@@ -220,10 +220,9 @@ struct EPUBParser {
     // MARK: - Private helpers
 
     private func openArchive() throws -> Archive {
-        guard let archive = try? Archive(url: epubURL, accessMode: .read) else {
-            throw EPUBError.cannotOpenArchive
-        }
-        return archive
+        // Use the throwing initialiser directly — no do/catch wrapper, which would
+        // cause the compiler to select the deprecated non-throwing overload instead.
+        return try Archive(url: epubURL, accessMode: .read)
     }
 
     private static func extract(_ entry: Entry, from archive: Archive) -> Data? {

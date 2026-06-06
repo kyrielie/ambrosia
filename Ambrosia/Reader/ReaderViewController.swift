@@ -2,45 +2,58 @@ import AppKit
 import WebKit
 import SwiftData
 
-/// Scroll-mode EPUB reader.
-///
-/// Loading sequence:
-///   1. viewDidLoad → parse EPUB + extract images on background thread
-///   2. Load merged HTML into WKWebView (baseURL = image temp dir)
-///   3. webView(_:didFinish:) → restore bookState.lastScrollOffset
-///   4. Inject passive scroll tracker JS
-///   5. Start 5-second auto-save timer
-///
-/// Position save: JS positionUpdate message → bookState.lastScrollOffset
-/// Auto-save: every 5 s + viewWillDisappear (final flush)
-///
-/// Character offset invariant: UTF-16 code units, text nodes only.
-/// See top of EPUBParser.swift for the full contract.
+// MARK: - ReadingMode (re-exported for clarity; canonical definition in BookState.swift)
+
+// MARK: - ReaderViewController
+//
+// Hosts the main visible WKWebView for reading.
+// Supports two modes, switchable at runtime:
+//
+//   .scroll     — full merged HTML, position tracked by window.scrollY
+//   .paginated  — same merged HTML, paginated by PaginationEngine,
+//                 one page visible at a time, position tracked by page index
+//
+// Invariant: every style or font change calls reloadHTML(), which rebuilds
+// the full HTML string from EPUBParser and reloads the WebView.
+// Never patch the live DOM for style changes — see project invariant #7.
+//
+// Character offset convention: UTF-16 code units, text nodes only.
+// See EPUBParser.swift for the full contract.
+
 class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMessageHandler {
 
-    // MARK: - Dependencies (set before viewDidLoad)
+    // MARK: - Dependencies
 
     let book: CalibreBook
     let modelContainer: ModelContainer
 
-    // MARK: - Private state
+    // MARK: - Private: reader state
 
     private var webView: WKWebView!
     private var parser: EPUBParser?
     private var imageBaseURL: URL?
-    private var saveTimer: Timer?
 
-    /// We hold a short-lived ModelContext for position saves.
-    /// Created lazily on first use, always on the main thread.
+    private var currentMode: ReadingMode = .scroll
+    private var currentHTML: String = ""        // last-built merged HTML
+
+    // Paginated mode state
+    private var pages: [PaginationEngine.PageBoundary] = []
+    private var currentPageIndex: Int = 0
+    private var paginationEngine: PaginationEngine?
+
+    // Resize debounce (300 ms, paginated mode only)
+    private let resizeDebounce = DebounceTimer(delay: 0.3)
+
+    // MARK: - Private: persistence
+
+    private var saveTimer: Timer?
     private var _saveContext: ModelContext?
     private var saveContext: ModelContext {
-        if let ctx = _saveContext { return ctx }
-        let ctx = ModelContext(modelContainer)
-        _saveContext = ctx
-        return ctx
+        if let c = _saveContext { return c }
+        let c = ModelContext(modelContainer)
+        _saveContext = c
+        return c
     }
-
-    /// Cached BookState for this book (fetched or created once on first save).
     private var bookState: BookState?
 
     // MARK: - Init
@@ -59,14 +72,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     override func loadView() {
         let config = WKWebViewConfiguration()
 
-        // Safari Web Inspector support (DEBUG only)
         #if DEBUG
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         #endif
 
-        // Scroll position messages from JS
-        // Handler name must match JS: window.webkit.messageHandlers.positionUpdate.postMessage(...)
+        // Scroll position (scroll mode)
         config.userContentController.add(self, name: "positionUpdate")
+        // Page turn requests from keyboard/gesture (paginated mode)
+        config.userContentController.add(self, name: "pageAction")
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
@@ -75,14 +88,21 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     override func viewDidLoad() {
         super.viewDidLoad()
-
-        // Ensure BookState exists before parsing starts (so save timer has something to write to)
+        // ensureBookState() must run first so bookState is available for readingMode
         ensureBookState()
+        currentMode = bookState?.readingMode ?? .scroll
 
-        // Parse EPUB + extract images on a background thread, then load HTML on main
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             await self.loadEPUB()
+        }
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        guard currentMode == .paginated, !pages.isEmpty else { return }
+        resizeDebounce.schedule { [weak self] in
+            self?.repaginatePreservingPosition()
         }
     }
 
@@ -97,32 +117,25 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     private func loadEPUB() async {
         guard let pathStr = LibraryRegistry.shared.activePath else {
-            await showError("No library open.")
-            return
+            await showError("No library open."); return
         }
         let libraryRoot = URL(fileURLWithPath: pathStr)
         guard let epubURL = book.epubURL(libraryRoot: libraryRoot),
               FileManager.default.fileExists(atPath: epubURL.path) else {
-            await showError("EPUB file not found: \(book.displayTitle)")
-            return
+            await showError("EPUB file not found: \(self.book.displayTitle)"); return
         }
 
         do {
-            // Parse spine
             var p = EPUBParser(epubURL: epubURL)
             try p.parse()
-
-            // Extract images to temp dir
             let imgBase = try EPUBParser.extractImages(from: epubURL, calibreID: book.id)
-
-            // Build merged HTML
-            let css  = ReaderPreferences.shared.css
-            let html = try p.mergedHTML(userCSS: css)
+            let html    = try p.mergedHTML(userCSS: ReaderPreferences.shared.css)
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.parser       = p
                 self.imageBaseURL = imgBase
+                self.currentHTML  = html
                 self.webView.loadHTMLString(html, baseURL: imgBase)
             }
         } catch {
@@ -130,34 +143,70 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
     }
 
-    @MainActor
-    private func showError(_ message: String) {
-        let html = """
-        <html><body style="font-family:system-ui;color:#999;padding:40px;text-align:center">
-        <p style="font-size:48px">📖</p>
-        <p>\(message)</p>
-        </body></html>
-        """
-        webView.loadHTMLString(html, baseURL: nil)
+    // MARK: - HTML reload (called on style/font change)
+
+    /// Rebuilds HTML from EPUBParser with fresh CSS and reloads.
+    /// After load, position is preserved via character offset (paginated)
+    /// or scroll offset (scroll mode).
+    func reloadHTML() {
+        guard let p = parser else { return }
+        do {
+            let html = try p.mergedHTML(userCSS: ReaderPreferences.shared.css)
+            currentHTML = html
+            webView.loadHTMLString(html, baseURL: imageBaseURL)
+            // didFinish will restore position
+        } catch {
+            print("[ReaderVC] reloadHTML error: \(error)")
+        }
+    }
+
+    // MARK: - Mode switching
+
+    func switchToScrollMode() {
+        currentMode = .scroll
+        bookState?.readingMode = .scroll
+        saveCurrentCharOffset { [weak self] _ in
+            self?.reloadHTML()
+        }
+    }
+
+    func switchToPaginatedMode() {
+        currentMode = .paginated
+        bookState?.readingMode = .paginated
+        // currentHTML is already loaded; start pagination
+        paginateCurrentContent()
     }
 
     // MARK: - WKNavigationDelegate
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        // Restore last scroll position
-        let offset = bookState?.lastScrollOffset ?? 0
-        if offset > 0 {
-            webView.evaluateJavaScript("window.scrollTo(0, \(offset));")
+        switch currentMode {
+        case .scroll:
+            restoreScrollPosition()
+            injectScrollTracker()
+            startAutoSave()
+
+        case .paginated:
+            // Inject PaginationJS then paginate
+            webView.evaluateJavaScript(PaginationJS.script) { [weak self] _, _ in
+                self?.paginateCurrentContent()
+            }
         }
-
-        // Inject passive scroll tracker
-        injectScrollTracker()
-
-        // Begin auto-save cycle
-        startAutoSave()
     }
 
-    // MARK: - Scroll tracking
+    func webView(_ webView: WKWebView,
+                 didFail navigation: WKNavigation!, withError error: Error) {
+        print("[ReaderVC] Navigation failed: \(error.localizedDescription)")
+    }
+
+    // MARK: - Scroll mode: position save/restore
+
+    private func restoreScrollPosition() {
+        let offset = bookState?.lastScrollOffset ?? 0
+        if offset > 0 {
+            webView.evaluateJavaScript("window.scrollTo(0, \(offset));", completionHandler: nil)
+        }
+    }
 
     private func injectScrollTracker() {
         let js = """
@@ -169,27 +218,131 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             }, { passive: true });
         })();
         """
-        webView.evaluateJavaScript(js)
+        webView.evaluateJavaScript(js, completionHandler: nil)
     }
 
-    // MARK: - WKScriptMessageHandler
+    // MARK: - Paginated mode: pagination
 
-    func userContentController(_ userContentController: WKUserContentController,
-                                didReceive message: WKScriptMessage) {
-        guard message.name == "positionUpdate",
-              let body = message.body as? String,
-              let data = body.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let y    = json["scrollY"] as? Double
-        else { return }
+    private func paginateCurrentContent() {
+        guard !currentHTML.isEmpty else { return }
+        // 2px safety margin per plan invariant
+        let pageHeight = max(1, webView.bounds.height - 2.0)
 
-        bookState?.lastScrollOffset = y
+        let engine = PaginationEngine(parentView: view)
+        paginationEngine = engine
+        engine.paginate(html: currentHTML, pageHeight: pageHeight, baseURL: imageBaseURL) { [weak self] boundaries in
+            guard let self else { return }
+            self.paginationEngine = nil
+
+            if boundaries.isEmpty {
+                print("[ReaderVC] Pagination returned 0 pages — falling back to scroll mode")
+                self.switchToScrollMode()
+                return
+            }
+
+            self.pages = boundaries
+            // Restore page from last saved character offset
+            let savedOffset = self.bookState?.lastCharacterOffset ?? 0
+            self.currentPageIndex = self.pageIndex(forCharOffset: savedOffset)
+            self.renderCurrentPage()
+            self.startAutoSave()
+        }
+    }
+
+    private func repaginatePreservingPosition() {
+        guard currentMode == .paginated, !currentHTML.isEmpty else { return }
+
+        // Save current character offset before destroying page boundaries
+        saveCurrentCharOffset { [weak self] savedOffset in
+            guard let self else { return }
+            let pageHeight = max(1, self.webView.bounds.height - 2.0)
+            let engine = PaginationEngine(parentView: self.view)
+            self.paginationEngine = engine
+            engine.paginate(
+                html: self.currentHTML,
+                pageHeight: pageHeight,
+                baseURL: self.imageBaseURL
+            ) { [weak self] boundaries in
+                guard let self else { return }
+                self.paginationEngine = nil
+                guard !boundaries.isEmpty else { return }
+                self.pages = boundaries
+                self.currentPageIndex = self.pageIndex(forCharOffset: savedOffset)
+                self.renderCurrentPage()
+                // Temporary highlight at the restored position
+                self.webView.evaluateJavaScript("window.ambrosiaHighlight(\(savedOffset));", completionHandler: nil)            }
+        }
+    }
+
+    /// Renders the current page by calling ambrosiaRenderPage with boundaries.
+    func renderCurrentPage() {
+        guard !pages.isEmpty else { return }
+        let idx   = max(0, min(currentPageIndex, pages.count - 1))
+        let page  = pages[idx]
+        webView.evaluateJavaScript("window.ambrosiaRenderPage(\(page.startChar), \(page.endChar));", completionHandler: nil)
+        // Update progress
+        let progress = pages.isEmpty ? 0 : Double(idx + 1) / Double(pages.count)
+        bookState?.totalReadPercent = progress
+    }
+
+    // MARK: - Page navigation (paginated mode)
+
+    func goToNextPage() {
+        guard currentMode == .paginated, currentPageIndex < pages.count - 1 else { return }
+        currentPageIndex += 1
+        renderCurrentPage()
+        saveCurrentPage()
+    }
+
+    func goToPreviousPage() {
+        guard currentMode == .paginated, currentPageIndex > 0 else { return }
+        currentPageIndex -= 1
+        renderCurrentPage()
+        saveCurrentPage()
+    }
+
+    // MARK: - Char offset helpers
+
+    /// Returns the page index that contains the given character offset.
+    private func pageIndex(forCharOffset offset: Int) -> Int {
+        guard !pages.isEmpty else { return 0 }
+        for (i, page) in pages.enumerated() {
+            if offset < page.endChar { return i }
+        }
+        return pages.count - 1
+    }
+
+    /// Asks JS for the current scroll position and maps it to a character offset.
+    /// For scroll mode: we track scrollY directly. For paginated mode: use page boundaries.
+    private func saveCurrentCharOffset(completion: @escaping (Int) -> Void) {
+        if currentMode == .paginated {
+            let offset = pages.isEmpty ? 0 : pages[max(0, currentPageIndex)].startChar
+            bookState?.lastCharacterOffset = offset
+            completion(offset)
+        } else {
+            // For scroll mode, approximate via scrollY / scrollHeight ratio
+            webView.evaluateJavaScript("[window.scrollY, document.body.scrollHeight]") { [weak self] result, _ in
+                guard let arr = result as? [Double],
+                      arr.count == 2, arr[1] > 0 else {
+                    completion(0); return
+                }
+                // Store raw scroll offset (no char offset approximation needed for scroll mode)
+                self?.bookState?.lastScrollOffset = arr[0]
+                completion(0)
+            }
+        }
+    }
+
+    private func saveCurrentPage() {
+        guard currentMode == .paginated, !pages.isEmpty else { return }
+        let page = pages[max(0, min(currentPageIndex, pages.count - 1))]
+        bookState?.lastCharacterOffset = page.startChar
+        bookState?.lastSpineIndex      = 0   // merged HTML — spine index tracked via JS data-spine-index
+        flushPosition()
     }
 
     // MARK: - BookState management
 
-    /// Fetches or creates a BookState for this book.
-    /// Must be called on the main thread (saveContext is main-thread-only).
     private func ensureBookState() {
         let cid = book.id
         let all = (try? saveContext.fetch(FetchDescriptor<BookState>())) ?? []
@@ -216,4 +369,75 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         guard bookState != nil else { return }
         try? saveContext.save()
     }
+
+    // MARK: - WKScriptMessageHandler
+
+    func userContentController(_ userContentController: WKUserContentController,
+                                didReceive message: WKScriptMessage) {
+        switch message.name {
+
+        case "positionUpdate":
+            guard let body = message.body as? String,
+                  let data = body.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let y    = json["scrollY"] as? Double
+            else { return }
+            bookState?.lastScrollOffset = y
+
+        case "pageAction":
+            guard let body = message.body as? String else { return }
+            if body == "next" { goToNextPage() }
+            else if body == "prev" { goToPreviousPage() }
+
+        default:
+            break
+        }
+    }
+
+    // MARK: - Keyboard events (paginated mode)
+
+    override func keyDown(with event: NSEvent) {
+        guard currentMode == .paginated else { super.keyDown(with: event); return }
+        switch event.keyCode {
+        case 123, 126: goToPreviousPage()   // ← / ↑
+        case 124, 125: goToNextPage()       // → / ↓
+        case 49:       goToNextPage()       // space
+        default:       super.keyDown(with: event)
+        }
+    }
+
+    // MARK: - Error display
+
+    @MainActor
+    private func showError(_ message: String) {
+        let html = """
+        <html><body style="font-family:system-ui;color:#999;padding:40px;text-align:center">
+        <p style="font-size:48px">📖</p><p>\(message)</p>
+        </body></html>
+        """
+        webView.loadHTMLString(html, baseURL: nil)
+    }
+
+    // MARK: - Pagination harness (DEBUG)
+
+    #if DEBUG
+    /// Validates that the sum of all page char counts matches the plain-text
+    /// UTF-16 length from EPUBParser. Difference must be ≤ 5.
+    func runPaginationHarness() {
+        guard let p = parser else { print("[Harness] No parser"); return }
+        let paginatedTotal = pages.reduce(0) { $0 + $1.charCount }
+        var expectedTotal = 0
+        for item in p.spine {
+            if let text = try? p.plainText(for: item) {
+                expectedTotal += text.utf16.count
+            }
+        }
+        let diff = abs(paginatedTotal - expectedTotal)
+        if diff <= 5 {
+            print("[Harness] ✅ PASS — paginatedTotal=\(paginatedTotal) expectedTotal=\(expectedTotal) diff=\(diff)")
+        } else {
+            print("[Harness] ❌ FAIL — paginatedTotal=\(paginatedTotal) expectedTotal=\(expectedTotal) diff=\(diff)")
+        }
+    }
+    #endif
 }
