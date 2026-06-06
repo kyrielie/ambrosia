@@ -15,14 +15,33 @@ struct AmbrosiaApp: App {
             Collection.self,
             ReadingGoal.self,
         ])
-        let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        let config = ModelConfiguration("Ambrosia", schema: schema, isStoredInMemoryOnly: false)
         do {
             let container = try ModelContainer(for: schema, configurations: [config])
             sharedModelContainer = container
             appDelegate.modelContainer = container
             appDelegate.session = session
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            // Schema changed (old Book/Author/ReadingState entities removed).
+            // Delete the stale store and start fresh — only BookState is lost.
+            print("[Ambrosia] SwiftData store incompatible, resetting: \(error)")
+            let fm = FileManager.default
+            if let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                let storeDir = appSupport.appendingPathComponent("Ambrosia")
+                let candidates = (try? fm.contentsOfDirectory(at: storeDir,
+                                       includingPropertiesForKeys: nil)) ?? []
+                for candidate in candidates where candidate.lastPathComponent.hasPrefix("Ambrosia") {
+                    try? fm.removeItem(at: candidate)
+                }
+            }
+            do {
+                let container = try ModelContainer(for: schema, configurations: [config])
+                sharedModelContainer = container
+                appDelegate.modelContainer = container
+                appDelegate.session = session
+            } catch {
+                fatalError("Could not create ModelContainer after reset: \(error)")
+            }
         }
     }
 

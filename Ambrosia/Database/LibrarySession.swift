@@ -53,7 +53,7 @@ final class LibrarySession {
 
     // MARK: - Count refresh (call after debounced search input)
 
-    func refreshCount(search: String?, filter: LibraryFilter) {
+    func refreshCount(search: String?, filter: LibraryFilter = .none) {
         guard let library else { return }
         totalCount = library.bookCount(search: search, filter: filter)
     }

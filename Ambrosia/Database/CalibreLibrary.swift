@@ -4,7 +4,7 @@ import Foundation
 // MARK: - Sort field
 
 enum SortField: String, CaseIterable, Identifiable {
-    case title, author, wordCount, kudos, published, lastOpened
+    case title, author, wordCount, kudos, published, lastOpened, series
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -14,6 +14,7 @@ enum SortField: String, CaseIterable, Identifiable {
         case .kudos:      return "Kudos"
         case .published:  return "Published"
         case .lastOpened: return "Last Opened"
+        case .series:     return "Series"
         }
     }
 }
@@ -43,7 +44,7 @@ enum LibraryFilter: Equatable {
 final class CalibreLibrary {
 
     let root: URL                   // absolute path to the Calibre library folder
-    private let db: Connection
+    internal let db: Connection
 
     // Cached column expressions
     private let booksTable   = Table("books")
@@ -51,16 +52,14 @@ final class CalibreLibrary {
     private let titleCol     = Expression<String>("title")
     private let pathCol      = Expression<String>("path")
     private let pubdateCol   = Expression<String?>("pubdate")
-    private let seriesCol    = Expression<String?>("series")
     private let seriesIdxCol = Expression<Double?>("series_index")
 
     init(root: URL) throws {
         self.root = root
         let dbPath = root.appendingPathComponent("metadata.db").path
         db = try Connection(dbPath, readonly: true)
-        try db.execute("PRAGMA query_only = ON")
-        // WAL allows concurrent reads while Calibre may have the file open
-        try db.execute("PRAGMA journal_mode = WAL")
+        // query_only is a connection-level flag — safe on a readonly connection.
+        // Do NOT set journal_mode — that requires a write lock and will fail.
     }
 
     // MARK: - Count
@@ -79,12 +78,12 @@ final class CalibreLibrary {
     private func _bookCount(search: String?, filter: LibraryFilter) throws -> Int {
         switch filter {
         case .none:
-            let pred = search.map { "SELECT COUNT(*) FROM books WHERE title LIKE ?" }
-                          ?? "SELECT COUNT(*) FROM books"
             if let s = search {
-                return (try db.scalar(pred, ["%\(s)%"]) as? Int64).map(Int.init) ?? 0
+                let rows = try db.prepare("SELECT COUNT(*) FROM books WHERE title LIKE ?", ["%\(s)%" as Binding?]).map { $0 }
+                return (rows.first?.first as? Int64).map(Int.init) ?? 0
             } else {
-                return (try db.scalar(pred) as? Int64).map(Int.init) ?? 0
+                let rows = try db.prepare("SELECT COUNT(*) FROM books").map { $0 }
+                return (rows.first?.first as? Int64).map(Int.init) ?? 0
             }
 
         case .author(let name):
@@ -95,8 +94,9 @@ final class CalibreLibrary {
                 WHERE a.name = ?
                 \(search != nil ? "AND b.title LIKE ?" : "")
                 """
-            let args: [Binding] = search != nil ? [name, "%\(search!)%"] : [name]
-            return (try db.scalar(sql, args) as? Int64).map(Int.init) ?? 0
+            let args: [Binding?] = search != nil ? [name as Binding?, "%\(search!)%" as Binding?] : [name as Binding?]
+            let rows = try db.prepare(sql, args).map { $0 }
+            return (rows.first?.first as? Int64).map(Int.init) ?? 0
 
         case .tag(let name):
             let sql = """
@@ -106,8 +106,9 @@ final class CalibreLibrary {
                 WHERE t.name = ?
                 \(search != nil ? "AND b.title LIKE ?" : "")
                 """
-            let args: [Binding] = search != nil ? [name, "%\(search!)%"] : [name]
-            return (try db.scalar(sql, args) as? Int64).map(Int.init) ?? 0
+            let args: [Binding?] = search != nil ? [name as Binding?, "%\(search!)%" as Binding?] : [name as Binding?]
+            let rows = try db.prepare(sql, args).map { $0 }
+            return (rows.first?.first as? Int64).map(Int.init) ?? 0
         }
     }
 
@@ -167,36 +168,46 @@ final class CalibreLibrary {
             case .kudos:      return "COALESCE(b.custom_column_kudos, 0) \(direction)"
             case .published:  return "b.pubdate \(direction)"
             case .lastOpened: return "b.title \(direction)"   // Phase 2: merge with BookState
+            case .series:     return "s.name \(direction), b.series_index ASC"
             }
         }()
 
         let sql: String
-        let args: [Binding]
+        let args: [Binding?]
+
+        // Build fuzzy search condition
+        let (fuzzyClause, fuzzyArgs): (String, [Binding?]) = search.map {
+            CalibreLibrary.fuzzyTitleCondition(for: $0)
+        } ?? ("", [])
 
         switch filter {
         case .none:
-            let where_ = search != nil ? "WHERE b.title LIKE ?" : ""
+            let where_ = search != nil ? "WHERE \(fuzzyClause)" : ""
             sql = """
-                SELECT DISTINCT b.id, b.title, b.path, b.pubdate, b.series, b.series_index
+                SELECT DISTINCT b.id, b.title, b.path, b.pubdate, s.name, b.series_index
                 FROM books b
                 LEFT JOIN books_authors_link bal ON bal.book = b.id
                 LEFT JOIN authors a ON a.id = bal.author
+                LEFT JOIN books_series_link bsl ON bsl.book = b.id
+                LEFT JOIN series s ON s.id = bsl.series
                 \(where_)
                 GROUP BY b.id
                 ORDER BY \(orderBy)
                 LIMIT ? OFFSET ?
                 """
             args = search != nil
-                ? ["%\(search!)%", limit, offset]
-                : [limit, offset]
+                ? fuzzyArgs + [limit as Binding?, offset as Binding?]
+                : [limit as Binding?, offset as Binding?]
 
         case .author(let name):
-            let where_ = search != nil ? "AND b.title LIKE ?" : ""
+            let where_ = search != nil ? "AND \(fuzzyClause)" : ""
             sql = """
-                SELECT DISTINCT b.id, b.title, b.path, b.pubdate, b.series, b.series_index
+                SELECT DISTINCT b.id, b.title, b.path, b.pubdate, s.name, b.series_index
                 FROM books b
                 JOIN books_authors_link bal ON bal.book = b.id
                 JOIN authors a ON a.id = bal.author
+                LEFT JOIN books_series_link bsl ON bsl.book = b.id
+                LEFT JOIN series s ON s.id = bsl.series
                 WHERE a.name = ?
                 \(where_)
                 GROUP BY b.id
@@ -204,16 +215,18 @@ final class CalibreLibrary {
                 LIMIT ? OFFSET ?
                 """
             args = search != nil
-                ? [name, "%\(search!)%", limit, offset]
-                : [name, limit, offset]
+                ? [name as Binding?] + fuzzyArgs + [limit as Binding?, offset as Binding?]
+                : [name as Binding?, limit as Binding?, offset as Binding?]
 
         case .tag(let name):
-            let where_ = search != nil ? "AND b.title LIKE ?" : ""
+            let where_ = search != nil ? "AND \(fuzzyClause)" : ""
             sql = """
-                SELECT DISTINCT b.id, b.title, b.path, b.pubdate, b.series, b.series_index
+                SELECT DISTINCT b.id, b.title, b.path, b.pubdate, s.name, b.series_index
                 FROM books b
                 JOIN books_tags_link btl ON btl.book = b.id
                 JOIN tags t ON t.id = btl.tag
+                LEFT JOIN books_series_link bsl ON bsl.book = b.id
+                LEFT JOIN series s ON s.id = bsl.series
                 WHERE t.name = ?
                 \(where_)
                 GROUP BY b.id
@@ -221,8 +234,8 @@ final class CalibreLibrary {
                 LIMIT ? OFFSET ?
                 """
             args = search != nil
-                ? [name, "%\(search!)%", limit, offset]
-                : [name, limit, offset]
+                ? [name as Binding?] + fuzzyArgs + [limit as Binding?, offset as Binding?]
+                : [name as Binding?, limit as Binding?, offset as Binding?]
         }
 
         let rows: [[Binding?]] = try db.prepare(sql, args).map { $0 }
@@ -245,7 +258,7 @@ final class CalibreLibrary {
 
     // MARK: - Bulk JOIN queries (one per data type per page)
 
-    private func _authors(for ids: [Int]) throws -> [Int: [String]] {
+    internal func _authors(for ids: [Int]) throws -> [Int: [String]] {
         guard !ids.isEmpty else { return [:] }
         let placeholders = ids.map { _ in "?" }.joined(separator: ",")
         let sql = """
@@ -254,7 +267,7 @@ final class CalibreLibrary {
             WHERE bal.book IN (\(placeholders))
             ORDER BY bal.book, a.sort
             """
-        let args = ids.map { $0 as Binding }
+        let args = ids.map { $0 as Binding? }
         var result: [Int: [String]] = [:]
         for row in try db.prepare(sql, args).map({ $0 }) {
             guard let cidBind = row[0] as? Int64,
@@ -265,7 +278,7 @@ final class CalibreLibrary {
         return result
     }
 
-    private func _tags(for ids: [Int]) throws -> [Int: [String]] {
+    internal func _tags(for ids: [Int]) throws -> [Int: [String]] {
         guard !ids.isEmpty else { return [:] }
         let placeholders = ids.map { _ in "?" }.joined(separator: ",")
         let sql = """
@@ -274,7 +287,7 @@ final class CalibreLibrary {
             WHERE btl.book IN (\(placeholders))
             ORDER BY btl.book, t.name
             """
-        let args = ids.map { $0 as Binding }
+        let args = ids.map { $0 as Binding? }
         var result: [Int: [String]] = [:]
         for row in try db.prepare(sql, args).map({ $0 }) {
             guard let cidBind = row[0] as? Int64,
@@ -285,11 +298,11 @@ final class CalibreLibrary {
         return result
     }
 
-    private func _comments(for ids: [Int]) throws -> [Int: String] {
+    internal func _comments(for ids: [Int]) throws -> [Int: String] {
         guard !ids.isEmpty else { return [:] }
         let placeholders = ids.map { _ in "?" }.joined(separator: ",")
         let sql = "SELECT book, text FROM comments WHERE book IN (\(placeholders))"
-        let args = ids.map { $0 as Binding }
+        let args = ids.map { $0 as Binding? }
         var result: [Int: String] = [:]
         for row in try db.prepare(sql, args).map({ $0 }) {
             guard let cidBind = row[0] as? Int64,
@@ -313,7 +326,7 @@ final class CalibreLibrary {
 
     // MARK: - Date parsing
 
-    private func parseDate(_ string: String) -> Date? {
+    internal func parseDate(_ string: String) -> Date? {
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let d = iso.date(from: string) { return d }
@@ -321,5 +334,53 @@ final class CalibreLibrary {
         if let d = iso.date(from: string) { return d }
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
         return f.date(from: string)
+    }
+}
+
+// MARK: - Fuzzy search helper
+
+extension CalibreLibrary {
+    /// Expands a user search query into a SQL WHERE clause fragment that handles:
+    /// - Multi-word partial matching (each word must appear somewhere in the title)
+    /// - Typo tolerance via character-level trigrams for longer words
+    ///
+    /// Returns (whereClause, args). Caller prepends "WHERE " and appends to query.
+    static func fuzzyTitleCondition(for query: String) -> (String, [Binding?]) {
+        let words = query
+            .lowercased()
+            .components(separatedBy: .whitespaces)
+            .map { $0.trimmingCharacters(in: .punctuationCharacters) }
+            .filter { $0.count >= 2 }
+
+        guard !words.isEmpty else { return ("1=1", []) }
+
+        // Each word must appear in the title (AND across words, LIKE within word).
+        // For words ≥ 5 chars, also accept trigrams so "poter" matches "potter".
+        var clauses: [String] = []
+        var args: [Binding?]  = []
+
+        for word in words {
+            if word.count >= 5 {
+                // Generate trigrams and accept if any trigram matches
+                let trigrams = Self.trigrams(for: word)
+                let trigramClauses = trigrams.map { _ in "LOWER(b.title) LIKE ?" }
+                    .joined(separator: " OR ")
+                let exactClause = "LOWER(b.title) LIKE ?"
+                clauses.append("(\(exactClause) OR \(trigramClauses))")
+                args.append("%\(word)%" as Binding?)
+                for t in trigrams { args.append("%\(t)%" as Binding?) }
+            } else {
+                clauses.append("LOWER(b.title) LIKE ?")
+                args.append("%\(word)%" as Binding?)
+            }
+        }
+
+        return (clauses.joined(separator: " AND "), args)
+    }
+
+    private static func trigrams(for word: String) -> [String] {
+        let chars = Array(word)
+        guard chars.count >= 3 else { return [word] }
+        return (0...(chars.count - 3)).map { String(chars[$0..<$0+3]) }
     }
 }
