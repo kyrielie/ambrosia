@@ -1,0 +1,539 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		00D6889E038A44BD866CAB5EF /* ReaderPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00D6889E038A44BD866CAB5E /* ReaderPreferences.swift */; };
+		14E71F3DACC447CF8B4FF29BF /* PaginationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14E71F3DACC447CF8B4FF29B /* PaginationEngine.swift */; };
+		18225FAA0945438AB71AB285F /* ReaderViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18225FAA0945438AB71AB285 /* ReaderViewController.swift */; };
+		1F8977AB2F9745DEACFF6548F /* Fandom.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F8977AB2F9745DEACFF6548 /* Fandom.swift */; };
+		289A4ED0240F4884963BAF9AF /* LibraryViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 289A4ED0240F4884963BAF9A /* LibraryViewController.swift */; };
+		2FC91CA366334CFE8E8EAD54F /* FilterDrawerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FC91CA366334CFE8E8EAD54 /* FilterDrawerView.swift */; };
+		36E517D472614A1788F9CEDEF /* Tag.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36E517D472614A1788F9CEDE /* Tag.swift */; };
+		3EF30D6D00BA40B691EA8110F /* EPUBParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EF30D6D00BA40B691EA8110 /* EPUBParser.swift */; };
+		4D1E361C90E1497DA1CD75E2F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D1E361C90E1497DA1CD75E2 /* AppDelegate.swift */; };
+		5037BC30F5C947B49D7196AEF /* LibraryWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5037BC30F5C947B49D7196AE /* LibraryWindowController.swift */; };
+		62E101B92FCB3F7500AA3B18 /* SQLite in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000SPM1 /* SQLite */; };
+		62E101BA2FCB3F7500AA3B18 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000SPM2 /* ZIPFoundation */; };
+		73D871CF8BD14E60B94CB491F /* ReadingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73D871CF8BD14E60B94CB491 /* ReadingState.swift */; };
+		7E96791E70E24692B2282A1EF /* FilterRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E96791E70E24692B2282A1E /* FilterRule.swift */; };
+		80EBF1ABC2834516B4FD8D2DF /* FilterBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80EBF1ABC2834516B4FD8D2D /* FilterBuilder.swift */; };
+		87229515E83E4AC59B9B2A95F /* ReadingGoal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87229515E83E4AC59B9B2A95 /* ReadingGoal.swift */; };
+		898749FB003147C58A876E92F /* BookmarkManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 898749FB003147C58A876E92 /* BookmarkManager.swift */; };
+		904C7DC3FE504D28A3C90A2BF /* Author.swift in Sources */ = {isa = PBXBuildFile; fileRef = 904C7DC3FE504D28A3C90A2B /* Author.swift */; };
+		9D4E67B889EA4F2999FBE7D4F /* PaginationJS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D4E67B889EA4F2999FBE7D4 /* PaginationJS.swift */; };
+		A1D0BEF497D14BD099B5D5ECF /* Book.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D0BEF497D14BD099B5D5EC /* Book.swift */; };
+		B09DADA86BD349A1BC47BC12F /* BookGridItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B09DADA86BD349A1BC47BC12 /* BookGridItem.swift */; };
+		B7D4280E44CE40FC8478BC68F /* CalibreImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7D4280E44CE40FC8478BC68 /* CalibreImporter.swift */; };
+		B97B006AF7074876BE529C12F /* Collection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B97B006AF7074876BE529C12 /* Collection.swift */; };
+		BB364F9ED5F842B9A84A141CF /* BaseStyles.css in Resources */ = {isa = PBXBuildFile; fileRef = BB364F9ED5F842B9A84A141C /* BaseStyles.css */; };
+		BC523994168D4B84897956DBF /* DebounceTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC523994168D4B84897956DB /* DebounceTimer.swift */; };
+		C0601B8F88CB49BDB51F0CE4F /* BookLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0601B8F88CB49BDB51F0CE4 /* BookLibrary.swift */; };
+		C5CF7F5D87034F05895A4539F /* HighlightBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5CF7F5D87034F05895A4539 /* HighlightBridge.swift */; };
+		EC41B135F47F481D94724963F /* AmbrosiaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC41B135F47F481D94724963 /* AmbrosiaApp.swift */; };
+		EE2E961A9DAB42CABB4D7F7BF /* ExportManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE2E961A9DAB42CABB4D7F7B /* ExportManager.swift */; };
+		F1142C6BB8354DB3B488C450F /* ReaderWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1142C6BB8354DB3B488C450 /* ReaderWindowController.swift */; };
+		FD0FC465A08D4530A5C86C59F /* EPUBValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0FC465A08D4530A5C86C59 /* EPUBValidator.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		00D6889E038A44BD866CAB5E /* ReaderPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderPreferences.swift; sourceTree = "<group>"; };
+		14E71F3DACC447CF8B4FF29B /* PaginationEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaginationEngine.swift; sourceTree = "<group>"; };
+		18225FAA0945438AB71AB285 /* ReaderViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderViewController.swift; sourceTree = "<group>"; };
+		1F8977AB2F9745DEACFF6548 /* Fandom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Fandom.swift; sourceTree = "<group>"; };
+		289A4ED0240F4884963BAF9A /* LibraryViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryViewController.swift; sourceTree = "<group>"; };
+		2FC91CA366334CFE8E8EAD54 /* FilterDrawerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterDrawerView.swift; sourceTree = "<group>"; };
+		36E517D472614A1788F9CEDE /* Tag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tag.swift; sourceTree = "<group>"; };
+		3EF30D6D00BA40B691EA8110 /* EPUBParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBParser.swift; sourceTree = "<group>"; };
+		4D1E361C90E1497DA1CD75E2 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		5037BC30F5C947B49D7196AE /* LibraryWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryWindowController.swift; sourceTree = "<group>"; };
+		73D871CF8BD14E60B94CB491 /* ReadingState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingState.swift; sourceTree = "<group>"; };
+		7E96791E70E24692B2282A1E /* FilterRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterRule.swift; sourceTree = "<group>"; };
+		80EBF1ABC2834516B4FD8D2D /* FilterBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterBuilder.swift; sourceTree = "<group>"; };
+		87229515E83E4AC59B9B2A95 /* ReadingGoal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingGoal.swift; sourceTree = "<group>"; };
+		898749FB003147C58A876E92 /* BookmarkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarkManager.swift; sourceTree = "<group>"; };
+		904C7DC3FE504D28A3C90A2B /* Author.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Author.swift; sourceTree = "<group>"; };
+		9D4E67B889EA4F2999FBE7D4 /* PaginationJS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaginationJS.swift; sourceTree = "<group>"; };
+		A1D0BEF497D14BD099B5D5EC /* Book.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Book.swift; sourceTree = "<group>"; };
+		AA000000000000000000PLIST /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AA000000000000000000PROD1 /* Ambrosia.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ambrosia.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B09DADA86BD349A1BC47BC12 /* BookGridItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookGridItem.swift; sourceTree = "<group>"; };
+		B7D4280E44CE40FC8478BC68 /* CalibreImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreImporter.swift; sourceTree = "<group>"; };
+		B97B006AF7074876BE529C12 /* Collection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Collection.swift; sourceTree = "<group>"; };
+		BB364F9ED5F842B9A84A141C /* BaseStyles.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = BaseStyles.css; sourceTree = "<group>"; };
+		BC523994168D4B84897956DB /* DebounceTimer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebounceTimer.swift; sourceTree = "<group>"; };
+		C0601B8F88CB49BDB51F0CE4 /* BookLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookLibrary.swift; sourceTree = "<group>"; };
+		C5CF7F5D87034F05895A4539 /* HighlightBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightBridge.swift; sourceTree = "<group>"; };
+		EC41B135F47F481D94724963 /* AmbrosiaApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbrosiaApp.swift; sourceTree = "<group>"; };
+		EE2E961A9DAB42CABB4D7F7B /* ExportManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportManager.swift; sourceTree = "<group>"; };
+		F1142C6BB8354DB3B488C450 /* ReaderWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderWindowController.swift; sourceTree = "<group>"; };
+		FD0FC465A08D4530A5C86C59 /* EPUBValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBValidator.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		AA000000000000000000FWBP /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				62E101BA2FCB3F7500AA3B18 /* ZIPFoundation in Frameworks */,
+				62E101B92FCB3F7500AA3B18 /* SQLite in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1C4325980DE54054B34FA01C /* FilterDrawer */ = {
+			isa = PBXGroup;
+			children = (
+				2FC91CA366334CFE8E8EAD54 /* FilterDrawerView.swift */,
+				7E96791E70E24692B2282A1E /* FilterRule.swift */,
+				80EBF1ABC2834516B4FD8D2D /* FilterBuilder.swift */,
+			);
+			path = FilterDrawer;
+			sourceTree = "<group>";
+		};
+		1CA363F1AB59489BA9407C58 /* Ambrosia */ = {
+			isa = PBXGroup;
+			children = (
+				705BB594EE414BA1A2183507 /* App */,
+				B6064A1F96704D96963D3167 /* Database */,
+				8CA9EAB7C3FE4C969CB15A7E /* LibraryUI */,
+				8208FAF195094788BD46B9A7 /* Reader */,
+				CB4338E4E54A4D70B3E57422 /* Utilities */,
+				A11C24217BD6471FA3E2C333 /* Resources */,
+				397D9A9DAE894F5E81144288 /* Products */,
+			);
+			path = Ambrosia;
+			sourceTree = "<group>";
+		};
+		20F1F4AE83FE4391B96B4C08 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				A1D0BEF497D14BD099B5D5EC /* Book.swift */,
+				904C7DC3FE504D28A3C90A2B /* Author.swift */,
+				1F8977AB2F9745DEACFF6548 /* Fandom.swift */,
+				36E517D472614A1788F9CEDE /* Tag.swift */,
+				B97B006AF7074876BE529C12 /* Collection.swift */,
+				73D871CF8BD14E60B94CB491 /* ReadingState.swift */,
+				87229515E83E4AC59B9B2A95 /* ReadingGoal.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		397D9A9DAE894F5E81144288 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AA000000000000000000PROD1 /* Ambrosia.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		705BB594EE414BA1A2183507 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				EC41B135F47F481D94724963 /* AmbrosiaApp.swift */,
+				4D1E361C90E1497DA1CD75E2 /* AppDelegate.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		8208FAF195094788BD46B9A7 /* Reader */ = {
+			isa = PBXGroup;
+			children = (
+				F1142C6BB8354DB3B488C450 /* ReaderWindowController.swift */,
+				18225FAA0945438AB71AB285 /* ReaderViewController.swift */,
+				3EF30D6D00BA40B691EA8110 /* EPUBParser.swift */,
+				14E71F3DACC447CF8B4FF29B /* PaginationEngine.swift */,
+				9D4E67B889EA4F2999FBE7D4 /* PaginationJS.swift */,
+				C5CF7F5D87034F05895A4539 /* HighlightBridge.swift */,
+				898749FB003147C58A876E92 /* BookmarkManager.swift */,
+				00D6889E038A44BD866CAB5E /* ReaderPreferences.swift */,
+			);
+			path = Reader;
+			sourceTree = "<group>";
+		};
+		8CA9EAB7C3FE4C969CB15A7E /* LibraryUI */ = {
+			isa = PBXGroup;
+			children = (
+				1C4325980DE54054B34FA01C /* FilterDrawer */,
+				5037BC30F5C947B49D7196AE /* LibraryWindowController.swift */,
+				289A4ED0240F4884963BAF9A /* LibraryViewController.swift */,
+				B09DADA86BD349A1BC47BC12 /* BookGridItem.swift */,
+			);
+			path = LibraryUI;
+			sourceTree = "<group>";
+		};
+		A11C24217BD6471FA3E2C333 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				BB364F9ED5F842B9A84A141C /* BaseStyles.css */,
+				AA000000000000000000PLIST /* Info.plist */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		B6064A1F96704D96963D3167 /* Database */ = {
+			isa = PBXGroup;
+			children = (
+				20F1F4AE83FE4391B96B4C08 /* Models */,
+				B7D4280E44CE40FC8478BC68 /* CalibreImporter.swift */,
+				FD0FC465A08D4530A5C86C59 /* EPUBValidator.swift */,
+				C0601B8F88CB49BDB51F0CE4 /* BookLibrary.swift */,
+			);
+			path = Database;
+			sourceTree = "<group>";
+		};
+		CB4338E4E54A4D70B3E57422 /* Utilities */ = {
+			isa = PBXGroup;
+			children = (
+				EE2E961A9DAB42CABB4D7F7B /* ExportManager.swift */,
+				BC523994168D4B84897956DB /* DebounceTimer.swift */,
+			);
+			path = Utilities;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		52DE067F0773415CAB462294 /* Ambrosia */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA000000000000000000CFLG /* Build configuration list for PBXNativeTarget "Ambrosia" */;
+			buildPhases = (
+				AA000000000000000000SRCS /* Sources */,
+				AA000000000000000000FWBP /* Frameworks */,
+				AA000000000000000000RSRC /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Ambrosia;
+			packageProductDependencies = (
+				AA000000000000000000SPM1 /* SQLite */,
+				AA000000000000000000SPM2 /* ZIPFoundation */,
+			);
+			productName = Ambrosia;
+			productReference = AA000000000000000000PROD1 /* Ambrosia.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AA000000000000000000PROJ /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					52DE067F0773415CAB462294 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = AA000000000000000000PCFL /* Build configuration list for PBXProject "Ambrosia" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 1CA363F1AB59489BA9407C58 /* Ambrosia */;
+			packageReferences = (
+				AA000000000000000000PKG1 /* XCRemoteSwiftPackageReference "SQLite.swift" */,
+				AA000000000000000000PKG2 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+			);
+			productRefGroup = 397D9A9DAE894F5E81144288 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				52DE067F0773415CAB462294 /* Ambrosia */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AA000000000000000000RSRC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BB364F9ED5F842B9A84A141CF /* BaseStyles.css in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AA000000000000000000SRCS /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EC41B135F47F481D94724963F /* AmbrosiaApp.swift in Sources */,
+				4D1E361C90E1497DA1CD75E2F /* AppDelegate.swift in Sources */,
+				A1D0BEF497D14BD099B5D5ECF /* Book.swift in Sources */,
+				904C7DC3FE504D28A3C90A2BF /* Author.swift in Sources */,
+				1F8977AB2F9745DEACFF6548F /* Fandom.swift in Sources */,
+				36E517D472614A1788F9CEDEF /* Tag.swift in Sources */,
+				B97B006AF7074876BE529C12F /* Collection.swift in Sources */,
+				73D871CF8BD14E60B94CB491F /* ReadingState.swift in Sources */,
+				87229515E83E4AC59B9B2A95F /* ReadingGoal.swift in Sources */,
+				B7D4280E44CE40FC8478BC68F /* CalibreImporter.swift in Sources */,
+				FD0FC465A08D4530A5C86C59F /* EPUBValidator.swift in Sources */,
+				C0601B8F88CB49BDB51F0CE4F /* BookLibrary.swift in Sources */,
+				5037BC30F5C947B49D7196AEF /* LibraryWindowController.swift in Sources */,
+				289A4ED0240F4884963BAF9AF /* LibraryViewController.swift in Sources */,
+				B09DADA86BD349A1BC47BC12F /* BookGridItem.swift in Sources */,
+				2FC91CA366334CFE8E8EAD54F /* FilterDrawerView.swift in Sources */,
+				7E96791E70E24692B2282A1EF /* FilterRule.swift in Sources */,
+				80EBF1ABC2834516B4FD8D2DF /* FilterBuilder.swift in Sources */,
+				F1142C6BB8354DB3B488C450F /* ReaderWindowController.swift in Sources */,
+				18225FAA0945438AB71AB285F /* ReaderViewController.swift in Sources */,
+				3EF30D6D00BA40B691EA8110F /* EPUBParser.swift in Sources */,
+				14E71F3DACC447CF8B4FF29BF /* PaginationEngine.swift in Sources */,
+				9D4E67B889EA4F2999FBE7D4F /* PaginationJS.swift in Sources */,
+				C5CF7F5D87034F05895A4539F /* HighlightBridge.swift in Sources */,
+				898749FB003147C58A876E92F /* BookmarkManager.swift in Sources */,
+				00D6889E038A44BD866CAB5EF /* ReaderPreferences.swift in Sources */,
+				EE2E961A9DAB42CABB4D7F7BF /* ExportManager.swift in Sources */,
+				BC523994168D4B84897956DBF /* DebounceTimer.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		AA000000000000000000DBG1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		AA000000000000000000DBG2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Ambrosia/Ambrosia.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = S35M3D45Z9;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Ambrosia/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ambrosia.reader;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		AA000000000000000000REL1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		AA000000000000000000REL2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Ambrosia/Ambrosia.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = S35M3D45Z9;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Ambrosia/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ambrosia.reader;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AA000000000000000000CFLG /* Build configuration list for PBXNativeTarget "Ambrosia" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA000000000000000000DBG2 /* Debug */,
+				AA000000000000000000REL2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA000000000000000000PCFL /* Build configuration list for PBXProject "Ambrosia" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA000000000000000000DBG1 /* Debug */,
+				AA000000000000000000REL1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		AA000000000000000000PKG1 /* XCRemoteSwiftPackageReference "SQLite.swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/stephencelis/SQLite.swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.14.1;
+			};
+		};
+		AA000000000000000000PKG2 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AA000000000000000000SPM1 /* SQLite */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA000000000000000000PKG1 /* XCRemoteSwiftPackageReference "SQLite.swift" */;
+			productName = SQLite;
+		};
+		AA000000000000000000SPM2 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA000000000000000000PKG2 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = AA000000000000000000PROJ /* Project object */;
+}

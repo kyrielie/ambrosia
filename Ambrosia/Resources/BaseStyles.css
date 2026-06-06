@@ -1,0 +1,111 @@
+/*
+ * BaseStyles.css — Ambrosia reader
+ * Injected into every EPUB spine item, replacing all publisher CSS.
+ * User preferences (font, size, colors, line height, max width) are
+ * applied on top of this via a dynamically generated <style> block.
+ * INVARIANT: Never leave publisher CSS intact — strip entirely and rebuild.
+ */
+
+/* Hard reset */
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    width: 100%;
+    height: auto;
+    overflow-x: hidden;
+    /* Background and text color injected by ReaderPreferences */
+}
+
+body {
+    /* Typography defaults — overridden by user preferences at runtime */
+    font-family: Georgia, serif;
+    font-size: 18px;
+    line-height: 1.6;
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 32px 24px;
+    word-wrap: break-word;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Suppress all publisher-defined fonts */
+@font-face { font-family: inherit; }
+
+/* Block-level elements */
+p {
+    margin-bottom: 0.8em;
+    text-indent: 0;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-weight: bold;
+    margin-bottom: 0.5em;
+    margin-top: 1em;
+    line-height: 1.2;
+}
+
+h1 { font-size: 1.6em; }
+h2 { font-size: 1.4em; }
+h3 { font-size: 1.2em; }
+h4, h5, h6 { font-size: 1em; }
+
+/* Inline elements */
+a {
+    color: inherit;
+    text-decoration: underline;
+    pointer-events: none; /* Disable navigation links inside EPUB */
+}
+
+em, i { font-style: italic; }
+strong, b { font-weight: bold; }
+
+/* Images */
+img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 1em auto;
+}
+
+/* Tables */
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1em 0;
+}
+td, th {
+    border: 1px solid currentColor;
+    padding: 0.4em 0.6em;
+}
+
+/* Horizontal rules */
+hr {
+    border: none;
+    border-top: 1px solid currentColor;
+    opacity: 0.3;
+    margin: 1.5em 0;
+}
+
+/* Code */
+code, pre {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.9em;
+}
+
+pre {
+    overflow-x: auto;
+    padding: 1em;
+    background: rgba(128,128,128,0.1);
+    border-radius: 4px;
+}
+
+/* Suppress epub:type nav and landmarks */
+nav[epub\\:type="toc"],
+nav[epub\\:type="landmarks"],
+[epub\\:type="cover"] img ~ * {
+    display: none;
+}
