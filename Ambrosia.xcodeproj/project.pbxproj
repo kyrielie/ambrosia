@@ -47,6 +47,10 @@
 		FC001122334455667788DDEE2 /* CalibreLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788DDF0 /* CalibreLibrary.swift */; };
 		FC001122334455667788DDEE3 /* LibrarySession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788DDF1 /* LibrarySession.swift */; };
 		FD0FC465A08D4530A5C86C59F /* EPUBValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0FC465A08D4530A5C86C59 /* EPUBValidator.swift */; };
+		D67DC672B21B9C67E2454465F /* CollectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE5E3EB1BF9C138C86AFF21F /* CollectionsView.swift */; };
+		56289C63BFA2118454C7D2C7F /* ReadingGoalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49EB97076C4987CADEC037C /* ReadingGoalView.swift */; };
+		01EF0559DBE5881E10712105F /* BookmarkSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87293BD4CB51E144CC4057EC /* BookmarkSidebarView.swift */; };
+		99F7BE9279DA0BDF718EAAADF /* TagSynonymStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2F7D6C9C832E5FAE1048A46 /* TagSynonymStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -90,6 +94,10 @@
 		FC001122334455667788DDF0 /* CalibreLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreLibrary.swift; sourceTree = "<group>"; };
 		FC001122334455667788DDF1 /* LibrarySession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySession.swift; sourceTree = "<group>"; };
 		FD0FC465A08D4530A5C86C59 /* EPUBValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBValidator.swift; sourceTree = "<group>"; };
+		BE5E3EB1BF9C138C86AFF21F /* CollectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionsView.swift; sourceTree = "<group>"; };
+		A49EB97076C4987CADEC037C /* ReadingGoalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingGoalView.swift; sourceTree = "<group>"; };
+		87293BD4CB51E144CC4057EC /* BookmarkSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarkSidebarView.swift; sourceTree = "<group>"; };
+		D2F7D6C9C832E5FAE1048A46 /* TagSynonymStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagSynonymStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -173,6 +181,7 @@
 				C5CF7F5D87034F05895A4539 /* HighlightBridge.swift */,
 				898749FB003147C58A876E92 /* BookmarkManager.swift */,
 				00D6889E038A44BD866CAB5E /* ReaderPreferences.swift */,
+				87293BD4CB51E144CC4057EC /* BookmarkSidebarView.swift */,
 			);
 			path = Reader;
 			sourceTree = "<group>";
@@ -184,6 +193,8 @@
 				5037BC30F5C947B49D7196AE /* LibraryWindowController.swift */,
 				289A4ED0240F4884963BAF9A /* LibraryViewController.swift */,
 				B09DADA86BD349A1BC47BC12 /* BookGridItem.swift */,
+				A49EB97076C4987CADEC037C /* ReadingGoalView.swift */,
+				BE5E3EB1BF9C138C86AFF21F /* CollectionsView.swift */,
 			);
 			path = LibraryUI;
 			sourceTree = "<group>";
@@ -210,6 +221,7 @@
 				1C767EA792624845BFBF18EC /* CalibreLibraryPhase2.swift */,
 				31EF9AEBF5CB4EE494463865 /* AO3Metadata.swift */,
 				88C9DE92AB9B4816872BCD08 /* CustomColumnConfig.swift */,
+				D2F7D6C9C832E5FAE1048A46 /* TagSynonymStore.swift */,
 			);
 			path = Database;
 			sourceTree = "<group>";
@@ -338,6 +350,10 @@
 				5CE859818988473590FC2997 /* CalibreLibraryPhase2.swift in Sources */,
 				DCB818E84DEF4B2BBC8A8147 /* AO3Metadata.swift in Sources */,
 				1EEFE8E535A844FABA1ACC5A /* CustomColumnConfig.swift in Sources */,
+				D67DC672B21B9C67E2454465F /* CollectionsView.swift in Sources */,
+				56289C63BFA2118454C7D2C7F /* ReadingGoalView.swift in Sources */,
+				01EF0559DBE5881E10712105F /* BookmarkSidebarView.swift in Sources */,
+				99F7BE9279DA0BDF718EAAADF /* TagSynonymStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

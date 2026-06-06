@@ -16,7 +16,12 @@ struct FilterBuilder {
     let library: CalibreLibrary
 
     /// Evaluate a full FilterExpression (multiple groups joined by groupConjunction).
-    func matchingIDs(expression: FilterExpression, likedIDs: Set<Int>) -> FilterResult {
+    ///
+    /// - Parameter collectionMap: name → Set<calibreID> for all known Collections.
+    ///   Populated from SwiftData by the caller since FilterBuilder has no ModelContext.
+    func matchingIDs(expression: FilterExpression,
+                     likedIDs: Set<Int>,
+                     collectionMap: [String: Set<Int>] = [:]) -> FilterResult {
         let completeGroups = expression.groups.filter(\.isComplete)
         guard !completeGroups.isEmpty else {
             return FilterResult(calibreIDs: [], totalCount: library.bookCount())
@@ -24,17 +29,15 @@ struct FilterBuilder {
 
         // Evaluate each group independently, then combine with groupConjunction
         let groupResults: [Set<Int>] = completeGroups.map { group in
-            Set(matchingIDsForGroup(group, likedIDs: likedIDs))
+            Set(matchingIDsForGroup(group, likedIDs: likedIDs, collectionMap: collectionMap))
         }
 
         let finalIDs: [Int]
         switch expression.groupConjunction {
         case .or:
-            // Union: book matches if it satisfies ANY group
             let union = groupResults.reduce(Set<Int>()) { $0.union($1) }
             finalIDs = Array(union).sorted()
         case .and:
-            // Intersection: book must satisfy ALL groups
             guard let first = groupResults.first else { finalIDs = []; break }
             let intersection = groupResults.dropFirst().reduce(first) { $0.intersection($1) }
             finalIDs = Array(intersection).sorted()
@@ -43,12 +46,16 @@ struct FilterBuilder {
         return FilterResult(calibreIDs: finalIDs, totalCount: finalIDs.count)
     }
 
-    private func matchingIDsForGroup(_ group: FilterGroup, likedIDs: Set<Int>) -> [Int] {
+    private func matchingIDsForGroup(_ group: FilterGroup,
+                                     likedIDs: Set<Int>,
+                                     collectionMap: [String: Set<Int>]) -> [Int] {
         let complete = group.completeRules
         guard !complete.isEmpty else { return library.allCalibreIDs() }
 
-        let sqlRules = complete.filter { $0.field != .isLiked }
-        let appRules = complete.filter { $0.field == .isLiked }
+        // Partition: SQL-evaluated vs app-evaluated (isLiked, collection)
+        let sqlRules        = complete.filter { $0.field != .isLiked && $0.field != .collection }
+        let likedRules      = complete.filter { $0.field == .isLiked }
+        let collectionRules = complete.filter { $0.field == .collection }
 
         var ids: [Int]
         if sqlRules.isEmpty {
@@ -57,18 +64,51 @@ struct FilterBuilder {
             ids = library.calibreIDs(matchingRules: sqlRules, conjunction: group.conjunction)
         }
 
-        if !appRules.isEmpty {
+        // Apply isLiked in-memory
+        if !likedRules.isEmpty {
             ids = ids.filter { likedIDs.contains($0) }
         }
+
+        // Apply collection rules in-memory
+        // Each collection rule restricts (AND) or excludes (NOT) a set of IDs.
+        // Multiple collection rules within a group follow the group's conjunction.
+        if !collectionRules.isEmpty {
+            var idSet = Set(ids)
+            if group.conjunction == .and {
+                for rule in collectionRules {
+                    let memberIDs = collectionMap[rule.value] ?? []
+                    switch rule.op {
+                    case .equals:    idSet = idSet.intersection(memberIDs)
+                    case .notEquals: idSet = idSet.subtracting(memberIDs)
+                    default:         break   // only equals/notEquals are offered in the UI
+                    }
+                }
+            } else {
+                // OR: book passes if it satisfies ANY collection rule
+                var unionIDs = Set<Int>()
+                for rule in collectionRules {
+                    let memberIDs = collectionMap[rule.value] ?? []
+                    switch rule.op {
+                    case .equals:    unionIDs.formUnion(idSet.intersection(memberIDs))
+                    case .notEquals: unionIDs.formUnion(idSet.subtracting(memberIDs))
+                    default:         break
+                    }
+                }
+                idSet = unionIDs
+            }
+            ids = Array(idSet).sorted()
+        }
+
         return ids
     }
 
     // Legacy single-group entry point — used by quick tag/author taps
     func matchingIDs(rules: [FilterRule], conjunction: FilterConjunction,
-                     likedIDs: Set<Int>) -> FilterResult {
+                     likedIDs: Set<Int>,
+                     collectionMap: [String: Set<Int>] = [:]) -> FilterResult {
         var expr = FilterExpression()
         expr.groups = [FilterGroup(rules: rules, conjunction: conjunction)]
-        return matchingIDs(expression: expr, likedIDs: likedIDs)
+        return matchingIDs(expression: expr, likedIDs: likedIDs, collectionMap: collectionMap)
     }
 }
 
@@ -198,6 +238,11 @@ extension CalibreLibrary {
             return (kudosSQL(sqlOp: "<"), [n as Binding?])
 
         case .isLiked:
+            return nil
+
+        case .collection:
+            // Collection membership is evaluated in-memory against SwiftData.
+            // SQL layer never sees this field.
             return nil
         }
     }

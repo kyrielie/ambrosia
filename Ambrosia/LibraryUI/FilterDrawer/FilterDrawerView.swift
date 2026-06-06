@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 // MARK: - FilterDrawerView
 
@@ -80,7 +81,18 @@ struct FilterDrawerView: View {
             // Footer
             HStack {
                 Button(role: .destructive) {
-                    expression = FilterExpression()
+                    // Preserve any collection rules — they survive Clear All.
+                    // Only rule-based (non-collection) filters are cleared.
+                    let collectionRules = expression.groups
+                        .flatMap(\.rules)
+                        .filter { $0.field == .collection }
+                    if collectionRules.isEmpty {
+                        expression = FilterExpression()
+                    } else {
+                        var fresh = FilterExpression()
+                        fresh.groups[0].rules = collectionRules
+                        expression = fresh
+                    }
                     onClear()
                 } label: {
                     Label("Clear All", systemImage: "trash")
@@ -179,6 +191,8 @@ struct FilterRuleRow: View {
     @Binding var rule: FilterRule
     let onDelete: () -> Void
 
+    @Query(sort: \Collection.createdDate) private var collections: [Collection]
+
     var body: some View {
         HStack(spacing: 8) {
             Picker("", selection: $rule.field) {
@@ -215,6 +229,13 @@ struct FilterRuleRow: View {
         switch rule.field {
         case .isLiked:
             Text("is liked").font(.callout).foregroundStyle(.secondary); Spacer()
+        case .collection:
+            Picker("", selection: $rule.value) {
+                Text("— pick —").tag("")
+                ForEach(collections) { col in
+                    Text(col.name).tag(col.name)
+                }
+            }.labelsHidden().frame(maxWidth: .infinity)
         case .rating:
             Picker("", selection: $rule.value) {
                 Text("— pick —").tag("")

@@ -23,6 +23,10 @@ struct LibraryRootView: View {
     // BookState dictionary keyed by calibreID — fetched ONCE here, never per-row
     @State private var bookStates: [Int: BookState] = [:]
 
+    // Phase 6 sheet state
+    @State private var showCollections = false
+    @State private var showReadingGoal = false
+
     private let pageSize = 100
     private let debouncer = DebounceTimer(delay: 0.3)
 
@@ -68,7 +72,7 @@ struct LibraryRootView: View {
                 loadPage()
                 refreshBookStates()
             } else {
-                books = []; bookStates = [:]
+                books = []; bookStates = [:] 
             }
         }
         .onAppear {
@@ -84,6 +88,14 @@ struct LibraryRootView: View {
                     currentPage = 0; loadPage()
                 }
             )
+        }
+        .sheet(isPresented: $showCollections) {
+            CollectionsView(onSelectCollection: { collection in
+                addOrReplaceRule(FilterRule(field: .collection, op: .equals, value: collection.name))
+            })
+        }
+        .sheet(isPresented: $showReadingGoal) {
+            ReadingGoalView()
         }
     }
 
@@ -128,8 +140,23 @@ struct LibraryRootView: View {
         let likedIDs: Set<Int> = needsLiked
             ? Set(bookStates.values.filter(\.isLiked).map(\.calibreID))
             : []
+
+        // Build collection name → IDs map (from SwiftData) for in-memory evaluation
+        let needsCollection = filterExpression.groups.flatMap(\.rules).contains { $0.field == .collection }
+        let collectionMap: [String: Set<Int>]
+        if needsCollection {
+            let allCollections = (try? modelContext.fetch(FetchDescriptor<Collection>())) ?? []
+            collectionMap = Dictionary(uniqueKeysWithValues:
+                allCollections.map { ($0.name, Set($0.calibreIDs)) }
+            )
+        } else {
+            collectionMap = [:]
+        }
+
         let builder = FilterBuilder(library: library)
-        activeFilterResult = builder.matchingIDs(expression: filterExpression, likedIDs: likedIDs)
+        activeFilterResult = builder.matchingIDs(expression: filterExpression,
+                                                  likedIDs: likedIDs,
+                                                  collectionMap: collectionMap)
         currentPage = 0; loadPage()
     }
 
@@ -154,6 +181,35 @@ struct LibraryRootView: View {
             TextField("Search titles…", text: $searchText)
                 .textFieldStyle(.roundedBorder).frame(maxWidth: 300)
             Spacer()
+            // Phase 6 — Collections
+            Button { showCollections = true } label: {
+                Label("Collections", systemImage: "tray.2")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .help("Manage Collections")
+
+            // Phase 6 — Reading Goal
+            Button { showReadingGoal = true } label: {
+                Label("Reading Goal", systemImage: "target")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .help("Reading Goal")
+
+            // Phase 6 — CSV Export
+            Button {
+                ExportManager.presentExportPanel(books: books)
+            } label: {
+                Label("Export", systemImage: "arrow.up.doc")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .help("Export current list to CSV")
+            .disabled(books.isEmpty)
+
+            Divider().frame(height: 16)
+
             Button { showFilterDrawer = true } label: {
                 Label("Filter", systemImage: filterExpression.isEmpty
                       ? "line.3.horizontal.decrease.circle"
@@ -348,6 +404,8 @@ struct BookListRow: View, Equatable {
             }
             Divider()
             Button(bookState?.isLiked == true ? "Unlike" : "Like") { onLikeToggle() }
+            Divider()
+            AddToCollectionMenu(book: book)
         }
     }
 

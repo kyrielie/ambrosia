@@ -5,6 +5,8 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
 
     private let book: CalibreBook
     private let modelContainer: ModelContainer
+    /// Recorded when the window loads; diffed on close to accumulate reading time.
+    private var sessionStartDate: Date = Date()
 
     private static var openWindows: [Int: ReaderWindowController] = [:]
 
@@ -61,8 +63,33 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    override func windowDidLoad() {
+        super.windowDidLoad()
+        sessionStartDate = Date()
+    }
+
     @MainActor
     func windowWillClose(_ notification: Notification) {
         Self.openWindows.removeValue(forKey: book.id)
+
+        // Accumulate reading session time into BookState.totalReadingTimeSeconds
+        let elapsed   = Date().timeIntervalSince(sessionStartDate)
+        let calibreID = book.id
+        let container = modelContainer
+        Task.detached {
+            let ctx  = ModelContext(container)
+            var desc = FetchDescriptor<BookState>(
+                predicate: #Predicate { $0.calibreID == calibreID }
+            )
+            desc.fetchLimit = 1
+            if let state = try? ctx.fetch(desc).first {
+                state.totalReadingTimeSeconds += elapsed
+            } else {
+                let state = BookState(calibreID: calibreID)
+                state.totalReadingTimeSeconds = elapsed
+                ctx.insert(state)
+            }
+            try? ctx.save()
+        }
     }
 }

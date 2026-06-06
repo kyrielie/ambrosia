@@ -16,6 +16,7 @@ enum FilterField: String, CaseIterable, Identifiable, Codable {
     case kudosGT
     case kudosLT
     case isLiked
+    case collection
 
     var id: String { rawValue }
 
@@ -34,12 +35,13 @@ enum FilterField: String, CaseIterable, Identifiable, Codable {
         case .kudosGT:     return "Kudos >"
         case .kudosLT:     return "Kudos <"
         case .isLiked:     return "Is liked"
+        case .collection:  return "Collection"
         }
     }
 
     var expectsText: Bool {
         switch self {
-        case .title, .authorName, .tag, .rating, .warning, .category, .series, .comment:
+        case .title, .authorName, .tag, .rating, .warning, .category, .series, .comment, .collection:
             return true
         case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT, .isLiked:
             return false
@@ -120,8 +122,8 @@ struct FilterRule: Identifiable, Codable {
     /// Operators valid for the current field.
     var availableOperators: [FilterOperator] {
         switch field {
-        case .rating, .warning, .category:
-            // AO3 metadata — exact match makes most sense; also allow notEquals
+        case .rating, .warning, .category, .collection:
+            // Exact match only — contains/startsWith don't make sense for collections
             return FilterOperator.exactOperators
         case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT:
             return FilterOperator.numericOperators
