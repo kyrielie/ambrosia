@@ -51,6 +51,7 @@
 		56289C63BFA2118454C7D2C7F /* ReadingGoalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49EB97076C4987CADEC037C /* ReadingGoalView.swift */; };
 		01EF0559DBE5881E10712105F /* BookmarkSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87293BD4CB51E144CC4057EC /* BookmarkSidebarView.swift */; };
 		99F7BE9279DA0BDF718EAAADF /* TagSynonymStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2F7D6C9C832E5FAE1048A46 /* TagSynonymStore.swift */; };
+		3752F8ABCEECBBFFEC4065BBF /* PreferencesWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCF05383F236D5093B604921 /* PreferencesWindowController.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -98,6 +99,7 @@
 		A49EB97076C4987CADEC037C /* ReadingGoalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingGoalView.swift; sourceTree = "<group>"; };
 		87293BD4CB51E144CC4057EC /* BookmarkSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarkSidebarView.swift; sourceTree = "<group>"; };
 		D2F7D6C9C832E5FAE1048A46 /* TagSynonymStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagSynonymStore.swift; sourceTree = "<group>"; };
+		CCF05383F236D5093B604921 /* PreferencesWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindowController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -127,6 +129,7 @@
 			isa = PBXGroup;
 			children = (
 				705BB594EE414BA1A2183507 /* App */,
+				0FB79E6B7F772FC94DF372BD /* Preferences */,
 				B6064A1F96704D96963D3167 /* Database */,
 				8CA9EAB7C3FE4C969CB15A7E /* LibraryUI */,
 				8208FAF195094788BD46B9A7 /* Reader */,
@@ -234,6 +237,14 @@
 				FA112233445566778899AABB /* HTMLStripper.swift */,
 			);
 			path = Utilities;
+			sourceTree = "<group>";
+		};
+		0FB79E6B7F772FC94DF372BD /* Preferences */ = {
+			isa = PBXGroup;
+			children = (
+				CCF05383F236D5093B604921 /* PreferencesWindowController.swift */,
+			);
+			path = Preferences;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -354,6 +365,7 @@
 				56289C63BFA2118454C7D2C7F /* ReadingGoalView.swift in Sources */,
 				01EF0559DBE5881E10712105F /* BookmarkSidebarView.swift in Sources */,
 				99F7BE9279DA0BDF718EAAADF /* TagSynonymStore.swift in Sources */,
+				3752F8ABCEECBBFFEC4065BBF /* PreferencesWindowController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

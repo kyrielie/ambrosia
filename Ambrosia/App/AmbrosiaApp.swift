@@ -52,6 +52,14 @@ struct AmbrosiaApp: App {
         .modelContainer(sharedModelContainer)
         .environment(session)
         .commands {
+            // ── Ambrosia → Preferences… (⌘,) ─────────────────────────────
+            CommandGroup(replacing: .appSettings) {
+                Button("Preferences…") {
+                    PreferencesWindowController.show()
+                }
+                .keyboardShortcut(",", modifiers: [.command])
+            }
+
             CommandGroup(replacing: .newItem) {
                 Button("Open Calibre Library…") {
                     AppDelegate.shared?.chooseLibraryFolder()
