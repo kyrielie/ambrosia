@@ -36,7 +36,6 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         super.init(window: window)
         window.delegate = self
 
-        // Phase 3: replace with full ReaderViewController
         let vc = ReaderViewController(book: book, modelContainer: modelContainer)
         window.contentViewController = vc
 
