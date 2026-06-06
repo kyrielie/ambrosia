@@ -5,26 +5,81 @@ import SwiftData
 struct AmbrosiaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
-    var sharedModelContainer: ModelContainer = {
+    let sharedModelContainer: ModelContainer
+    let session = LibrarySession()
+
+    init() {
+        // Schema contains only app-owned state. Calibre metadata is never copied.
         let schema = Schema([
-            Book.self, Author.self, Fandom.self,
-            Tag.self, Collection.self,
-            ReadingState.self, ReadingGoal.self,
+            BookState.self,
+            Collection.self,
+            ReadingGoal.self,
         ])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         do {
-            return try ModelContainer(for: schema, configurations: [config])
+            let container = try ModelContainer(for: schema, configurations: [config])
+            sharedModelContainer = container
+            appDelegate.modelContainer = container
+            appDelegate.session = session
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }
-    }()
+    }
 
     var body: some Scene {
-        // The actual window is managed by AppDelegate/NSWindowController.
-        // We use WindowGroup only to satisfy the Scene requirement.
         WindowGroup {
             Color.clear.frame(width: 0, height: 0)
         }
         .modelContainer(sharedModelContainer)
+        .environment(session)
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("Open Calibre Library…") {
+                    AppDelegate.shared?.chooseLibraryFolder()
+                }
+                .keyboardShortcut("o", modifiers: [.command])
+
+                Menu("Recent Libraries") {
+                    RecentLibrariesMenuContent(session: session)
+                }
+            }
+        }
+    }
+}
+
+/// Recent libraries submenu — reads LibraryRegistry at render time.
+struct RecentLibrariesMenuContent: View {
+    let session: LibrarySession
+    @State private var paths: [String] = LibraryRegistry.shared.knownPaths
+
+    var body: some View {
+        if paths.isEmpty {
+            Text("No recent libraries")
+                .foregroundStyle(.secondary)
+        } else {
+            ForEach(paths, id: \.self) { path in
+                let name    = LibraryRegistry.shared.displayName(for: path)
+                let isActive = path == session.activePath
+                let valid   = LibraryRegistry.shared.isValid(path)
+                Button {
+                    guard !isActive else { return }
+                    session.open(url: URL(fileURLWithPath: path))
+                } label: {
+                    if isActive {
+                        Label(name, systemImage: "checkmark")
+                    } else {
+                        Text(valid ? name : "⚠ \(name) (not found)")
+                    }
+                }
+                .disabled(isActive || !valid)
+            }
+
+            Divider()
+
+            Button("Clear Recent Libraries") {
+                LibraryRegistry.shared.knownPaths = []
+                paths = []
+            }
+        }
     }
 }

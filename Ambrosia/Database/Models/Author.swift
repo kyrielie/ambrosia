@@ -1,12 +1,3 @@
-import SwiftData
-import Foundation
-
-// Phase 0 stub — relationships deferred to Phase 1
-@Model
-final class Author {
-    var name: String = ""
-
-    init(name: String) {
-        self.name = name
-    }
-}
+// Author.swift — REMOVED
+// Authors are now read directly from Calibre's metadata.db via CalibreLibrary.
+// Kept as placeholder to avoid breaking pbxproj references.

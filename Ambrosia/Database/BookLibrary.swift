@@ -1,7 +1,17 @@
 import Foundation
 import SwiftData
 
-// Phase 0 stub — implementation in Phase 1
+/// Thin query wrapper — used by FilterBuilder in Phase 2.
+/// Phase 1 stub: no logic yet beyond holding a context reference.
 class BookLibrary {
-    // Will provide query/filter interface over the SwiftData store
+    let modelContext: ModelContext
+
+    init(modelContext: ModelContext) {
+        self.modelContext = modelContext
+    }
+
+    /// Diagnostic: return total book count.
+    func totalCount() throws -> Int {
+        try modelContext.fetch(FetchDescriptor<Book>()).count
+    }
 }

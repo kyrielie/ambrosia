@@ -1,12 +1,11 @@
 import SwiftData
 import Foundation
 
-// Phase 0 stub
 @Model
 final class ReadingGoal {
-    var targetBooksCount: Int = 0
-    var periodStart: Date = Date()
-    var periodEnd: Date = Date()
+    var targetBooksCount: Int
+    var periodStart: Date
+    var periodEnd: Date
 
     init(targetBooksCount: Int, periodStart: Date, periodEnd: Date) {
         self.targetBooksCount = targetBooksCount

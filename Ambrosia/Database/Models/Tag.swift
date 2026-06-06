@@ -1,12 +1,5 @@
-import SwiftData
-import Foundation
-
-// Phase 0 stub — relationships deferred to Phase 1
-@Model
-final class Tag {
-    var name: String = ""
-
-    init(name: String) {
-        self.name = name
-    }
-}
+// Tag.swift — REMOVED as a @Model
+// Tags are now stored as Book.tagsRaw (tab-separated String).
+// No relationship table, no join walk on import.
+// This file is kept as a placeholder to avoid breaking the pbxproj file reference.
+// Phase 2: synonym/fandom grouping will be added here.
