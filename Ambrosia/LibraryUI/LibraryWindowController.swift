@@ -12,6 +12,7 @@ class LibraryWindowController: NSWindowController {
         )
         window.title = "Ambrosia"
         window.minSize = NSSize(width: 700, height: 500)
+        window.isReleasedWhenClosed = false   // keep alive so Dock click can re-show it
         window.center()
         super.init(window: window)
         window.contentViewController = LibraryViewController(

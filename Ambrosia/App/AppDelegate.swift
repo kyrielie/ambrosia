@@ -11,7 +11,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
-        NSApp.windows.first?.close()
+
+        // Hide the WindowGroup ghost window that SwiftUI creates for Color.clear.
+        // We must NOT close() it — closing triggers deallocation and SwiftUI will
+        // recreate a new window the next time applicationShouldHandleReopen fires
+        // (because returning true signals the scene manager to restore windows).
+        // Hiding with orderOut keeps it alive and invisible so the scene stays satisfied.
+        if let ghostWindow = NSApp.windows.first {
+            ghostWindow.isExcludedFromWindowsMenu = true
+            ghostWindow.orderOut(nil)
+        }
 
         // Reopen last used library silently on launch
         session.reopenIfNeeded()
@@ -24,6 +33,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    /// Clicking the Dock icon when all windows are closed re-shows the library window.
+    /// Returns false — we handle reopen entirely ourselves. Returning true would tell
+    /// SwiftUI's WindowGroup scene manager to restore its scene windows, which recreates
+    /// the ghost window we hid at launch.
+    func applicationShouldHandleReopen(_ sender: NSApplication,
+                                        hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows {
+            libraryWindowController?.showWindow(nil)
+            libraryWindowController?.window?.makeKeyAndOrderFront(nil)
+        }
+        return false
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         // Clean up temp image directories created by EPUBParser.extractImages
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("ambrosia")

@@ -255,19 +255,32 @@ struct LibraryRootView: View {
                 }
                 .buttonStyle(.borderless)
             }
-            // Show each active filter value as a pill
+            // Show each active filter value as a pill.
+            // Negated operators (notContains, notEquals) get a red NOT badge.
             FlowLayout(spacing: 4) {
                 ForEach(completeRules) { rule in
+                    let negated = rule.op == .notContains || rule.op == .notEquals
                     HStack(spacing: 3) {
+                        if negated {
+                            Text("NOT")
+                                .font(.caption2.bold())
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 4).padding(.vertical, 1)
+                                .background(Color.red.opacity(0.85))
+                                .clipShape(Capsule())
+                        }
                         Text(rule.field.label)
                             .font(.caption2).foregroundStyle(.secondary)
-                        Text(rule.value.isEmpty ? "✓" : rule.value)
-                            .font(.caption2.bold())
+                        if !rule.value.isEmpty {
+                            Text(rule.value).font(.caption2.bold())
+                        }
                     }
                     .padding(.horizontal, 7).padding(.vertical, 3)
-                    .background(Color.accentColor.opacity(0.12))
+                    .background(negated ? Color.red.opacity(0.08) : Color.accentColor.opacity(0.12))
                     .clipShape(Capsule())
-                    .overlay(Capsule().stroke(Color.accentColor.opacity(0.3), lineWidth: 0.5))
+                    .overlay(Capsule().stroke(
+                        negated ? Color.red.opacity(0.3) : Color.accentColor.opacity(0.3),
+                        lineWidth: 0.5))
                 }
             }
         }
