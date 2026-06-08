@@ -35,7 +35,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     // MARK: - Private: reader state
 
-    private var webView: WKWebView!
+    private var webView: ReaderMenuWebView!
     private var parser: EPUBParser?
     private var imageBaseURL: URL?
 
@@ -90,7 +90,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         config.userContentController.add(self, name: "pageAction")       // paginated prev/next
         config.userContentController.add(self, name: "highlightAdded")   // text selection → highlight
 
-        webView = WKWebView(frame: .zero, configuration: config)
+        webView = ReaderMenuWebView(frame: .zero, configuration: config)
+        webView.viewController = self
         webView.navigationDelegate = self
         view = webView
     }
@@ -558,6 +559,112 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         webView.loadHTMLString(html, baseURL: nil)
     }
 
+    // MARK: - Context menu (B1)
+
+    // MARK: - Context menu actions (B1)
+
+    /// Opens the selected text as a Google search in the user's default browser.
+    /// Two-argument evaluateJavaScript form — required by Invariant 11.
+    @objc func searchInBrowser() {
+        webView.evaluateJavaScript("window.getSelection().toString()") { result, _ in
+            guard let text = result as? String, !text.isEmpty else { return }
+            var comps = URLComponents(string: "https://www.google.com/search")!
+            comps.queryItems = [URLQueryItem(name: "q", value: text)]
+            if let url = comps.url { NSWorkspace.shared.open(url) }
+        }
+    }
+
+    /// Copies the selected text to the clipboard as a formatted quote with book metadata.
+    ///
+    /// Format:
+    ///   "Selected passage here."
+    ///
+    ///   — Book Title, by Author Name
+    @objc func shareSelection() {
+        webView.evaluateJavaScript("window.getSelection().toString()") { [weak self] result, _ in
+            guard let self, let text = result as? String, !text.isEmpty else { return }
+            let formatted = """
+                \u{201C}\(text)\u{201D}
+
+                \u{2014} \(self.book.displayTitle), by \(self.book.displayAuthors)
+                """
+            DispatchQueue.main.async {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(formatted, forType: .string)
+                self.showHUD("Copied to clipboard")
+            }
+        }
+    }
+
+    /// Debug implementation for B1 — confirms the menu wiring fires and JS evaluation
+    /// returns the expected selection text. Full popover UI (colour picker, note field,
+    /// save to BookState.annotationsData) is implemented in session 8C-2.
+    ///
+    /// If this alert never appears when you tap "Add Annotation…", the target/action
+    /// wiring in ReaderMenuWebView.willOpenMenu is broken — check that item.target = vc.
+    /// If the alert appears but "selectedText" is empty, the JS evaluation failed or
+    /// the menu was opened without an active text selection.
+    @objc func addAnnotationFromSelection() {
+        webView.evaluateJavaScript("window.getSelection().toString()") { [weak self] result, _ in
+            guard let self else { return }
+            let selected = (result as? String) ?? ""
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                if selected.isEmpty {
+                    alert.messageText = "No text selected"
+                    alert.informativeText = "Select some text in the reader, then right-click → Add Annotation…"
+                } else {
+                    alert.messageText = "Add Annotation — wiring confirmed ✓"
+                    alert.informativeText = "Selected text (\(selected.count) chars):\n\n\"\(selected.prefix(300))\"\n\nFull popover UI with note field and colour picker is implemented in session 8C-2."
+                }
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
+        }
+    }
+
+    // MARK: - HUD
+
+    /// Brief non-blocking confirmation label that fades in, lingers, then fades out.
+    private func showHUD(_ message: String) {
+        let hud = NSTextField(labelWithString: message)
+        hud.font              = .systemFont(ofSize: 13, weight: .medium)
+        hud.textColor         = .white
+        hud.isBezeled         = false
+        hud.isEditable        = false
+        hud.backgroundColor   = .clear
+        hud.sizeToFit()
+
+        // Pad around the text
+        var f = hud.frame
+        f = f.insetBy(dx: -14, dy: -7)
+        f.origin = CGPoint(
+            x: (view.bounds.width  - f.width)  / 2,
+            y:  view.bounds.height * 0.12
+        )
+        hud.frame = f
+
+        hud.wantsLayer        = true
+        hud.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
+        hud.layer?.cornerRadius    = 8
+        hud.alphaValue             = 0
+        view.addSubview(hud)
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.18
+            hud.animator().alphaValue = 1
+        } completionHandler: {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.3
+                    hud.animator().alphaValue = 0
+                } completionHandler: {
+                    hud.removeFromSuperview()
+                }
+            }
+        }
+    }
+
     // MARK: - Pagination harness (DEBUG)
 
     #if DEBUG
@@ -578,4 +685,78 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
     }
     #endif
+}
+
+// MARK: - ReaderMenuWebView
+
+/// WKWebView subclass that intercepts WebKit's context menu via willOpenMenu(_:with:),
+/// replacing it entirely with the reader's custom NSMenu (Option B from B1 spec).
+///
+/// willOpenMenu is a macOS-only WKWebView method — it is NOT the iOS-only
+/// WKUIDelegate method and does not require any delegate hookup.
+/// WebKit calls it on the WKWebView instance before displaying the menu, passing
+/// the menu it intends to show. We clear that menu and replace it with our own items.
+private class ReaderMenuWebView: WKWebView {
+
+    weak var viewController: ReaderViewController?
+
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        // Step 1: strip unwanted WebKit default items by title.
+        // "Copy Link with Highlight" pollutes the menu; "Share…" is replaced by our
+        // own Share item that formats the quote with book metadata.
+        let titlesToStrip: Set<String> = [
+            "Copy Link with Highlight",
+            "Share\u{2026}",   // "Share…" with Unicode ellipsis (U+2026)
+            "Share...",        // ASCII fallback
+        ]
+        for item in menu.items where titlesToStrip.contains(item.title) {
+            menu.removeItem(item)
+        }
+
+        guard let vc = viewController else {
+            super.willOpenMenu(menu, with: event)
+            return
+        }
+
+        // Step 2: prepend our custom items at the top of the (now-cleaned) menu.
+        let prefs = ReaderPreferences.shared.contextMenu
+        var idx = 0
+
+        if prefs.showSearchInBrowser {
+            let item = NSMenuItem(
+                title: "Search in Browser",
+                action: #selector(ReaderViewController.searchInBrowser),
+                keyEquivalent: ""
+            )
+            item.target = vc
+            menu.insertItem(item, at: idx)
+            idx += 1
+        }
+
+        if prefs.showAddAnnotation {
+            let item = NSMenuItem(
+                title: "Add Annotation\u{2026}",
+                action: #selector(ReaderViewController.addAnnotationFromSelection),
+                keyEquivalent: ""
+            )
+            item.target = vc
+            menu.insertItem(item, at: idx)
+            idx += 1
+        }
+
+        let shareItem = NSMenuItem(
+            title: "Share",
+            action: #selector(ReaderViewController.shareSelection),
+            keyEquivalent: ""
+        )
+        shareItem.target = vc
+        menu.insertItem(shareItem, at: idx)
+        idx += 1
+
+        if idx > 0 {
+            menu.insertItem(.separator(), at: idx)
+        }
+
+        super.willOpenMenu(menu, with: event)
+    }
 }

@@ -36,6 +36,10 @@ final class ReaderPreferences: ObservableObject {
         didSet { UserDefaults.standard.set(paddingV, forKey: Keys.paddingV) }
     }
 
+    /// Context menu configuration for the reader's WKWebView.
+    /// Not persisted — defaults are suitable for all users.
+    var contextMenu: ContextMenuPreferences = ContextMenuPreferences()
+
     // MARK: - Defaults
 
     private enum Defaults {
