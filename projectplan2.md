@@ -14,6 +14,39 @@ Never implement across more than one major section per session.
 
 ---
 
+## Session discipline — read this before every session
+
+These rules exist because multiple sessions have been lost to the same failure modes. They are not suggestions.
+
+**Rule 1 — Diagnose before writing.**
+Before touching any file, run these three commands and read every line of output:
+```
+grep -rn "TODO\|FIXME\|WKContextMenuElementInfo\|UIContextMenuConfiguration\|UIContextMenuActionProvider" /path/to/project/
+xcodebuild -scheme Ambrosia -destination 'platform=macOS' build 2>&1 | grep -E "error:|warning:"
+ls -la /path/to/project/Reader/ /path/to/project/Preferences/
+```
+The build output is the truth. Your memory of previous sessions is not.
+
+**Rule 2 — One approach, carried to completion.**
+If the current file already has a partial implementation (e.g. a `WebViewContainer` subclass, a `willOpenMenu` override, a `WKUIDelegate` extension), continue that approach. Do not evaluate alternatives, do not start over. Switching approaches mid-session is the primary cause of broken intermediate states.
+
+**Rule 3 — Never claim a build is clean without running it.**
+The session exit condition for any code change is a clean `xcodebuild` run. Paste the last 10 lines of build output into the handoff block. A diff review is not a substitute.
+
+**Rule 4 — Write a handoff block before ending.**
+Format:
+```
+## Handoff — Session [ID]
+State: [COMPLETE / PARTIAL — describe what is done and what remains]
+Last build output:
+[paste last 10 lines of xcodebuild here]
+Files changed: [list]
+Next session starts with: [exact first action]
+```
+If you hit the context window without completing, the handoff block is the deliverable. Do not skip it to write more code.
+
+---
+
 ## Locked-in decisions
 
 | Question | Decision |
@@ -114,52 +147,109 @@ until B1 builds cleanly.
 
 ### B1 — Context menu
 
-**`Reader/ReaderViewController.swift`**
+> **This section has consumed multiple sessions. Read the diagnostic block below in full before writing a single line of code.**
 
-Add `WKUIDelegate` conformance. In `loadView()`, set `webView.uiDelegate = self`.
+#### Step 0 — Diagnose the current state (mandatory, do this first)
 
-Suppress the default WebKit context menu:
+Run these commands and read every line of output before proceeding:
 
-```swift
-func webView(_ webView: WKWebView,
-             contextMenuConfigurationFor element: WKContextMenuElementInfo,
-             completionHandler: @escaping (UIContextMenuConfiguration?) -> Void) {
-    completionHandler(nil)
-}
+```bash
+# 1. What iOS-only types are currently present? (should be zero)
+grep -n "WKContextMenuElementInfo\|UIContextMenuConfiguration\|UIContextMenuActionProvider" \
+    Reader/ReaderViewController.swift
+
+# 2. What context menu approach is already in the file?
+grep -n "willOpenMenu\|rightMouseDown\|WebViewContainer\|ReaderMenuWebView\|WKUIDelegate\|contextMenuConfiguration" \
+    Reader/ReaderViewController.swift
+
+# 3. Does ContextMenuPreferences.swift exist and is it in the Xcode target?
+ls -la Reader/ContextMenuPreferences.swift Preferences/ContextMenuPreferences.swift 2>/dev/null
+grep "ContextMenuPreferences" Ambrosia.xcodeproj/project.pbxproj | head -5
+
+# 4. Current build errors (the only truth that matters)
+xcodebuild -scheme Ambrosia -destination 'platform=macOS' build 2>&1 | grep -E "error:|warning:"
 ```
 
-Provide a custom NSMenu via `NSView.menu`. Override `rightMouseDown` on a thin
-`NSView` subclass wrapping the WKWebView (or subclass WKWebView itself):
+Based on what the diagnostic shows, continue the existing partial implementation — do not start over. If the file already has `WebViewContainer`, finish that. If it already has `willOpenMenu`, finish that. The chosen approach does not matter; finishing it does.
+
+#### Acceptance checklist — B1 is complete when all of these are true
+
+- [ ] Zero iOS-only types in `ReaderViewController.swift`: `WKContextMenuElementInfo`, `UIContextMenuConfiguration`, `UIContextMenuActionProvider` do not appear anywhere in the file.
+- [ ] The default WebKit context menu is suppressed via exactly one of:
+  - **Option A (container wrapper):** A `WebViewContainer: NSView` subclass wraps the `WKWebView`, overrides `rightMouseDown`, and `WKUIDelegate.webView(_:contextMenuConfigurationForElement:completionHandler:)` is NOT used (it is iOS-only). The suppression on macOS is achieved by building and showing a custom `NSMenu` instead — WebKit shows its own menu only if you do nothing.
+  - **Option B (WKWebView subclass):** A `ReaderMenuWebView: WKWebView` subclass overrides `willOpenMenu(_:with:)`, mutates the menu in place, and calls `super`.
+- [ ] `searchInBrowser()` is an `@objc` method that evaluates `window.getSelection().toString()` and opens the result via `NSWorkspace.shared.open(_:)`.
+- [ ] `addAnnotationFromSelection()` exists as a no-op `@objc` stub (full implementation is B2).
+- [ ] `ContextMenuPreferences.swift` compiles and is registered in the Xcode target.
+- [ ] `ReaderPreferences.swift` has a `contextMenu: ContextMenuPreferences` property.
+- [ ] `xcodebuild` produces zero errors. Paste the last 10 lines of output into the handoff block.
+
+#### What has gone wrong in previous sessions — do not repeat
+
+- Using `WKContextMenuElementInfo` or `UIContextMenuConfiguration` — these are **iOS-only**. The macOS `WKUIDelegate` does not have these methods. Any code containing them will not compile on macOS.
+- Switching between `willOpenMenu` and `WebViewContainer` mid-session without finishing either, leaving both approaches partially present.
+- Reading the file state from memory or from a previous session's description instead of running `grep` and `cat` at the start of the session.
+- Ending a session after a diff review without running `xcodebuild`.
+
+#### Reference implementation (use only if the file has no existing partial implementation)
+
+If and only if Step 0 shows no existing context menu code, implement using Option A:
 
 ```swift
-override func rightMouseDown(with event: NSEvent) {
-    let menu = NSMenu(title: "")
-    menu.addItem(NSMenuItem(title: "Search in Browser",
-                            action: #selector(searchInBrowser), keyEquivalent: ""))
-    menu.addItem(NSMenuItem(title: "Add Annotation…",
-                            action: #selector(addAnnotationFromSelection), keyEquivalent: ""))
-    menu.addItem(.separator())
-    menu.addItem(NSMenuItem(title: "Copy",
-                            action: #selector(NSText.copy(_:)), keyEquivalent: ""))
-    NSMenu.popUpContextMenu(menu, with: event, for: self)
-}
-```
+// Add inside ReaderViewController.swift, at the bottom of the file
 
-`searchInBrowser`:
+private class WebViewContainer: NSView {
+    weak var viewController: ReaderViewController?
 
-```swift
-@objc private func searchInBrowser() {
-    webView.evaluateJavaScript("window.getSelection().toString()", completionHandler: nil) { result, _ in
-        guard let text = result as? String, !text.isEmpty else { return }
-        var comps = URLComponents(string: "https://www.google.com/search")!
-        comps.queryItems = [URLQueryItem(name: "q", value: text)]
-        if let url = comps.url { NSWorkspace.shared.open(url) }
+    override func rightMouseDown(with event: NSEvent) {
+        guard let vc = viewController else { super.rightMouseDown(with: event); return }
+        let menu = vc.buildContextMenu()
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
 }
 ```
 
-Note: `NSWorkspace.shared.open(_:)` always uses the system default browser regardless
-of which search engine URL is used. The user's browser choice is respected automatically.
+Wire it in `loadView()`:
+```swift
+let container = WebViewContainer()
+container.viewController = self
+container.addSubview(webView)
+webView.translatesAutoresizingMaskIntoConstraints = false
+NSLayoutConstraint.activate([
+    webView.topAnchor.constraint(equalTo: container.topAnchor),
+    webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+    webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+    webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+])
+self.view = container
+```
+
+`buildContextMenu()` reads `ReaderPreferences.shared.contextMenu` and returns an `NSMenu`.
+Menu items for "Search in Browser" and "Add Annotation…" must have `target = self` set
+explicitly — if left nil they travel the responder chain and the WKWebView may swallow them.
+"Copy" leaves `target = nil` so it reaches `WKWebView`'s own copy handler.
+
+`searchInBrowser`:
+```swift
+@objc func searchInBrowser() {
+    webView.evaluateJavaScript("window.getSelection().toString()", completionHandler: nil)
+    // Note: the two-argument form above is the correct macOS signature.
+    // See Invariant 11: always pass completionHandler: nil, not a bare zero-arg closure.
+}
+```
+
+The JS callback must use the `(Any?, Error?) -> Void` form. Open the URL:
+```swift
+webView.evaluateJavaScript("window.getSelection().toString()") { result, _ in
+    guard let text = result as? String, !text.isEmpty else { return }
+    var comps = URLComponents(string: "https://www.google.com/search")!
+    comps.queryItems = [URLQueryItem(name: "q", value: text)]
+    if let url = comps.url { NSWorkspace.shared.open(url) }
+}
+```
+
+`NSWorkspace.shared.open(_:)` always uses the system default browser regardless of the
+URL's domain. The user's browser choice is respected automatically.
 
 ### B2 — Unified Annotation type
 
@@ -1286,18 +1376,21 @@ IDs with the active filter result IDs (if any) and passes the intersection to
 
 ## Updated implementation order
 
-| Session | Section | Size |
-|---|---|---|
-| 8A | A — Custom column bug fix | Small |
-| 8B | F — NOT filter chip; G — Dock reopen | Small |
-| 8C-1 | B1 — Context menu | Small |
-| 8C-2 | B2 — Unified annotation model + sidebar + popover | Large |
-| 8D | C — Font picker + reload strategy | Medium |
-| 8E-1 | D1 — LibraryToolbarState + NSToolbar | Medium |
-| 8E-2 | D2 — Email view | Large |
-| 8E-3 | D3 — Grid view + cover art | Medium |
-| 8F | E — Window size preference | Small |
-| 8G | H — Pagination mode toggle in Settings | Small |
-| 8H-1 | I1 — SearchQueryParser + prefix SQL | Medium |
-| 8H-2 | I2 — Autocomplete suggestions UI | Medium |
-| 8H-3 | I3 — FTS5 integration | Medium |
+| Session | Section | Size | Status |
+|---|---|---|---|
+| 8A | A — Custom column bug fix | Small | ✅ Complete |
+| 8B | F — NOT filter chip; G — Dock reopen | Small | ✅ Complete |
+| 8C-1 | B1 — Context menu | Small | ⚠️ Partially attempted — run diagnostic before proceeding |
+| 8C-2 | B2 — Unified annotation model + sidebar + popover | Large | Not started |
+| 8D | C — Font picker + reload strategy | Medium | Not started |
+| 8E-1 | D1 — LibraryToolbarState + NSToolbar | Medium | Not started |
+| 8E-2 | D2 — Email view | Large | Not started |
+| 8E-3 | D3 — Grid view + cover art | Medium | Not started |
+| 8F | E — Window size preference | Small | Not started |
+| 8G | H — Pagination mode toggle in Settings | Small | Not started |
+| 8H-1 | I1 — SearchQueryParser + prefix SQL | Medium | Not started |
+| 8H-2 | I2 — Autocomplete suggestions UI | Medium | Not started |
+| 8H-3 | I3 — FTS5 integration | Medium | Not started |
+
+Do not start 8C-2 until 8C-1 produces a clean `xcodebuild` and the handoff block contains the build output.
+Do not start 8E-2 until 8E-1 builds cleanly.
