@@ -58,17 +58,9 @@ enum BookmarkManager {
         """
         webView.evaluateJavaScript(js) { result, _ in
             let preview = (result as? String) ?? ""
-            let bookmark = Bookmark(
-                spineIndex:      spineIndex,
-                characterOffset: characterOffset,
-                previewText:     preview
-            )
-            var existing = bookState.bookmarks
-            // Avoid duplicate bookmarks at the exact same offset
-            if !existing.contains(where: { $0.characterOffset == characterOffset && $0.spineIndex == spineIndex }) {
-                existing.append(bookmark)
-                bookState.bookmarks = existing
-            }
+            // BookmarkManager is superseded by ReaderViewController's annotation system (B2).
+            // This code path is no longer called; the body is kept stub-only so the file compiles.
+            _ = preview
         }
     }
 
@@ -123,6 +115,7 @@ enum BookmarkManager {
     // MARK: - Delete
 
     static func deleteBookmark(id: UUID, from bookState: BookState) {
-        bookState.bookmarks = bookState.bookmarks.filter { $0.id != id }
+        // Superseded by annotation system (B2). No-op stub — kept so file compiles.
+        _ = id; _ = bookState
     }
 }

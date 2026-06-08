@@ -50,6 +50,9 @@
 		D67DC672B21B9C67E2454465F /* CollectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE5E3EB1BF9C138C86AFF21F /* CollectionsView.swift */; };
 		56289C63BFA2118454C7D2C7F /* ReadingGoalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49EB97076C4987CADEC037C /* ReadingGoalView.swift */; };
 		01EF0559DBE5881E10712105F /* BookmarkSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87293BD4CB51E144CC4057EC /* BookmarkSidebarView.swift */; };
+		AA11223344556677889900AAF /* AnnotationSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677889900AA /* AnnotationSidebarView.swift */; };
+		BB99887766554433221100BBF /* AnnotationPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB99887766554433221100BB /* AnnotationPopover.swift */; };
+		CC11223344556677889900CCF /* FindBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11223344556677889900CC /* FindBarView.swift */; };
 		99F7BE9279DA0BDF718EAAADF /* TagSynonymStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2F7D6C9C832E5FAE1048A46 /* TagSynonymStore.swift */; };
 		3752F8ABCEECBBFFEC4065BBF /* PreferencesWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCF05383F236D5093B604921 /* PreferencesWindowController.swift */; };
 		BB11223344556677889900CCF /* ContextMenuPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB11223344556677889900CC /* ContextMenuPreferences.swift */; };
@@ -99,6 +102,9 @@
 		BE5E3EB1BF9C138C86AFF21F /* CollectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionsView.swift; sourceTree = "<group>"; };
 		A49EB97076C4987CADEC037C /* ReadingGoalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingGoalView.swift; sourceTree = "<group>"; };
 		87293BD4CB51E144CC4057EC /* BookmarkSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarkSidebarView.swift; sourceTree = "<group>"; };
+		AA11223344556677889900AA /* AnnotationSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationSidebarView.swift; sourceTree = "<group>"; };
+		BB99887766554433221100BB /* AnnotationPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationPopover.swift; sourceTree = "<group>"; };
+		CC11223344556677889900CC /* FindBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FindBarView.swift; sourceTree = "<group>"; };
 		BB11223344556677889900CC /* ContextMenuPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextMenuPreferences.swift; sourceTree = "<group>"; };
 		D2F7D6C9C832E5FAE1048A46 /* TagSynonymStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagSynonymStore.swift; sourceTree = "<group>"; };
 		CCF05383F236D5093B604921 /* PreferencesWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindowController.swift; sourceTree = "<group>"; };
@@ -185,6 +191,9 @@
 				9D4E67B889EA4F2999FBE7D4 /* PaginationJS.swift */,
 				C5CF7F5D87034F05895A4539 /* HighlightBridge.swift */,
 				898749FB003147C58A876E92 /* BookmarkManager.swift */,
+				AA11223344556677889900AA /* AnnotationSidebarView.swift */,
+				BB99887766554433221100BB /* AnnotationPopover.swift */,
+				CC11223344556677889900CC /* FindBarView.swift */,
 				00D6889E038A44BD866CAB5E /* ReaderPreferences.swift */,
 				87293BD4CB51E144CC4057EC /* BookmarkSidebarView.swift */,
 				BB11223344556677889900CC /* ContextMenuPreferences.swift */,
@@ -367,6 +376,9 @@
 				D67DC672B21B9C67E2454465F /* CollectionsView.swift in Sources */,
 				56289C63BFA2118454C7D2C7F /* ReadingGoalView.swift in Sources */,
 				01EF0559DBE5881E10712105F /* BookmarkSidebarView.swift in Sources */,
+				AA11223344556677889900AAF /* AnnotationSidebarView.swift in Sources */,
+				BB99887766554433221100BBF /* AnnotationPopover.swift in Sources */,
+				CC11223344556677889900CCF /* FindBarView.swift in Sources */,
 				99F7BE9279DA0BDF718EAAADF /* TagSynonymStore.swift in Sources */,
 				3752F8ABCEECBBFFEC4065BBF /* PreferencesWindowController.swift in Sources */,
 				BB11223344556677889900CCF /* ContextMenuPreferences.swift in Sources */,

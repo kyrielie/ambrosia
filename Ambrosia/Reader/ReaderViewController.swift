@@ -6,25 +6,19 @@ import SwiftUI
 // MARK: - ReaderViewController
 //
 // Hosts the main visible WKWebView for reading.
-// Supports two modes, switchable at runtime:
+// Supports two modes: .scroll and .paginated.
 //
-//   .scroll     — full merged HTML, position tracked by window.scrollY
-//   .paginated  — same merged HTML, paginated by PaginationEngine,
-//                 one page visible at a time, position tracked by page index
+// Annotation flow:
+//   mouseup → highlightAdded → store pendingAnnotation (NO UI shown)
+//   "Add Annotation…" menu item → addAnnotationFromSelection() → present popover
+//   ⌘D → savePointAnnotationAtCurrentPosition() → immediate save + sentence preview
 //
-// Phase 5 additions:
-//   - HighlightBridge: selection listener injected after every didFinish;
-//     "highlightAdded" messages decoded and persisted to BookState.
-//   - BookmarkManager: ⌘D saves a bookmark; sidebar panel lists/jumps/deletes.
-//   - Message handlers registered at WKWebViewConfiguration init time (required):
-//       positionUpdate, pageAction, highlightAdded
+// Find bar: ⌘F / ⌘G / ⇧⌘G. Uses WKFindConfiguration (macOS 13+).
 //
-// Invariant: every style or font change calls reloadHTML(), which rebuilds
-// the full HTML string from EPUBParser and reloads the WebView.
-// Never patch the live DOM for style changes — see project invariant #7.
+// Highlight click: spans with notes post "highlightTapped"; Swift shows note popover.
 //
-// Character offset convention: UTF-16 code units, text nodes only.
-// See EPUBParser.swift for the full contract.
+// Message handlers (all registered at construction time):
+//   positionUpdate, pageAction, highlightAdded, highlightTapped
 
 class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMessageHandler {
 
@@ -50,9 +44,27 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     // Resize debounce
     private let resizeDebounce = DebounceTimer(delay: 0.3)
 
-    // Bookmark sidebar
+    // Annotation sidebar
     private var sidebarPanel: NSPanel?
-    private var sidebarHostingView: NSHostingView<BookmarkSidebarView>?
+    private var sidebarHostingView: NSHostingView<AnnotationSidebarView>?
+
+    // Pending annotation captured at mouseup — presented in popover only when menu item fires
+    private var pendingAnnotation: Annotation?
+    // Cursor position at mouseup in CSS coordinates (pageY = document-relative)
+    private var pendingCursorX: CGFloat = 0
+    private var pendingCursorPageY: CGFloat = 0
+
+    // Active popovers
+    private var annotationPopover: NSPopover?
+    private var notePopover: NSPopover?
+
+    // Find bar
+    private var findBarHostingView: NSHostingView<FindBarView>?
+    private var findSearchText: String = "" {
+        didSet { performFind(findSearchText) }
+    }
+    private var findMatchCurrent: Int = 0
+    private var findMatchTotal: Int = 0
 
     // MARK: - Private: persistence
 
@@ -85,10 +97,10 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         #endif
 
-        // All message handlers must be registered at construction time.
-        config.userContentController.add(self, name: "positionUpdate")   // scroll mode position
-        config.userContentController.add(self, name: "pageAction")       // paginated prev/next
-        config.userContentController.add(self, name: "highlightAdded")   // text selection → highlight
+        config.userContentController.add(self, name: "positionUpdate")
+        config.userContentController.add(self, name: "pageAction")
+        config.userContentController.add(self, name: "highlightAdded")   // capture selection only
+        config.userContentController.add(self, name: "highlightTapped")  // note popup trigger
 
         webView = ReaderMenuWebView(frame: .zero, configuration: config)
         webView.viewController = self
@@ -99,7 +111,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     override func viewDidLoad() {
         super.viewDidLoad()
         ensureBookState()
-        currentMode = bookState?.readingMode ?? .scroll
+        currentMode = .scroll
 
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
@@ -109,6 +121,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     override func viewDidLayout() {
         super.viewDidLayout()
+        repositionFindBar()
         guard currentMode == .paginated, !pages.isEmpty else { return }
         resizeDebounce.schedule { [weak self] in
             self?.repaginatePreservingPosition()
@@ -120,6 +133,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         saveTimer?.invalidate()
         saveTimer = nil
         sidebarPanel?.close()
+        annotationPopover?.close()
+        notePopover?.close()
+        hideFindBar()
         flushPosition()
     }
 
@@ -127,12 +143,12 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     private func loadEPUB() async {
         guard let pathStr = LibraryRegistry.shared.activePath else {
-            await showError("No library open."); return
+            await MainActor.run { self.showError("No library open.") }; return
         }
         let libraryRoot = URL(fileURLWithPath: pathStr)
         guard let epubURL = book.epubURL(libraryRoot: libraryRoot),
               FileManager.default.fileExists(atPath: epubURL.path) else {
-            await showError("EPUB file not found: \(book.displayTitle)"); return
+            await MainActor.run { self.showError("EPUB file not found: \(self.book.displayTitle)") }; return
         }
 
         do {
@@ -149,11 +165,11 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 self.webView.loadHTMLString(html, baseURL: imgBase)
             }
         } catch {
-            await showError(error.localizedDescription)
+            await MainActor.run { self.showError(error.localizedDescription) }
         }
     }
 
-    // MARK: - HTML reload (on style/font change)
+    // MARK: - HTML reload
 
     func reloadHTML() {
         guard let p = parser else { return }
@@ -170,38 +186,26 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     func switchToScrollMode() {
         currentMode = .scroll
-        bookState?.readingMode = .scroll
-        saveCurrentCharOffset { [weak self] _ in
-            self?.reloadHTML()
-        }
+        saveCurrentCharOffset { [weak self] _ in self?.reloadHTML() }
     }
 
     func switchToPaginatedMode() {
         currentMode = .paginated
-        bookState?.readingMode = .paginated
         paginateCurrentContent()
     }
 
     // MARK: - WKNavigationDelegate
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        // Inject PaginationJS first (needed in both modes: paginated uses it
-        // for rendering, scroll mode uses ambrosiaHighlight for bookmark jumps).
         webView.evaluateJavaScript(PaginationJS.script, completionHandler: nil)
-
-        // Inject highlight selection listener (Phase 5)
         HighlightBridge.injectSelectionListener(into: webView)
-
-        // Restore persisted highlights for the current document
-        let highlights = bookState?.highlights ?? []
-        HighlightBridge.restoreHighlights(highlights, into: webView)
+        restoreAnnotations()
 
         switch currentMode {
         case .scroll:
             restoreScrollPosition()
             injectScrollTracker()
             startAutoSave()
-
         case .paginated:
             paginateCurrentContent()
         }
@@ -234,7 +238,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         webView.evaluateJavaScript(js, completionHandler: nil)
     }
 
-    // MARK: - Paginated mode: pagination
+    // MARK: - Paginated mode
 
     private func paginateCurrentContent() {
         guard !currentHTML.isEmpty else { return }
@@ -244,13 +248,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         engine.paginate(html: currentHTML, pageHeight: pageHeight, baseURL: imageBaseURL) { [weak self] boundaries in
             guard let self else { return }
             self.paginationEngine = nil
-
             if boundaries.isEmpty {
-                print("[ReaderVC] Pagination returned 0 pages — falling back to scroll mode")
-                self.switchToScrollMode()
-                return
+                self.switchToScrollMode(); return
             }
-
             self.pages = boundaries
             let savedOffset = self.bookState?.lastCharacterOffset ?? 0
             self.currentPageIndex = self.pageIndex(forCharOffset: savedOffset)
@@ -266,21 +266,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             let pageHeight = max(1, self.webView.bounds.height - 2.0)
             let engine = PaginationEngine(parentView: self.view)
             self.paginationEngine = engine
-            engine.paginate(
-                html: self.currentHTML,
-                pageHeight: pageHeight,
-                baseURL: self.imageBaseURL
-            ) { [weak self] boundaries in
+            engine.paginate(html: self.currentHTML, pageHeight: pageHeight, baseURL: self.imageBaseURL) { [weak self] boundaries in
                 guard let self else { return }
                 self.paginationEngine = nil
                 guard !boundaries.isEmpty else { return }
                 self.pages = boundaries
                 self.currentPageIndex = self.pageIndex(forCharOffset: savedOffset)
                 self.renderCurrentPage()
-                self.webView.evaluateJavaScript(
-                    "window.ambrosiaHighlight(\(savedOffset));",
-                    completionHandler: nil
-                )
+                self.webView.evaluateJavaScript("window.ambrosiaHighlight(\(savedOffset));", completionHandler: nil)
             }
         }
     }
@@ -289,37 +282,25 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         guard !pages.isEmpty else { return }
         let idx  = max(0, min(currentPageIndex, pages.count - 1))
         let page = pages[idx]
-        webView.evaluateJavaScript(
-            "window.ambrosiaRenderPage(\(page.startChar), \(page.endChar));",
-            completionHandler: nil
-        )
-        let progress = Double(idx + 1) / Double(pages.count)
-        bookState?.totalReadPercent = progress
+        webView.evaluateJavaScript("window.ambrosiaRenderPage(\(page.startChar), \(page.endChar));", completionHandler: nil)
+        bookState?.totalReadPercent = Double(idx + 1) / Double(pages.count)
     }
-
-    // MARK: - Page navigation (paginated mode)
 
     func goToNextPage() {
         guard currentMode == .paginated, currentPageIndex < pages.count - 1 else { return }
-        currentPageIndex += 1
-        renderCurrentPage()
-        saveCurrentPage()
+        currentPageIndex += 1; renderCurrentPage(); saveCurrentPage()
     }
 
     func goToPreviousPage() {
         guard currentMode == .paginated, currentPageIndex > 0 else { return }
-        currentPageIndex -= 1
-        renderCurrentPage()
-        saveCurrentPage()
+        currentPageIndex -= 1; renderCurrentPage(); saveCurrentPage()
     }
 
     // MARK: - Char offset helpers
 
     private func pageIndex(forCharOffset offset: Int) -> Int {
         guard !pages.isEmpty else { return 0 }
-        for (i, page) in pages.enumerated() {
-            if offset < page.endChar { return i }
-        }
+        for (i, page) in pages.enumerated() { if offset < page.endChar { return i } }
         return pages.count - 1
     }
 
@@ -330,9 +311,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             completion(offset)
         } else {
             webView.evaluateJavaScript("[window.scrollY, document.body.scrollHeight]") { [weak self] result, _ in
-                guard let arr = result as? [Double], arr.count == 2, arr[1] > 0 else {
-                    completion(0); return
-                }
+                guard let arr = result as? [Double], arr.count == 2, arr[1] > 0 else { completion(0); return }
                 self?.bookState?.lastScrollOffset = arr[0]
                 completion(0)
             }
@@ -361,8 +340,6 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             bookState = state
         }
     }
-
-    // MARK: - Auto-save
 
     private func startAutoSave() {
         saveTimer?.invalidate()
@@ -396,16 +373,34 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             else if body == "prev" { goToPreviousPage() }
 
         case "highlightAdded":
-            guard let highlight = HighlightBridge.decodeHighlight(from: message),
-                  var state = bookState else { return }
-            var existing = state.highlights
-            existing.append(highlight)
-            state.highlights = existing
-            flushPosition()
+            // Store pending annotation — do NOT show popover yet.
+            // Popover is shown only when "Add Annotation…" menu item fires.
+            if let annotation = HighlightBridge.decodeAnnotation(from: message) {
+                pendingAnnotation = annotation
+                if let body = message.body as? String,
+                   let data = body.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    pendingCursorX     = json["cursorX"]     as? CGFloat ?? webView.bounds.midX
+                    pendingCursorPageY = json["cursorPageY"] as? CGFloat ?? webView.bounds.midY
+                }
+            }
+
+        case "highlightTapped":
+            // User clicked a highlight span that has a note — show note popover.
+            guard let (idStr, clientX, pageY) = HighlightBridge.decodeTap(from: message) else { return }
+            let idWithDashes = idStr.inserting(dashes: true)
+            guard let uuid = UUID(uuidString: idWithDashes),
+                  let annotation = bookState?.annotations.first(where: { $0.id == uuid }),
+                  let note = annotation.note, !note.isEmpty
+            else { return }
+            DispatchQueue.main.async { [weak self] in
+                self?.presentNotePopover(note: note, clientX: clientX, pageY: pageY)
+            }
 
         default:
             break
         }
+
     }
 
     // MARK: - Keyboard events
@@ -414,129 +409,475 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         if event.modifierFlags.contains(.command) {
             switch event.charactersIgnoringModifiers {
             case "d":
-                saveBookmarkAtCurrentPosition()
-                return
+                savePointAnnotationAtCurrentPosition(); return
             case "b":
-                toggleBookmarkSidebar()
+                toggleAnnotationSidebar(); return
+            case "f":
+                toggleFindBar(); return
+            case "g":
+                if event.modifierFlags.contains(.shift) { findPrevious() }
+                else { findNext() }
                 return
             default:
                 break
             }
+        }
+        if event.keyCode == 53 && findBarHostingView != nil {   // Escape
+            hideFindBar(); return
         }
 
         guard currentMode == .paginated else { super.keyDown(with: event); return }
         switch event.keyCode {
         case 123, 126: goToPreviousPage()
         case 124, 125: goToNextPage()
-        case 49:       goToNextPage()   // space
+        case 49:       goToNextPage()
         default:       super.keyDown(with: event)
         }
     }
 
-    // MARK: - Responder-chain actions (called by menu items via NSApp.sendAction)
+    // MARK: - Responder-chain actions
 
-    @objc func addBookmark(_ sender: Any?) {
-        saveBookmarkAtCurrentPosition()
+    @objc func addAnnotation(_ sender: Any?) {
+        savePointAnnotationAtCurrentPosition()
     }
 
-    @objc func showBookmarkSidebar(_ sender: Any?) {
-        toggleBookmarkSidebar()
+    @objc func showAnnotationSidebar(_ sender: Any?) {
+        toggleAnnotationSidebar()
     }
 
-    // MARK: - Bookmarks
+    // MARK: - Point annotations (⌘D — immediate save with sentence preview)
 
-    private func saveBookmarkAtCurrentPosition() {
+    private func savePointAnnotationAtCurrentPosition() {
         guard let state = bookState else { return }
 
-        // Determine the current character offset
         let offset: Int
         if currentMode == .paginated, !pages.isEmpty {
             offset = pages[max(0, currentPageIndex)].startChar
         } else {
-            // Scroll mode: use 0 as a safe fallback; a full async version
-            // would evaluateJavaScript to get scrollY first, but for a simple
-            // bookmark the top-of-visible-area approximation is fine.
             offset = Int(state.lastScrollOffset)
         }
 
         let spineIndex = state.lastSpineIndex
 
-        BookmarkManager.saveBookmark(
-            at:         offset,
-            spineIndex: spineIndex,
-            in:         webView,
-            bookState:  state
-        )
+        // CHANGE 2: Extract surrounding sentence from the live DOM as preview text.
+        let sentenceJS = """
+        (function() {
+            var target = \(offset);
+            var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+            var remaining = target;
+            var node;
+            while ((node = walker.nextNode()) !== null) {
+                if (remaining <= node.length) {
+                    // Collect text around this position: 300 chars total
+                    var before = '';
+                    var after  = '';
 
-        // Brief visual confirmation
-        webView.evaluateJavaScript(
-            "window.ambrosiaHighlight(\(offset));",
-            completionHandler: nil
-        )
+                    // Collect chars before (walk backwards through text)
+                    var beforeWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+                    var nodes = [];
+                    var n;
+                    while ((n = beforeWalker.nextNode()) !== null) nodes.push(n);
 
-        // Flush immediately so the bookmark persists even if the app is force-quit
-        flushPosition()
+                    var nodeIdx = nodes.indexOf(node);
+                    var charIdx = remaining;
 
-        // Refresh sidebar if open
-        refreshSidebarIfVisible()
+                    // Scan backwards for sentence start
+                    var collected = '';
+                    var charPos = charIdx - 1;
+                    var ni = nodeIdx;
+                    while (ni >= 0 && collected.length < 150) {
+                        var txt = nodes[ni].data;
+                        var from = (ni === nodeIdx) ? charPos : txt.length - 1;
+                        for (var i = from; i >= 0 && collected.length < 150; i--) {
+                            var ch = txt[i];
+                            if (ch === '.' || ch === '!' || ch === '?' || ch === '\\n') break;
+                            collected = ch + collected;
+                        }
+                        if (collected.length < 150) ni--;
+                    }
+                    before = collected.trimStart();
+
+                    // Scan forwards for sentence end
+                    collected = '';
+                    charPos = charIdx;
+                    ni = nodeIdx;
+                    while (ni < nodes.length && collected.length < 150) {
+                        var txt2 = nodes[ni].data;
+                        var from2 = (ni === nodeIdx) ? charPos : 0;
+                        for (var j = from2; j < txt2.length && collected.length < 150; j++) {
+                            var ch2 = txt2[j];
+                            collected += ch2;
+                            if (ch2 === '.' || ch2 === '!' || ch2 === '?') break;
+                        }
+                        if (collected.length < 150 && !collected.match(/[.!?]$/)) ni++;
+                        else break;
+                    }
+                    after = collected.trimEnd();
+
+                    return (before + after).trim().replace(/\\s+/g, ' ');
+                }
+                remaining -= node.length;
+            }
+            return '';
+        })();
+        """
+
+        webView.evaluateJavaScript(sentenceJS) { [weak self] result, _ in
+            guard let self else { return }
+            let previewText = (result as? String) ?? ""
+
+            let annotation = Annotation(
+                spineIndex:   spineIndex,
+                startChar:    offset,
+                endChar:      offset,
+                selectedText: previewText,
+                colorHex:     "#FFD60A"
+            )
+
+            guard let state = self.bookState else { return }
+            var existing = state.annotations
+            if !existing.contains(where: { $0.startChar == offset && $0.spineIndex == spineIndex && $0.isPointAnnotation }) {
+                existing.append(annotation)
+                state.annotations = existing
+            }
+
+            self.webView.evaluateJavaScript("window.ambrosiaHighlight(\(offset));", completionHandler: nil)
+            self.flushPosition()
+            self.refreshSidebarIfVisible()
+            self.showHUD("Bookmark saved")
+        }
     }
 
-    // MARK: - Bookmark sidebar
+    // MARK: - Ranged annotations (context menu → popover)
 
-    func toggleBookmarkSidebar() {
-        if let panel = sidebarPanel, panel.isVisible {
-            panel.close()
+    // CHANGE 1: Popover is presented HERE (menu action), not at mouseup.
+    @objc func addAnnotationFromSelection() {
+        guard let pending = pendingAnnotation, !pending.selectedText.isEmpty else {
+            showHUD("Select text first, then right-click")
             return
         }
-        openBookmarkSidebar()
+        presentAnnotationPopover(for: pending)
+        pendingAnnotation = nil
     }
 
-    private func openBookmarkSidebar() {
-        guard let windowFrame = view.window?.frame else { return }
+    private func presentAnnotationPopover(for pending: Annotation) {
+        annotationPopover?.close()
 
-        let sidebar = makeSidebarView()
+        let popoverView = AnnotationPopover(
+            selectedText: pending.selectedText,
+            onSave: { [weak self] note, colorHex in
+                guard let self, let state = self.bookState else { return }
+                self.annotationPopover?.close()
+                self.annotationPopover = nil
+
+                var final = pending
+                final.note     = note
+                final.colorHex = colorHex
+
+                var existing = state.annotations
+                existing.append(final)
+                state.annotations = existing
+                self.flushPosition()
+                self.refreshSidebarIfVisible()
+
+                // Restore using the full set so overlap detection works correctly —
+                // the new span may overlap an already-rendered span.
+                // Re-running restoreHighlights is safe: each span checks `if (document.getElementById(...)) return`
+                // so existing spans are skipped; only the new one is inserted.
+                if !final.isPointAnnotation {
+                    HighlightBridge.restoreHighlights(existing.filter { !$0.isPointAnnotation }, into: self.webView)
+                }
+                self.showHUD("Annotation saved")
+            },
+            onCancel: { [weak self] in
+                self?.annotationPopover?.close()
+                self?.annotationPopover = nil
+            }
+        )
+
+        let popover = NSPopover()
+        popover.contentViewController = NSHostingController(rootView: popoverView)
+        popover.behavior = .semitransient
+        popover.contentSize = NSSize(width: 320, height: 300)
+        annotationPopover = popover
+
+        // Anchor to cursor position captured at mouseup.
+        // cursorPageY is document-relative; subtract scrollY to get viewport-relative clientY,
+        // then flip because NSView is bottom-up.
+        let cx = pendingCursorX
+        let cpy = pendingCursorPageY
+        webView.evaluateJavaScript("window.scrollY") { [weak self] result, _ in
+            guard let self else { return }
+            let scrollY = (result as? CGFloat) ?? 0
+            let clientY = cpy - scrollY
+            let viewX   = cx
+            let viewY   = self.webView.bounds.height - clientY
+            let anchor  = CGRect(x: viewX - 4, y: viewY - 4, width: 8, height: 8)
+            popover.show(relativeTo: anchor, of: self.webView, preferredEdge: .maxY)
+        }
+    }
+
+    // MARK: - Note popup (highlight click)
+
+    // FIX 3: Note popup — convert pageY (document-relative) to NSView coords.
+    private func presentNotePopover(note: String, clientX: CGFloat, pageY: CGFloat) {
+        notePopover?.close()
+
+        let noteView = NotePopoverView(note: note)
+        let popover = NSPopover()
+        popover.contentViewController = NSHostingController(rootView: noteView)
+        popover.behavior = .transient
+        popover.contentSize = NSSize(width: 240, height: 80)
+        notePopover = popover
+
+        // pageY is document-relative. Subtract scrollY to get viewport-relative clientY.
+        // NSView is bottom-up, so flip: viewY = webView.height - clientY.
+        webView.evaluateJavaScript("window.scrollY") { [weak self] result, _ in
+            guard let self else { return }
+            let scrollY  = (result as? CGFloat) ?? 0
+            let clientY  = pageY - scrollY
+            let viewX    = clientX
+            let viewY    = self.webView.bounds.height - clientY
+            let anchor   = CGRect(x: viewX - 4, y: viewY - 4, width: 8, height: 8)
+            popover.show(relativeTo: anchor, of: self.webView, preferredEdge: .maxY)
+        }
+    }
+
+    // MARK: - Restore annotations after page load
+
+    private func restoreAnnotations() {
+        guard let state = bookState else { return }
+        let ranged = state.annotations.filter { !$0.isPointAnnotation }
+        HighlightBridge.restoreHighlights(ranged, into: webView)
+    }
+
+    // MARK: - Jump to annotation (from sidebar)
+    // CHANGE 4: Uses char offset (primary, unambiguous). Falls back to find for
+    // point annotations with selectedText when offset is 0.
+
+    func jumpToAnnotation(_ annotation: Annotation) {
+        // Always dispatch on main thread — taps from the floating NSPanel sidebar
+        // can arrive on SwiftUI's render thread. Also bring the reader window to
+        // front so the scroll is actually visible to the user.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.view.window?.makeKeyAndOrderFront(nil)
+
+            let offset = annotation.startChar
+
+            if self.currentMode == .paginated {
+                self.currentPageIndex = self.pageIndex(forCharOffset: offset)
+                self.renderCurrentPage()
+                self.webView.evaluateJavaScript(
+                    "if (window.ambrosiaHighlight) window.ambrosiaHighlight(\(offset));",
+                    completionHandler: nil)
+                return
+            }
+
+            if offset > 0 || annotation.selectedText.isEmpty {
+                self.scrollToCharOffset(offset)
+            } else {
+                self.performFindAndJump(annotation.selectedText)
+            }
+        }
+    }
+
+    private func scrollToCharOffset(_ offset: Int) {
+        let js = """
+        (function() {
+            var target = \(offset);
+            var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+            var remaining = target;
+            var node;
+            while ((node = walker.nextNode()) !== null) {
+                if (remaining <= node.length) {
+                    var range = document.createRange();
+                    range.setStart(node, remaining);
+                    range.collapse(true);
+                    var marker = document.createElement('span');
+                    marker.style.cssText = 'display:inline;font-size:0;line-height:0;';
+                    range.insertNode(marker);
+                    var rect = marker.getBoundingClientRect();
+                    var y = rect.top + window.scrollY - 80;
+                    marker.parentNode.removeChild(marker);
+                    window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+                    return;
+                }
+                remaining -= node.length;
+            }
+        })();
+        """
+        webView.evaluateJavaScript(js, completionHandler: nil)
+        webView.evaluateJavaScript("if (window.ambrosiaHighlight) window.ambrosiaHighlight(\(offset));", completionHandler: nil)
+    }
+
+    // MARK: - Find bar (⌘F)
+    // CHANGE 3: find bar docked at bottom of reader, uses WKWebView.find().
+
+    private func toggleFindBar() {
+        if findBarHostingView != nil { hideFindBar() } else { showFindBar() }
+    }
+
+    private func showFindBar() {
+        guard findBarHostingView == nil else { return }
+
+        let barView = FindBarView(
+            searchText:   Binding(get: { self.findSearchText }, set: { self.findSearchText = $0 }),
+            matchCurrent: findMatchCurrent,
+            matchTotal:   findMatchTotal,
+            onNext:       { [weak self] in self?.findNext() },
+            onPrevious:   { [weak self] in self?.findPrevious() },
+            onClose:      { [weak self] in self?.hideFindBar() }
+        )
+
+        let hosting = NSHostingView(rootView: barView)
+        hosting.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(hosting)
+
+        let barHeight: CGFloat = 44
+        NSLayoutConstraint.activate([
+            hosting.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            hosting.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            hosting.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            hosting.heightAnchor.constraint(equalToConstant: barHeight),
+        ])
+
+        findBarHostingView = hosting
+    }
+
+    private func hideFindBar() {
+        findBarHostingView?.removeFromSuperview()
+        findBarHostingView = nil
+        findSearchText   = ""
+        findMatchCurrent = 0
+        findMatchTotal   = 0
+        // Clear find highlights
+        if #available(macOS 13.0, *) {
+            webView.find("", configuration: WKFindConfiguration()) { _ in }
+        }
+    }
+
+    private func repositionFindBar() {
+        // NSHostingView with Auto Layout handles this automatically; nothing to do.
+    }
+
+    private func performFind(_ query: String) {
+        guard #available(macOS 13.0, *) else { return }
+        guard !query.isEmpty else {
+            findMatchCurrent = 0; findMatchTotal = 0
+            webView.find("", configuration: WKFindConfiguration()) { _ in }
+            updateFindBar()
+            return
+        }
+
+        let config = WKFindConfiguration()
+        config.caseSensitive   = false
+        config.wraps           = true
+        config.backwards       = false
+
+        webView.find(query, configuration: config) { [weak self] result in
+            guard let self else { return }
+            self.findMatchTotal   = result.matchFound ? 1 : 0
+            self.findMatchCurrent = result.matchFound ? 1 : 0
+            self.updateFindBar()
+        }
+    }
+
+    private func findNext() {
+        guard #available(macOS 13.0, *), !findSearchText.isEmpty else { return }
+        let config = WKFindConfiguration()
+        config.caseSensitive = false
+        config.wraps         = true
+        config.backwards     = false
+        webView.find(findSearchText, configuration: config) { [weak self] result in
+            guard let self else { return }
+            if result.matchFound {
+                self.findMatchCurrent = (self.findMatchCurrent % max(1, self.findMatchTotal)) + 1
+            }
+            self.updateFindBar()
+        }
+    }
+
+    private func findPrevious() {
+        guard #available(macOS 13.0, *), !findSearchText.isEmpty else { return }
+        let config = WKFindConfiguration()
+        config.caseSensitive = false
+        config.wraps         = true
+        config.backwards     = true
+        webView.find(findSearchText, configuration: config) { [weak self] result in
+            guard let self else { return }
+            if result.matchFound {
+                self.findMatchCurrent = self.findMatchCurrent > 1
+                    ? self.findMatchCurrent - 1
+                    : self.findMatchTotal
+            }
+            self.updateFindBar()
+        }
+    }
+
+    private func performFindAndJump(_ text: String) {
+        guard #available(macOS 13.0, *), !text.isEmpty else { return }
+        let config = WKFindConfiguration()
+        config.caseSensitive = false
+        config.wraps         = true
+        config.backwards     = false
+        webView.find(text, configuration: config) { _ in }
+    }
+
+    private func updateFindBar() {
+        guard let hosting = findBarHostingView else { return }
+        let barView = FindBarView(
+            searchText:   Binding(get: { self.findSearchText }, set: { self.findSearchText = $0 }),
+            matchCurrent: findMatchCurrent,
+            matchTotal:   findMatchTotal,
+            onNext:       { [weak self] in self?.findNext() },
+            onPrevious:   { [weak self] in self?.findPrevious() },
+            onClose:      { [weak self] in self?.hideFindBar() }
+        )
+        hosting.rootView = barView
+    }
+
+    // MARK: - Annotation sidebar
+
+    func toggleAnnotationSidebar() {
+        if let panel = sidebarPanel, panel.isVisible { panel.close(); return }
+        openAnnotationSidebar()
+    }
+
+    private func openAnnotationSidebar() {
+        guard let windowFrame = view.window?.frame else { return }
+        let sidebar = makeAnnotationSidebarView()
         let hosting = NSHostingView(rootView: sidebar)
         hosting.frame = CGRect(x: 0, y: 0, width: 260, height: windowFrame.height)
         sidebarHostingView = hosting
 
         let panel = NSPanel(
-            contentRect: CGRect(
-                x: windowFrame.maxX,
-                y: windowFrame.minY,
-                width: 260,
-                height: windowFrame.height
-            ),
-            styleMask: [.titled, .closable, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
+            contentRect: CGRect(x: windowFrame.maxX, y: windowFrame.minY, width: 260, height: windowFrame.height),
+            styleMask: [.titled, .closable],
+            backing: .buffered, defer: false
         )
-        panel.title       = "Bookmarks"
+        panel.title = "Annotations"
         panel.isFloatingPanel = true
+        panel.level = .floating
         panel.contentView = hosting
-        panel.becomesKeyOnlyIfNeeded = true
         panel.orderFront(nil)
         sidebarPanel = panel
     }
 
-    private func makeSidebarView() -> BookmarkSidebarView {
-        BookmarkSidebarView(
-            bookmarks: bookState?.bookmarks ?? [],
-            onJump: { [weak self] bookmark in
-                guard let self else { return }
-                if self.currentMode == .paginated {
-                    BookmarkManager.jumpToBookmark(bookmark, in: self.webView) { offset in
-                        self.currentPageIndex = self.pageIndex(forCharOffset: offset)
-                        self.renderCurrentPage()
-                    }
-                } else {
-                    BookmarkManager.jumpToBookmark(bookmark, in: self.webView, renderPage: nil)
-                }
+    private func makeAnnotationSidebarView() -> AnnotationSidebarView {
+        AnnotationSidebarView(
+            annotations: bookState?.annotations ?? [],
+            onJump: { [weak self] annotation in
+                self?.jumpToAnnotation(annotation)
             },
             onDelete: { [weak self] id in
                 guard let self, let state = self.bookState else { return }
-                BookmarkManager.deleteBookmark(id: id, from: state)
+                state.annotations = state.annotations.filter { $0.id != id }
                 self.flushPosition()
                 self.refreshSidebarIfVisible()
+                // Remove the live DOM span so the highlight disappears immediately
+                // without requiring a page reload.
+                HighlightBridge.removeHighlight(id: id, from: self.webView)
             }
         )
     }
@@ -544,7 +885,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private func refreshSidebarIfVisible() {
         guard let panel = sidebarPanel, panel.isVisible,
               let hosting = sidebarHostingView else { return }
-        hosting.rootView = makeSidebarView()
+        hosting.rootView = makeAnnotationSidebarView()
     }
 
     // MARK: - Error display
@@ -559,12 +900,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         webView.loadHTMLString(html, baseURL: nil)
     }
 
-    // MARK: - Context menu (B1)
+    // MARK: - Context menu actions
 
-    // MARK: - Context menu actions (B1)
-
-    /// Opens the selected text as a Google search in the user's default browser.
-    /// Two-argument evaluateJavaScript form — required by Invariant 11.
     @objc func searchInBrowser() {
         webView.evaluateJavaScript("window.getSelection().toString()") { result, _ in
             guard let text = result as? String, !text.isEmpty else { return }
@@ -574,20 +911,10 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
     }
 
-    /// Copies the selected text to the clipboard as a formatted quote with book metadata.
-    ///
-    /// Format:
-    ///   "Selected passage here."
-    ///
-    ///   — Book Title, by Author Name
     @objc func shareSelection() {
         webView.evaluateJavaScript("window.getSelection().toString()") { [weak self] result, _ in
             guard let self, let text = result as? String, !text.isEmpty else { return }
-            let formatted = """
-                \u{201C}\(text)\u{201D}
-
-                \u{2014} \(self.book.displayTitle), by \(self.book.displayAuthors)
-                """
+            let formatted = "\u{201C}\(text)\u{201D}\n\n\u{2014} \(self.book.displayTitle), by \(self.book.displayAuthors)"
             DispatchQueue.main.async {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(formatted, forType: .string)
@@ -596,71 +923,50 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
     }
 
-    /// Debug implementation for B1 — confirms the menu wiring fires and JS evaluation
-    /// returns the expected selection text. Full popover UI (colour picker, note field,
-    /// save to BookState.annotationsData) is implemented in session 8C-2.
-    ///
-    /// If this alert never appears when you tap "Add Annotation…", the target/action
-    /// wiring in ReaderMenuWebView.willOpenMenu is broken — check that item.target = vc.
-    /// If the alert appears but "selectedText" is empty, the JS evaluation failed or
-    /// the menu was opened without an active text selection.
-    @objc func addAnnotationFromSelection() {
-        webView.evaluateJavaScript("window.getSelection().toString()") { [weak self] result, _ in
-            guard let self else { return }
-            let selected = (result as? String) ?? ""
-            DispatchQueue.main.async {
-                let alert = NSAlert()
-                if selected.isEmpty {
-                    alert.messageText = "No text selected"
-                    alert.informativeText = "Select some text in the reader, then right-click → Add Annotation…"
-                } else {
-                    alert.messageText = "Add Annotation — wiring confirmed ✓"
-                    alert.informativeText = "Selected text (\(selected.count) chars):\n\n\"\(selected.prefix(300))\"\n\nFull popover UI with note field and colour picker is implemented in session 8C-2."
-                }
-                alert.addButton(withTitle: "OK")
-                alert.runModal()
-            }
-        }
-    }
-
     // MARK: - HUD
 
-    /// Brief non-blocking confirmation label that fades in, lingers, then fades out.
     private func showHUD(_ message: String) {
-        let hud = NSTextField(labelWithString: message)
-        hud.font              = .systemFont(ofSize: 13, weight: .medium)
-        hud.textColor         = .white
-        hud.isBezeled         = false
-        hud.isEditable        = false
-        hud.backgroundColor   = .clear
-        hud.sizeToFit()
+        // Build a pill-shaped container with a centred label.
+        // Using a separate container avoids the NSTextField left-alignment issue
+        // where insetBy expands the frame but the text stays left-aligned.
+        let label = NSTextField(labelWithString: message)
+        label.font            = .systemFont(ofSize: 13, weight: .medium)
+        label.textColor       = .white
+        label.isBezeled       = false
+        label.isEditable      = false
+        label.backgroundColor = .clear
+        label.alignment       = .center
+        label.sizeToFit()
 
-        // Pad around the text
-        var f = hud.frame
-        f = f.insetBy(dx: -14, dy: -7)
-        f.origin = CGPoint(
-            x: (view.bounds.width  - f.width)  / 2,
-            y:  view.bounds.height * 0.12
-        )
-        hud.frame = f
+        let padding: CGFloat = 14
+        let vPad:    CGFloat = 8
+        let pillW = label.frame.width  + padding * 2
+        let pillH = label.frame.height + vPad * 2
 
-        hud.wantsLayer        = true
-        hud.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
-        hud.layer?.cornerRadius    = 8
-        hud.alphaValue             = 0
-        view.addSubview(hud)
+        let container = NSView(frame: CGRect(
+            x: (view.bounds.width - pillW) / 2,
+            y: view.bounds.height * 0.12,
+            width: pillW, height: pillH
+        ))
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
+        container.layer?.cornerRadius    = pillH / 2
+
+        label.frame = CGRect(x: padding, y: vPad, width: label.frame.width, height: label.frame.height)
+        container.addSubview(label)
+
+        container.alphaValue = 0
+        view.addSubview(container)
 
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.18
-            hud.animator().alphaValue = 1
+            container.animator().alphaValue = 1
         } completionHandler: {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 NSAnimationContext.runAnimationGroup { ctx in
                     ctx.duration = 0.3
-                    hud.animator().alphaValue = 0
-                } completionHandler: {
-                    hud.removeFromSuperview()
-                }
+                    container.animator().alphaValue = 0
+                } completionHandler: { container.removeFromSuperview() }
             }
         }
     }
@@ -673,89 +979,86 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         let paginatedTotal = pages.reduce(0) { $0 + $1.charCount }
         var expectedTotal = 0
         for item in p.spine {
-            if let text = try? p.plainText(for: item) {
-                expectedTotal += text.utf16.count
-            }
+            if let text = try? p.plainText(for: item) { expectedTotal += text.utf16.count }
         }
         let diff = abs(paginatedTotal - expectedTotal)
-        if diff <= 5 {
-            print("[Harness] ✅ PASS — paginated=\(paginatedTotal) expected=\(expectedTotal) diff=\(diff)")
-        } else {
-            print("[Harness] ❌ FAIL — paginated=\(paginatedTotal) expected=\(expectedTotal) diff=\(diff)")
-        }
+        print(diff <= 5
+            ? "[Harness] ✅ PASS — paginated=\(paginatedTotal) expected=\(expectedTotal) diff=\(diff)"
+            : "[Harness] ❌ FAIL — paginated=\(paginatedTotal) expected=\(expectedTotal) diff=\(diff)")
     }
     #endif
 }
 
+// MARK: - NotePopoverView
+
+/// Minimal read-only view shown when a highlight span with a note is clicked.
+private struct NotePopoverView: View {
+    let note: String
+    var body: some View {
+        ScrollView {
+            Text(note)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+        }
+        .frame(width: 240)
+        .frame(maxHeight: 160)
+    }
+}
+
+// MARK: - String UUID helper
+
+private extension String {
+    /// Converts a 32-char hex UUID string (no dashes) back to standard UUID format.
+    func inserting(dashes: Bool) -> String {
+        guard dashes, count == 32 else { return self }
+        var s = self
+        for i in [20, 16, 12, 8] { s.insert("-", at: s.index(s.startIndex, offsetBy: i)) }
+        return s
+    }
+}
+
 // MARK: - ReaderMenuWebView
 
-/// WKWebView subclass that intercepts WebKit's context menu via willOpenMenu(_:with:),
-/// replacing it entirely with the reader's custom NSMenu (Option B from B1 spec).
-///
-/// willOpenMenu is a macOS-only WKWebView method — it is NOT the iOS-only
-/// WKUIDelegate method and does not require any delegate hookup.
-/// WebKit calls it on the WKWebView instance before displaying the menu, passing
-/// the menu it intends to show. We clear that menu and replace it with our own items.
 private class ReaderMenuWebView: WKWebView {
 
     weak var viewController: ReaderViewController?
 
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
-        // Step 1: strip unwanted WebKit default items by title.
-        // "Copy Link with Highlight" pollutes the menu; "Share…" is replaced by our
-        // own Share item that formats the quote with book metadata.
-        let titlesToStrip: Set<String> = [
-            "Copy Link with Highlight",
-            "Share\u{2026}",   // "Share…" with Unicode ellipsis (U+2026)
-            "Share...",        // ASCII fallback
-        ]
+        let titlesToStrip: Set<String> = ["Copy Link with Highlight", "Share\u{2026}", "Share..."]
         for item in menu.items where titlesToStrip.contains(item.title) {
             menu.removeItem(item)
         }
 
-        guard let vc = viewController else {
-            super.willOpenMenu(menu, with: event)
-            return
-        }
+        guard let vc = viewController else { super.willOpenMenu(menu, with: event); return }
 
-        // Step 2: prepend our custom items at the top of the (now-cleaned) menu.
         let prefs = ReaderPreferences.shared.contextMenu
         var idx = 0
 
         if prefs.showSearchInBrowser {
-            let item = NSMenuItem(
-                title: "Search in Browser",
-                action: #selector(ReaderViewController.searchInBrowser),
-                keyEquivalent: ""
-            )
+            let item = NSMenuItem(title: "Search in Browser",
+                                  action: #selector(ReaderViewController.searchInBrowser),
+                                  keyEquivalent: "")
             item.target = vc
-            menu.insertItem(item, at: idx)
-            idx += 1
+            menu.insertItem(item, at: idx); idx += 1
         }
 
         if prefs.showAddAnnotation {
-            let item = NSMenuItem(
-                title: "Add Annotation\u{2026}",
-                action: #selector(ReaderViewController.addAnnotationFromSelection),
-                keyEquivalent: ""
-            )
+            let item = NSMenuItem(title: "Add Annotation\u{2026}",
+                                  action: #selector(ReaderViewController.addAnnotationFromSelection),
+                                  keyEquivalent: "")
             item.target = vc
-            menu.insertItem(item, at: idx)
-            idx += 1
+            menu.insertItem(item, at: idx); idx += 1
         }
 
-        let shareItem = NSMenuItem(
-            title: "Share",
-            action: #selector(ReaderViewController.shareSelection),
-            keyEquivalent: ""
-        )
+        let shareItem = NSMenuItem(title: "Share",
+                                   action: #selector(ReaderViewController.shareSelection),
+                                   keyEquivalent: "")
         shareItem.target = vc
-        menu.insertItem(shareItem, at: idx)
-        idx += 1
+        menu.insertItem(shareItem, at: idx); idx += 1
 
-        if idx > 0 {
-            menu.insertItem(.separator(), at: idx)
-        }
+        if idx > 0 { menu.insertItem(.separator(), at: idx) }
 
         super.willOpenMenu(menu, with: event)
     }

@@ -25,37 +25,31 @@ final class BookState {
     var totalReadingTimeSeconds: TimeInterval = 0
 
     // MARK: - Reading position
-    var readingModeRaw: String = "scroll"   // ReadingMode raw value
+    var readingModeRaw: String = "scroll"   // Legacy — superseded by ReaderPreferences.shared.defaultReadingMode (global override).
+                                             // Not removed to avoid SwiftData migration. Never read or written.
     var lastSpineIndex: Int = 0
     var lastCharacterOffset: Int = 0        // UTF-16 code units, text nodes only
     var lastScrollOffset: Double = 0
     var lastSavedDate: Date = Date()
 
-    // MARK: - Annotations (JSON-encoded — never stored as [T])
+    // MARK: - Legacy annotation fields (orphaned — never read or written)
+    // bookmarksData and highlightsData are retained to avoid SwiftData migration.
+    // All annotation code now uses annotationsData / annotations below.
     var bookmarksData: Data?
     var highlightsData: Data?
 
-    // MARK: - Computed accessors
+    // MARK: - Annotation (unified bookmark + highlight)
 
-    var readingMode: ReadingMode {
-        get { ReadingMode(rawValue: readingModeRaw) ?? .scroll }
-        set { readingModeRaw = newValue.rawValue }
-    }
+    var annotationsData: Data?   // JSON-encoded [Annotation]. Never [Annotation] directly.
 
-    var bookmarks: [Bookmark] {
+    var annotations: [Annotation] {
         get {
-            guard let data = bookmarksData, !data.isEmpty else { return [] }
-            return (try? JSONDecoder().decode([Bookmark].self, from: data)) ?? []
+            guard let d = annotationsData else { return [] }
+            return (try? JSONDecoder().decode([Annotation].self, from: d)) ?? []
         }
-        set { bookmarksData = try? JSONEncoder().encode(newValue) }
-    }
-
-    var highlights: [Highlight] {
-        get {
-            guard let data = highlightsData, !data.isEmpty else { return [] }
-            return (try? JSONDecoder().decode([Highlight].self, from: data)) ?? []
+        set {
+            annotationsData = try? JSONEncoder().encode(newValue)
         }
-        set { highlightsData = try? JSONEncoder().encode(newValue) }
     }
 
     init(calibreID: Int) {
@@ -63,17 +57,40 @@ final class BookState {
     }
 }
 
-// MARK: - Supporting value types
+// MARK: - Annotation (unified bookmark + highlight)
 
-enum ReadingMode: String, Codable {
+struct Annotation: Codable, Identifiable {
+    var id: UUID          = UUID()
+    var spineIndex: Int                 // which spine item
+    var startChar: Int                  // UTF-16 code units, text nodes only
+    var endChar: Int                    // == startChar for point annotations (old bookmarks)
+    var selectedText: String            // "" for point annotations
+    var note: String?                   // user-written note, optional
+    var colorHex: String                // "#FFD60A" yellow default
+    var isPointAnnotation: Bool { startChar == endChar }
+    var createdDate: Date               = Date()
+}
+
+// MARK: - ReadingMode (used by ReaderPreferences — kept here for compatibility)
+
+enum ReadingMode: String, Codable, CaseIterable, Identifiable {
     case scroll    = "scroll"
     case paginated = "paginated"
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .scroll:    return "Scroll"
+        case .paginated: return "Paginated"
+        }
+    }
 }
+
+// MARK: - Legacy types (retained for decode compatibility — not used in new code)
 
 struct Bookmark: Codable, Identifiable {
     var id: UUID = UUID()
     let spineIndex: Int
-    let characterOffset: Int    // UTF-16 code units, text nodes only
+    let characterOffset: Int
     let note: String?
     let createdDate: Date
     let previewText: String
@@ -101,7 +118,7 @@ struct Bookmark: Codable, Identifiable {
 struct Highlight: Codable, Identifiable {
     var id: UUID = UUID()
     let spineIndex: Int
-    let startChar: Int          // UTF-16 code units, text nodes only
+    let startChar: Int
     let endChar: Int
     let selectedText: String
     let note: String?

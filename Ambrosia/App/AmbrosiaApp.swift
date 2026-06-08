@@ -72,14 +72,14 @@ struct AmbrosiaApp: App {
             }
 
             CommandMenu("Reader") {
-                Button("Add Bookmark") {
-                    NSApp.sendAction(#selector(ReaderViewController.addBookmark(_:)),
+                Button("Add Annotation") {
+                    NSApp.sendAction(#selector(ReaderViewController.addAnnotation(_:)),
                                      to: nil, from: nil)
                 }
                 .keyboardShortcut("d", modifiers: [.command])
 
-                Button("Show Bookmarks") {
-                    NSApp.sendAction(#selector(ReaderViewController.showBookmarkSidebar(_:)),
+                Button("Show Annotations") {
+                    NSApp.sendAction(#selector(ReaderViewController.showAnnotationSidebar(_:)),
                                      to: nil, from: nil)
                 }
                 .keyboardShortcut("b", modifiers: [.command])
