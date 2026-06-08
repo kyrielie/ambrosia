@@ -216,6 +216,22 @@ enum HighlightBridge {
         webView.evaluateJavaScript(js, completionHandler: nil)
     }
 
+    static func clearHighlights(from webView: WKWebView, completion: (() -> Void)? = nil) {
+        let js = """
+        (function() {
+            var spans = Array.from(document.querySelectorAll('[data-ambrosia-highlight="1"]'));
+            spans.forEach(function(span) {
+                var parent = span.parentNode;
+                if (!parent) return;
+                while (span.firstChild) parent.insertBefore(span.firstChild, span);
+                parent.removeChild(span);
+            });
+            document.body.normalize();
+        })();
+        """
+        webView.evaluateJavaScript(js) { _, _ in completion?() }
+    }
+
     // MARK: - Decode messages
 
     static func decodeAnnotation(from message: WKScriptMessage) -> Annotation? {

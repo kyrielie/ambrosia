@@ -396,8 +396,10 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 if let body = message.body as? String,
                    let data = body.data(using: .utf8),
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    pendingCursorX     = json["cursorX"]     as? CGFloat ?? webView.bounds.midX
-                    pendingCursorPageY = json["cursorPageY"] as? CGFloat ?? webView.bounds.midY
+                    let cursorX = Self.cgFloat(from: json["cursorX"])
+                    let cursorPageY = Self.cgFloat(from: json["cursorPageY"])
+                    pendingCursorX = cursorX > 0 ? cursorX : webView.bounds.midX
+                    pendingCursorPageY = cursorPageY > 0 ? cursorPageY : webView.bounds.midY
                 }
             }
 
@@ -598,10 +600,12 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
                 // Restore using the full set so overlap detection works correctly —
                 // the new span may overlap an already-rendered span.
-                // Re-running restoreHighlights is safe: each span checks `if (document.getElementById(...)) return`
-                // so existing spans are skipped; only the new one is inserted.
+                // Clear first so existing highlights can change from filled highlight
+                // to underline when a larger overlapping annotation is added later.
                 if !final.isPointAnnotation {
-                    HighlightBridge.restoreHighlights(existing.filter { !$0.isPointAnnotation }, into: self.webView)
+                    HighlightBridge.clearHighlights(from: self.webView) {
+                        HighlightBridge.restoreHighlights(existing.filter { !$0.isPointAnnotation }, into: self.webView)
+                    }
                 }
                 self.showHUD("Annotation saved")
             },
@@ -624,11 +628,11 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         let cpy = pendingCursorPageY
         webView.evaluateJavaScript("window.scrollY") { [weak self] result, _ in
             guard let self else { return }
-            let scrollY = (result as? CGFloat) ?? 0
+            let scrollY = Self.cgFloat(from: result)
             let clientY = cpy - scrollY
             let viewX   = cx
             let viewY   = self.webView.bounds.height - clientY
-            let anchor  = CGRect(x: viewX - 4, y: viewY - 4, width: 8, height: 8)
+            let anchor  = CGRect(x: viewX, y: viewY, width: 1, height: 1)
             popover.show(relativeTo: anchor, of: self.webView, preferredEdge: .maxY)
         }
     }
@@ -650,13 +654,21 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         // NSView is bottom-up, so flip: viewY = webView.height - clientY.
         webView.evaluateJavaScript("window.scrollY") { [weak self] result, _ in
             guard let self else { return }
-            let scrollY  = (result as? CGFloat) ?? 0
+            let scrollY  = Self.cgFloat(from: result)
             let clientY  = pageY - scrollY
             let viewX    = clientX
             let viewY    = self.webView.bounds.height - clientY
-            let anchor   = CGRect(x: viewX - 4, y: viewY - 4, width: 8, height: 8)
+            let anchor   = CGRect(x: viewX, y: viewY, width: 1, height: 1)
             popover.show(relativeTo: anchor, of: self.webView, preferredEdge: .maxY)
         }
+    }
+
+    private static func cgFloat(from value: Any?) -> CGFloat {
+        if let value = value as? CGFloat { return value }
+        if let value = value as? Double { return CGFloat(value) }
+        if let value = value as? Int { return CGFloat(value) }
+        if let value = value as? NSNumber { return CGFloat(truncating: value) }
+        return 0
     }
 
     // MARK: - Restore annotations after page load

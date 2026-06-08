@@ -486,46 +486,82 @@ private struct LibraryPreviewRows: View {
 
 private struct WindowTab: View {
     @ObservedObject private var prefs = ReaderPreferences.shared
+    @State private var savedSizeMessage: String?
 
     var body: some View {
-        Form {
-            Section {
-                Toggle("Use 75% of screen size", isOn: $prefs.useScreenFraction)
+        ScrollView {
+            Form {
+                Section {
+                    Toggle("Half-screen portrait", isOn: $prefs.useScreenFraction)
 
-                if !prefs.useScreenFraction {
-                    HStack {
-                        Text("Width")
-                        Spacer()
-                        Stepper(
-                            "\(Int(prefs.defaultWindowWidth)) px",
-                            value: Binding(
-                                get: { Int(prefs.defaultWindowWidth) },
-                                set: { prefs.defaultWindowWidth = CGFloat($0) }
-                            ),
-                            in: 480...3000, step: 20
-                        )
+                    if prefs.useScreenFraction {
+                        HStack(spacing: 6) {
+                            Image(systemName: "info.circle")
+                                .foregroundStyle(.secondary)
+                            Text("New reader windows open at half the visible screen width and 90% of the visible screen height.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        HStack {
+                            Text("Width")
+                            Spacer()
+                            Stepper(
+                                "\(Int(prefs.defaultWindowWidth)) px",
+                                value: Binding(
+                                    get: { Int(prefs.defaultWindowWidth) },
+                                    set: { prefs.defaultWindowWidth = CGFloat($0) }
+                                ),
+                                in: 480...3000, step: 20
+                            )
+                        }
+                        HStack {
+                            Text("Height")
+                            Spacer()
+                            Stepper(
+                                "\(Int(prefs.defaultWindowHeight)) px",
+                                value: Binding(
+                                    get: { Int(prefs.defaultWindowHeight) },
+                                    set: { prefs.defaultWindowHeight = CGFloat($0) }
+                                ),
+                                in: 400...2000, step: 20
+                            )
+                        }
                     }
-                    HStack {
-                        Text("Height")
-                        Spacer()
-                        Stepper(
-                            "\(Int(prefs.defaultWindowHeight)) px",
-                            value: Binding(
-                                get: { Int(prefs.defaultWindowHeight) },
-                                set: { prefs.defaultWindowHeight = CGFloat($0) }
-                            ),
-                            in: 400...2000, step: 20
-                        )
-                    }
+                } header: {
+                    Label("Reader Window Default Size", systemImage: "macwindow").font(.headline)
+                } footer: {
+                    Text("Applies to new reader windows only.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-            } header: {
-                Label("Reader Window Default Size", systemImage: "macwindow").font(.headline)
-            } footer: {
-                Text("Applies to new reader windows only. Resizing a window overrides the default for that session.")
-                    .font(.caption).foregroundStyle(.secondary)
+
+                Section {
+                    Button {
+                        if let size = ReaderWindowController.saveFrontWindowSizeAsDefault() {
+                            savedSizeMessage = "Saved \(Int(size.width)) x \(Int(size.height)) px"
+                        } else {
+                            savedSizeMessage = "Open a reader window first"
+                        }
+                    } label: {
+                        Label("Save Current Reader Window Size", systemImage: "square.and.arrow.down")
+                    }
+                    .frame(maxWidth: .infinity)
+
+                    if let savedSizeMessage {
+                        Text(savedSizeMessage)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Label("Custom Size", systemImage: "rectangle.inset.filled").font(.headline)
+                } footer: {
+                    Text("Saving a reader window switches new windows to the custom width and height above.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
+            .formStyle(.grouped)
+            .padding(.bottom, 8)
         }
-        .formStyle(.grouped)
     }
 }
 
@@ -539,34 +575,37 @@ private struct ColumnsTab: View {
     @State private var availableColumns: [String] = []
 
     var body: some View {
-        Form {
-            Section {
-                if availableColumns.isEmpty {
-                    Text("Open a Calibre library to see available custom columns.")
-                        .font(.callout).foregroundStyle(.secondary)
-                } else {
-                    let opts = ["(none)"] + availableColumns
-                    Picker("Word count column", selection: $wordCountLabel) {
-                        ForEach(opts, id: \.self) { Text($0).tag($0) }
+        ScrollView {
+            Form {
+                Section {
+                    if availableColumns.isEmpty {
+                        Text("Open a Calibre library to see available custom columns.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        let opts = ["(none)"] + availableColumns
+                        Picker("Word count column", selection: $wordCountLabel) {
+                            ForEach(opts, id: \.self) { Text($0).tag($0) }
+                        }
+                        .onChange(of: wordCountLabel) { _, v in
+                            CustomColumnConfig.shared.wordCountLabel = v == "(none)" ? nil : v
+                        }
+                        Picker("Kudos column", selection: $kudosLabel) {
+                            ForEach(opts, id: \.self) { Text($0).tag($0) }
+                        }
+                        .onChange(of: kudosLabel) { _, v in
+                            CustomColumnConfig.shared.kudosLabel = v == "(none)" ? nil : v
+                        }
                     }
-                    .onChange(of: wordCountLabel) { _, v in
-                        CustomColumnConfig.shared.wordCountLabel = v == "(none)" ? nil : v
-                    }
-                    Picker("Kudos column", selection: $kudosLabel) {
-                        ForEach(opts, id: \.self) { Text($0).tag($0) }
-                    }
-                    .onChange(of: kudosLabel) { _, v in
-                        CustomColumnConfig.shared.kudosLabel = v == "(none)" ? nil : v
-                    }
+                } header: {
+                    Label("Calibre Custom Columns", systemImage: "tablecells").font(.headline)
+                } footer: {
+                    Text("Maps Calibre custom column labels to word count and kudos. Labels are case-sensitive.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-            } header: {
-                Label("Calibre Custom Columns", systemImage: "tablecells").font(.headline)
-            } footer: {
-                Text("Maps Calibre custom column labels to word count and kudos. Labels are case-sensitive.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
+            .formStyle(.grouped)
+            .padding(.bottom, 8)
         }
-        .formStyle(.grouped)
         .onAppear { loadAvailableColumns() }
     }
 

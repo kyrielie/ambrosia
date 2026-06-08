@@ -7,8 +7,23 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
     private let modelContainer: ModelContainer
     /// Recorded when the window loads; diffed on close to accumulate reading time.
     private var sessionStartDate: Date = Date()
+    private var didApplyInitialWindowSize = false
 
     private static var openWindows: [Int: ReaderWindowController] = [:]
+
+    @MainActor
+    static func saveFrontWindowSizeAsDefault() -> NSSize? {
+        let readerWindows = Set(openWindows.values.compactMap(\.window))
+        let frontWindow = NSApp.orderedWindows.first { readerWindows.contains($0) }
+            ?? openWindows.values.compactMap(\.window).first
+
+        guard let size = frontWindow?.frame.size else { return nil }
+        let prefs = ReaderPreferences.shared
+        prefs.defaultWindowWidth = size.width.rounded()
+        prefs.defaultWindowHeight = size.height.rounded()
+        prefs.useScreenFraction = false
+        return size
+    }
 
     @MainActor
     static func open(book: CalibreBook, modelContainer: ModelContainer) {
@@ -19,6 +34,7 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         }
         let wc = ReaderWindowController(book: book, modelContainer: modelContainer)
         openWindows[book.id] = wc
+        wc.applyDefaultWindowSizeIfNeeded()
         wc.showWindow(nil)
     }
 
@@ -67,11 +83,17 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
     override func windowDidLoad() {
         super.windowDidLoad()
         sessionStartDate = Date()
+        applyDefaultWindowSizeIfNeeded()
+    }
+
+    private func applyDefaultWindowSizeIfNeeded() {
+        guard !didApplyInitialWindowSize else { return }
+        didApplyInitialWindowSize = true
         applyDefaultWindowSize()
     }
 
-    /// E1 — Sets the window to half the screen width, portrait height (90% of screen).
-    /// Called from windowDidLoad where NSScreen.main is guaranteed non-nil.
+    /// Sets new reader windows to either the half-screen portrait preset or the
+    /// persisted custom size from Preferences.
     private func applyDefaultWindowSize() {
         guard let window else { return }
         let rp      = ReaderPreferences.shared
