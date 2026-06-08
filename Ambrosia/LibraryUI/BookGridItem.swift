@@ -5,6 +5,7 @@ import SwiftData
 
 struct LibraryRootView: View {
     @Environment(LibrarySession.self) private var session
+    @Environment(LibraryToolbarState.self) private var toolbarState
     @Environment(\.modelContext) private var modelContext
     @Environment(\.colorScheme) private var systemColorScheme
     @ObservedObject private var prefs = ReaderPreferences.shared
@@ -43,40 +44,27 @@ struct LibraryRootView: View {
     @State private var books: [CalibreBook] = []
     @State private var hasNextPage  = false
     @State private var currentPage  = 0
-    @State private var searchText   = ""
-    @State private var sortField    = SortField.title
-    @State private var ascending    = true
     @State private var filteredCount: Int? = nil
-
-    // Filter state
-    @State private var filterExpression  = FilterExpression()
-    @State private var activeFilterResult: FilterResult? = nil
-    @State private var showFilterDrawer  = false
 
     // BookState dictionary keyed by calibreID — fetched ONCE here, never per-row
     @State private var bookStates: [Int: BookState] = [:]
-
-    // Phase 6 sheet state
-    @State private var showCollections = false
-    @State private var showReadingGoal = false
 
     private let pageSize = 100
     private let debouncer = DebounceTimer(delay: 0.3)
 
     var displayCount: Int {
-        activeFilterResult?.totalCount ?? filteredCount ?? session.totalCount
+        toolbarState.activeFilterResult?.totalCount ?? filteredCount ?? session.totalCount
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            toolbar
             Divider()
-            if let result = activeFilterResult {
-                activeFilterChip(count: result.totalCount)
+            if toolbarState.hasActiveFilter {
+                activeFilterChip(count: toolbarState.activeFilterResult!.totalCount)
             }
             if !session.isOpen {
                 emptyLibraryState
-            } else if books.isEmpty && searchText.isEmpty && activeFilterResult == nil {
+            } else if books.isEmpty && toolbarState.searchText.isEmpty && !toolbarState.hasActiveFilter {
                 loadingState
             } else {
                 bookList
@@ -88,51 +76,75 @@ struct LibraryRootView: View {
         .foregroundStyle(libraryTextColor)
         .preferredColorScheme(prefs.libraryAppearanceMode == .system ? nil
             : prefs.libraryAppearanceMode == .light ? .light : .dark)
-        .onChange(of: currentPage)    { loadPage() }
-        .onChange(of: sortField)      { currentPage = 0; loadPage() }
-        .onChange(of: ascending)      { currentPage = 0; loadPage() }
-        .onChange(of: searchText) {
+        .onChange(of: currentPage)                { loadPage() }
+        .onChange(of: toolbarState.sortField)     { currentPage = 0; loadPage() }
+        .onChange(of: toolbarState.ascending)     { currentPage = 0; loadPage() }
+        .onChange(of: toolbarState.searchText) {
             currentPage = 0
             debouncer.schedule {
                 loadPage()
-                filteredCount = searchText.isEmpty ? nil
-                    : session.library?.bookCount(search: searchText)
+                filteredCount = toolbarState.searchText.isEmpty ? nil
+                    : session.library?.bookCount(search: toolbarState.searchText)
             }
+        }
+        .onChange(of: toolbarState.activeFilterResult?.calibreIDs) {
+            currentPage = 0; loadPage()
         }
         .onChange(of: session.isOpen) {
             if session.isOpen {
-                currentPage = 0; searchText = ""
-                activeFilterResult = nil; filterExpression = FilterExpression()
+                currentPage = 0
+                toolbarState.searchText = ""
+                toolbarState.activeFilterResult = nil
+                toolbarState.filterExpression = FilterExpression()
                 if let lib = session.library {
                     CustomColumnConfig.shared.autoDetect(using: lib)
                 }
                 loadPage()
                 refreshBookStates()
             } else {
-                books = []; bookStates = [:] 
+                books = []; bookStates = [:]
             }
         }
         .onAppear {
             if session.isOpen { loadPage(); refreshBookStates() }
         }
-        .sheet(isPresented: $showFilterDrawer) {
+        // Sheet presentations driven by toolbarState trigger flags
+        .sheet(isPresented: Binding(
+            get: { toolbarState.showFilterDrawer },
+            set: { toolbarState.showFilterDrawer = $0 }
+        )) {
             FilterDrawerView(
-                expression: $filterExpression,
+                expression: Binding(
+                    get: { toolbarState.filterExpression },
+                    set: { toolbarState.filterExpression = $0 }
+                ),
                 onApply: { applyFilterRules() },
                 onClear: {
-                    filterExpression = FilterExpression()
-                    activeFilterResult = nil
+                    toolbarState.filterExpression = FilterExpression()
+                    toolbarState.activeFilterResult = nil
                     currentPage = 0; loadPage()
                 }
             )
         }
-        .sheet(isPresented: $showCollections) {
+        .sheet(isPresented: Binding(
+            get: { toolbarState.showCollections },
+            set: { toolbarState.showCollections = $0 }
+        )) {
             CollectionsView(onSelectCollection: { collection in
                 addOrReplaceRule(FilterRule(field: .collection, op: .equals, value: collection.name))
             })
         }
-        .sheet(isPresented: $showReadingGoal) {
+        .sheet(isPresented: Binding(
+            get: { toolbarState.showReadingGoal },
+            set: { toolbarState.showReadingGoal = $0 }
+        )) {
             ReadingGoalView()
+        }
+        .onChange(of: toolbarState.triggerExport) {
+            if toolbarState.triggerExport {
+                ExportManager.presentExportPanel(books: books)
+                toolbarState.triggerExport = false
+            }
         }
     }
 
@@ -140,22 +152,24 @@ struct LibraryRootView: View {
 
     private func loadPage() {
         guard let library = session.library else { books = []; return }
-        let effectiveSearch = searchText.isEmpty ? nil : searchText
+        let effectiveSearch = toolbarState.searchText.isEmpty ? nil : toolbarState.searchText
 
-        if let result = activeFilterResult, !result.calibreIDs.isEmpty {
+        if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
             let raw = library.books(
                 ids: result.calibreIDs,
                 offset: currentPage * pageSize, limit: pageSize + 1,
-                sort: sortField, ascending: ascending, search: effectiveSearch
+                sort: toolbarState.sortField, ascending: toolbarState.ascending,
+                search: effectiveSearch
             )
             hasNextPage = raw.count > pageSize
             books = Array(raw.prefix(pageSize))
-        } else if activeFilterResult != nil {
+        } else if toolbarState.activeFilterResult != nil {
             books = []; hasNextPage = false
         } else {
             let raw = library.books(
                 offset: currentPage * pageSize, limit: pageSize + 1,
-                sort: sortField, ascending: ascending, search: effectiveSearch
+                sort: toolbarState.sortField, ascending: toolbarState.ascending,
+                search: effectiveSearch
             )
             hasNextPage = raw.count > pageSize
             books = Array(raw.prefix(pageSize))
@@ -170,16 +184,15 @@ struct LibraryRootView: View {
 
     private func applyFilterRules() {
         guard let library = session.library else { return }
-        guard filterExpression.hasCompleteRules else {
-            activeFilterResult = nil; currentPage = 0; loadPage(); return
+        guard toolbarState.filterExpression.hasCompleteRules else {
+            toolbarState.activeFilterResult = nil; currentPage = 0; loadPage(); return
         }
-        let needsLiked = filterExpression.groups.flatMap(\.rules).contains { $0.field == .isLiked }
+        let needsLiked = toolbarState.filterExpression.groups.flatMap(\.rules).contains { $0.field == .isLiked }
         let likedIDs: Set<Int> = needsLiked
             ? Set(bookStates.values.filter(\.isLiked).map(\.calibreID))
             : []
 
-        // Build collection name → IDs map (from SwiftData) for in-memory evaluation
-        let needsCollection = filterExpression.groups.flatMap(\.rules).contains { $0.field == .collection }
+        let needsCollection = toolbarState.filterExpression.groups.flatMap(\.rules).contains { $0.field == .collection }
         let collectionMap: [String: Set<Int>]
         if needsCollection {
             let allCollections = (try? modelContext.fetch(FetchDescriptor<Collection>())) ?? []
@@ -191,89 +204,34 @@ struct LibraryRootView: View {
         }
 
         let builder = FilterBuilder(library: library)
-        activeFilterResult = builder.matchingIDs(expression: filterExpression,
-                                                  likedIDs: likedIDs,
-                                                  collectionMap: collectionMap)
+        toolbarState.activeFilterResult = builder.matchingIDs(
+            expression: toolbarState.filterExpression,
+            likedIDs: likedIDs,
+            collectionMap: collectionMap
+        )
         currentPage = 0; loadPage()
     }
 
     private func addOrReplaceRule(_ rule: FilterRule) {
-        if filterExpression.groups.isEmpty { filterExpression.groups = [FilterGroup()] }
-        let allRules = filterExpression.groups.flatMap(\.rules)
+        if toolbarState.filterExpression.groups.isEmpty {
+            toolbarState.filterExpression.groups = [FilterGroup()]
+        }
+        let allRules = toolbarState.filterExpression.groups.flatMap(\.rules)
         let isDuplicate = allRules.contains {
             $0.field == rule.field && $0.value == rule.value && $0.op == rule.op
         }
         guard !isDuplicate else { return }
         if rule.field == .authorName {
-            filterExpression.groups[0].rules.removeAll { $0.field == .authorName }
+            toolbarState.filterExpression.groups[0].rules.removeAll { $0.field == .authorName }
         }
-        filterExpression.groups[0].rules.append(rule)
+        toolbarState.filterExpression.groups[0].rules.append(rule)
         applyFilterRules()
     }
 
     // MARK: - Subviews
 
-    private var toolbar: some View {
-        HStack(spacing: 12) {
-            TextField("Search titles…", text: $searchText)
-                .textFieldStyle(.roundedBorder).frame(maxWidth: 300)
-            Spacer()
-            // Phase 6 — Collections
-            Button { showCollections = true } label: {
-                Label("Collections", systemImage: "tray.2")
-                    .labelStyle(.iconOnly)
-            }
-            .buttonStyle(.borderless)
-            .help("Manage Collections")
-
-            // Phase 6 — Reading Goal
-            Button { showReadingGoal = true } label: {
-                Label("Reading Goal", systemImage: "target")
-                    .labelStyle(.iconOnly)
-            }
-            .buttonStyle(.borderless)
-            .help("Reading Goal")
-
-            // Phase 6 — CSV Export
-            Button {
-                ExportManager.presentExportPanel(books: books)
-            } label: {
-                Label("Export", systemImage: "arrow.up.doc")
-                    .labelStyle(.iconOnly)
-            }
-            .buttonStyle(.borderless)
-            .help("Export current list to CSV")
-            .disabled(books.isEmpty)
-
-            Divider().frame(height: 16)
-
-            Button { showFilterDrawer = true } label: {
-                Label("Filter", systemImage: filterExpression.isEmpty
-                      ? "line.3.horizontal.decrease.circle"
-                      : "line.3.horizontal.decrease.circle.fill")
-                    .labelStyle(.iconOnly)
-            }
-            .buttonStyle(.borderless)
-            .overlay(alignment: .topTrailing) {
-                if !filterExpression.isEmpty {
-                    Circle().fill(Color.accentColor).frame(width: 8, height: 8).offset(x: 2, y: -2)
-                }
-            }
-            Picker("Sort", selection: $sortField) {
-                ForEach(SortField.allCases) { f in Text(f.label).tag(f) }
-            }
-            .pickerStyle(.menu).frame(width: 140)
-            Button { ascending.toggle() } label: {
-                Image(systemName: ascending ? "arrow.up" : "arrow.down")
-            }
-            .buttonStyle(.borderless)
-        }
-        .padding(.horizontal, 16).padding(.vertical, 10)
-        .background(libraryBGColor)
-    }
-
     private func activeFilterChip(count: Int) -> some View {
-        let completeRules = filterExpression.groups.flatMap(\.rules).filter(\.isComplete)
+        let completeRules = toolbarState.filterExpression.groups.flatMap(\.rules).filter(\.isComplete)
         return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Image(systemName: "line.3.horizontal.decrease.circle.fill")
@@ -282,18 +240,17 @@ struct LibraryRootView: View {
                 Text("\(count) result\(count == 1 ? "" : "s")")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("Edit") { showFilterDrawer = true }
+                Button("Edit") { toolbarState.showFilterDrawer = true }
                     .buttonStyle(.borderless).font(.caption)
                 Button {
-                    filterExpression = FilterExpression(); activeFilterResult = nil
+                    toolbarState.filterExpression = FilterExpression()
+                    toolbarState.activeFilterResult = nil
                     currentPage = 0; loadPage()
                 } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
                 .buttonStyle(.borderless)
             }
-            // Show each active filter value as a pill.
-            // Negated operators (notContains, notEquals) get a red NOT badge.
             FlowLayout(spacing: 4) {
                 ForEach(completeRules) { rule in
                     let negated = rule.op == .notContains || rule.op == .notEquals
@@ -337,10 +294,7 @@ struct LibraryRootView: View {
                 onAuthorTap: { author in
                     addOrReplaceRule(FilterRule(field: .authorName, op: .equals, value: author))
                 },
-                onLikeToggle: {
-                    // Update the shared dictionary so the row reflects the new state immediately
-                    toggleLike(for: book)
-                }
+                onLikeToggle: { toggleLike(for: book) }
             )
             .equatable()
             .listRowSeparator(.visible)
@@ -411,14 +365,12 @@ struct BookListRow: View, Equatable {
     let onLikeToggle: () -> Void
 
     // Equatable: closures cannot be compared so we only check data fields.
-    // This lets .equatable() skip re-rendering rows whose book data is unchanged.
     static func == (lhs: BookListRow, rhs: BookListRow) -> Bool {
         lhs.book == rhs.book
-            && lhs.bookState?.calibreID    == rhs.bookState?.calibreID
-            && lhs.bookState?.isLiked      == rhs.bookState?.isLiked
+            && lhs.bookState?.calibreID        == rhs.bookState?.calibreID
+            && lhs.bookState?.isLiked          == rhs.bookState?.isLiked
             && lhs.bookState?.totalReadPercent == rhs.bookState?.totalReadPercent
     }
-
 
     // Computed once at struct init time — not recomputed on re-render
     private let buckets: AO3TagBuckets
@@ -459,7 +411,7 @@ struct BookListRow: View, Equatable {
         }
     }
 
-    // MARK: - Row sections (each a @ViewBuilder to keep body clean)
+    // MARK: - Row sections
 
     private var titleRow: some View {
         HStack(alignment: .firstTextBaseline) {
@@ -491,8 +443,6 @@ struct BookListRow: View, Equatable {
         }
     }
 
-    /// All tags in one FlowLayout pass — AO3 metadata first (coloured), then all regular tags.
-    /// .drawingGroup() flattens all pills into a single Metal layer per row.
     @ViewBuilder
     private var tagsRow: some View {
         let hasAny = !buckets.ratings.isEmpty || !buckets.warnings.isEmpty
@@ -543,9 +493,6 @@ struct BookListRow: View, Equatable {
 
     // MARK: - Helpers
 
-    /// Format a last-opened date as a static string so SwiftUI does not create
-    /// a live-updating timer for every visible row. Relative date Text views
-    /// fire re-renders across all visible rows on a system timer.
     private static func formatLastOpened(_ date: Date) -> String {
         let age = Date().timeIntervalSince(date)
         if age < 3600 { return "just now" }
@@ -606,7 +553,6 @@ struct CachedFlowLayout: Layout {
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         let maxWidth = proposal.width ?? 600
-        // Measure each subview once and cache
         if cache.sizes.count != subviews.count || cache.proposedWidth != maxWidth {
             cache.sizes = subviews.map { $0.sizeThatFits(.unspecified) }
             cache.proposedWidth = maxWidth
@@ -668,7 +614,7 @@ struct CollapsibleText: View {
     }
 }
 
-// MARK: - (Unused original FlowLayout kept for reference — use CachedFlowLayout)
+// MARK: - FlowLayout (kept for filter chips)
 struct FlowLayout: Layout {
     var spacing: CGFloat = 4
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {

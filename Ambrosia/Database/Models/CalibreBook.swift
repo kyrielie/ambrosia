@@ -65,6 +65,14 @@ struct CalibreBook: Identifiable, Hashable {
         return contents.first { $0.pathExtension.lowercased() == "epub" }
     }
 
+    /// Absolute cover URL if Calibre has generated a cover.jpg beside the book files.
+    func coverURL(libraryRoot: URL) -> URL? {
+        let url = libraryRoot
+            .appendingPathComponent(relativePath)
+            .appendingPathComponent("cover.jpg")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
     // MARK: - Hashable
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
     static func == (lhs: CalibreBook, rhs: CalibreBook) -> Bool { lhs.id == rhs.id }

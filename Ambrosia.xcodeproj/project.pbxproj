@@ -56,6 +56,10 @@
 		99F7BE9279DA0BDF718EAAADF /* TagSynonymStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2F7D6C9C832E5FAE1048A46 /* TagSynonymStore.swift */; };
 		3752F8ABCEECBBFFEC4065BBF /* PreferencesWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCF05383F236D5093B604921 /* PreferencesWindowController.swift */; };
 		BB11223344556677889900CCF /* ContextMenuPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB11223344556677889900CC /* ContextMenuPreferences.swift */; };
+		D100000000000001F /* LibraryToolbarState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000000000001 /* LibraryToolbarState.swift */; };
+		D100000000000002F /* EmailSidebarViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000000000002 /* EmailSidebarViewController.swift */; };
+		D100000000000003F /* EmailDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000000000003 /* EmailDetailView.swift */; };
+		D100000000000004F /* EmailLibraryViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000000000004 /* EmailLibraryViewController.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -108,6 +112,10 @@
 		BB11223344556677889900CC /* ContextMenuPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextMenuPreferences.swift; sourceTree = "<group>"; };
 		D2F7D6C9C832E5FAE1048A46 /* TagSynonymStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagSynonymStore.swift; sourceTree = "<group>"; };
 		CCF05383F236D5093B604921 /* PreferencesWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindowController.swift; sourceTree = "<group>"; };
+		D100000000000001 /* LibraryToolbarState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryToolbarState.swift; sourceTree = "<group>"; };
+		D100000000000002 /* EmailSidebarViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailSidebarViewController.swift; sourceTree = "<group>"; };
+		D100000000000003 /* EmailDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailDetailView.swift; sourceTree = "<group>"; };
+		D100000000000004 /* EmailLibraryViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailLibraryViewController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -131,6 +139,16 @@
 				80EBF1ABC2834516B4FD8D2D /* FilterBuilder.swift */,
 			);
 			path = FilterDrawer;
+			sourceTree = "<group>";
+		};
+		D100000000000010 /* Email */ = {
+			isa = PBXGroup;
+			children = (
+				D100000000000002 /* EmailSidebarViewController.swift */,
+				D100000000000003 /* EmailDetailView.swift */,
+				D100000000000004 /* EmailLibraryViewController.swift */,
+			);
+			path = Email;
 			sourceTree = "<group>";
 		};
 		1CA363F1AB59489BA9407C58 /* Ambrosia */ = {
@@ -205,8 +223,10 @@
 			isa = PBXGroup;
 			children = (
 				1C4325980DE54054B34FA01C /* FilterDrawer */,
+				D100000000000010 /* Email */,
 				5037BC30F5C947B49D7196AE /* LibraryWindowController.swift */,
 				289A4ED0240F4884963BAF9A /* LibraryViewController.swift */,
+				D100000000000001 /* LibraryToolbarState.swift */,
 				B09DADA86BD349A1BC47BC12 /* BookGridItem.swift */,
 				A49EB97076C4987CADEC037C /* ReadingGoalView.swift */,
 				BE5E3EB1BF9C138C86AFF21F /* CollectionsView.swift */,
@@ -382,6 +402,10 @@
 				99F7BE9279DA0BDF718EAAADF /* TagSynonymStore.swift in Sources */,
 				3752F8ABCEECBBFFEC4065BBF /* PreferencesWindowController.swift in Sources */,
 				BB11223344556677889900CCF /* ContextMenuPreferences.swift in Sources */,
+				D100000000000001F /* LibraryToolbarState.swift in Sources */,
+				D100000000000002F /* EmailSidebarViewController.swift in Sources */,
+				D100000000000003F /* EmailDetailView.swift in Sources */,
+				D100000000000004F /* EmailLibraryViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
