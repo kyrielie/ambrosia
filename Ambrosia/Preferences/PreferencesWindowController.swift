@@ -3,36 +3,29 @@ import SwiftUI
 
 // MARK: - PreferencesWindowController
 
-/// Singleton NSWindowController hosting the SwiftUI preferences form.
-/// Open via ⌘, or the Ambrosia → Preferences… menu item.
-///
-/// All changes write directly to ReaderPreferences.shared (UserDefaults-backed).
-/// ReaderViewController subscribes to that singleton via Combine and calls
-/// reloadHTML() automatically — the preferences window does not need to
-/// know about open reader windows.
 final class PreferencesWindowController: NSWindowController {
 
     static let shared = PreferencesWindowController()
 
     private init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 600),
+            contentRect: NSRect(x: 0, y: 0, width: 580, height: 680),
             styleMask:   [.titled, .closable, .miniaturizable],
             backing:     .buffered,
             defer:       false
         )
         window.title   = "Preferences"
-        window.minSize = NSSize(width: 460, height: 480)
+        window.minSize = NSSize(width: 540, height: 500)
         window.center()
-        window.isReleasedWhenClosed = false   // singleton — keep alive
+        window.isReleasedWhenClosed = false
+        window.toolbarStyle = .preference
         super.init(window: window)
-        window.contentView = NSHostingView(rootView: PreferencesView())
+        window.contentView = NSHostingView(rootView: PreferencesRootView())
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    /// Shows the preferences window, bringing it to front.
     @MainActor
     static func show() {
         shared.showWindow(nil)
@@ -41,201 +34,557 @@ final class PreferencesWindowController: NSWindowController {
     }
 }
 
-// MARK: - PreferencesView
+// MARK: - Root tabbed view
 
-/// SwiftUI Form presenting all user-configurable reading and library settings.
-private struct PreferencesView: View {
+private struct PreferencesRootView: View {
+    @ObservedObject private var prefs = ReaderPreferences.shared
+    @State private var tab: PrefTab = .reader
 
+    var body: some View {
+        TabView(selection: $tab) {
+            ReaderTab()
+                .tabItem { Label("Reader", systemImage: "text.book.closed") }
+                .tag(PrefTab.reader)
+
+            LibraryTab()
+                .tabItem { Label("Library", systemImage: "books.vertical") }
+                .tag(PrefTab.library)
+
+            WindowTab()
+                .tabItem { Label("Window", systemImage: "macwindow") }
+                .tag(PrefTab.window)
+
+            ColumnsTab()
+                .tabItem { Label("Columns", systemImage: "tablecells") }
+                .tag(PrefTab.columns)
+        }
+        .frame(width: 580)
+    }
+}
+
+private enum PrefTab { case reader, library, window, columns }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Reader Tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+private struct ReaderTab: View {
     @ObservedObject private var prefs = ReaderPreferences.shared
 
-    // Custom column config — backed by UserDefaults via CustomColumnConfig.shared
-    @State private var wordCountLabel: String = CustomColumnConfig.shared.wordCountLabel ?? ""
-    @State private var kudosLabel:     String = CustomColumnConfig.shared.kudosLabel ?? ""
-
-    // Available custom columns from the open library (populated on appear)
-    @State private var availableColumns: [String] = []
-
-    // Colour pickers need hex-string ↔ NSColor bridging
-    @State private var bgColor:   Color = Color(hex: ReaderPreferences.shared.backgroundColor) ?? .white
-    @State private var textColor: Color = Color(hex: ReaderPreferences.shared.textColor) ?? .black
-
-    // Common system font families for the picker
-    private let fontFamilies: [String] = [
-        "Georgia, serif",
-        "\"Times New Roman\", Times, serif",
-        "Palatino, \"Palatino Linotype\", serif",
-        "\"Book Antiqua\", Palatino, serif",
-        "-apple-system, sans-serif",
-        "Helvetica, Arial, sans-serif",
-        "\"SF Pro Text\", -apple-system, sans-serif",
-        "Verdana, Geneva, sans-serif",
-        "\"Trebuchet MS\", sans-serif",
-        "\"Courier New\", Courier, monospace",
-        "\"SF Mono\", Menlo, monospace",
-    ]
+    // Reader colour local state
+    @State private var readerBgColor:   Color = Color(hex: ReaderPreferences.shared.readerBackgroundColor) ?? .white
+    @State private var readerTextColor: Color = Color(hex: ReaderPreferences.shared.readerTextColor) ?? .black
 
     var body: some View {
         ScrollView {
             Form {
-                // ── Reading ──────────────────────────────────────────────────
+
+                // ── Typography ────────────────────────────────────────────────
                 Section {
-                    Picker("Font family", selection: $prefs.fontFamily) {
-                        ForEach(fontFamilies, id: \.self) { family in
-                            Text(familyDisplayName(family)).tag(family)
-                        }
-                    }
-                    .onChange(of: prefs.fontFamily) { }  // triggers @Published → Combine
-
-                    HStack {
-                        Text("Font size")
-                        Spacer()
-                        Stepper("\(prefs.fontSize) pt",
-                                value: $prefs.fontSize, in: 10...36, step: 1)
-                    }
-
-                    HStack {
-                        Text("Line height")
-                        Spacer()
-                        Stepper(String(format: "%.1f", prefs.lineHeight),
-                                value: $prefs.lineHeight, in: 1.0...3.0, step: 0.1)
-                    }
-
-                    HStack {
-                        Text("Max width")
-                        Spacer()
-                        Stepper("\(prefs.maxWidth) px",
-                                value: $prefs.maxWidth, in: 400...1400, step: 20)
-                    }
-
-                    HStack {
-                        Text("Horizontal padding")
-                        Spacer()
-                        Stepper("\(prefs.paddingH) px",
-                                value: $prefs.paddingH, in: 0...120, step: 4)
-                    }
-
-                    HStack {
-                        Text("Vertical padding")
-                        Spacer()
-                        Stepper("\(prefs.paddingV) px",
-                                value: $prefs.paddingV, in: 0...120, step: 4)
-                    }
-
+                    fontFamilyRow
+                    stepperRow("Font size",          int: $prefs.fontSize,    range: 10...36, step: 1,  unit: "pt")
+                    stepperRow("Line height",      dbl: $prefs.lineHeight,    range: 1.0...3.0, step: 0.1)
+                    stepperRow("Max line width",     int: $prefs.maxWidth,    range: 400...1400, step: 20, unit: "px")
+                    stepperRow("Horizontal padding", int: $prefs.paddingH,    range: 0...120, step: 4,  unit: "px")
+                    stepperRow("Vertical padding",   int: $prefs.paddingV,    range: 0...120, step: 4,  unit: "px")
                 } header: {
-                    Label("Reading", systemImage: "text.book.closed")
-                        .font(.headline)
+                    Label("Typography", systemImage: "textformat").font(.headline)
                 }
 
-                // ── Colours ───────────────────────────────────────────────────
+                // ── Reader colours ────────────────────────────────────────────
                 Section {
-                    ColorPicker("Background colour", selection: $bgColor, supportsOpacity: false)
-                        .onChange(of: bgColor) {
-                            if let hex = bgColor.hexString { prefs.backgroundColor = hex }
+                    ColorPicker("Background", selection: $readerBgColor, supportsOpacity: false)
+                        .onChange(of: readerBgColor) { _, c in
+                            if let hex = c.hexString { prefs.readerBackgroundColor = hex }
                         }
-
-                    ColorPicker("Text colour", selection: $textColor, supportsOpacity: false)
-                        .onChange(of: textColor) {
-                            if let hex = textColor.hexString { prefs.textColor = hex }
+                    ColorPicker("Text", selection: $readerTextColor, supportsOpacity: false)
+                        .onChange(of: readerTextColor) { _, c in
+                            if let hex = c.hexString { prefs.readerTextColor = hex }
                         }
-
-                    // Preset themes
-                    HStack(spacing: 8) {
-                        Text("Preset")
-                        Spacer()
-                        ForEach(Theme.allCases) { theme in
-                            Button(theme.label) {
-                                applyTheme(theme)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                    themePresetRow(
+                        onPick: { bg, fg in
+                            prefs.readerBackgroundColor = bg
+                            prefs.readerTextColor       = fg
+                            readerBgColor   = Color(hex: bg) ?? .white
+                            readerTextColor = Color(hex: fg) ?? .black
                         }
-                    }
-
+                    )
                 } header: {
-                    Label("Colours", systemImage: "paintbrush")
-                        .font(.headline)
+                    Label("Reader Colours", systemImage: "paintbrush").font(.headline)
                 }
 
-                // ── Calibre custom columns ────────────────────────────────────
+                // ── Preferences update behaviour ──────────────────────────────
                 Section {
-                    if availableColumns.isEmpty {
-                        Text("No Calibre library open, or library has no custom columns.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        let colOptions = ["(none)"] + availableColumns
-
-                        Picker("Word count column", selection: $wordCountLabel) {
-                            ForEach(colOptions, id: \.self) { Text($0).tag($0) }
-                        }
-                        .onChange(of: wordCountLabel) {
-                            CustomColumnConfig.shared.wordCountLabel =
-                                wordCountLabel == "(none)" ? nil : wordCountLabel
-                        }
-
-                        Picker("Kudos column", selection: $kudosLabel) {
-                            ForEach(colOptions, id: \.self) { Text($0).tag($0) }
-                        }
-                        .onChange(of: kudosLabel) {
-                            CustomColumnConfig.shared.kudosLabel =
-                                kudosLabel == "(none)" ? nil : kudosLabel
-                        }
+                    HStack(spacing: 6) {
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.secondary)
+                        Text("Open reader windows reload immediately when any preference changes.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
                     }
                 } header: {
-                    Label("Calibre Custom Columns", systemImage: "tablecells")
-                        .font(.headline)
-                } footer: {
-                    Text("These map Calibre custom column labels to word count and kudos fields in the library view.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Label("When Preferences Change", systemImage: "arrow.clockwise").font(.headline)
                 }
 
                 // ── Reset ─────────────────────────────────────────────────────
                 Section {
-                    Button("Restore Defaults", role: .destructive) {
-                        prefs.resetToDefaults()
-                        bgColor   = Color(hex: prefs.backgroundColor) ?? .white
-                        textColor = Color(hex: prefs.textColor) ?? .black
+                    Button("Restore Reader Defaults", role: .destructive) {
+                        prefs.resetReaderToDefaults()
+                        readerBgColor   = Color(hex: prefs.readerBackgroundColor) ?? .white
+                        readerTextColor = Color(hex: prefs.readerTextColor) ?? .black
                     }
                     .frame(maxWidth: .infinity)
                 }
             }
             .formStyle(.grouped)
-            .padding(8)
+            .padding(.bottom, 8)
         }
-        .onAppear { loadAvailableColumns() }
     }
 
-    // MARK: - Helpers
+    // MARK: Font family row
 
-    private func familyDisplayName(_ css: String) -> String {
-        // Extract the first font name from the CSS stack, remove quotes
-        let first = css.components(separatedBy: ",").first ?? css
-        return first.trimmingCharacters(in: .whitespaces)
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+    @ViewBuilder
+    private var fontFamilyRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Font family")
+                Spacer()
+                Text("Aa")
+                    .font(.custom(prefs.displayFontFamily, size: 15))
+                    .foregroundStyle(.secondary)
+            }
+
+            // 2-column grid of preset buttons
+            let cols = [GridItem(.flexible()), GridItem(.flexible())]
+            LazyVGrid(columns: cols, spacing: 6) {
+                ForEach(ReaderPreferences.fontPresets, id: \.id) { preset in
+                    let selected = prefs.fontFamily == preset.cssStack
+                    Button { prefs.fontFamily = preset.cssStack } label: {
+                        HStack {
+                            Text(preset.label)
+                                .font(.custom(preset.label, size: 13))
+                                .lineLimit(1)
+                            Spacer()
+                            if selected {
+                                Image(systemName: "checkmark")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(selected
+                            ? Color.accentColor.opacity(0.12)
+                            : Color(nsColor: .controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(selected
+                                    ? Color.accentColor.opacity(0.4)
+                                    : Color(nsColor: .separatorColor),
+                                    lineWidth: 0.5)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            // Live preview
+            Text("The quick brown fox jumps over the lazy dog.")
+                .font(.custom(prefs.displayFontFamily, size: CGFloat(prefs.fontSize)))
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(Color(hex: prefs.readerBackgroundColor) ?? Color(nsColor: .textBackgroundColor))
+                .foregroundStyle(Color(hex: prefs.readerTextColor) ?? Color(nsColor: .labelColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                )
+        }
+    }
+
+    // MARK: Shared helpers
+
+    @ViewBuilder
+    private func themePresetRow(onPick: @escaping (String, String) -> Void) -> some View {
+        HStack(spacing: 8) {
+            Text("Preset")
+            Spacer()
+            ForEach(ReaderTheme.allCases) { theme in
+                Button(theme.label) { onPick(theme.bg, theme.fg) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func stepperRow(_ label: String, int value: Binding<Int>,
+                             range: ClosedRange<Int>, step: Int, unit: String) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Stepper("\(value.wrappedValue) \(unit)", value: value, in: range, step: step)
+        }
+    }
+
+    @ViewBuilder
+    private func stepperRow(_ label: String, dbl value: Binding<Double>,
+                             range: ClosedRange<Double>, step: Double) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Stepper(String(format: "%.1f", value.wrappedValue), value: value, in: range, step: step)
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Library Tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+private struct LibraryTab: View {
+    @ObservedObject private var prefs = ReaderPreferences.shared
+    @Environment(\.colorScheme) private var systemScheme
+
+    // Local colour state for the custom pickers
+    @State private var lightBG:   Color = Color(hex: ReaderPreferences.shared.libraryLightBackgroundColor) ?? .white
+    @State private var lightText: Color = Color(hex: ReaderPreferences.shared.libraryLightTextColor)       ?? .black
+    @State private var darkBG:    Color = Color(hex: ReaderPreferences.shared.libraryDarkBackgroundColor)  ?? Color(nsColor: .windowBackgroundColor)
+    @State private var darkText:  Color = Color(hex: ReaderPreferences.shared.libraryDarkTextColor)        ?? Color(nsColor: .labelColor)
+
+    private var effectiveIsDark: Bool {
+        switch prefs.libraryAppearanceMode {
+        case .system: return systemScheme == .dark
+        case .light:  return false
+        case .dark:   return true
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            Form {
+
+                // ── Appearance (light / dark / system) ───────────────────────
+                Section {
+                    Picker("Color scheme", selection: $prefs.libraryAppearanceMode) {
+                        ForEach(LibraryAppearanceMode.allCases) { m in
+                            Text(m.label).tag(m)
+                        }
+                    }
+                } header: {
+                    Label("Appearance", systemImage: "circle.lefthalf.filled").font(.headline)
+                } footer: {
+                    Text("Controls whether the library uses light or dark appearance, independently of the system setting.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                // ── Background colour ─────────────────────────────────────────
+                Section {
+                    Picker("Mode", selection: $prefs.libraryColorMode) {
+                        ForEach(LibraryColorMode.allCases) { m in
+                            Text(m.label).tag(m)
+                        }
+                    }
+
+                    switch prefs.libraryColorMode {
+                    case .systemDefault:
+                        HStack(spacing: 6) {
+                            Image(systemName: "info.circle").foregroundStyle(.secondary)
+                            Text("Uses NSColor.windowBackgroundColor and NSColor.labelColor — adapts automatically to light/dark mode.")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+
+                    case .accentColor:
+                        HStack(spacing: 6) {
+                            Image(systemName: "info.circle").foregroundStyle(.secondary)
+                            Text("Applies a subtle tint of your system accent color to the library background.")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+
+                    case .custom:
+                        customColourPairs
+                    }
+
+                } header: {
+                    Label("Background Color", systemImage: "paintbucket").font(.headline)
+                }
+
+                // ── Live preview ──────────────────────────────────────────────
+                Section {
+                    LibraryPreviewRows(
+                        bgColor: resolvedPreviewBG,
+                        textColor: resolvedPreviewText,
+                        accentMode: prefs.libraryColorMode == .accentColor
+                    )
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                } header: {
+                    Label("Preview", systemImage: "eye").font(.headline)
+                }
+
+                // ── Reset ─────────────────────────────────────────────────────
+                Section {
+                    Button("Restore Library Defaults", role: .destructive) {
+                        prefs.resetLibraryToDefaults()
+                        syncLocalState()
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .formStyle(.grouped)
+            .padding(.bottom, 8)
+        }
+        .onAppear { syncLocalState() }
+    }
+
+    // MARK: Custom colour pair rows
+
+    @ViewBuilder
+    private var customColourPairs: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            colourPairRow(
+                label: "Light mode",
+                bg: $lightBG, text: $lightText,
+                onBGChange:   { prefs.libraryLightBackgroundColor = $0 },
+                onTextChange: { prefs.libraryLightTextColor = $0 }
+            )
+            Divider()
+            colourPairRow(
+                label: "Dark mode",
+                bg: $darkBG, text: $darkText,
+                onBGChange:   { prefs.libraryDarkBackgroundColor = $0 },
+                onTextChange: { prefs.libraryDarkTextColor = $0 }
+            )
+            HStack(spacing: 6) {
+                Image(systemName: "info.circle").foregroundStyle(.secondary).font(.caption)
+                Text("The active pair is chosen based on the color scheme setting above.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func colourPairRow(
+        label: String,
+        bg: Binding<Color>, text: Binding<Color>,
+        onBGChange: @escaping (String) -> Void,
+        onTextChange: @escaping (String) -> Void
+    ) -> some View {
+        HStack(spacing: 16) {
+            Text(label)
+                .font(.subheadline)
+                .frame(width: 80, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Background").font(.caption).foregroundStyle(.tertiary)
+                ColorPicker("", selection: bg, supportsOpacity: false).labelsHidden()
+                    .onChange(of: bg.wrappedValue) { _, c in
+                        if let hex = c.hexString { onBGChange(hex) }
+                    }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Text").font(.caption).foregroundStyle(.tertiary)
+                ColorPicker("", selection: text, supportsOpacity: false).labelsHidden()
+                    .onChange(of: text.wrappedValue) { _, c in
+                        if let hex = c.hexString { onTextChange(hex) }
+                    }
+            }
+
+            // Mini swatch
+            RoundedRectangle(cornerRadius: 6)
+                .fill(bg.wrappedValue)
+                .frame(width: 64, height: 34)
+                .overlay(
+                    Text("Aa")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(text.wrappedValue)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                )
+        }
+    }
+
+    // MARK: Preview helpers
+
+    private var resolvedPreviewBG: Color {
+        switch prefs.libraryColorMode {
+        case .systemDefault: return Color(nsColor: .windowBackgroundColor)
+        case .accentColor:   return Color(nsColor: .controlAccentColor).opacity(0.08)
+        case .custom:        return effectiveIsDark ? darkBG : lightBG
+        }
+    }
+
+    private var resolvedPreviewText: Color {
+        switch prefs.libraryColorMode {
+        case .systemDefault, .accentColor: return Color(nsColor: .labelColor)
+        case .custom:                      return effectiveIsDark ? darkText : lightText
+        }
+    }
+
+    private func syncLocalState() {
+        lightBG   = Color(hex: prefs.libraryLightBackgroundColor) ?? .white
+        lightText = Color(hex: prefs.libraryLightTextColor)       ?? .black
+        darkBG    = Color(hex: prefs.libraryDarkBackgroundColor)  ?? Color(nsColor: .windowBackgroundColor)
+        darkText  = Color(hex: prefs.libraryDarkTextColor)        ?? Color(nsColor: .labelColor)
+    }
+}
+
+// MARK: - Library Preview Rows
+
+private struct LibraryPreviewRows: View {
+    let bgColor: Color
+    let textColor: Color
+    let accentMode: Bool
+
+    private let sampleTitles  = ["A Memory Called Empire",   "The Left Hand of Darkness", "Piranesi"]
+    private let sampleAuthors = ["Arkady Martine",           "Ursula K. Le Guin",          "Susanna Clarke"]
+    private let sampleWidths  = [CGFloat(160), CGFloat(130), CGFloat(145)]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(0..<3, id: \.self) { i in
+                HStack(spacing: 10) {
+                    // Cover stub
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(textColor.opacity(0.12))
+                        .frame(width: 30, height: 42)
+                    VStack(alignment: .leading, spacing: 4) {
+                        // Title stub
+                        Capsule().fill(textColor.opacity(0.75))
+                            .frame(width: sampleWidths[i], height: 10)
+                        // Author stub
+                        Capsule().fill(textColor.opacity(0.4))
+                            .frame(width: sampleWidths[i] * 0.6, height: 8)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(
+                    accentMode
+                        ? Color(nsColor: .controlAccentColor).opacity(0.08)
+                        : bgColor
+                )
+                if i < 2 { Divider().padding(.leading, 54) }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.05), radius: 4, y: 2)
+        .padding(.vertical, 4)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Window Tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+private struct WindowTab: View {
+    @ObservedObject private var prefs = ReaderPreferences.shared
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Use 75% of screen size", isOn: $prefs.useScreenFraction)
+
+                if !prefs.useScreenFraction {
+                    HStack {
+                        Text("Width")
+                        Spacer()
+                        Stepper(
+                            "\(Int(prefs.defaultWindowWidth)) px",
+                            value: Binding(
+                                get: { Int(prefs.defaultWindowWidth) },
+                                set: { prefs.defaultWindowWidth = CGFloat($0) }
+                            ),
+                            in: 480...3000, step: 20
+                        )
+                    }
+                    HStack {
+                        Text("Height")
+                        Spacer()
+                        Stepper(
+                            "\(Int(prefs.defaultWindowHeight)) px",
+                            value: Binding(
+                                get: { Int(prefs.defaultWindowHeight) },
+                                set: { prefs.defaultWindowHeight = CGFloat($0) }
+                            ),
+                            in: 400...2000, step: 20
+                        )
+                    }
+                }
+            } header: {
+                Label("Reader Window Default Size", systemImage: "macwindow").font(.headline)
+            } footer: {
+                Text("Applies to new reader windows only. Resizing a window overrides the default for that session.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Columns Tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+private struct ColumnsTab: View {
+    @State private var wordCountLabel: String = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
+    @State private var kudosLabel:     String = CustomColumnConfig.shared.kudosLabel     ?? "(none)"
+    @State private var availableColumns: [String] = []
+
+    var body: some View {
+        Form {
+            Section {
+                if availableColumns.isEmpty {
+                    Text("Open a Calibre library to see available custom columns.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    let opts = ["(none)"] + availableColumns
+                    Picker("Word count column", selection: $wordCountLabel) {
+                        ForEach(opts, id: \.self) { Text($0).tag($0) }
+                    }
+                    .onChange(of: wordCountLabel) { _, v in
+                        CustomColumnConfig.shared.wordCountLabel = v == "(none)" ? nil : v
+                    }
+                    Picker("Kudos column", selection: $kudosLabel) {
+                        ForEach(opts, id: \.self) { Text($0).tag($0) }
+                    }
+                    .onChange(of: kudosLabel) { _, v in
+                        CustomColumnConfig.shared.kudosLabel = v == "(none)" ? nil : v
+                    }
+                }
+            } header: {
+                Label("Calibre Custom Columns", systemImage: "tablecells").font(.headline)
+            } footer: {
+                Text("Maps Calibre custom column labels to word count and kudos. Labels are case-sensitive.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { loadAvailableColumns() }
     }
 
     private func loadAvailableColumns() {
         guard let library = AppDelegate.shared?.session?.library else { return }
         availableColumns = library.customColumns().map(\.label).sorted()
-        // Sync picker state with persisted values
-        wordCountLabel = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
-        kudosLabel     = CustomColumnConfig.shared.kudosLabel ?? "(none)"
-    }
-
-    private func applyTheme(_ theme: Theme) {
-        prefs.backgroundColor = theme.bg
-        prefs.textColor       = theme.fg
-        bgColor   = Color(hex: theme.bg) ?? .white
-        textColor = Color(hex: theme.fg) ?? .black
+        wordCountLabel   = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
+        kudosLabel       = CustomColumnConfig.shared.kudosLabel     ?? "(none)"
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 // MARK: - Themes
+// ─────────────────────────────────────────────────────────────────────────────
 
-private enum Theme: String, CaseIterable, Identifiable {
+private enum ReaderTheme: String, CaseIterable, Identifiable {
     case parchment, night, paper, slate
-
     var id: String { rawValue }
-
     var label: String {
         switch self {
         case .parchment: return "Parchment"
@@ -262,35 +611,28 @@ private enum Theme: String, CaseIterable, Identifiable {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 // MARK: - Color ↔ hex helpers
+// ─────────────────────────────────────────────────────────────────────────────
 
-private extension Color {
-    /// Initialise from a CSS hex string like "#FFFDF6" or "#FFF".
+extension Color {
     init?(hex: String) {
         var h = hex.trimmingCharacters(in: .whitespaces)
         if h.hasPrefix("#") { h = String(h.dropFirst()) }
-        if h.count == 3 {
-            h = h.map { "\($0)\($0)" }.joined()
-        }
-        guard h.count == 6,
-              let value = UInt64(h, radix: 16) else { return nil }
-        let r = Double((value >> 16) & 0xFF) / 255
-        let g = Double((value >>  8) & 0xFF) / 255
-        let b = Double( value        & 0xFF) / 255
-        self.init(red: r, green: g, blue: b)
+        if h.count == 3 { h = h.map { "\($0)\($0)" }.joined() }
+        guard h.count == 6, let value = UInt64(h, radix: 16) else { return nil }
+        self.init(
+            red:   Double((value >> 16) & 0xFF) / 255,
+            green: Double((value >>  8) & 0xFF) / 255,
+            blue:  Double( value        & 0xFF) / 255
+        )
     }
 
-    /// Returns a 7-character "#RRGGBB" string, or nil if the colour
-    /// can't be converted (e.g. dynamic system colours).
     var hexString: String? {
-        guard let cgColor = NSColor(self).cgColor.converted(
+        guard let cg = NSColor(self).cgColor.converted(
             to: CGColorSpace(name: CGColorSpace.sRGB)!,
             intent: .defaultIntent, options: nil),
-              let comps = cgColor.components, comps.count >= 3
-        else { return nil }
-        let r = Int(comps[0] * 255)
-        let g = Int(comps[1] * 255)
-        let b = Int(comps[2] * 255)
-        return String(format: "#%02X%02X%02X", r, g, b)
+              let c = cg.components, c.count >= 3 else { return nil }
+        return String(format: "#%02X%02X%02X", Int(c[0]*255), Int(c[1]*255), Int(c[2]*255))
     }
 }

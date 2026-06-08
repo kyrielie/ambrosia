@@ -150,17 +150,3 @@ private struct AnnotationRow: View {
         .onTapGesture { onJump(annotation) }
     }
 }
-
-// MARK: - Color hex helper
-
-private extension Color {
-    init?(hex: String) {
-        let cleaned = hex.trimmingCharacters(in: .init(charactersIn: "#"))
-        guard cleaned.count == 6,
-              let value = UInt64(cleaned, radix: 16) else { return nil }
-        let r = Double((value >> 16) & 0xFF) / 255
-        let g = Double((value >>  8) & 0xFF) / 255
-        let b = Double( value        & 0xFF) / 255
-        self.init(red: r, green: g, blue: b)
-    }
-}

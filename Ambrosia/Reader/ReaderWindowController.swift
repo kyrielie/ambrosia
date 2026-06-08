@@ -26,15 +26,16 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         self.book           = book
         self.modelContainer = modelContainer
 
+        // Create window with a placeholder size; actual size set in windowDidLoad
+        // once NSScreen.main is reliable (it can be nil during init).
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 800, height: 900),
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 900),
             styleMask:   [.titled, .closable, .miniaturizable, .resizable],
             backing:     .buffered,
             defer:       false
         )
         window.title   = book.displayTitle
-        window.minSize = NSSize(width: 480, height: 400)
-        window.center()
+        window.minSize = NSSize(width: 600, height: 500)
         super.init(window: window)
         window.delegate = self
 
@@ -66,6 +67,31 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
     override func windowDidLoad() {
         super.windowDidLoad()
         sessionStartDate = Date()
+        applyDefaultWindowSize()
+    }
+
+    /// E1 — Sets the window to half the screen width, portrait height (90% of screen).
+    /// Called from windowDidLoad where NSScreen.main is guaranteed non-nil.
+    private func applyDefaultWindowSize() {
+        guard let window else { return }
+        let rp      = ReaderPreferences.shared
+        let screen  = window.screen ?? NSScreen.main ?? NSScreen.screens[0]
+        let visible = screen.visibleFrame
+
+        let width: CGFloat
+        let height: CGFloat
+        if rp.useScreenFraction {
+            // Portrait: half the screen width, 90% of screen height
+            width  = (visible.width * 0.50).rounded()
+            height = (visible.height * 0.90).rounded()
+        } else {
+            width  = rp.defaultWindowWidth
+            height = rp.defaultWindowHeight
+        }
+
+        let x = visible.minX + (visible.width - width) / 2
+        let y = visible.minY + (visible.height - height) / 2
+        window.setFrame(NSRect(x: x, y: y, width: width, height: height), display: false)
     }
 
     @MainActor

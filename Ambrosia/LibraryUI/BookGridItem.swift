@@ -6,6 +6,39 @@ import SwiftData
 struct LibraryRootView: View {
     @Environment(LibrarySession.self) private var session
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.colorScheme) private var systemColorScheme
+    @ObservedObject private var prefs = ReaderPreferences.shared
+
+    // MARK: - Resolved library colours
+
+    private var effectiveIsDark: Bool {
+        switch prefs.libraryAppearanceMode {
+        case .system: return systemColorScheme == .dark
+        case .light:  return false
+        case .dark:   return true
+        }
+    }
+
+    private var libraryBGColor: Color {
+        switch prefs.libraryColorMode {
+        case .systemDefault: return Color(nsColor: .windowBackgroundColor)
+        case .accentColor:   return Color(nsColor: .controlAccentColor).opacity(0.08)
+        case .custom:        return Color(hex: effectiveIsDark
+                                    ? prefs.libraryDarkBackgroundColor
+                                    : prefs.libraryLightBackgroundColor)
+                                    ?? Color(nsColor: .windowBackgroundColor)
+        }
+    }
+
+    private var libraryTextColor: Color {
+        switch prefs.libraryColorMode {
+        case .systemDefault, .accentColor: return Color(nsColor: .labelColor)
+        case .custom: return Color(hex: effectiveIsDark
+                                    ? prefs.libraryDarkTextColor
+                                    : prefs.libraryLightTextColor)
+                                    ?? Color(nsColor: .labelColor)
+        }
+    }
 
     @State private var books: [CalibreBook] = []
     @State private var hasNextPage  = false
@@ -51,6 +84,10 @@ struct LibraryRootView: View {
             Divider()
             footer
         }
+        .background(libraryBGColor)
+        .foregroundStyle(libraryTextColor)
+        .preferredColorScheme(prefs.libraryAppearanceMode == .system ? nil
+            : prefs.libraryAppearanceMode == .light ? .light : .dark)
         .onChange(of: currentPage)    { loadPage() }
         .onChange(of: sortField)      { currentPage = 0; loadPage() }
         .onChange(of: ascending)      { currentPage = 0; loadPage() }
@@ -232,7 +269,7 @@ struct LibraryRootView: View {
             .buttonStyle(.borderless)
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
-        .background(Color(NSColor.windowBackgroundColor))
+        .background(libraryBGColor)
     }
 
     private func activeFilterChip(count: Int) -> some View {
@@ -338,7 +375,7 @@ struct LibraryRootView: View {
             Button("Next →") { currentPage += 1 }.disabled(!hasNextPage).buttonStyle(.borderless)
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
-        .background(Color(NSColor.windowBackgroundColor))
+        .background(libraryBGColor)
     }
 
     private var emptyLibraryState: some View {

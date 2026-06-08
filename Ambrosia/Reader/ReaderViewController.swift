@@ -2,6 +2,7 @@ import AppKit
 import WebKit
 import SwiftData
 import SwiftUI
+import Combine
 
 // MARK: - ReaderViewController
 //
@@ -58,6 +59,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private var annotationPopover: NSPopover?
     private var notePopover: NSPopover?
 
+    // Preferences subscription
+    private var prefsCancellable: AnyCancellable?
+
     // Find bar
     private var findBarHostingView: NSHostingView<FindBarView>?
     private var findSearchText: String = "" {
@@ -112,6 +116,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         super.viewDidLoad()
         ensureBookState()
         currentMode = .scroll
+        subscribeToPreferences()
 
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
@@ -180,6 +185,17 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         } catch {
             print("[ReaderVC] reloadHTML error: \(error)")
         }
+    }
+
+    // MARK: - Preferences subscription
+
+    private func subscribeToPreferences() {
+        prefsCancellable = ReaderPreferences.shared.objectWillChange
+            .sink { [weak self] _ in
+                DispatchQueue.main.asyncAfter(deadline: .now()) {
+                    self?.reloadHTML()
+                }
+            }
     }
 
     // MARK: - Mode switching
