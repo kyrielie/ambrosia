@@ -36,6 +36,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
         )
         window.title = "Ambrosia"
         window.titleVisibility = .hidden   // suppress "Ambrosia" — count label replaces it
+        window.toolbarStyle    = .expanded  // taller toolbar — fits two-line label and icons
         window.minSize = NSSize(width: 700, height: 500)
         window.isReleasedWhenClosed = false
         window.center()
@@ -243,10 +244,11 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
         updateCountLabel()
 
         let item = NSToolbarItem(itemIdentifier: identifier)
-        item.label   = "Library"
-        item.view    = stack
-        item.minSize = NSSize(width: 100, height: 38)
-        item.maxSize = NSSize(width: 220, height: 38)
+        item.label = "Library"
+        item.view  = stack
+        // minSize/maxSize deprecated on macOS 12+; constrain the view directly instead
+        stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 100).isActive = true
+        stack.widthAnchor.constraint(lessThanOrEqualToConstant: 220).isActive    = true
         return item
     }
 

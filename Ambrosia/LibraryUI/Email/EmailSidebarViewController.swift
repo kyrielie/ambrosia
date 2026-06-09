@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import SwiftData
 
 // MARK: - EmailSidebarViewController
@@ -7,7 +8,7 @@ import SwiftData
 //
 // Layout (top to bottom):
 //   ┌──────────────────────┐
-//   │  FilterHeaderView    │  fixed 52pt — shows active filter chips or "All fics"
+//   │  SidebarFilterPillsView │  SwiftUI, variable height, hidden when no filter active
 //   ├──────────────────────┤
 //   │  NSScrollView        │  fills remaining space
 //   │  └─ NSTableView      │  64pt rows: title / author / progress text + bar
@@ -38,9 +39,9 @@ final class EmailSidebarViewController: NSViewController,
 
     // MARK: - Private
 
-    private var tableView:    NSTableView!
-    private var scrollView:   NSScrollView!
-    private var filterHeader: FilterHeaderView!
+    private var tableView:  NSTableView!
+    private var scrollView: NSScrollView!
+    private var pillsHost:  NSHostingView<SidebarFilterPillsView>?
     private var hasTriggeredLoadMore = false
 
     // MARK: - Lifecycle
@@ -48,14 +49,6 @@ final class EmailSidebarViewController: NSViewController,
     override func loadView() {
         let container = NSView()
 
-        // --- Filter header ---
-        filterHeader = FilterHeaderView()
-        filterHeader.translatesAutoresizingMaskIntoConstraints = false
-        filterHeader.onEdit  = { [weak self] in self?.onEditFilter?() }
-        filterHeader.onClear = { [weak self] in self?.onClearFilter?() }
-        container.addSubview(filterHeader)
-
-        // --- Table ---
         tableView = NSTableView()
         tableView.dataSource = self
         tableView.delegate   = self
@@ -68,12 +61,11 @@ final class EmailSidebarViewController: NSViewController,
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("BookColumn"))
         col.resizingMask = .autoresizingMask
         tableView.addTableColumn(col)
-
         tableView.target       = self
         tableView.doubleAction = #selector(handleDoubleClick)
 
         scrollView = NSScrollView()
-        scrollView.documentView     = tableView
+        scrollView.documentView        = tableView
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers  = true
         scrollView.borderType          = .noBorder
@@ -85,14 +77,10 @@ final class EmailSidebarViewController: NSViewController,
             name: NSScrollView.didLiveScrollNotification, object: scrollView
         )
 
-        // Layout: header pinned to top, scroll fills the rest
+        // Scroll view fills the whole container initially;
+        // installPillsHost() will re-pin its top edge after the pills view is added.
         NSLayoutConstraint.activate([
-            filterHeader.topAnchor.constraint(equalTo: container.topAnchor),
-            filterHeader.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            filterHeader.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            filterHeader.heightAnchor.constraint(equalToConstant: 52),
-
-            scrollView.topAnchor.constraint(equalTo: filterHeader.bottomAnchor),
+            scrollView.topAnchor.constraint(equalTo: container.topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
@@ -105,26 +93,36 @@ final class EmailSidebarViewController: NSViewController,
         super.viewDidLoad()
         tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         tableView.tableColumns.first?.width = tableView.bounds.width
-        if let ts = toolbarState { filterHeader.configure(with: ts) }
-        startObservingFilter()
+        if let ts = toolbarState { installPillsHost(ts: ts) }
     }
 
-    // MARK: - Filter header observation
+    // MARK: - Pills header
 
-    private func startObservingFilter() { scheduleFilterObservation() }
+    private func installPillsHost(ts: LibraryToolbarState) {
+        let pillsView = SidebarFilterPillsView(
+            toolbarState: ts,
+            onEdit:  { [weak self] in self?.onEditFilter?()  },
+            onClear: { [weak self] in self?.onClearFilter?() }
+        )
+        let hv = NSHostingView(rootView: pillsView)
+        hv.sizingOptions = []   // constraint-driven; avoids intrinsicContentSize {inf} crash
+        hv.translatesAutoresizingMaskIntoConstraints = false
 
-    private func scheduleFilterObservation() {
-        guard let ts = toolbarState else { return }
-        withObservationTracking {
-            _ = ts.activeFilterResult
-            _ = ts.filterExpression.groups
-        } onChange: { [weak self] in
-            DispatchQueue.main.async {
-                guard let self, let ts = self.toolbarState else { return }
-                self.filterHeader.configure(with: ts)
-                self.scheduleFilterObservation()
-            }
-        }
+        guard let container = view else { return }
+        container.addSubview(hv, positioned: .above, relativeTo: scrollView)
+
+        // Remove the scroll view's top-to-container constraint, re-pin below pills
+        if let topC = scrollView.constraints.first(where: {
+            $0.firstAttribute == .top && $0.secondItem === container
+        }) { topC.isActive = false }
+
+        NSLayoutConstraint.activate([
+            hv.topAnchor.constraint(equalTo: container.topAnchor),
+            hv.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            hv.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: hv.bottomAnchor),
+        ])
+        pillsHost = hv
     }
 
     // MARK: - NSTableViewDataSource
@@ -156,8 +154,6 @@ final class EmailSidebarViewController: NSViewController,
         onSelect?(row >= 0 ? books[row] : nil)
     }
 
-    // MARK: - Double-click
-
     @objc private func handleDoubleClick() {
         let row = tableView.clickedRow
         guard row >= 0, row < books.count else { return }
@@ -171,8 +167,7 @@ final class EmailSidebarViewController: NSViewController,
               let doc  = scrollView.documentView else { return }
         let visBottom = clip.documentVisibleRect.maxY
         let docHeight = doc.frame.height
-        guard docHeight > 0, visBottom >= docHeight - 150 else { return }
-        guard !hasTriggeredLoadMore else { return }
+        guard docHeight > 0, visBottom >= docHeight - 150, !hasTriggeredLoadMore else { return }
         hasTriggeredLoadMore = true
         onLoadMore?()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -183,105 +178,74 @@ final class EmailSidebarViewController: NSViewController,
     deinit { NotificationCenter.default.removeObserver(self) }
 }
 
-// MARK: - FilterHeaderView
+// MARK: - SidebarFilterPillsView
 //
-// Fixed 52pt bar above the book list showing what filter is active.
-//
-//  No filter:  [ All fics            ] [Edit]
-//  Filtered:   [ 47 matched          ] [Edit] [✕]
-//
-// "Edit" opens the filter drawer. "✕" clears the filter.
+// SwiftUI view that renders filter pills matching the list-view chip style.
+// Returns zero height (empty) when no filter is active, so no space is wasted.
 
-final class FilterHeaderView: NSView {
+struct SidebarFilterPillsView: View {
+    let toolbarState: LibraryToolbarState
+    let onEdit:  () -> Void
+    let onClear: () -> Void
 
-    var onEdit:  (() -> Void)?
-    var onClear: (() -> Void)?
+    var body: some View {
+        let rules   = toolbarState.filterExpression.groups.flatMap(\.rules).filter(\.isComplete)
+        let hasFilter = toolbarState.activeFilterResult != nil && !rules.isEmpty
 
-    private let summaryLabel = NSTextField(labelWithString: "All fics")
-    private let editButton   = NSButton(title: "Filter", target: nil, action: nil)
-    private let clearButton  = NSButton(title: "", target: nil, action: nil)
+        if hasFilter {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                        .foregroundStyle(Color.accentColor)
+                        .font(.caption)
+                    let count = toolbarState.activeFilterResult?.totalCount ?? 0
+                    Text("\(count) result\(count == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Edit") { onEdit() }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                    Button { onClear() } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                }
 
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        setup()
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func setup() {
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.6).cgColor
-
-        // Bottom separator
-        let sep = NSBox()
-        sep.boxType = .separator
-        sep.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(sep)
-
-        summaryLabel.font      = NSFont.systemFont(ofSize: 11, weight: .medium)
-        summaryLabel.textColor = .secondaryLabelColor
-        summaryLabel.lineBreakMode = .byTruncatingTail
-        summaryLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(summaryLabel)
-
-        editButton.bezelStyle = .inline
-        editButton.isBordered = true
-        editButton.font       = NSFont.systemFont(ofSize: 10)
-        editButton.target     = self
-        editButton.action     = #selector(editTapped)
-        editButton.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(editButton)
-
-        // Clear button — SF Symbol ✕
-        let cfg = NSImage.SymbolConfiguration(pointSize: 9, weight: .regular)
-        clearButton.image        = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Clear filter")?
-            .withSymbolConfiguration(cfg)
-        clearButton.bezelStyle   = .regularSquare
-        clearButton.isBordered   = false
-        clearButton.target       = self
-        clearButton.action       = #selector(clearTapped)
-        clearButton.isHidden     = true
-        clearButton.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(clearButton)
-
-        NSLayoutConstraint.activate([
-            sep.leadingAnchor.constraint(equalTo: leadingAnchor),
-            sep.trailingAnchor.constraint(equalTo: trailingAnchor),
-            sep.bottomAnchor.constraint(equalTo: bottomAnchor),
-            sep.heightAnchor.constraint(equalToConstant: 1),
-
-            summaryLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            summaryLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-
-            editButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            editButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-
-            clearButton.trailingAnchor.constraint(equalTo: editButton.leadingAnchor, constant: -4),
-            clearButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            clearButton.widthAnchor.constraint(equalToConstant: 18),
-            clearButton.heightAnchor.constraint(equalToConstant: 18),
-
-            summaryLabel.trailingAnchor.constraint(lessThanOrEqualTo: clearButton.leadingAnchor, constant: -4),
-        ])
-    }
-
-    func configure(with ts: LibraryToolbarState) {
-        if let result = ts.activeFilterResult, ts.filterExpression.hasCompleteRules {
-            let fmt = NumberFormatter()
-            fmt.numberStyle = .decimal
-            let n = fmt.string(from: NSNumber(value: result.totalCount)) ?? "\(result.totalCount)"
-            summaryLabel.stringValue = "\(n) matched"
-            summaryLabel.textColor   = .controlAccentColor
-            clearButton.isHidden     = false
-        } else {
-            summaryLabel.stringValue = "All fics"
-            summaryLabel.textColor   = .secondaryLabelColor
-            clearButton.isHidden     = true
+                FlowLayout(spacing: 4) {
+                    ForEach(rules) { rule in
+                        let negated = rule.op == .notContains || rule.op == .notEquals
+                        HStack(spacing: 3) {
+                            if negated {
+                                Text("NOT")
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4).padding(.vertical, 1)
+                                    .background(Color.red.opacity(0.85))
+                                    .clipShape(Capsule())
+                            }
+                            Text(rule.field.label)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            if !rule.value.isEmpty {
+                                Text(rule.value).font(.caption2.bold())
+                            }
+                        }
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(negated ? Color.red.opacity(0.08) : Color.accentColor.opacity(0.12))
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(
+                            negated ? Color.red.opacity(0.3) : Color.accentColor.opacity(0.3),
+                            lineWidth: 0.5))
+                    }
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(Color(NSColor.controlBackgroundColor))
+            .overlay(alignment: .bottom) { Divider() }
         }
     }
-
-    @objc private func editTapped()  { onEdit?()  }
-    @objc private func clearTapped() { onClear?() }
 }
 
 // MARK: - EmailBookCellView

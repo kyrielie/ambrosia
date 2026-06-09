@@ -177,7 +177,6 @@ private struct BookDetailContent: View {
     }
 
     private func tagPill(_ label: String, _ color: Color?) -> some View {
-        let c = color ?? Color(NSColor.controlColor)
         return Text(label)
             .font(.caption2)
             .padding(.horizontal, 6).padding(.vertical, 2)
