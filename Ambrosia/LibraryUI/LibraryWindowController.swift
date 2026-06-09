@@ -17,7 +17,7 @@ extension NSToolbarItem.Identifier {
 
 // MARK: - LibraryWindowController
 
-class LibraryWindowController: NSWindowController, NSToolbarDelegate {
+class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSTextFieldDelegate, NSSearchFieldDelegate {
 
     private weak var toolbarState: LibraryToolbarState?
     private weak var session: LibrarySession?
@@ -26,6 +26,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
     /// Two-line count label in the toolbar centre.
     private var ficCountLabel: NSTextField?
     private var readCountLabel: NSTextField?
+    /// Retained search field so we can set delegate and push completions.
+    private weak var searchField: NSSearchField?
 
     init(modelContainer: ModelContainer, session: LibrarySession) {
         let window = NSWindow(
@@ -96,6 +98,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
             item.resignsFirstResponderWithCancel = true
             item.searchField.target = self
             item.searchField.action = #selector(searchFieldChanged(_:))
+            item.searchField.delegate = self
+            searchField = item.searchField
             return item
 
         case .librarySidebarToggle:
@@ -282,6 +286,38 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
 
     @objc private func searchFieldChanged(_ sender: NSSearchField) {
         toolbarState?.searchText = sender.stringValue
+    }
+
+    // MARK: - NSTextFieldDelegate (search field completions)
+
+    /// Called by AppKit when the user pauses typing in the search field.
+    /// Return strings and AppKit renders them in a native dropdown, properly
+    /// positioned under the search field — identical to Finder's behaviour.
+    func control(_ control: NSControl,
+                 textView: NSTextView,
+                 completions words: [String],
+                 forPartialWordRange charRange: NSRange,
+                 indexOfSelectedItem index: UnsafeMutablePointer<Int>) -> [String] {
+        guard let library = session?.library else { return [] }
+        let fullText = (control as? NSSearchField)?.stringValue ?? textView.string
+        let typed = (fullText as NSString).substring(with: charRange)
+        guard !typed.isEmpty else { return [] }
+
+        // Route completions based on active prefix, mirroring computeSuggestions logic.
+        if let prefix = fullText.activePrefixValue(for: "author:"), !prefix.isEmpty {
+            return library.authorSuggestions(prefix: prefix, limit: 8)
+                .map { "author:\"\($0)\"" }
+        }
+        if let prefix = fullText.activePrefixValue(for: "title:"), !prefix.isEmpty {
+            return library.titleSuggestions(prefix: prefix, limit: 8)
+                .map { "title:\"\($0)\"" }
+        }
+        // Plain text — tag suggestions for the last word (≥2 chars, no colon)
+        let lastWord = fullText.components(separatedBy: .whitespaces).last ?? ""
+        if lastWord.count >= 2, !lastWord.contains(":") {
+            return library.tagSuggestions(prefix: lastWord, limit: 8)
+        }
+        return []
     }
 
     @objc private func toggleFilter() {

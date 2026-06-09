@@ -46,10 +46,6 @@ struct LibraryRootView: View {
     @State private var currentPage  = 0
     @State private var filteredCount: Int? = nil
 
-    // Autocomplete suggestions (I2)
-    @State private var suggestions: [SearchSuggestion] = []
-    private let suggestionDebouncer = DebounceTimer(delay: 0.15)
-
     // BookState dictionary keyed by calibreID — fetched ONCE here, never per-row
     @State private var bookStates: [Int: BookState] = [:]
 
@@ -61,33 +57,20 @@ struct LibraryRootView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            VStack(spacing: 0) {
-                Divider()
-                if toolbarState.hasActiveFilter {
-                    activeFilterChip(count: toolbarState.activeFilterResult!.totalCount)
-                }
-                if !session.isOpen {
-                    emptyLibraryState
-                } else if books.isEmpty && toolbarState.searchText.isEmpty && !toolbarState.hasActiveFilter {
-                    loadingState
-                } else {
-                    bookList
-                }
-                Divider()
-                footer
+        VStack(spacing: 0) {
+            Divider()
+            if toolbarState.hasActiveFilter {
+                activeFilterChip(count: toolbarState.activeFilterResult!.totalCount)
             }
-
-            // Autocomplete suggestion overlay (I2)
-            if !suggestions.isEmpty {
-                SearchSuggestionsView(suggestions: suggestions) { selected in
-                    toolbarState.searchText = applyingSuggestion(selected, to: toolbarState.searchText)
-                    suggestions = []
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 4)
-                .zIndex(10)
+            if !session.isOpen {
+                emptyLibraryState
+            } else if books.isEmpty && toolbarState.searchText.isEmpty && !toolbarState.hasActiveFilter {
+                loadingState
+            } else {
+                bookList
             }
+            Divider()
+            footer
         }
         .background(libraryBGColor)
         .foregroundStyle(libraryTextColor)
@@ -98,14 +81,6 @@ struct LibraryRootView: View {
         .onChange(of: toolbarState.ascending)     { currentPage = 0; loadPage() }
         .onChange(of: toolbarState.searchText) {
             currentPage = 0
-            // Suggestion update on faster debounce
-            suggestionDebouncer.schedule {
-                if let lib = session.library {
-                    suggestions = computeSuggestions(for: toolbarState.searchText, library: lib)
-                } else {
-                    suggestions = []
-                }
-            }
             debouncer.schedule {
                 loadPage()
                 filteredCount = toolbarState.searchText.isEmpty ? nil
@@ -480,8 +455,9 @@ struct BookListRow: View, Equatable {
         if !book.authors.isEmpty {
             HStack(spacing: 4) {
                 ForEach(book.authors, id: \.self) { author in
-                    Button(author) { onAuthorTap(author) }
-                        .buttonStyle(.plain).font(.subheadline).foregroundStyle(.secondary)
+                    Text(author)
+                        .font(.subheadline).foregroundStyle(.secondary)
+                        .onTapGesture { onAuthorTap(author) }
                     if author != book.authors.last {
                         Text("·").foregroundStyle(.tertiary).font(.subheadline)
                     }
@@ -492,22 +468,23 @@ struct BookListRow: View, Equatable {
 
     @ViewBuilder
     private var tagsRow: some View {
-        let hasAny = !buckets.ratings.isEmpty || !buckets.warnings.isEmpty
-                   || !buckets.categories.isEmpty || !buckets.regular.isEmpty
-
-        if hasAny {
+        if !buckets.isEmpty {
             FlowLayout(spacing: 4) {
                 ForEach(buckets.ratings, id: \.self) { tag in
-                    ao3Pill(tag, color: .orange) { onTagTap(tag, .rating) }
+                    tagPill(tag, color: .orange)
+                        .onTapGesture { onTagTap(tag, .rating) }
                 }
                 ForEach(buckets.categories, id: \.self) { tag in
-                    ao3Pill(tag, color: .blue)   { onTagTap(tag, .category) }
+                    tagPill(tag, color: .blue)
+                        .onTapGesture { onTagTap(tag, .category) }
                 }
                 ForEach(buckets.warnings, id: \.self) { tag in
-                    ao3Pill(tag, color: .red)    { onTagTap(tag, .warning) }
+                    tagPill(tag, color: .red)
+                        .onTapGesture { onTagTap(tag, .warning) }
                 }
                 ForEach(buckets.regular, id: \.self) { tag in
-                    regularPill(tag) { onTagTap(tag, .tag) }
+                    tagPill(tag, color: nil)
+                        .onTapGesture { onTagTap(tag, .tag) }
                 }
             }
         }
@@ -562,26 +539,20 @@ struct BookListRow: View, Equatable {
 
     // MARK: - Pill builders
 
-    private func ao3Pill(_ label: String, color: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label).font(.caption2)
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(color.opacity(0.18))
-                .foregroundStyle(color)
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func regularPill(_ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label).font(.caption2)
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(Color(NSColor.controlBackgroundColor))
-                .foregroundStyle(.secondary)
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
+    /// Single pill view: `Text` with coloured or neutral background.
+    /// Using `Text` + `.onTapGesture` instead of `Button` + `.buttonStyle(.plain)`
+    /// reduces the SwiftUI node count significantly (no ButtonStyle resolution per pill).
+    private func tagPill(_ label: String, color: Color?) -> some View {
+        Text(label)
+            .font(.caption2)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                color.map { $0.opacity(0.18) }
+                    ?? Color(NSColor.controlBackgroundColor)
+            )
+            .foregroundStyle(color ?? .secondary)
+            .clipShape(Capsule())
     }
 
     private func statChip(_ label: String, icon: String) -> some View {
@@ -612,22 +583,79 @@ struct CollapsibleText: View {
 // MARK: - FlowLayout
 struct FlowLayout: Layout {
     var spacing: CGFloat = 4
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
-        var x: CGFloat = 0, y: CGFloat = 0, rowH: CGFloat = 0
-        for sub in subviews {
-            let size = sub.sizeThatFits(.unspecified)
-            if x + size.width > maxWidth, x > 0 { x = 0; y += rowH + spacing; rowH = 0 }
-            rowH = max(rowH, size.height); x += size.width + spacing
-        }
-        return CGSize(width: maxWidth, height: y + rowH)
+
+    // Cache stores pre-measured subview sizes and the resolved layout at the last width.
+    struct Cache {
+        var subviewSizes: [CGSize] = []
+        var lastWidth: CGFloat = -1
+        var rows: [(startIndex: Int, y: CGFloat, height: CGFloat)] = []
+        var totalHeight: CGFloat = 0
     }
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX, y = bounds.minY, rowH: CGFloat = 0
-        for sub in subviews {
-            let size = sub.sizeThatFits(.unspecified)
-            if x + size.width > bounds.maxX, x > bounds.minX { x = bounds.minX; y += rowH + spacing; rowH = 0 }
-            sub.place(at: CGPoint(x: x, y: y), proposal: .unspecified); rowH = max(rowH, size.height); x += size.width + spacing
+
+    func makeCache(subviews: Subviews) -> Cache {
+        // Measure each subview once; sizes are stable unless subviews change identity.
+        var c = Cache()
+        c.subviewSizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        return c
+    }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        // Re-measure only when subview count changes (tags don't change per row).
+        if cache.subviewSizes.count != subviews.count {
+            cache.subviewSizes = subviews.map { $0.sizeThatFits(.unspecified) }
+            cache.lastWidth = -1   // invalidate row layout
         }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        let maxWidth = proposal.width ?? 800
+        rebuildRows(in: &cache, maxWidth: maxWidth)
+        return CGSize(width: maxWidth, height: cache.totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        rebuildRows(in: &cache, maxWidth: bounds.width)
+        var rowIdx = 0
+        var x = bounds.minX
+        var currentRowY: CGFloat = bounds.minY
+        var currentRowH: CGFloat = 0
+
+        for (i, sub) in subviews.enumerated() {
+            let size = cache.subviewSizes[i]
+            if rowIdx + 1 < cache.rows.count && i >= cache.rows[rowIdx + 1].startIndex {
+                rowIdx += 1
+                x = bounds.minX
+            }
+            currentRowY = bounds.minY + cache.rows[rowIdx].y
+            currentRowH = cache.rows[rowIdx].height
+            let yOffset = (currentRowH - size.height) / 2   // vertically centre within row
+            sub.place(at: CGPoint(x: x, y: currentRowY + yOffset), proposal: .unspecified)
+            x += size.width + spacing
+        }
+    }
+
+    // Recompute row positions only when width changes.
+    private func rebuildRows(in cache: inout Cache, maxWidth: CGFloat) {
+        guard abs(cache.lastWidth - maxWidth) > 0.5 else { return }
+        cache.lastWidth = maxWidth
+
+        var rows: [(startIndex: Int, y: CGFloat, height: CGFloat)] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowH: CGFloat = 0
+        var rowStart = 0
+
+        for (i, size) in cache.subviewSizes.enumerated() {
+            if x + size.width > maxWidth && x > 0 {
+                rows.append((startIndex: rowStart, y: y, height: rowH))
+                y += rowH + spacing
+                x = 0; rowH = 0; rowStart = i
+            }
+            rowH = max(rowH, size.height)
+            x += size.width + spacing
+        }
+        rows.append((startIndex: rowStart, y: y, height: rowH))
+        cache.rows = rows
+        cache.totalHeight = y + rowH
     }
 }
