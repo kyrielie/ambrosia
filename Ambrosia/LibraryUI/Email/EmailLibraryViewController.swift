@@ -6,60 +6,50 @@ import SwiftData
 //
 // Email-style split view: hideable left sidebar + right inline reader pane.
 //
-// Filters/sorts applied in the list view are inherited here because the same
-// LibraryToolbarState is shared across all view modes.  Single-click on a
-// sidebar row loads the book into the inline ReaderViewController on the
-// right.  Double-click opens a dedicated reader window (the normal flow).
-//
-// Sidebar visibility is toggled by a small button that floats just inside the
-// leading edge of the content area.  Collapsing uses NSSplitViewItem.isCollapsed
-// so the split view remembers the open width on restore.
-//
-// When toolbarState.showFilterDrawer becomes true this VC presents the
-// FilterDrawerView as an NSWindow sheet so the filter UI is available in
-// email mode the same as in list mode.
+// The sidebar header shows active filter chips. The filter sheet is presented
+// via a persistent zero-size SwiftUI hosting view so @Environment(\.dismiss)
+// resolves correctly through SwiftUI's sheet system — not through NSPanel/beginSheet
+// (which breaks FilterDrawerView's built-in X and Apply buttons).
 
 final class EmailLibraryViewController: NSViewController {
 
     // MARK: - Dependencies
 
-    private let modelContainer: ModelContainer
-    private let session:        LibrarySession
-    private let toolbarState:   LibraryToolbarState
+    let modelContainer: ModelContainer
+    let session:        LibrarySession
+    let toolbarState:   LibraryToolbarState
 
     // MARK: - Child VCs
 
     private var splitVC:   NSSplitViewController!
     private var sidebarVC: EmailSidebarViewController!
 
-    // MARK: - Sidebar toggle
+    // MARK: - Filter sheet host
+    // A zero-size NSHostingView permanently in the hierarchy that carries the
+    // SwiftUI .sheet() modifier. This lets @Environment(\.dismiss) work correctly.
+    private var filterSheetHost: NSHostingView<FilterSheetCarrier>?
 
-    private var sidebarToggleButton: NSButton!
+    // MARK: - Sidebar state
+
     private var isSidebarHidden = false
 
-    // MARK: - Filter sheet
-
-    private var filterSheetWindowController: NSWindowController?
-
-    // MARK: - Pagination state
+    // MARK: - Pagination
 
     private var books:      [CalibreBook]    = []
-    private var bookStates: [Int: BookState] = [:]
+    var bookStates: [Int: BookState] = [:]        // internal(set) for FilterSheetCarrier
     private var currentPage = 0
     private var hasNextPage = false
     private let pageSize    = 100
 
-    // MARK: - Toolbar observation snapshots
+    // MARK: - Toolbar snapshots
 
-    private var lastSearch:     String    = ""
-    private var lastSort:       SortField = .title
-    private var lastAscending:  Bool      = true
-    private var lastFilterIDs:  [Int]?    = nil
-    private var lastShowFilter: Bool      = false
+    private var lastSearch:    String    = ""
+    private var lastSort:      SortField = .title
+    private var lastAscending: Bool      = true
+    private var lastFilterIDs: [Int]?    = nil
 
     private let debouncer = DebounceTimer(delay: 0.3)
 
-    // Currently selected book — setting it triggers updateReaderPane()
     private var selectedBook: CalibreBook? { didSet { updateReaderPane() } }
 
     // MARK: - Init
@@ -83,7 +73,7 @@ final class EmailLibraryViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         buildSplitView()
-        addSidebarToggleButton()
+        addFilterSheetHost()
         refreshBookStates()
         loadPage(reset: true)
         startObservingToolbarState()
@@ -93,27 +83,35 @@ final class EmailLibraryViewController: NSViewController {
 
     private func buildSplitView() {
         sidebarVC = EmailSidebarViewController()
-        sidebarVC.onSelect   = { [weak self] book in self?.selectedBook = book }
-        sidebarVC.onOpen     = { [weak self] book in
+        sidebarVC.toolbarState = toolbarState
+        sidebarVC.onSelect     = { [weak self] book in self?.selectedBook = book }
+        sidebarVC.onOpen       = { [weak self] book in
             guard let self else { return }
             let ctx = ModelContext(modelContainer)
             AppDelegate.shared?.openReaderWindow(book: book, modelContext: ctx)
         }
-        sidebarVC.onLoadMore = { [weak self] in self?.loadNextPageIfAvailable() }
-
-        let placeholder = makePlaceholderVC()
+        sidebarVC.onLoadMore   = { [weak self] in self?.loadNextPageIfAvailable() }
+        sidebarVC.onEditFilter = { [weak self] in
+            self?.toolbarState.showFilterDrawer = true
+        }
+        sidebarVC.onClearFilter = { [weak self] in
+            guard let self else { return }
+            toolbarState.filterExpression   = FilterExpression()
+            toolbarState.activeFilterResult = nil
+            loadPage(reset: true)
+        }
 
         splitVC = NSSplitViewController()
         splitVC.splitView.isVertical   = true
         splitVC.splitView.autosaveName = "AmbrosiaEmailSplitView"
 
         let sidebarItem = NSSplitViewItem(viewController: sidebarVC)
-        sidebarItem.minimumThickness          = 200
-        sidebarItem.maximumThickness          = 380
+        sidebarItem.minimumThickness           = 200
+        sidebarItem.maximumThickness           = 380
         sidebarItem.preferredThicknessFraction = 0.26
-        sidebarItem.canCollapse               = true
+        sidebarItem.canCollapse                = true
 
-        let readerItem = NSSplitViewItem(viewController: placeholder)
+        let readerItem = NSSplitViewItem(viewController: makePlaceholderVC())
         readerItem.minimumThickness = 420
 
         splitVC.addSplitViewItem(sidebarItem)
@@ -130,10 +128,32 @@ final class EmailLibraryViewController: NSViewController {
         ])
     }
 
+    // MARK: - Filter sheet host (SwiftUI .sheet carrier)
+
+    private func addFilterSheetHost() {
+        let carrier = FilterSheetCarrier(
+            toolbarState:   toolbarState,
+            modelContainer: modelContainer,
+            emailVC:        self
+        )
+        let hv = NSHostingView(rootView: carrier)
+        hv.sizingOptions = []          // purely constraint-driven; never intrinsicContentSize
+        hv.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(hv)
+        // Zero size — purely a SwiftUI sheet presenter
+        NSLayoutConstraint.activate([
+            hv.widthAnchor.constraint(equalToConstant: 0),
+            hv.heightAnchor.constraint(equalToConstant: 0),
+            hv.topAnchor.constraint(equalTo: view.topAnchor),
+            hv.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+        ])
+        filterSheetHost = hv
+    }
+
     // MARK: - Placeholder
 
     private func makePlaceholderVC() -> NSViewController {
-        let v = NSHostingController(rootView:
+        NSHostingController(rootView:
             VStack(spacing: 14) {
                 Image(systemName: "book.closed")
                     .font(.system(size: 48))
@@ -141,7 +161,7 @@ final class EmailLibraryViewController: NSViewController {
                 Text("Select a book to read")
                     .font(.title3)
                     .foregroundStyle(.tertiary)
-                Text("Use the list view to filter by tag, then switch here to read.")
+                Text("Filter by tag in the list view, then switch here to read through results.")
                     .font(.callout)
                     .foregroundStyle(.quaternary)
                     .multilineTextAlignment(.center)
@@ -149,51 +169,17 @@ final class EmailLibraryViewController: NSViewController {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         )
-        return v
     }
 
-    // MARK: - Sidebar toggle button
+    // MARK: - Sidebar toggle (called from toolbar via toolbarState trigger flag)
 
-    private func addSidebarToggleButton() {
-        let cfg = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-        let img = NSImage(systemSymbolName: "sidebar.left",
-                          accessibilityDescription: "Toggle sidebar")?
-            .withSymbolConfiguration(cfg)
-
-        let btn = NSButton(frame: NSRect(x: 0, y: 0, width: 28, height: 24))
-        btn.bezelStyle      = .regularSquare
-        btn.isBordered      = false
-        btn.image           = img
-        btn.imageScaling    = .scaleProportionallyDown
-        btn.target          = self
-        btn.action          = #selector(toggleSidebar)
-        btn.toolTip         = "Hide sidebar"
-        btn.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(btn)
-
-        NSLayoutConstraint.activate([
-            btn.topAnchor.constraint(equalTo: view.topAnchor, constant: 6),
-            btn.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 6),
-            btn.widthAnchor.constraint(equalToConstant: 28),
-            btn.heightAnchor.constraint(equalToConstant: 24),
-        ])
-
-        sidebarToggleButton = btn
-    }
-
-    @objc private func toggleSidebar() {
+    @objc func performSidebarToggle() {
         isSidebarHidden.toggle()
-        guard let sidebarItem = splitVC.splitViewItems.first else { return }
+        guard let item = splitVC.splitViewItems.first else { return }
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.2
-            sidebarItem.animator().isCollapsed = isSidebarHidden
+            item.animator().isCollapsed = isSidebarHidden
         }
-        let cfg = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-        let imgName = isSidebarHidden ? "sidebar.right" : "sidebar.left"
-        sidebarToggleButton.image = NSImage(systemSymbolName: imgName,
-                                             accessibilityDescription: nil)?
-            .withSymbolConfiguration(cfg)
-        sidebarToggleButton.toolTip = isSidebarHidden ? "Show sidebar" : "Hide sidebar"
     }
 
     // MARK: - Toolbar state observation
@@ -206,7 +192,7 @@ final class EmailLibraryViewController: NSViewController {
             _ = toolbarState.sortField
             _ = toolbarState.ascending
             _ = toolbarState.activeFilterResult?.calibreIDs
-            _ = toolbarState.showFilterDrawer
+            _ = toolbarState.toggleEmailSidebar
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 self?.toolbarStateDidChange()
@@ -216,108 +202,101 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func toolbarStateDidChange() {
-        let newSearch     = toolbarState.searchText
-        let newSort       = toolbarState.sortField
-        let newAscending  = toolbarState.ascending
-        let newFilterIDs  = toolbarState.activeFilterResult?.calibreIDs
-        let newShowFilter = toolbarState.showFilterDrawer
+        if toolbarState.toggleEmailSidebar {
+            toolbarState.toggleEmailSidebar = false
+            performSidebarToggle()
+        }
 
-        if newShowFilter && !lastShowFilter { presentFilterSheet() }
-        lastShowFilter = newShowFilter
+        let newSearch    = toolbarState.searchText
+        let newSort      = toolbarState.sortField
+        let newAscending = toolbarState.ascending
+        let newFilterIDs = toolbarState.activeFilterResult?.calibreIDs
 
-        let searchChanged = newSearch    != lastSearch
-        let sortChanged   = newSort      != lastSort || newAscending != lastAscending
-        let filterChanged = newFilterIDs != lastFilterIDs
+        let changed = newSearch    != lastSearch
+                   || newSort      != lastSort
+                   || newAscending != lastAscending
+                   || newFilterIDs != lastFilterIDs
 
-        guard searchChanged || sortChanged || filterChanged else { return }
+        guard changed else { return }
         lastSearch    = newSearch
         lastSort      = newSort
         lastAscending = newAscending
         lastFilterIDs = newFilterIDs
 
-        if searchChanged {
+        if newSearch != lastSearch {
             debouncer.schedule { [weak self] in self?.loadPage(reset: true) }
         } else {
             loadPage(reset: true)
         }
     }
 
-    // MARK: - Filter sheet
+    // MARK: - Filter application (called from FilterSheetCarrier after Apply)
 
-    private func presentFilterSheet() {
-        guard filterSheetWindowController == nil,
-              let parentWindow = view.window else { return }
-
-        // Build a sheet window hosting FilterDrawerView
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 560),
-            styleMask: [.titled, .closable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        panel.title = "Filter Library"
-        panel.isReleasedWhenClosed = false
-
-        let hostVC = NSHostingController(rootView: EmailFilterSheet(toolbarState: toolbarState) {
-            [weak self] in self?.dismissFilterSheet()
-        }.modelContainer(modelContainer))
-        panel.contentViewController = hostVC
-
-        let wc = NSWindowController(window: panel)
-        filterSheetWindowController = wc
-
-        parentWindow.beginSheet(panel) { [weak self] _ in
-            self?.filterSheetWindowController = nil
-            // Reset the trigger flag so it can fire again next time
-            self?.toolbarState.showFilterDrawer = false
-            self?.lastShowFilter = false
+    func applyFilterRules() {
+        guard let library = session.library else { return }
+        guard toolbarState.filterExpression.hasCompleteRules else {
+            toolbarState.activeFilterResult = nil
+            loadPage(reset: true)
+            return
         }
-    }
 
-    private func dismissFilterSheet() {
-        guard let wc = filterSheetWindowController,
-              let sheet = wc.window,
-              let parentWindow = view.window else { return }
-        parentWindow.endSheet(sheet)
+        let needsLiked = toolbarState.filterExpression.groups
+            .flatMap(\.rules).contains { $0.field == .isLiked }
+        let likedIDs: Set<Int> = needsLiked
+            ? Set(bookStates.values.filter(\.isLiked).map(\.calibreID))
+            : []
+
+        let needsCollection = toolbarState.filterExpression.groups
+            .flatMap(\.rules).contains { $0.field == .collection }
+        let collectionMap: [String: Set<Int>]
+        if needsCollection {
+            let ctx  = ModelContext(modelContainer)
+            let cols = (try? ctx.fetch(FetchDescriptor<Collection>())) ?? []
+            collectionMap = Dictionary(uniqueKeysWithValues:
+                cols.map { ($0.name, Set($0.calibreIDs)) }
+            )
+        } else {
+            collectionMap = [:]
+        }
+
+        let builder = FilterBuilder(library: library)
+        toolbarState.activeFilterResult = builder.matchingIDs(
+            expression: toolbarState.filterExpression,
+            likedIDs:      likedIDs,
+            collectionMap: collectionMap
+        )
+        loadPage(reset: true)
     }
 
     // MARK: - Data loading
 
-    private var libraryRootURL: URL? {
-        LibraryRegistry.shared.activePath.map { URL(fileURLWithPath: $0) }
-    }
-
-    private func loadPage(reset: Bool) {
+    func loadPage(reset: Bool) {
         guard let library = session.library else {
-            books = []; sidebarVC.books = []; return
+            books = []; sidebarVC?.books = []; return
         }
         if reset { currentPage = 0; books = []; selectedBook = nil }
 
-        let effectiveSearch = toolbarState.searchText.isEmpty ? nil : toolbarState.searchText
+        let search = toolbarState.searchText.isEmpty ? nil : toolbarState.searchText
         let raw: [CalibreBook]
         if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
-            raw = library.books(
-                ids: result.calibreIDs,
-                offset: currentPage * pageSize, limit: pageSize + 1,
-                sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                search: effectiveSearch
-            )
+            raw = library.books(ids: result.calibreIDs,
+                                offset: currentPage * pageSize, limit: pageSize + 1,
+                                sort: toolbarState.sortField, ascending: toolbarState.ascending,
+                                search: search)
         } else if toolbarState.activeFilterResult != nil {
             raw = []
         } else {
-            raw = library.books(
-                offset: currentPage * pageSize, limit: pageSize + 1,
-                sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                search: effectiveSearch
-            )
+            raw = library.books(offset: currentPage * pageSize, limit: pageSize + 1,
+                                sort: toolbarState.sortField, ascending: toolbarState.ascending,
+                                search: search)
         }
 
         hasNextPage = raw.count > pageSize
         let page    = Array(raw.prefix(pageSize))
         if reset { books = page } else { books.append(contentsOf: page) }
 
-        sidebarVC.books      = books
-        sidebarVC.bookStates = bookStates
+        sidebarVC?.books      = books
+        sidebarVC?.bookStates = bookStates
     }
 
     private func loadNextPageIfAvailable() {
@@ -326,7 +305,7 @@ final class EmailLibraryViewController: NSViewController {
         loadPage(reset: false)
     }
 
-    private func refreshBookStates() {
+    func refreshBookStates() {
         let ctx = ModelContext(modelContainer)
         let all = (try? ctx.fetch(FetchDescriptor<BookState>())) ?? []
         bookStates = Dictionary(uniqueKeysWithValues: all.map { ($0.calibreID, $0) })
@@ -336,22 +315,18 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Inline reader pane
 
     private func updateReaderPane() {
-        // Pull out and replace the right-pane split item
         replaceRightPane(with: makeRightVC())
     }
 
     private func makeRightVC() -> NSViewController {
         guard let book = selectedBook else { return makePlaceholderVC() }
-
         let rvc = ReaderViewController(book: book, modelContainer: modelContainer)
-
-        // Record lastOpenedDate without the window controller wrapper
         let cid = book.id
         Task.detached { [mc = modelContainer] in
             let ctx = ModelContext(mc)
             let all = (try? ctx.fetch(FetchDescriptor<BookState>())) ?? []
-            if let state = all.first(where: { $0.calibreID == cid }) {
-                state.lastOpenedDate = Date()
+            if let s = all.first(where: { $0.calibreID == cid }) {
+                s.lastOpenedDate = Date()
             } else {
                 let s = BookState(calibreID: cid)
                 s.lastOpenedDate = Date()
@@ -362,23 +337,13 @@ final class EmailLibraryViewController: NSViewController {
         return rvc
     }
 
-    /// Remove the last NSSplitViewItem and replace with `vc`.
-    ///
-    /// IMPORTANT: NSSplitViewController requires that every VC in its items is
-    /// one of *its own* children.  We must call splitVC.addChild (not self.addChild)
-    /// before calling addSplitViewItem, otherwise the right pane stays blank because
-    /// the split view never gets a chance to size and display the view.
     private func replaceRightPane(with vc: NSViewController) {
-        // 1. Remove the existing right split item (if any)
         if splitVC.splitViewItems.count > 1 {
-            let last = splitVC.splitViewItems.last!
-            // Detach the old child VC from the split VC's hierarchy
+            let last  = splitVC.splitViewItems.last!
             let oldVC = last.viewController
             splitVC.removeSplitViewItem(last)
             oldVC.removeFromParent()
         }
-
-        // 2. Add the new VC as a child of splitVC (not self) and create the item
         splitVC.addChild(vc)
         let item = NSSplitViewItem(viewController: vc)
         item.minimumThickness = 420
@@ -386,37 +351,41 @@ final class EmailLibraryViewController: NSViewController {
     }
 }
 
-// MARK: - EmailFilterSheet
+// MARK: - FilterSheetCarrier
+//
+// Zero-size SwiftUI view permanently embedded in EmailLibraryViewController's
+// view hierarchy. It owns the .sheet() presentation so that @Environment(\.dismiss)
+// inside FilterDrawerView resolves through SwiftUI's sheet system, making both
+// the X button and Apply button work correctly.
 
-/// SwiftUI wrapper that hosts FilterDrawerView as an NSWindow sheet.
-///
-/// FilterDrawerView already contains its own X button (via @Environment(\.dismiss))
-/// and an Apply button that calls onApply then dismisses.  We just need to wire the
-/// bindings and pass an onApply that closes the sheet through the NSWindow sheet API.
-private struct EmailFilterSheet: View {
-    let toolbarState: LibraryToolbarState
-    let onDismiss: () -> Void
+struct FilterSheetCarrier: View {
+    let toolbarState:   LibraryToolbarState
+    let modelContainer: ModelContainer
+    weak var emailVC:   EmailLibraryViewController?
 
     var body: some View {
-        FilterDrawerView(
-            expression: Binding(
-                get: { toolbarState.filterExpression },
-                set: { toolbarState.filterExpression = $0 }
-            ),
-            onApply: {
-                // Email view inherits activeFilterResult from toolbarState directly.
-                // The list-view FilterBuilder result will already be set if the user
-                // was in list view first; if not, leave activeFilterResult nil and
-                // let the sidebar show the full library (consistent behaviour).
-                onDismiss()
-            },
-            onClear: {
-                toolbarState.filterExpression   = FilterExpression()
-                toolbarState.activeFilterResult = nil
+        Color.clear
+            .frame(width: 0, height: 0)
+            .sheet(isPresented: Binding(
+                get: { toolbarState.showFilterDrawer },
+                set: { toolbarState.showFilterDrawer = $0 }
+            )) {
+                FilterDrawerView(
+                    expression: Binding(
+                        get: { toolbarState.filterExpression },
+                        set: { toolbarState.filterExpression = $0 }
+                    ),
+                    onApply: {
+                        emailVC?.applyFilterRules()
+                    },
+                    onClear: {
+                        toolbarState.filterExpression   = FilterExpression()
+                        toolbarState.activeFilterResult = nil
+                        emailVC?.loadPage(reset: true)
+                    }
+                )
+                .environment(toolbarState)
+                .modelContainer(modelContainer)
             }
-        )
-        .environment(toolbarState)
-        // FilterDrawerView's built-in dismiss button calls @Environment(\.dismiss)
-        // which resolves to the sheet's endSheet when presented as NSWindow sheet.
     }
 }

@@ -34,10 +34,11 @@ final class LibraryToolbarState {
     var viewMode:         LibraryViewMode = .list
 
     // Trigger flags — views observe these and act, then set back to false.
-    var showFilterDrawer: Bool = false
-    var showCollections:  Bool = false
-    var showReadingGoal:  Bool = false
-    var triggerExport:    Bool = false
+    var showFilterDrawer:     Bool = false
+    var showCollections:      Bool = false
+    var showReadingGoal:      Bool = false
+    var triggerExport:        Bool = false
+    var toggleEmailSidebar:   Bool = false
 
     // MARK: - Filter state (shared across all view modes)
 

@@ -4,13 +4,15 @@ import SwiftData
 // MARK: - Toolbar item identifiers
 
 extension NSToolbarItem.Identifier {
-    static let librarySearch     = NSToolbarItem.Identifier("ambrosia.library.search")
-    static let libraryFilter     = NSToolbarItem.Identifier("ambrosia.library.filter")
-    static let librarySort       = NSToolbarItem.Identifier("ambrosia.library.sort")
-    static let libraryCollections = NSToolbarItem.Identifier("ambrosia.library.collections")
-    static let libraryReadingGoal = NSToolbarItem.Identifier("ambrosia.library.readinggoal")
-    static let libraryExport     = NSToolbarItem.Identifier("ambrosia.library.export")
-    static let libraryViewMode   = NSToolbarItem.Identifier("ambrosia.library.viewmode")
+    static let librarySearch        = NSToolbarItem.Identifier("ambrosia.library.search")
+    static let libraryFilter        = NSToolbarItem.Identifier("ambrosia.library.filter")
+    static let librarySort          = NSToolbarItem.Identifier("ambrosia.library.sort")
+    static let libraryCollections   = NSToolbarItem.Identifier("ambrosia.library.collections")
+    static let libraryReadingGoal   = NSToolbarItem.Identifier("ambrosia.library.readinggoal")
+    static let libraryExport        = NSToolbarItem.Identifier("ambrosia.library.export")
+    static let libraryViewMode      = NSToolbarItem.Identifier("ambrosia.library.viewmode")
+    static let libraryTitle         = NSToolbarItem.Identifier("ambrosia.library.title")
+    static let librarySidebarToggle = NSToolbarItem.Identifier("ambrosia.library.sidebartoggle")
 }
 
 // MARK: - LibraryWindowController
@@ -18,8 +20,12 @@ extension NSToolbarItem.Identifier {
 class LibraryWindowController: NSWindowController, NSToolbarDelegate {
 
     private weak var toolbarState: LibraryToolbarState?
+    private weak var session: LibrarySession?
     private var viewModeControl: NSSegmentedControl?
     private var sortMenuToolbarItem: NSMenuToolbarItem?
+    /// Two-line count label in the toolbar centre.
+    private var ficCountLabel: NSTextField?
+    private var readCountLabel: NSTextField?
 
     init(modelContainer: ModelContainer, session: LibrarySession) {
         let window = NSWindow(
@@ -29,8 +35,9 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
             defer: false
         )
         window.title = "Ambrosia"
+        window.titleVisibility = .hidden   // suppress "Ambrosia" — count label replaces it
         window.minSize = NSSize(width: 700, height: 500)
-        window.isReleasedWhenClosed = false   // keep alive so Dock click can re-show it
+        window.isReleasedWhenClosed = false
         window.center()
         super.init(window: window)
 
@@ -40,9 +47,10 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
         )
         window.contentViewController = libraryVC
 
-        // Grab the toolbarState before configuring the toolbar
-        toolbarState = libraryVC.toolbarState
+        self.session    = session
+        toolbarState    = libraryVC.toolbarState
         configureToolbar(window: window)
+        startObservingCounts()
     }
 
     @available(*, unavailable)
@@ -51,7 +59,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
     // MARK: - Toolbar setup
 
     private func configureToolbar(window: NSWindow) {
-        let toolbar = NSToolbar(identifier: "LibraryToolbar")
+        let toolbar = NSToolbar(identifier: "LibraryToolbar2")
         toolbar.delegate = self
         toolbar.allowsUserCustomization = true
         toolbar.autosavesConfiguration  = true
@@ -62,7 +70,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.librarySearch, .libraryFilter, .librarySort,
+        [.librarySidebarToggle, .libraryTitle, .librarySearch, .libraryFilter, .librarySort,
          .flexibleSpace,
          .libraryCollections, .libraryReadingGoal, .libraryExport,
          .space,
@@ -70,9 +78,9 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.librarySearch, .libraryFilter, .librarySort,
+        [.librarySidebarToggle, .librarySearch, .libraryFilter, .librarySort,
          .libraryCollections, .libraryReadingGoal, .libraryExport,
-         .libraryViewMode,
+         .libraryViewMode, .libraryTitle,
          .space, .flexibleSpace]
     }
 
@@ -85,10 +93,19 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
             let item = NSSearchToolbarItem(itemIdentifier: identifier)
             item.toolTip = "Search titles and authors"
             item.resignsFirstResponderWithCancel = true
-            // Wire search field via target-action (KVO binding to @Observable requires a helper)
             item.searchField.target = self
             item.searchField.action = #selector(searchFieldChanged(_:))
             return item
+
+        case .librarySidebarToggle:
+            return makeIconItem(
+                identifier, label: "Sidebar",
+                image: "sidebar.left",
+                action: #selector(triggerSidebarToggle)
+            )
+
+        case .libraryTitle:
+            return makeTitleItem(identifier)
 
         case .libraryFilter:
             return makeIconItem(
@@ -195,6 +212,70 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
         return item
     }
 
+    private func makeTitleItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        // Two-line block: "1,234 fics" (semibold) + "— read" scaffold (small, tertiary).
+        // Left-aligned so it sits naturally after the sidebar toggle button.
+        let ficLabel = NSTextField(labelWithString: "")
+        ficLabel.font      = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        ficLabel.textColor = .labelColor
+        ficLabel.alignment = .left
+        ficLabel.setContentHuggingPriority(.required, for: .vertical)
+        ficLabel.setContentCompressionResistancePriority(.required, for: .vertical)
+
+        let readLabel = NSTextField(labelWithString: "— read")
+        readLabel.font      = NSFont.systemFont(ofSize: 10)
+        readLabel.textColor = .tertiaryLabelColor
+        readLabel.alignment = .left
+        readLabel.setContentHuggingPriority(.required, for: .vertical)
+        readLabel.setContentCompressionResistancePriority(.required, for: .vertical)
+
+        let stack = NSStackView(views: [ficLabel, readLabel])
+        stack.orientation  = .vertical
+        stack.alignment    = .leading
+        stack.spacing      = 1
+        stack.setHuggingPriority(.required, for: .vertical)
+        stack.setContentCompressionResistancePriority(.required, for: .vertical)
+        // Give the stack a concrete frame so the toolbar item doesn't clip it
+        stack.frame = NSRect(x: 0, y: 0, width: 140, height: 38)
+
+        ficCountLabel  = ficLabel
+        readCountLabel = readLabel
+        updateCountLabel()
+
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label   = "Library"
+        item.view    = stack
+        item.minSize = NSSize(width: 100, height: 38)
+        item.maxSize = NSSize(width: 220, height: 38)
+        return item
+    }
+
+    private func updateCountLabel() {
+        guard let ts = toolbarState, let sess = session else { return }
+        let count = ts.activeFilterResult?.totalCount ?? sess.totalCount
+        let fmt = NumberFormatter()
+        fmt.numberStyle = .decimal
+        let str = fmt.string(from: NSNumber(value: count)) ?? "\(count)"
+        ficCountLabel?.stringValue = "\(str) fics"
+    }
+
+    /// Observation loop: re-fires whenever filter result or total count changes.
+    private func startObservingCounts() {
+        scheduleCounting()
+    }
+
+    private func scheduleCounting() {
+        withObservationTracking {
+            _ = toolbarState?.activeFilterResult?.totalCount
+            _ = session?.totalCount
+        } onChange: { [weak self] in
+            DispatchQueue.main.async {
+                self?.updateCountLabel()
+                self?.scheduleCounting()
+            }
+        }
+    }
+
     // MARK: - Actions
 
     @objc private func searchFieldChanged(_ sender: NSSearchField) {
@@ -203,6 +284,10 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
 
     @objc private func toggleFilter() {
         toolbarState?.showFilterDrawer = true
+    }
+
+    @objc private func triggerSidebarToggle() {
+        toolbarState?.toggleEmailSidebar = true
     }
 
     @objc private func sortMenuItemSelected(_ sender: NSMenuItem) {
