@@ -108,7 +108,7 @@ final class EmailSidebarViewController: NSViewController,
         hv.sizingOptions = []   // constraint-driven; avoids intrinsicContentSize {inf} crash
         hv.translatesAutoresizingMaskIntoConstraints = false
 
-        guard let container = view else { return }
+        let container = view
         container.addSubview(hv, positioned: .above, relativeTo: scrollView)
 
         // Remove the scroll view's top-to-container constraint, re-pin below pills
@@ -163,8 +163,8 @@ final class EmailSidebarViewController: NSViewController,
     // MARK: - Scroll pagination
 
     @objc private func scrollDidChange(_ notification: Notification) {
-        guard let clip = scrollView.contentView as? NSClipView,
-              let doc  = scrollView.documentView else { return }
+        let clip = scrollView.contentView
+        guard let doc = scrollView.documentView else { return }
         let visBottom = clip.documentVisibleRect.maxY
         let docHeight = doc.frame.height
         guard docHeight > 0, visBottom >= docHeight - 150, !hasTriggeredLoadMore else { return }
