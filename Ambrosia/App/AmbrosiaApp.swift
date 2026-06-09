@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import AppKit
 
 @main
 struct AmbrosiaApp: App {
@@ -12,7 +13,6 @@ struct AmbrosiaApp: App {
         // Schema contains only app-owned state. Calibre metadata is never copied.
         let schema = Schema([
             BookState.self,
-            Collection.self,
             ReadingGoal.self,
         ])
         let config = ModelConfiguration("Ambrosia", schema: schema, isStoredInMemoryOnly: false)
@@ -22,25 +22,21 @@ struct AmbrosiaApp: App {
             appDelegate.modelContainer = container
             appDelegate.session = session
         } catch {
-            // Schema changed (old Book/Author/ReadingState entities removed).
-            // Delete the stale store and start fresh — only BookState is lost.
-            print("[Ambrosia] SwiftData store incompatible, resetting: \(error)")
-            let fm = FileManager.default
-            if let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-                let storeDir = appSupport.appendingPathComponent("Ambrosia")
-                let candidates = (try? fm.contentsOfDirectory(at: storeDir,
-                                       includingPropertiesForKeys: nil)) ?? []
-                for candidate in candidates where candidate.lastPathComponent.hasPrefix("Ambrosia") {
-                    try? fm.removeItem(at: candidate)
-                }
-            }
+            print("[Ambrosia] SwiftData store incompatible: \(error)")
+            let alert = NSAlert()
+            alert.messageText = "Could Not Open Reading State"
+            alert.informativeText = "Ambrosia could not open its reading-state database. No files were deleted. The app will run with temporary reading state until this is resolved.\n\n\(error.localizedDescription)"
+            alert.alertStyle = .critical
+            alert.runModal()
+
+            let fallback = ModelConfiguration("AmbrosiaRecovery", schema: schema, isStoredInMemoryOnly: true)
             do {
-                let container = try ModelContainer(for: schema, configurations: [config])
+                let container = try ModelContainer(for: schema, configurations: [fallback])
                 sharedModelContainer = container
                 appDelegate.modelContainer = container
                 appDelegate.session = session
             } catch {
-                fatalError("Could not create ModelContainer after reset: \(error)")
+                fatalError("Could not create temporary ModelContainer: \(error)")
             }
         }
     }

@@ -29,9 +29,12 @@
 		A1D0BEF497D14BD099B5D5ECF /* Book.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D0BEF497D14BD099B5D5EC /* Book.swift */; };
 		AA000000000000000000SPF1 /* SQLite in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000SPM1 /* SQLite */; };
 		AA000000000000000000SPF2 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000SPM2 /* ZIPFoundation */; };
+		AA1000000000000000000001 /* AmbrosiaMetaDB.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000011 /* AmbrosiaMetaDB.swift */; };
+		AA1000000000000000000002 /* LibraryIndexManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000012 /* LibraryIndexManager.swift */; };
+		AA1000000000000000000003 /* SystemCollectionID.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000013 /* SystemCollectionID.swift */; };
+		AA1000000000000000000004 /* CollectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000014 /* CollectionStore.swift */; };
 		B09DADA86BD349A1BC47BC12F /* BookGridItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B09DADA86BD349A1BC47BC12 /* BookGridItem.swift */; };
 		B7D4280E44CE40FC8478BC68F /* CalibreImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7D4280E44CE40FC8478BC68 /* CalibreImporter.swift */; };
-		B97B006AF7074876BE529C12F /* Collection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B97B006AF7074876BE529C12 /* Collection.swift */; };
 		BB364F9ED5F842B9A84A141CF /* BaseStyles.css in Resources */ = {isa = PBXBuildFile; fileRef = BB364F9ED5F842B9A84A141C /* BaseStyles.css */; };
 		BC523994168D4B84897956DBF /* DebounceTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC523994168D4B84897956DB /* DebounceTimer.swift */; };
 		C0601B8F88CB49BDB51F0CE4F /* BookLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0601B8F88CB49BDB51F0CE4 /* BookLibrary.swift */; };
@@ -90,9 +93,12 @@
 		A1D0BEF497D14BD099B5D5EC /* Book.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Book.swift; sourceTree = "<group>"; };
 		AA000000000000000000PLIST /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA000000000000000000PROD1 /* Ambrosia.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ambrosia.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA1000000000000000000011 /* AmbrosiaMetaDB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbrosiaMetaDB.swift; sourceTree = "<group>"; };
+		AA1000000000000000000012 /* LibraryIndexManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryIndexManager.swift; sourceTree = "<group>"; };
+		AA1000000000000000000013 /* SystemCollectionID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemCollectionID.swift; sourceTree = "<group>"; };
+		AA1000000000000000000014 /* CollectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionStore.swift; sourceTree = "<group>"; };
 		B09DADA86BD349A1BC47BC12 /* BookGridItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookGridItem.swift; sourceTree = "<group>"; };
 		B7D4280E44CE40FC8478BC68 /* CalibreImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreImporter.swift; sourceTree = "<group>"; };
-		B97B006AF7074876BE529C12 /* Collection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Collection.swift; sourceTree = "<group>"; };
 		BB364F9ED5F842B9A84A141C /* BaseStyles.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = BaseStyles.css; sourceTree = "<group>"; };
 		BC523994168D4B84897956DB /* DebounceTimer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebounceTimer.swift; sourceTree = "<group>"; };
 		C0601B8F88CB49BDB51F0CE4 /* BookLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookLibrary.swift; sourceTree = "<group>"; };
@@ -181,7 +187,6 @@
 				904C7DC3FE504D28A3C90A2B /* Author.swift */,
 				1F8977AB2F9745DEACFF6548 /* Fandom.swift */,
 				36E517D472614A1788F9CEDE /* Tag.swift */,
-				B97B006AF7074876BE529C12 /* Collection.swift */,
 				73D871CF8BD14E60B94CB491 /* ReadingState.swift */,
 				87229515E83E4AC59B9B2A95 /* ReadingGoal.swift */,
 				FC001122334455667788DDEE /* BookState.swift */,
@@ -260,6 +265,10 @@
 				FD0FC465A08D4530A5C86C59 /* EPUBValidator.swift */,
 				C0601B8F88CB49BDB51F0CE4 /* BookLibrary.swift */,
 				FB223344556677889900BBCC /* LibraryRegistry.swift */,
+				AA1000000000000000000011 /* AmbrosiaMetaDB.swift */,
+				AA1000000000000000000012 /* LibraryIndexManager.swift */,
+				AA1000000000000000000013 /* SystemCollectionID.swift */,
+				AA1000000000000000000014 /* CollectionStore.swift */,
 				FC001122334455667788DDF0 /* CalibreLibrary.swift */,
 				FC001122334455667788DDF1 /* LibrarySession.swift */,
 				1C767EA792624845BFBF18EC /* CalibreLibraryPhase2.swift */,
@@ -374,7 +383,6 @@
 				904C7DC3FE504D28A3C90A2BF /* Author.swift in Sources */,
 				1F8977AB2F9745DEACFF6548F /* Fandom.swift in Sources */,
 				36E517D472614A1788F9CEDEF /* Tag.swift in Sources */,
-				B97B006AF7074876BE529C12F /* Collection.swift in Sources */,
 				73D871CF8BD14E60B94CB491F /* ReadingState.swift in Sources */,
 				87229515E83E4AC59B9B2A95F /* ReadingGoal.swift in Sources */,
 				B7D4280E44CE40FC8478BC68F /* CalibreImporter.swift in Sources */,
@@ -398,6 +406,10 @@
 				BC523994168D4B84897956DBF /* DebounceTimer.swift in Sources */,
 				FA112233445566778899AABBF /* HTMLStripper.swift in Sources */,
 				FB223344556677889900BBCCF /* LibraryRegistry.swift in Sources */,
+				AA1000000000000000000001 /* AmbrosiaMetaDB.swift in Sources */,
+				AA1000000000000000000002 /* LibraryIndexManager.swift in Sources */,
+				AA1000000000000000000003 /* SystemCollectionID.swift in Sources */,
+				AA1000000000000000000004 /* CollectionStore.swift in Sources */,
 				FC001122334455667788DDEE0 /* BookState.swift in Sources */,
 				FC001122334455667788DDEE1 /* CalibreBook.swift in Sources */,
 				FC001122334455667788DDEE2 /* CalibreLibrary.swift in Sources */,

@@ -81,6 +81,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         return c
     }
     private var bookState: BookState?
+    private var annotations: [Annotation] = []
 
     // MARK: - Init
 
@@ -408,7 +409,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             guard let (idStr, clientX, pageY) = HighlightBridge.decodeTap(from: message) else { return }
             let idWithDashes = idStr.inserting(dashes: true)
             guard let uuid = UUID(uuidString: idWithDashes),
-                  let annotation = bookState?.annotations.first(where: { $0.id == uuid }),
+                  let annotation = annotations.first(where: { $0.id == uuid }),
                   let note = annotation.note, !note.isEmpty
             else { return }
             DispatchQueue.main.async { [weak self] in
@@ -552,11 +553,11 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 colorHex:     "#FFD60A"
             )
 
-            guard let state = self.bookState else { return }
-            var existing = state.annotations
+            var existing = self.annotations
             if !existing.contains(where: { $0.startChar == offset && $0.spineIndex == spineIndex && $0.isPointAnnotation }) {
                 existing.append(annotation)
-                state.annotations = existing
+                self.annotations = existing
+                Task { try? await AppDelegate.shared?.session.metaDB?.insertAnnotation(annotation, calibreID: self.book.id) }
             }
 
             self.webView.evaluateJavaScript("window.ambrosiaHighlight(\(offset));", completionHandler: nil)
@@ -584,7 +585,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         let popoverView = AnnotationPopover(
             selectedText: pending.selectedText,
             onSave: { [weak self] note, colorHex in
-                guard let self, let state = self.bookState else { return }
+                guard let self else { return }
                 self.annotationPopover?.close()
                 self.annotationPopover = nil
 
@@ -592,9 +593,10 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 final.note     = note
                 final.colorHex = colorHex
 
-                var existing = state.annotations
+                var existing = self.annotations
                 existing.append(final)
-                state.annotations = existing
+                self.annotations = existing
+                Task { try? await AppDelegate.shared?.session.metaDB?.insertAnnotation(final, calibreID: self.book.id) }
                 self.flushPosition()
                 self.refreshSidebarIfVisible()
 
@@ -674,9 +676,15 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     // MARK: - Restore annotations after page load
 
     private func restoreAnnotations() {
-        guard let state = bookState else { return }
-        let ranged = state.annotations.filter { !$0.isPointAnnotation }
-        HighlightBridge.restoreHighlights(ranged, into: webView)
+        Task {
+            let loaded = (try? await AppDelegate.shared?.session.metaDB?.annotations(for: book.id)) ?? []
+            await MainActor.run {
+                annotations = loaded
+                let ranged = loaded.filter { !$0.isPointAnnotation }
+                HighlightBridge.restoreHighlights(ranged, into: webView)
+                refreshSidebarIfVisible()
+            }
+        }
     }
 
     // MARK: - Jump to annotation (from sidebar)
@@ -894,13 +902,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     private func makeAnnotationSidebarView() -> AnnotationSidebarView {
         AnnotationSidebarView(
-            annotations: bookState?.annotations ?? [],
+            annotations: annotations,
             onJump: { [weak self] annotation in
                 self?.jumpToAnnotation(annotation)
             },
             onDelete: { [weak self] id in
-                guard let self, let state = self.bookState else { return }
-                state.annotations = state.annotations.filter { $0.id != id }
+                guard let self else { return }
+                annotations = annotations.filter { $0.id != id }
+                Task { try? await AppDelegate.shared?.session.metaDB?.deleteAnnotation(id: id, calibreID: self.book.id) }
                 self.flushPosition()
                 self.refreshSidebarIfVisible()
                 // Remove the live DOM span so the highlight disappears immediately

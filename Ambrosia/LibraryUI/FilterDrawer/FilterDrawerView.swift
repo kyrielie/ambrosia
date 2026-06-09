@@ -191,7 +191,9 @@ struct FilterRuleRow: View {
     @Binding var rule: FilterRule
     let onDelete: () -> Void
 
-    @Query(sort: \Collection.createdDate) private var collections: [Collection]
+    @Environment(LibrarySession.self) private var session
+    @ObservedObject private var prefs = ReaderPreferences.shared
+    @State private var collections: [CollectionRow] = []
 
     var body: some View {
         HStack(spacing: 8) {
@@ -222,6 +224,9 @@ struct FilterRuleRow: View {
         .padding(.vertical, 3).padding(.horizontal, 6)
         .background(Color(NSColor.windowBackgroundColor).opacity(0.6))
         .clipShape(RoundedRectangle(cornerRadius: 5))
+        .task {
+            collections = (try? await session.collectionStore?.collections()) ?? []
+        }
     }
 
     @ViewBuilder
@@ -232,7 +237,7 @@ struct FilterRuleRow: View {
         case .collection:
             Picker("", selection: $rule.value) {
                 Text("— pick —").tag("")
-                ForEach(collections) { col in
+                ForEach(visibleCollections) { col in
                     Text(col.name).tag(col.name)
                 }
             }.labelsHidden().frame(maxWidth: .infinity)
@@ -272,6 +277,12 @@ struct FilterRuleRow: View {
         default:
             TextField(placeholder, text: $rule.value)
                 .textFieldStyle(.roundedBorder).frame(maxWidth: .infinity)
+        }
+    }
+
+    private var visibleCollections: [CollectionRow] {
+        collections.filter { col in
+            col.id != SystemCollectionID.skipped || prefs.showSkippedCollection
         }
     }
 

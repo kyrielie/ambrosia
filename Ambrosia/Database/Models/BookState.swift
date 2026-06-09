@@ -9,15 +9,10 @@ import Foundation
 /// STORAGE INVARIANTS:
 /// - characterOffset fields use UTF-16 code units, text nodes only.
 ///   Must match EPUBParser, PaginationJS, HighlightBridge exactly.
-/// - Collections stored as JSON Data — never [String] or [T] directly.
 @Model
 final class BookState {
     /// Foreign key into Calibre's books table. Unique per library.
     var calibreID: Int
-
-    // MARK: - User state
-    var isLiked: Bool = false
-    var isHidden: Bool = false
 
     // MARK: - Reading progress
     var lastOpenedDate: Date = Date(timeIntervalSince1970: 0)
@@ -25,32 +20,13 @@ final class BookState {
     var totalReadingTimeSeconds: TimeInterval = 0
 
     // MARK: - Reading position
-    var readingModeRaw: String = "scroll"   // Legacy — superseded by ReaderPreferences.shared.defaultReadingMode (global override).
-                                             // Not removed to avoid SwiftData migration. Never read or written.
     var lastSpineIndex: Int = 0
     var lastCharacterOffset: Int = 0        // UTF-16 code units, text nodes only
     var lastScrollOffset: Double = 0
-    var lastSavedDate: Date = Date()
 
-    // MARK: - Legacy annotation fields (orphaned — never read or written)
-    // bookmarksData and highlightsData are retained to avoid SwiftData migration.
-    // All annotation code now uses annotationsData / annotations below.
-    var bookmarksData: Data?
-    var highlightsData: Data?
-
-    // MARK: - Annotation (unified bookmark + highlight)
-
-    var annotationsData: Data?   // JSON-encoded [Annotation]. Never [Annotation] directly.
-
-    var annotations: [Annotation] {
-        get {
-            guard let d = annotationsData else { return [] }
-            return (try? JSONDecoder().decode([Annotation].self, from: d)) ?? []
-        }
-        set {
-            annotationsData = try? JSONEncoder().encode(newValue)
-        }
-    }
+    // MARK: - ELO ranking
+    var eloScore: Double = 1000.0
+    var eloMatchCount: Int = 0
 
     init(calibreID: Int) {
         self.calibreID = calibreID

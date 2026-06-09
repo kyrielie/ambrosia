@@ -1,32 +1,18 @@
 import SwiftUI
-import SwiftData
 
-// MARK: - Collections sheet
-
-/// Sheet that lets the user manage named collections of books.
-///
-/// Two modes:
-///  • Normal mode (bookToAdd == nil): list of collections; clicking one fires
-///    `onSelectCollection` so the library can switch to a filtered view.
-///  • "Add to collection" mode (bookToAdd != nil): each row shows a toggle;
-///    also has a "New Collection…" row that creates and immediately adds the book.
-///
-/// Collection membership is stored as comma-separated Calibre IDs in
-/// `Collection.calibreIDsRaw` — never as [Int] on the @Model.
 struct CollectionsView: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(LibrarySession.self) private var session
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var prefs = ReaderPreferences.shared
 
-    /// When non-nil, the sheet is in "add to collection" mode.
     var bookToAdd: CalibreBook? = nil
-    /// Called in normal mode when the user taps a collection row.
-    var onSelectCollection: ((Collection) -> Void)? = nil
+    var onSelectCollection: ((CollectionRow) -> Void)? = nil
 
-    @Query(sort: \Collection.createdDate) private var collections: [Collection]
-
+    @State private var collections: [CollectionRow] = []
+    @State private var membership: [String: Set<Int>] = [:]
     @State private var newName = ""
     @State private var isCreating = false
-    @State private var renamingID: PersistentIdentifier? = nil
+    @State private var renamingID: String?
     @State private var renameText = ""
 
     var body: some View {
@@ -34,23 +20,22 @@ struct CollectionsView: View {
             header
             Divider()
 
-            if collections.isEmpty && !isCreating {
+            if visibleCollections.isEmpty && !isCreating {
                 emptyState
             } else {
                 List {
-                    ForEach(collections) { collection in
+                    ForEach(visibleCollections) { collection in
                         collectionRow(collection)
                     }
                     if isCreating {
                         newCollectionRow
                     }
-                    // "Add to collection" mode: always show a "New Collection…" entry
                     if bookToAdd != nil && !isCreating {
                         Button {
                             isCreating = true
                             newName = ""
                         } label: {
-                            Label("New Collection…", systemImage: "plus")
+                            Label("New Collection...", systemImage: "plus")
                                 .foregroundStyle(Color.accentColor)
                         }
                         .buttonStyle(.plain)
@@ -63,9 +48,17 @@ struct CollectionsView: View {
             footer
         }
         .frame(minWidth: 380, minHeight: 320)
+        .task { await reload() }
     }
 
-    // MARK: - Header
+    private var visibleCollections: [CollectionRow] {
+        collections.filter { collection in
+            if collection.id == SystemCollectionID.skipped {
+                return prefs.showSkippedCollection
+            }
+            return !collection.isSystem || bookToAdd == nil
+        }
+    }
 
     private var header: some View {
         HStack {
@@ -79,28 +72,25 @@ struct CollectionsView: View {
         .padding(.vertical, 12)
     }
 
-    // MARK: - Row
-
     @ViewBuilder
-    private func collectionRow(_ collection: Collection) -> some View {
-        let isRenaming = renamingID == collection.persistentModelID
-        let count      = collection.calibreIDs.count
-        let isMember   = bookToAdd.map { collection.contains(calibreID: $0.id) } ?? false
+    private func collectionRow(_ collection: CollectionRow) -> some View {
+        let isRenaming = renamingID == collection.id
+        let count = membership[collection.id]?.count ?? 0
+        let isMember = bookToAdd.map { membership[collection.id]?.contains($0.id) == true } ?? false
 
         HStack {
             if isRenaming {
                 TextField("Collection name", text: $renameText)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { commitRename(collection) }
-                Button("Save")   { commitRename(collection) }
+                Button("Save") { commitRename(collection) }
                     .buttonStyle(.borderedProminent).controlSize(.small)
                 Button("Cancel") { renamingID = nil }
                     .buttonStyle(.borderless).controlSize(.small)
             } else {
-                // "Add to collection" mode: toggle circle
                 if let book = bookToAdd {
                     Button {
-                        toggleMembership(book: book, in: collection)
+                        toggleMembership(book: book, collection: collection)
                     } label: {
                         Image(systemName: isMember ? "checkmark.circle.fill" : "circle")
                             .foregroundStyle(isMember ? Color.accentColor : .secondary)
@@ -115,7 +105,6 @@ struct CollectionsView: View {
                 }
                 Spacer()
 
-                // Normal mode: chevron indicating the row is tappable
                 if bookToAdd == nil {
                     Image(systemName: "chevron.right")
                         .font(.caption).foregroundStyle(.tertiary)
@@ -126,27 +115,25 @@ struct CollectionsView: View {
         .onTapGesture {
             guard !isRenaming else { return }
             if let book = bookToAdd {
-                toggleMembership(book: book, in: collection)
+                toggleMembership(book: book, collection: collection)
             } else {
-                // Normal mode: activate the collection filter and close
                 onSelectCollection?(collection)
                 dismiss()
             }
         }
         .contextMenu {
-            Button("Rename") {
-                renamingID = collection.persistentModelID
-                renameText = collection.name
-            }
-            Divider()
-            Button("Delete", role: .destructive) {
-                modelContext.delete(collection)
-                try? modelContext.save()
+            if !collection.isSystem {
+                Button("Rename") {
+                    renamingID = collection.id
+                    renameText = collection.name
+                }
+                Divider()
+                Button("Delete", role: .destructive) {
+                    Task { try? await session.collectionStore?.deleteCollection(id: collection.id); await reload() }
+                }
             }
         }
     }
-
-    // MARK: - New collection row
 
     private var newCollectionRow: some View {
         HStack {
@@ -161,15 +148,11 @@ struct CollectionsView: View {
         }
     }
 
-    // MARK: - Empty state
-
     private var emptyState: some View {
         VStack(spacing: 12) {
             Spacer()
             Image(systemName: "tray.2").font(.system(size: 36)).foregroundStyle(.quaternary)
             Text("No Collections").font(.title3).foregroundStyle(.secondary)
-            Text("Create a collection to organise your books.")
-                .font(.caption).foregroundStyle(.tertiary).multilineTextAlignment(.center)
             Button {
                 isCreating = true
                 newName = ""
@@ -180,8 +163,6 @@ struct CollectionsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-
-    // MARK: - Footer (normal mode only)
 
     @ViewBuilder
     private var footer: some View {
@@ -200,61 +181,62 @@ struct CollectionsView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
         } else {
-            // In "add" mode the footer is just padding
             Color.clear.frame(height: 8)
         }
     }
 
-    // MARK: - Actions
+    private func reload() async {
+        collections = (try? await session.collectionStore?.collections()) ?? []
+        membership = (try? await session.collectionStore?.membershipByCollectionID()) ?? [:]
+    }
 
     private func commitCreate() {
         let trimmed = newName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
-        let col = Collection(name: trimmed)
-        if let book = bookToAdd {
-            col.add(calibreID: book.id)
+        let ids = bookToAdd.map { [$0.id] } ?? []
+        Task {
+            _ = try? await session.collectionStore?.createCollection(name: trimmed, calibreIDs: ids)
+            await reload()
+            isCreating = false
+            newName = ""
         }
-        modelContext.insert(col)
-        try? modelContext.save()
-        isCreating = false
-        newName = ""
     }
 
-    private func commitRename(_ collection: Collection) {
+    private func commitRename(_ collection: CollectionRow) {
         let trimmed = renameText.trimmingCharacters(in: .whitespaces)
-        if !trimmed.isEmpty { collection.name = trimmed }
-        try? modelContext.save()
-        renamingID = nil
+        guard !trimmed.isEmpty else { renamingID = nil; return }
+        Task {
+            try? await session.collectionStore?.renameCollection(id: collection.id, name: trimmed)
+            await reload()
+            renamingID = nil
+        }
     }
 
-    private func toggleMembership(book: CalibreBook, in collection: Collection) {
-        if collection.contains(calibreID: book.id) {
-            collection.remove(calibreID: book.id)
-        } else {
-            collection.add(calibreID: book.id)
+    private func toggleMembership(book: CalibreBook, collection: CollectionRow) {
+        Task {
+            try? await session.collectionStore?.toggle(calibreID: book.id, in: collection.id)
+            await reload()
         }
-        try? modelContext.save()
     }
 }
 
-// MARK: - "Add to collection" submenu for context menus
-
-/// Dropped inside a `.contextMenu { }` block on a BookListRow.
-/// Lists existing collections with a checkmark for membership, plus
-/// a "New Collection…" item that creates and immediately adds the book.
 struct AddToCollectionMenu: View {
     let book: CalibreBook
-    @Environment(\.modelContext) private var modelContext
-    @Query(sort: \Collection.createdDate) private var collections: [Collection]
-
+    @Environment(LibrarySession.self) private var session
+    @ObservedObject private var prefs = ReaderPreferences.shared
+    @State private var collections: [CollectionRow] = []
+    @State private var membership: [String: Set<Int>] = [:]
     @State private var showCreateSheet = false
 
     var body: some View {
         Menu("Add to Collection") {
-            ForEach(collections) { collection in
-                let isMember = collection.contains(calibreID: book.id)
+            ForEach(visibleCollections) { collection in
+                let isMember = membership[collection.id]?.contains(book.id) == true
                 Button {
-                    toggle(book: book, in: collection)
+                    Task {
+                        try? await session.collectionStore?.toggle(calibreID: book.id, in: collection.id)
+                        await reload()
+                    }
                 } label: {
                     if isMember {
                         Label(collection.name, systemImage: "checkmark")
@@ -264,26 +246,31 @@ struct AddToCollectionMenu: View {
                 }
             }
 
-            if !collections.isEmpty { Divider() }
+            if !visibleCollections.isEmpty { Divider() }
 
             Button {
                 showCreateSheet = true
             } label: {
-                Label("New Collection…", systemImage: "plus")
+                Label("New Collection...", systemImage: "plus")
             }
         }
-        // Sheet must be attached outside the Menu to render correctly on macOS
+        .task { await reload() }
         .sheet(isPresented: $showCreateSheet) {
             CollectionsView(bookToAdd: book)
         }
     }
 
-    private func toggle(book: CalibreBook, in collection: Collection) {
-        if collection.contains(calibreID: book.id) {
-            collection.remove(calibreID: book.id)
-        } else {
-            collection.add(calibreID: book.id)
+    private var visibleCollections: [CollectionRow] {
+        collections.filter { collection in
+            if collection.id == SystemCollectionID.skipped {
+                return prefs.showSkippedCollection
+            }
+            return !collection.isSystem
         }
-        try? modelContext.save()
+    }
+
+    private func reload() async {
+        collections = (try? await session.collectionStore?.collections()) ?? []
+        membership = (try? await session.collectionStore?.membershipByCollectionID()) ?? [:]
     }
 }

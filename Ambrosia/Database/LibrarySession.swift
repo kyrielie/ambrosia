@@ -15,6 +15,12 @@ final class LibrarySession {
     /// Optional full-text-search connection. Nil if full-text-search.db doesn't exist.
     private(set) var ftsLibrary: CalibreFTSLibrary?
 
+    /// Per-library app-owned SQLite database for collections and annotations.
+    private(set) var metaDB: AmbrosiaMetaDB?
+
+    /// Typed collection operations for the active library.
+    private(set) var collectionStore: CollectionStore?
+
     /// Cached total book count from metadata.db. Refreshed on library open
     /// and on search input (debounced). Never recomputed on page turns.
     private(set) var totalCount: Int = 0
@@ -35,11 +41,15 @@ final class LibrarySession {
         lastError = nil
         do {
             let newLibrary = try CalibreLibrary(root: url)
+            let newMetaDB = try AmbrosiaMetaDB(libraryURL: url)
             library    = newLibrary
+            metaDB = newMetaDB
+            collectionStore = CollectionStore(db: newMetaDB)
             activePath = url.path
             totalCount = newLibrary.bookCount()
             ftsLibrary = CalibreFTSLibrary(libraryURL: url)
             LibraryRegistry.shared.register(url)
+            LibraryIndexManager.shared.record(url: url)
             print("[LibrarySession] Opened \(url.lastPathComponent) — \(totalCount) books")
         } catch {
             lastError = "Could not open library: \(error.localizedDescription)"
@@ -50,6 +60,8 @@ final class LibrarySession {
     func close() {
         library    = nil
         ftsLibrary = nil
+        metaDB = nil
+        collectionStore = nil
         totalCount = 0
         activePath = nil
     }

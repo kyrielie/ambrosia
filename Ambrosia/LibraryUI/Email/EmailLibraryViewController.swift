@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import SwiftData
 
@@ -20,6 +21,7 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Filter sheet host
 
     private var filterSheetHost: NSHostingView<FilterSheetCarrier>?
+    private var prefsCancellable: AnyCancellable?
 
     // MARK: - Sidebar state
 
@@ -30,10 +32,13 @@ final class EmailLibraryViewController: NSViewController {
     private var books:      [CalibreBook]    = []
     var currentBooks: [CalibreBook] { books }
     var bookStates: [Int: BookState] = [:]
+    private var likedIDs: Set<Int> = []
+    private var skippedIDs: Set<Int> = []
     private var collectionMembership: [String: Set<Int>] = [:]
     private var currentPage = 0
     private var hasNextPage = false
     private let pageSize    = 25
+    private var pageFetchLimit: Int { (pageSize * 3) + 1 }
 
     // MARK: - Toolbar snapshots
 
@@ -72,10 +77,25 @@ final class EmailLibraryViewController: NSViewController {
         refreshCollections()
         loadPage(reset: true)
         startObservingToolbarState()
+        startObservingPreferences()
         // Register so LibraryWindowController can deliver committed filter rules
         toolbarState.registerFilterCommitHandler { [weak self] rule in
             self?.addOrReplaceRule(rule)
         }
+    }
+
+    private func startObservingPreferences() {
+        prefsCancellable = ReaderPreferences.shared.$showSkippedCollection
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if toolbarState.filterExpression.hasCompleteRules {
+                    applyFilterRules()
+                } else {
+                    loadPage(reset: true)
+                }
+            }
     }
 
     // MARK: - Split-view setup
@@ -106,29 +126,30 @@ final class EmailLibraryViewController: NSViewController {
         }
         sidebarVC.onContextMenuLike = { [weak self] book in
             guard let self else { return }
-            if let existing = bookStates[book.id] {
-                existing.isLiked.toggle()
-            } else {
-                let ctx = ModelContext(modelContainer)
-                let s = BookState(calibreID: book.id)
-                s.isLiked = true
-                ctx.insert(s)
-                try? ctx.save()
+            Task {
+                try? await self.session.collectionStore?.toggleLiked(calibreID: book.id)
+                await self.refreshCollectionSnapshots()
             }
-            refreshBookStates()
+        }
+        sidebarVC.onContextMenuSkip = { [weak self] book in
+            guard let self else { return }
+            Task {
+                try? await self.session.collectionStore?.skipBook(calibreID: book.id)
+                await self.refreshCollectionSnapshots()
+                self.applyFilterRules()
+            }
+        }
+        sidebarVC.onContextMenuMarkRead = { [weak self] book in
+            self?.markRead(book)
         }
         sidebarVC.onContextMenuToggleCollection = { [weak self] book, collectionName in
             guard let self else { return }
-            let ctx = ModelContext(modelContainer)
-            let all = (try? ctx.fetch(FetchDescriptor<Collection>())) ?? []
-            if let col = all.first(where: { $0.name == collectionName }) {
-                if col.contains(calibreID: book.id) {
-                    col.remove(calibreID: book.id)
-                } else {
-                    col.add(calibreID: book.id)
+            Task {
+                let collections = (try? await self.session.collectionStore?.collections()) ?? []
+                if let collection = collections.first(where: { $0.name == collectionName }) {
+                    try? await self.session.collectionStore?.toggle(calibreID: book.id, in: collection.id)
                 }
-                try? ctx.save()
-                refreshCollections()
+                await self.refreshCollectionSnapshots()
             }
         }
         sidebarVC.onContextMenuNewCollection = { [weak self] _ in
@@ -169,6 +190,7 @@ final class EmailLibraryViewController: NSViewController {
         let carrier = FilterSheetCarrier(
             toolbarState:   toolbarState,
             modelContainer: modelContainer,
+            session:        session,
             emailVC:        self
         )
         let hv = NSHostingView(rootView: carrier)
@@ -294,32 +316,32 @@ final class EmailLibraryViewController: NSViewController {
             return
         }
 
-        let needsLiked = toolbarState.filterExpression.groups
-            .flatMap(\.rules).contains { $0.field == .isLiked }
-        let likedIDs: Set<Int> = needsLiked
-            ? Set(bookStates.values.filter(\.isLiked).map(\.calibreID))
-            : []
+        Task {
+            let needsLiked = toolbarState.filterExpression.groups
+                .flatMap(\.rules).contains { $0.field == .isLiked }
+            let currentLikedIDs = needsLiked ? ((try? await session.collectionStore?.likedIDs()) ?? []) : []
+            let needsCollection = toolbarState.filterExpression.groups
+                .flatMap(\.rules).contains { $0.field == .collection }
+            let collectionMap = needsCollection ? ((try? await session.collectionStore?.membershipMap()) ?? [:]) : [:]
 
-        let needsCollection = toolbarState.filterExpression.groups
-            .flatMap(\.rules).contains { $0.field == .collection }
-        let collectionMap: [String: Set<Int>]
-        if needsCollection {
-            let ctx  = ModelContext(modelContainer)
-            let cols = (try? ctx.fetch(FetchDescriptor<Collection>())) ?? []
-            collectionMap = Dictionary(uniqueKeysWithValues:
-                cols.map { ($0.name, Set($0.calibreIDs)) }
+            let builder = FilterBuilder(library: library)
+            let result = builder.matchingIDs(
+                expression: toolbarState.filterExpression,
+                likedIDs:      currentLikedIDs,
+                collectionMap: collectionMap
             )
-        } else {
-            collectionMap = [:]
+            let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
+            let filteredIDs = ReaderPreferences.shared.showSkippedCollection
+                ? result.calibreIDs
+                : result.calibreIDs.filter { !currentSkipped.contains($0) }
+            toolbarState.activeFilterResult = FilterResult(
+                calibreIDs: filteredIDs,
+                totalCount: filteredIDs.count
+            )
+            likedIDs = currentLikedIDs
+            skippedIDs = currentSkipped
+            loadPage(reset: true)
         }
-
-        let builder = FilterBuilder(library: library)
-        toolbarState.activeFilterResult = builder.matchingIDs(
-            expression: toolbarState.filterExpression,
-            likedIDs:      likedIDs,
-            collectionMap: collectionMap
-        )
-        loadPage(reset: true)
     }
 
     // MARK: - Data loading (uses SearchQuery path — mirrors BookGridItem exactly)
@@ -338,7 +360,7 @@ final class EmailLibraryViewController: NSViewController {
 
         let raw: [CalibreBook]
         if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
-            let ids = query.ftsMatchedIDs ?? result.calibreIDs
+            let ids = visibleIDs(query.ftsMatchedIDs ?? result.calibreIDs)
             raw = library.books(
                 ids: ids,
                 offset: currentPage * pageSize, limit: pageSize + 1,
@@ -349,18 +371,28 @@ final class EmailLibraryViewController: NSViewController {
             raw = []
         } else {
             raw = library.books(
-                offset: currentPage * pageSize, limit: pageSize + 1,
+                offset: currentPage * pageSize, limit: pageFetchLimit,
                 sort: toolbarState.sortField, ascending: toolbarState.ascending,
                 query: query
             )
         }
 
-        hasNextPage = raw.count > pageSize
-        let page    = Array(raw.prefix(pageSize))
+        let visible = visibleBooks(raw)
+        hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
+        let page    = Array(visible.prefix(pageSize))
         if reset { books = page } else { books.append(contentsOf: page) }
 
         sidebarVC?.books      = books
         sidebarVC?.bookStates = bookStates
+        sidebarVC?.likedIDs = likedIDs
+    }
+
+    private func visibleIDs(_ ids: [Int]) -> [Int] {
+        ReaderPreferences.shared.showSkippedCollection ? ids : ids.filter { !skippedIDs.contains($0) }
+    }
+
+    private func visibleBooks(_ raw: [CalibreBook]) -> [CalibreBook] {
+        ReaderPreferences.shared.showSkippedCollection ? raw : raw.filter { !skippedIDs.contains($0.id) }
     }
 
     private func loadNextPageIfAvailable() {
@@ -374,15 +406,59 @@ final class EmailLibraryViewController: NSViewController {
         let all = (try? ctx.fetch(FetchDescriptor<BookState>())) ?? []
         bookStates = all.reduce(into: [:]) { $0[$1.calibreID] = $1 }
         sidebarVC?.bookStates = bookStates
+        Task { await refreshCollectionSnapshots() }
     }
 
     func refreshCollections() {
-        let ctx = ModelContext(modelContainer)
-        let all = (try? ctx.fetch(FetchDescriptor<Collection>())) ?? []
-        collectionMembership = Dictionary(uniqueKeysWithValues:
-            all.map { ($0.name, Set($0.calibreIDs)) }
-        )
+        Task { await refreshCollectionSnapshots() }
+    }
+
+    private func markRead(_ book: CalibreBook) {
+        let calibreID = book.id
+        let container = modelContainer
+        Task {
+            let ctx = ModelContext(container)
+            var desc = FetchDescriptor<BookState>(
+                predicate: #Predicate { $0.calibreID == calibreID }
+            )
+            desc.fetchLimit = 1
+            let state = (try? ctx.fetch(desc).first) ?? BookState(calibreID: calibreID)
+            if state.modelContext == nil {
+                ctx.insert(state)
+            }
+            state.totalReadPercent = 100
+            try? ctx.save()
+            try? await session.collectionStore?.syncAutomatedCollection(
+                collectionID: SystemCollectionID.finished,
+                calibreID: calibreID,
+                shouldBeMember: true
+            )
+            try? await session.collectionStore?.syncAutomatedCollection(
+                collectionID: SystemCollectionID.inProgress,
+                calibreID: calibreID,
+                shouldBeMember: false
+            )
+            refreshBookStates()
+            loadPage(reset: true)
+        }
+    }
+
+    @MainActor
+    private func refreshCollectionSnapshots() async {
+        let collections = (try? await session.collectionStore?.collections()) ?? []
+        let membershipByID = (try? await session.collectionStore?.membershipByCollectionID()) ?? [:]
+        let currentSkipped = membershipByID[SystemCollectionID.skipped] ?? []
+        collectionMembership = Dictionary(uniqueKeysWithValues: collections.map { collection in
+            return (collection.name, membershipByID[collection.id] ?? [])
+        })
+        likedIDs = (try? await session.collectionStore?.likedIDs()) ?? []
+        let shouldReloadPage = skippedIDs != currentSkipped
+        skippedIDs = currentSkipped
         sidebarVC?.collectionMembership = collectionMembership
+        sidebarVC?.likedIDs = likedIDs
+        if shouldReloadPage {
+            loadPage(reset: true)
+        }
     }
 
     // MARK: - Inline reader pane
@@ -429,6 +505,7 @@ final class EmailLibraryViewController: NSViewController {
 struct FilterSheetCarrier: View {
     let toolbarState:   LibraryToolbarState
     let modelContainer: ModelContainer
+    let session:        LibrarySession
     weak var emailVC:   EmailLibraryViewController?
 
     var body: some View {
@@ -451,6 +528,7 @@ struct FilterSheetCarrier: View {
                     }
                 )
                 .environment(toolbarState)
+                .environment(session)
                 .modelContainer(modelContainer)
             }
             .sheet(isPresented: Binding(
@@ -471,6 +549,7 @@ struct FilterSheetCarrier: View {
                     emailVC?.applyFilterRules()
                 })
                 .modelContainer(modelContainer)
+                .environment(session)
             }
             .sheet(isPresented: Binding(
                 get: { toolbarState.showReadingGoal },

@@ -26,6 +26,8 @@ final class EmailSidebarViewController: NSViewController,
     var onEditFilter:  (() -> Void)?
     var onClearFilter: (() -> Void)?
     var onContextMenuLike:             ((CalibreBook) -> Void)?
+    var onContextMenuSkip:             ((CalibreBook) -> Void)?
+    var onContextMenuMarkRead:         ((CalibreBook) -> Void)?
     var onContextMenuOpen:             ((CalibreBook) -> Void)?
     var onContextMenuToggleCollection: ((CalibreBook, String) -> Void)?
     var onContextMenuNewCollection:    ((CalibreBook) -> Void)?
@@ -38,6 +40,7 @@ final class EmailSidebarViewController: NSViewController,
 
     var books:      [CalibreBook]    = [] { didSet { tableView?.reloadData() } }
     var bookStates: [Int: BookState] = [:] { didSet { tableView?.reloadData() } }
+    var likedIDs: Set<Int> = [] { didSet { tableView?.reloadData() } }
     /// Collection snapshot for building context menu submenus. Key = name, value = member calibreIDs.
     var collectionMembership: [String: Set<Int>] = [:]
 
@@ -167,18 +170,29 @@ final class EmailSidebarViewController: NSViewController,
         menu.addItem(.separator())
 
         // Like / Unlike
-        let bookState = bookStates[book.id]
-        let likeTitle = bookState?.isLiked == true ? "Unlike" : "Like"
+        let likeTitle = likedIDs.contains(book.id) ? "Unlike" : "Like"
         let likeItem  = NSMenuItem(title: likeTitle, action: #selector(contextLike(_:)), keyEquivalent: "")
         likeItem.target = self
         likeItem.representedObject = book
         menu.addItem(likeItem)
 
+        let markReadItem = NSMenuItem(title: "Mark as Read", action: #selector(contextMarkRead(_:)), keyEquivalent: "")
+        markReadItem.target = self
+        markReadItem.representedObject = book
+        menu.addItem(markReadItem)
+
+        let skipItem = NSMenuItem(title: "Skip", action: #selector(contextSkip(_:)), keyEquivalent: "")
+        skipItem.target = self
+        skipItem.representedObject = book
+        menu.addItem(skipItem)
+
         menu.addItem(.separator())
 
         // Add to Collection submenu
         let collectionSubmenu = NSMenu(title: "Add to Collection")
-        let sortedNames = collectionMembership.keys.sorted()
+        let sortedNames = collectionMembership.keys
+            .filter { $0 != "Skipped" || ReaderPreferences.shared.showSkippedCollection }
+            .sorted()
         for name in sortedNames {
             let isMember = collectionMembership[name]?.contains(book.id) == true
             let item = NSMenuItem(
@@ -213,6 +227,16 @@ final class EmailSidebarViewController: NSViewController,
     @objc private func contextLike(_ sender: NSMenuItem) {
         guard let book = sender.representedObject as? CalibreBook else { return }
         onContextMenuLike?(book)
+    }
+
+    @objc private func contextSkip(_ sender: NSMenuItem) {
+        guard let book = sender.representedObject as? CalibreBook else { return }
+        onContextMenuSkip?(book)
+    }
+
+    @objc private func contextMarkRead(_ sender: NSMenuItem) {
+        guard let book = sender.representedObject as? CalibreBook else { return }
+        onContextMenuMarkRead?(book)
     }
 
     @objc private func contextToggleCollection(_ sender: NSMenuItem) {

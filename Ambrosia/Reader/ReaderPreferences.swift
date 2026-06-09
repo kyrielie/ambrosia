@@ -103,6 +103,9 @@ final class ReaderPreferences: ObservableObject {
     @Published var libraryDarkTextColor: String {
         didSet { UserDefaults.standard.set(libraryDarkTextColor, forKey: Keys.libraryDarkText) }
     }
+    @Published var showSkippedCollection: Bool {
+        didSet { UserDefaults.standard.set(showSkippedCollection, forKey: Keys.showSkippedCollection) }
+    }
 
     // MARK: - Derived: resolved library colour for current appearance
 
@@ -168,6 +171,7 @@ final class ReaderPreferences: ObservableObject {
         static let libraryDarkBackgroundColor  = "#1E1E1E"
         static let libraryLightTextColor       = "#1A1A1A"
         static let libraryDarkTextColor        = "#EBEBF0"
+        static let showSkippedCollection       = false
         static let useScreenFraction           = true
         static let defaultWindowWidth          = CGFloat(960)
         static let defaultWindowHeight         = CGFloat(1080)
@@ -189,6 +193,7 @@ final class ReaderPreferences: ObservableObject {
         static let libraryDarkBG               = "rp.libraryDarkBG"
         static let libraryLightText            = "rp.libraryLightText"
         static let libraryDarkText             = "rp.libraryDarkText"
+        static let showSkippedCollection       = "rp.showSkippedCollection"
         static let useScreenFraction           = "pref.useScreenFraction"
         static let defaultWindowWidth          = "pref.windowWidth"
         static let defaultWindowHeight         = "pref.windowHeight"
@@ -232,6 +237,9 @@ final class ReaderPreferences: ObservableObject {
             ?? Defaults.libraryDarkBackgroundColor
         libraryDarkTextColor        = ud.string(forKey: Keys.libraryDarkText)
             ?? Defaults.libraryDarkTextColor
+        showSkippedCollection = ud.object(forKey: Keys.showSkippedCollection) != nil
+            ? ud.bool(forKey: Keys.showSkippedCollection)
+            : Defaults.showSkippedCollection
 
         if ud.object(forKey: Keys.useScreenFraction) != nil {
             useScreenFraction = ud.bool(forKey: Keys.useScreenFraction)
@@ -337,6 +345,7 @@ final class ReaderPreferences: ObservableObject {
         libraryDarkBackgroundColor  = Defaults.libraryDarkBackgroundColor
         libraryLightTextColor       = Defaults.libraryLightTextColor
         libraryDarkTextColor        = Defaults.libraryDarkTextColor
+        showSkippedCollection       = Defaults.showSkippedCollection
     }
 }
 

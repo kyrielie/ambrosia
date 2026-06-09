@@ -266,6 +266,7 @@ private struct LibraryTab: View {
     @State private var lightText: Color = Color(hex: ReaderPreferences.shared.libraryLightTextColor)       ?? .black
     @State private var darkBG:    Color = Color(hex: ReaderPreferences.shared.libraryDarkBackgroundColor)  ?? Color(nsColor: .windowBackgroundColor)
     @State private var darkText:  Color = Color(hex: ReaderPreferences.shared.libraryDarkTextColor)        ?? Color(nsColor: .labelColor)
+    @State private var knownLibraries: [LibraryIndexEntry] = []
 
     private var effectiveIsDark: Bool {
         switch prefs.libraryAppearanceMode {
@@ -278,6 +279,27 @@ private struct LibraryTab: View {
     var body: some View {
         ScrollView {
             Form {
+                Section {
+                    if knownLibraries.isEmpty {
+                        Text("No known libraries")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(knownLibraries) { entry in
+                            libraryIndexRow(entry)
+                        }
+                    }
+                } header: {
+                    Label("Libraries", systemImage: "externaldrive").font(.headline)
+                }
+
+                Section {
+                    Toggle("Show skipped books", isOn: $prefs.showSkippedCollection)
+                } header: {
+                    Label("Skipped Books", systemImage: "eye.slash").font(.headline)
+                } footer: {
+                    Text("When off, skipped books are hidden from the library and the Skipped collection is hidden from collection pickers and menus.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
 
                 // ── Appearance (light / dark / system) ───────────────────────
                 Section {
@@ -349,7 +371,61 @@ private struct LibraryTab: View {
             .formStyle(.grouped)
             .padding(.bottom, 8)
         }
-        .onAppear { syncLocalState() }
+        .onAppear {
+            syncLocalState()
+            reloadKnownLibraries()
+        }
+    }
+
+    @ViewBuilder
+    private func libraryIndexRow(_ entry: LibraryIndexEntry) -> some View {
+        let reachable = FileManager.default.fileExists(atPath: entry.lastKnownPath)
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: reachable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(reachable ? Color.green : Color.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.displayName)
+                    .font(.callout.weight(.medium))
+                Text(entry.lastKnownPath)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text("Last opened \(entry.lastOpened)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer()
+            if !reachable {
+                Button("Re-link...") {
+                    relink(entry)
+                }
+                .controlSize(.small)
+            }
+        }
+    }
+
+    private func reloadKnownLibraries() {
+        knownLibraries = LibraryIndexManager.shared.entries()
+    }
+
+    private func relink(_ entry: LibraryIndexEntry) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the new location for \(entry.displayName)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try LibraryIndexManager.shared.relink(oldHash: entry.hash, newLibraryURL: url)
+            reloadKnownLibraries()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Could Not Re-link Library"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.runModal()
+        }
     }
 
     // MARK: Custom colour pair rows

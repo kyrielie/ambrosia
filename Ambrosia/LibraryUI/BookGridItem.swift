@@ -47,8 +47,11 @@ struct LibraryRootView: View {
     @State private var filteredCount: Int? = nil
 
     @State private var bookStates: [Int: BookState] = [:]
+    @State private var likedIDs: Set<Int> = []
+    @State private var skippedIDs: Set<Int> = []
 
     private let pageSize = 25
+    private var pageFetchLimit: Int { (pageSize * 3) + 1 }
     private let debouncer = DebounceTimer(delay: 0.4)
 
     var displayCount: Int {
@@ -93,6 +96,14 @@ struct LibraryRootView: View {
         }
         .onChange(of: toolbarState.activeFilterResult?.calibreIDs) {
             currentPage = 0; loadPage()
+        }
+        .onChange(of: prefs.showSkippedCollection) {
+            currentPage = 0
+            if toolbarState.filterExpression.hasCompleteRules {
+                applyFilterRules()
+            } else {
+                loadPage()
+            }
         }
         .onChange(of: session.isOpen) {
             if session.isOpen {
@@ -169,7 +180,7 @@ struct LibraryRootView: View {
         let query = session.resolvedQuery(rawQuery)
 
         if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
-            let ids = query.ftsMatchedIDs ?? result.calibreIDs
+            let ids = visibleIDs(query.ftsMatchedIDs ?? result.calibreIDs)
             let raw = library.books(
                 ids: ids,
                 offset: currentPage * pageSize, limit: pageSize + 1,
@@ -182,18 +193,37 @@ struct LibraryRootView: View {
             books = []; hasNextPage = false
         } else {
             let raw = library.books(
-                offset: currentPage * pageSize, limit: pageSize + 1,
+                offset: currentPage * pageSize, limit: pageFetchLimit,
                 sort: toolbarState.sortField, ascending: toolbarState.ascending,
                 query: query
             )
-            hasNextPage = raw.count > pageSize
-            books = Array(raw.prefix(pageSize))
+            let visible = visibleBooks(raw)
+            hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
+            books = Array(visible.prefix(pageSize))
         }
+    }
+
+    private func visibleIDs(_ ids: [Int]) -> [Int] {
+        prefs.showSkippedCollection ? ids : ids.filter { !skippedIDs.contains($0) }
+    }
+
+    private func visibleBooks(_ raw: [CalibreBook]) -> [CalibreBook] {
+        prefs.showSkippedCollection ? raw : raw.filter { !skippedIDs.contains($0.id) }
     }
 
     private func refreshBookStates() {
         let all = (try? modelContext.fetch(FetchDescriptor<BookState>())) ?? []
         bookStates = all.reduce(into: [:]) { $0[$1.calibreID] = $1 }
+        Task {
+            let currentLiked = (try? await session.collectionStore?.likedIDs()) ?? []
+            let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
+            await MainActor.run {
+                likedIDs = currentLiked
+                skippedIDs = currentSkipped
+                currentPage = 0
+                loadPage()
+            }
+        }
     }
 
     private func applyFilterRules() {
@@ -201,29 +231,29 @@ struct LibraryRootView: View {
         guard toolbarState.filterExpression.hasCompleteRules else {
             toolbarState.activeFilterResult = nil; currentPage = 0; loadPage(); return
         }
-        let needsLiked = toolbarState.filterExpression.groups.flatMap(\.rules).contains { $0.field == .isLiked }
-        let likedIDs: Set<Int> = needsLiked
-            ? Set(bookStates.values.filter(\.isLiked).map(\.calibreID))
-            : []
-
-        let needsCollection = toolbarState.filterExpression.groups.flatMap(\.rules).contains { $0.field == .collection }
-        let collectionMap: [String: Set<Int>]
-        if needsCollection {
-            let allCollections = (try? modelContext.fetch(FetchDescriptor<Collection>())) ?? []
-            collectionMap = Dictionary(uniqueKeysWithValues:
-                allCollections.map { ($0.name, Set($0.calibreIDs)) }
+        Task {
+            let needsLiked = toolbarState.filterExpression.groups.flatMap(\.rules).contains { $0.field == .isLiked }
+            let currentLikedIDs = needsLiked ? ((try? await session.collectionStore?.likedIDs()) ?? []) : []
+            let needsCollection = toolbarState.filterExpression.groups.flatMap(\.rules).contains { $0.field == .collection }
+            let collectionMap = needsCollection ? ((try? await session.collectionStore?.membershipMap()) ?? [:]) : [:]
+            let builder = FilterBuilder(library: library)
+            let result = builder.matchingIDs(
+                expression: toolbarState.filterExpression,
+                likedIDs: currentLikedIDs,
+                collectionMap: collectionMap
             )
-        } else {
-            collectionMap = [:]
+            let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
+            let filteredIDs = prefs.showSkippedCollection
+                ? result.calibreIDs
+                : result.calibreIDs.filter { !currentSkipped.contains($0) }
+            toolbarState.activeFilterResult = FilterResult(
+                calibreIDs: filteredIDs,
+                totalCount: filteredIDs.count
+            )
+            likedIDs = currentLikedIDs
+            skippedIDs = currentSkipped
+            currentPage = 0; loadPage()
         }
-
-        let builder = FilterBuilder(library: library)
-        toolbarState.activeFilterResult = builder.matchingIDs(
-            expression: toolbarState.filterExpression,
-            likedIDs: likedIDs,
-            collectionMap: collectionMap
-        )
-        currentPage = 0; loadPage()
     }
 
     /// Add or replace a filter rule. All quick taps (tag, author, rating, etc.)
@@ -304,6 +334,7 @@ struct LibraryRootView: View {
             BookListRow(
                 book: book,
                 bookState: bookStates[book.id],
+                isLiked: likedIDs.contains(book.id),
                 modelContext: modelContext,
                 onTagTap: { tag, field in
                     addOrReplaceRule(FilterRule(field: field, op: .equals, value: tag))
@@ -311,7 +342,9 @@ struct LibraryRootView: View {
                 onAuthorTap: { author in
                     addOrReplaceRule(FilterRule(field: .authorName, op: .equals, value: author))
                 },
-                onLikeToggle: { toggleLike(for: book) }
+                onLikeToggle: { toggleLike(for: book) },
+                onSkip: { skip(book) },
+                onMarkRead: { markRead(book) }
             )
             .equatable()
             .listRowSeparator(.visible)
@@ -321,16 +354,45 @@ struct LibraryRootView: View {
     }
 
     private func toggleLike(for book: CalibreBook) {
-        if let existing = bookStates[book.id] {
-            existing.isLiked.toggle()
-        } else {
-            let s = BookState(calibreID: book.id)
-            s.isLiked = true
-            modelContext.insert(s)
-            bookStates[book.id] = s
+        Task {
+            try? await session.collectionStore?.toggleLiked(calibreID: book.id)
+            likedIDs = (try? await session.collectionStore?.likedIDs()) ?? []
         }
+    }
+
+    private func skip(_ book: CalibreBook) {
+        Task {
+            try? await session.collectionStore?.skipBook(calibreID: book.id)
+            skippedIDs.insert(book.id)
+            applyFilterRules()
+        }
+    }
+
+    private func markRead(_ book: CalibreBook) {
+        let calibreID = book.id
+        var desc = FetchDescriptor<BookState>(
+            predicate: #Predicate { $0.calibreID == calibreID }
+        )
+        desc.fetchLimit = 1
+        let state = (try? modelContext.fetch(desc).first) ?? BookState(calibreID: calibreID)
+        if state.modelContext == nil {
+            modelContext.insert(state)
+        }
+        state.totalReadPercent = 100
         try? modelContext.save()
-        refreshBookStates()
+        bookStates[calibreID] = state
+        Task {
+            try? await session.collectionStore?.syncAutomatedCollection(
+                collectionID: SystemCollectionID.finished,
+                calibreID: calibreID,
+                shouldBeMember: true
+            )
+            try? await session.collectionStore?.syncAutomatedCollection(
+                collectionID: SystemCollectionID.inProgress,
+                calibreID: calibreID,
+                shouldBeMember: false
+            )
+        }
     }
 
     private var footer: some View {
@@ -371,30 +433,38 @@ struct LibraryRootView: View {
 struct BookListRow: View, Equatable {
     let book: CalibreBook
     let bookState: BookState?
+    let isLiked: Bool
     let modelContext: ModelContext
     let onTagTap: (String, FilterField) -> Void
     let onAuthorTap: (String) -> Void
     let onLikeToggle: () -> Void
+    let onSkip: () -> Void
+    let onMarkRead: () -> Void
 
     static func == (lhs: BookListRow, rhs: BookListRow) -> Bool {
         lhs.book == rhs.book
             && lhs.bookState?.calibreID        == rhs.bookState?.calibreID
-            && lhs.bookState?.isLiked          == rhs.bookState?.isLiked
+            && lhs.isLiked                     == rhs.isLiked
             && lhs.bookState?.totalReadPercent == rhs.bookState?.totalReadPercent
     }
 
     private let buckets: AO3TagBuckets
 
-    init(book: CalibreBook, bookState: BookState?, modelContext: ModelContext,
+    init(book: CalibreBook, bookState: BookState?, isLiked: Bool, modelContext: ModelContext,
          onTagTap: @escaping (String, FilterField) -> Void,
          onAuthorTap: @escaping (String) -> Void,
-         onLikeToggle: @escaping () -> Void) {
+         onLikeToggle: @escaping () -> Void,
+         onSkip: @escaping () -> Void,
+         onMarkRead: @escaping () -> Void) {
         self.book         = book
         self.bookState    = bookState
+        self.isLiked      = isLiked
         self.modelContext = modelContext
         self.onTagTap     = onTagTap
         self.onAuthorTap  = onAuthorTap
         self.onLikeToggle = onLikeToggle
+        self.onSkip       = onSkip
+        self.onMarkRead   = onMarkRead
         self.buckets      = AO3TagBuckets.from(tags: book.tags)
     }
 
@@ -415,7 +485,9 @@ struct BookListRow: View, Equatable {
                 AppDelegate.shared?.openReaderWindow(book: book, modelContext: modelContext)
             }
             Divider()
-            Button(bookState?.isLiked == true ? "Unlike" : "Like") { onLikeToggle() }
+            Button(isLiked ? "Unlike" : "Like") { onLikeToggle() }
+            Button("Mark as Read") { onMarkRead() }
+            Button("Skip") { onSkip() }
             Divider()
             AddToCollectionMenu(book: book)
         }
