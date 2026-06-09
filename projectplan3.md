@@ -25,6 +25,14 @@ lastSpineIndex: Int, lastCharacterOffset: Int, lastScrollOffset: Double,
 annotationsData: Data?
 ```
 
+**Planned additions (require SwiftData migration — see migration section):**
+```swift
+isRead: Bool = false          // manually set or auto-set at ≥98% progress
+eloScore: Double = 1000.0
+eloMatchCount: Int = 0
+isPinnedToTop: Bool = false
+```
+
 ### What does NOT yet exist (Phase 9+)
 `ambrosia_meta.db`, AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard, bookmarks/annotations overhaul (Phase 15 improvements), ELO ranking, custom fonts (Phase 17), AO3 login/kudos, collections improvements, annotation export, standalone mode, TOC popup, hidden books, pin-to-top window. These are all defined below.
 
@@ -74,8 +82,9 @@ All tables use `CREATE TABLE IF NOT EXISTS` — phases run DDL on startup in any
 
 ### SwiftData Migration — Required Before Adding Any `@Model` Field
 
-Add these four fields to `BookState` in a single `SchemaMigrationPlan` (lightweight migration, all have defaults):
+Add these five fields to `BookState` in a single `SchemaMigrationPlan` (lightweight migration, all have defaults):
 ```swift
+var isRead: Bool = false          // manually set or auto-set at ≥98% progress
 var eloScore: Double = 1000.0
 var eloMatchCount: Int = 0
 // isHidden: Bool = false  ← already exists as of Phase 8
@@ -109,7 +118,7 @@ TRACK G — AO3 network (Phase 18 — needs Phase 9 merged first)
 
 TRACK H — Standalone mode (Phase 21 — fully independent)
 
-TRACK I — Music (Phase 23 — BLOCKED, do not start; see Phase 23)
+TRACK I — Music (Phase 23 stub + Phase 24 full system — BLOCKED on product owner decisions; see Phase 23/24)
 ```
 
 Give each parallel AI session: `ambrosia_architecture.md`, this document, and one phase to implement. Each produces a clean feature branch.
@@ -140,6 +149,7 @@ CREATE TABLE IF NOT EXISTS ao3_metadata (
     relationships_json TEXT,
     characters_json TEXT,
     additional_tags_json TEXT,
+    category_json TEXT,          -- JSON array: values from {"F/F","F/M","M/M","Gen","Multi","Other"}
     ao3_collections_json TEXT,
     series_json TEXT,            -- JSON [{"name":str,"index":int,"ao3_id":str}]
     extracted_at TEXT NOT NULL   -- ISO-8601
@@ -169,6 +179,7 @@ A Swift `struct`. Takes raw HTML, returns `AO3Metadata?`.
 - Chapters: split on `/`. Second component `"?"` → `chapter_total = nil`. If `chapter_current == chapter_total` (both non-nil) → `is_complete = true`.
 - Word count: strip commas before `Int()`.
 - Series: each `<li>` → part index from `<span>`, name + AO3 ID from `<a href="/series/ID">`. Build JSON array.
+- **Tags:** extract five separate lists — fandoms, relationships, characters, additional tags, and category — each from their respective `<dt class="tags">` label. Store each as a JSON array. Category values are a closed set (`F/F`, `F/M`, `M/M`, `Gen`, `Multi`, `Other`); store any unrecognised value as-is without logging an error.
 
 ### Background extraction
 ```swift
@@ -296,15 +307,40 @@ For `.series`: one `EPUBParser` per work; join `mergedHTML()` results with:
 
 ---
 
-## Phase 11 — AO3 Tag Synonyms
+## Phase 11 — AO3 Tag Synonyms and Tag Classification
 **Dependencies:** Phase 9 (for `SwiftSoup` + `ambrosia_meta.db` write path). Track A.
 
-**Goal:** Resolve tag queries to canonical AO3 forms. Lazy on-demand scraping. Hardcoded seed for common tags.
+**Goal:** Resolve tag queries to canonical AO3 forms using a pre-built seed database. Wire every tag-bearing surface in the app through `TagSynonymResolver`. Treat AO3's structured tag categories (fandom, character, relationship, category) as first-class distinct fields — never conflate them with freeform additional tags.
 
-### Data source reality
-No public AO3 tag export exists. Strategy: hardcoded seed for top ~500–1000 tags (`AO3TagSeeds.swift`, built manually in a separate session); lazy live scraping for unknown tags.
+---
 
-### DDL
+### Background: what the scraper produced
+
+The Phase 11 seed data comes from `ao3_seed_scraper.py`, which was run against the library's tag URLs offline. It produced `AO3TagSeeds.swift` — drop this into the Xcode project and never edit it by hand. To regenerate the Swift file from an existing `ao3_tag_seeds.db` without re-scraping:
+
+```bash
+python3 ao3_seed_scraper.py --swift-only --output-dir ./output
+```
+
+`AO3TagSeeds.swift` exposes:
+```swift
+struct AO3TagSeeds {
+    static let synonyms: [(synonym: String, canonical: String, tagType: String)]
+    static let parentLinks: [(child: String, parent: String)]
+    // Inserts into canonical_tags, tag_synonyms, tag_parent_links in one transaction.
+    // INSERT OR IGNORE — safe to call again. Targets raw SQLite pointer for ambrosia_meta.db.
+    static func loadIfNeeded(db: OpaquePointer) throws
+}
+```
+
+**Invariant:** `synonym` is never equal to its canonical's name in the seed data. If a string appears in `canonical_tags.name` it is canonical; if it appears only in `tag_synonyms.synonym` it maps to something else. Never assume a string can be both.
+
+---
+
+### DDL — use these exact table names
+
+**Critical schema note:** The phase guide originally specified `fandom_hierarchy`. The actual seed data uses `tag_parent_links` (same structure, different name) plus `tag_subtag_sections`. Use the names below everywhere — `AO3TagSeeds.loadIfNeeded` targets `tag_parent_links`.
+
 ```sql
 CREATE TABLE IF NOT EXISTS canonical_tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -312,44 +348,192 @@ CREATE TABLE IF NOT EXISTS canonical_tags (
     tag_type TEXT NOT NULL,  -- 'fandom'|'character'|'relationship'|'additional'|'unknown'
     last_fetched TEXT        -- ISO-8601; NULL for seed entries
 );
+
 CREATE TABLE IF NOT EXISTS tag_synonyms (
     synonym TEXT NOT NULL,
     canonical_id INTEGER NOT NULL REFERENCES canonical_tags(id) ON DELETE CASCADE,
     PRIMARY KEY (synonym)
 );
 CREATE INDEX IF NOT EXISTS idx_tag_synonyms_canonical ON tag_synonyms(canonical_id);
-CREATE TABLE IF NOT EXISTS fandom_hierarchy (
-    child_id INTEGER NOT NULL REFERENCES canonical_tags(id),
+
+-- Directed hierarchy edge: child is a sub-type of parent.
+-- e.g. child=MCU, parent=Marvel. Both directions written by scraper.
+CREATE TABLE IF NOT EXISTS tag_parent_links (
+    child_id  INTEGER NOT NULL REFERENCES canonical_tags(id),
     parent_id INTEGER NOT NULL REFERENCES canonical_tags(id),
+    PRIMARY KEY (child_id, parent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tag_parent_links_child  ON tag_parent_links(child_id);
+CREATE INDEX IF NOT EXISTS idx_tag_parent_links_parent ON tag_parent_links(parent_id);
+
+-- Optional: section labels from AO3's wrangling UI ("Relationships", "Characters", etc.)
+-- Mirrors tag_parent_links rows exactly; only adds the section label.
+-- Do not use at runtime in Phase 11 — reserved for future fandom-browser UI.
+CREATE TABLE IF NOT EXISTS tag_subtag_sections (
+    child_id  INTEGER NOT NULL REFERENCES canonical_tags(id),
+    parent_id INTEGER NOT NULL REFERENCES canonical_tags(id),
+    section   TEXT,  -- "Relationships"|"Characters"|"Additional Tags"|"Fandoms"|""
     PRIMARY KEY (child_id, parent_id)
 );
 ```
 
-### AO3 URL encoding rules
+Do **not** create `fandom_hierarchy`. It does not exist in the seed data.
+
+---
+
+### AO3 tag category model — four structured types vs. freeform
+
+AO3 uses five distinct tag slots on every work. Ambrosia must treat them separately:
+
+| AO3 field | `tag_type` | Source in EPUB HTML | Calibre column | Notes |
+|---|---|---|---|---|
+| Fandoms | `'fandom'` | `<dt class="tags">Fandoms:</dt>` | Calibre `tags` table (mixed) | Always wrangled; hierarchy applies |
+| Relationships | `'relationship'` | `<dt class="tags">Relationships:</dt>` | Calibre `tags` table (mixed) | Wrangled; `*s*` / `*a*` URL encoding |
+| Characters | `'character'` | `<dt class="tags">Characters:</dt>` | Calibre `tags` table (mixed) | Wrangled |
+| Additional Tags | `'additional'` | `<dt class="tags">Additional Tags:</dt>` | Calibre `tags` table (mixed) | Freeform; synonym resolution applies but hierarchy does not |
+| Category | `'category'` | `<dt class="tags">Category:</dt>` | Not in Calibre schema | AO3-specific; values: F/F, F/M, M/M, Gen, Multi, Other |
+
+**Calibre's `tags` table mixes all five types into a single flat list.** It has no type column. The only way to know whether `"Clarke/Lexa"` is a relationship tag or `"Hurt/Comfort"` is additional is from the EPUB HTML — which is why Phase 9's `ao3_metadata` table stores them in separate JSON columns (`fandoms_json`, `relationships_json`, `characters_json`, `additional_tags_json`). Phase 11 must use those columns, not Calibre's `tags` table, for any type-aware operation.
+
+**Category tags** (`F/F`, `Gen`, `M/M`, etc.) are **not** stored in `canonical_tags`. They are a closed fixed vocabulary. Store them in `ao3_metadata.category_json TEXT` (add this column if not already present). Parse from `<dt class="tags">Category:</dt>` in the EPUB header alongside the other tags.
+
+---
+
+### What goes through `TagSynonymResolver` and what does not
+
+| Surface | Passes through resolver | Notes |
+|---|---|---|
+| Search bar `tag:` query | Yes | Resolve before building SQL |
+| Filter drawer tag rules | Yes | Resolve before `FilterBuilder` |
+| Tag pill taps (quick filter) | Yes | Tag came from Calibre; may need resolution |
+| Fandom-hierarchy expansion | Yes — only for `'fandom'` and `'character'`/`'relationship'` canonical tags | Never expand additional tags via hierarchy |
+| Category filter (`F/F`, `Gen`, etc.) | **No** — query `ao3_metadata.category_json` directly | Fixed vocabulary; no synonyms |
+| Tag display in list/email rows | **No** — display Calibre's raw tag strings | Resolution is for search/filter only; never mutate display strings |
+| Hidden-tags suppression (Phase 13) | Yes — resolve the stored hidden tag before comparing | Ensures "H/C" hides "Hurt/Comfort" books |
+
+---
+
+### `TagSynonymResolver`
+
+A service with a read-only `Connection`. Never writes. Must not block the main thread.
+
+```swift
+final class TagSynonymResolver {
+    private let db: Connection  // read-only; separate from AmbrosiaMetaDB write actor
+
+    /// Resolve a single tag to its canonical form.
+    /// Returns inputTag unchanged if already canonical or unknown.
+    func canonical(for inputTag: String) async -> String {
+        // Step 1: is it already canonical?
+        // SELECT id FROM canonical_tags WHERE name = ?
+        // → found: return inputTag unchanged
+
+        // Step 2: is it a known synonym?
+        // SELECT c.name FROM tag_synonyms s
+        // JOIN canonical_tags c ON c.id = s.canonical_id
+        // WHERE s.synonym = ?
+        // → found: return c.name
+
+        // Step 3: unknown → queue background AO3 fetch via AO3RateLimiter
+        //         write result to ambrosia_meta.db via AmbrosiaMetaDB.shared
+        //         return inputTag unchanged for this query
+        return inputTag
+    }
+
+    /// Resolve multiple tags in one call. Batches steps 1+2 as IN queries
+    /// to avoid N round-trips on the read-only connection.
+    func canonicalBatch(for tags: [String]) async -> [String: String]
+    // returns dict of inputTag → canonical (input unchanged if already canonical/unknown)
+}
+```
+
+**Batch resolution** is critical for performance. Filter rules and search queries may reference many tags at once. Do not call `canonical(for:)` in a loop — use `canonicalBatch(for:)` which batches the two lookups as `WHERE name IN (?)` and `WHERE synonym IN (?)` queries.
+
+---
+
+### Fandom hierarchy expansion
+
+When Preferences → Library → "Fandom Hierarchy" is **on**, a search for a parent fandom (e.g. `Marvel`) should also match works whose fandom tags are descendants (e.g. `MCU`, `Avengers (Movies)`). Hierarchy expansion applies **only** to `'fandom'`, `'character'`, and `'relationship'` tag types — never to `'additional'` tags.
+
+```sql
+-- All canonical tags that are descendants of a given parent (recursive CTE)
+WITH RECURSIVE descendants(id) AS (
+    SELECT child_id FROM tag_parent_links WHERE parent_id = (
+        SELECT id FROM canonical_tags WHERE name = ?
+    )
+    UNION
+    SELECT tpl.child_id FROM tag_parent_links tpl
+    JOIN descendants d ON tpl.parent_id = d.id
+)
+SELECT name FROM canonical_tags WHERE id IN (SELECT id FROM descendants);
+```
+
+Call this only when the fandom-hierarchy toggle is on (`UserDefaults` key `"fandomHierarchyEnabled"`, default `false`). The result set is passed to `FilterBuilder` as an expanded `IN` list against Calibre's `tags` table.
+
+**Performance note:** The recursive CTE on a read-only connection is fast for typical fandom trees (depth ≤ 4, branching factor ≤ 50). Cache the expanded set in memory per session per input tag — do not re-query on every keystroke. Invalidate the cache when the "Clear synonym cache" button is pressed.
+
+---
+
+### EPUB HTML parsing for tag types (extends Phase 9)
+
+Phase 9's `AO3MetadataExtractor` already extracts `fandoms_json`, `relationships_json`, `characters_json`, and `additional_tags_json`. Phase 11 adds:
+
+1. **`category_json TEXT`** column to `ao3_metadata` (add via `ALTER TABLE IF NOT EXISTS` or include in DDL if table not yet created). Parse `<dt class="tags">Category:</dt>` → extract `<li>` text values. Valid values: `F/F`, `F/M`, `M/M`, `Gen`, `Multi`, `Other`. Anything else: log and store as-is.
+
+2. **Tag type back-population:** After extraction, for each tag in each typed JSON array, ensure a row exists in `canonical_tags` with the correct `tag_type`. Use `INSERT OR IGNORE` — do not overwrite `last_fetched` on existing rows.
+   ```swift
+   // In AmbrosiaMetaDB, called after every ao3_metadata insert:
+   func ensureCanonicalTags(fandoms: [String], relationships: [String],
+                             characters: [String], additional: [String]) async
+   // INSERT OR IGNORE INTO canonical_tags (name, tag_type) VALUES (?, ?)
+   // for each tag in each list, with the correct tag_type string
+   ```
+   This ensures that every tag seen in the library has a `canonical_tags` row even before the scraper or live-fetch runs — which makes step 1 of `TagSynonymResolver` more effective immediately.
+
+---
+
+### Seed loading
+
+On first launch (`UserDefaults` flag `"tagSeedLoaded"`): call `AO3TagSeeds.loadIfNeeded(db:)`, passing the raw SQLite pointer for `ambrosia_meta.db`. This inserts into `canonical_tags`, `tag_synonyms`, and `tag_parent_links` in a single transaction with `INSERT OR IGNORE`. Set `last_fetched = NULL` for all seed entries.
+
+Run inside `Task.detached(priority: .background)` — the seed file may be large. Do not block app startup.
+
+---
+
+### "Clear synonym cache" button
+
+Preferences → Library → "Tag Synonyms" → "Clear synonym cache":
+
+```sql
+-- Delete live-fetched rows only (keep seeds; seeds have last_fetched IS NULL)
+DELETE FROM tag_synonyms
+  WHERE canonical_id IN (
+      SELECT id FROM canonical_tags WHERE last_fetched IS NOT NULL
+  );
+DELETE FROM tag_parent_links
+  WHERE child_id  IN (SELECT id FROM canonical_tags WHERE last_fetched IS NOT NULL)
+     OR parent_id IN (SELECT id FROM canonical_tags WHERE last_fetched IS NOT NULL);
+DELETE FROM canonical_tags WHERE last_fetched IS NOT NULL;
+
+-- Re-seed (INSERT OR IGNORE, so safe)
+UserDefaults.standard.removeObject(forKey: "tagSeedLoaded")
+-- then call AO3TagSeeds.loadIfNeeded(db:) again
+```
+
+Also invalidate the in-memory hierarchy expansion cache.
+
+---
+
+### AO3 URL encoding rules (for live-fetch URLs)
 - `/` in relationship tags → `*s*` (e.g. "Clarke/Lexa" → "Clarke*s*Lexa")
 - `&` in friendship tags → `*a*`
 - Spaces → `%20`
 - Other: standard percent-encoding
 
-### `TagSynonymResolver`
-A service with a read-only `Connection`. Called from `SearchQueryParser` before SQL is built. Must not block main thread.
-```swift
-final class TagSynonymResolver {
-    func canonical(for inputTag: String) async -> String {
-        // 1. Check canonical_tags.name — return as-is if found
-        // 2. Check tag_synonyms.synonym — return canonical if found
-        // 3. If unknown: queue background AO3 fetch via AO3RateLimiter
-        //    Write result to DB; return inputTag unchanged for this query
-        return inputTag  // fallback
-    }
-}
-```
-
-### Seed loading
-On first launch (`UserDefaults` flag `"tagSeedLoaded"`): insert `AO3TagSeeds.synonyms` into `canonical_tags` + `tag_synonyms` in a single SQLite transaction. Set `last_fetched = nil` for all seed entries.
+---
 
 ### Preferences UI
-Preferences → Library → "Tag Synonyms": resolve toggle (default on), fandom-hierarchy toggle (default off), count label ("X canonical tags, Y synonyms"), "Clear synonym cache" button (deletes non-seed rows, re-seeds).
+Preferences → Library → "Tag Synonyms": resolve toggle (default on), fandom-hierarchy toggle (default off), count label ("X canonical tags, Y synonyms, Z hierarchy edges"), "Clear synonym cache" button. Category filter UI (F/F, Gen, etc.) is a separate filter drawer field — not part of this preference panel.
 
 ---
 
@@ -385,17 +569,28 @@ Panel frame persisted in `UserDefaults` as `"tocPanelFrame"`. Keyboard shortcut:
 
 ---
 
-## Phase 13 — Hidden Books, Authors, and Series
+## Phase 13 — Hidden Books, Authors, Tags, and Collections
 **Dependencies:** None (Phase 19 Collections needed for "Hidden" collection UI — stub it). Track C.
 
-**Goal:** Hide books, all works by an author, or entire series. ⌘Z undoable. "Hidden" built-in collection.
+**Goal:** Hide books by multiple axes: individual book, all works by an author, all works with a given tag, all works in a given collection (this naturally covers "hide liked" and "hide read-later" in bulk), and all already-read or already-seen works. The hidden state is invisible everywhere in the UI except a dedicated toggle in Preferences → Library → "Show Hidden Content". ⌘Z undoable on all hide operations.
 
 ### Storage
 - **Hidden books:** `BookState.isHidden = true` (already exists). Post-filter in memory after `FetchDescriptor`. Never add to SQL WHERE — invariant 22.
-- **Hidden authors:** `UserDefaults` key `"hiddenAuthors"` — `Data` (JSON `[String]`).
-- **Hidden series:** `UserDefaults` key `"hiddenSeries"` — `Data` (JSON `[String]`).
+- **Hidden authors:** `UserDefaults` key `"hiddenAuthors"` — `Data` (JSON `[String]`). A book is hidden if ANY of its authors is in this set.
+- **Hidden tags:** `UserDefaults` key `"hiddenTags"` — `Data` (JSON `[String]`). A book is hidden if ANY of its tags is in this set.
+- **Hidden collections:** `UserDefaults` key `"hiddenCollectionIDs"` — `Data` (JSON `[String]`, using `Collection.id` UUIDs). A book is hidden if its `calibreID` is in any hidden collection's `calibreIDsData`. This is how the user can suppress all "Liked" books or all "Read Later" books from the main list at once.
+- **Hide read works:** `UserDefaults` bool `"hideReadBooks"` (default `false`). When true, suppress all books where `BookState.isRead == true`.
+- **Hide seen works:** `UserDefaults` bool `"hideSeenBooks"` (default `false`). A book is "seen" if `totalReadPercent > 0`. When true, suppress books the user has ever opened.
 
-A book is suppressed if ANY condition is true.
+A book is suppressed from library display if ANY condition is true. Evaluate in this order (cheapest first):
+1. `BookState.isHidden`
+2. `hideReadBooks && BookState.isRead`
+3. `hideSeenBooks && BookState.totalReadPercent > 0`
+4. Any author in `hiddenAuthors`
+5. Any tag in `hiddenTags`
+6. `calibreID` in any hidden collection
+
+Suppression is applied **after** the Calibre SQL fetch, in the same in-memory post-filter pass used for `isLiked` and collection membership. Do not encode any suppression logic into SQL — it must remain a pure in-memory step.
 
 ### Undo pattern
 ```swift
@@ -409,20 +604,29 @@ func hideBook(_ bookState: BookState, context: ModelContext, undoManager: UndoMa
     undoManager?.setActionName("Hide Book")
 }
 ```
-For author/series: same pattern, mutation target is `UserDefaults`. Capture pre-change array in closure.
+For author/tag/collection: same pattern, mutation target is `UserDefaults`. Capture pre-change array in closure.
 
 Undo stack is per-window and ephemeral — correct macOS behaviour, not a bug.
 
 ### Context menu additions
-- Book row: "Hide This Book", "Hide All Books by [Author]"
+- Book row: "Hide This Book", "Hide All Books by [Author]", "Hide All Books Tagged [Tag]" (one item per tag on the book, shown in a submenu if more than 3 tags)
 - Series row: "Hide This Series"
+- Collection sidebar row: "Hide Collection from Library" (adds to `hiddenCollectionIDs`)
+
+### Preferences — Library → Hidden Content
+A dedicated section (only visible/relevant when Preferences → Library → "Show Hidden Content" is off):
+- Toggle: "Show Hidden Content" (master reveal switch — when on, hidden books appear with a grey overlay, not fully unsuppressed)
+- Sub-section: "Quick Filters" — two on/off toggles: "Hide already-read books" (`hideReadBooks`), "Hide already-seen books" (`hideSeenBooks`)
+- Sub-section: "Hidden Authors" — list with remove (×) button per entry; "Clear All" button
+- Sub-section: "Hidden Tags" — same pattern
+- Sub-section: "Hidden Collections" — shows collection names, not UUIDs; remove button
 
 ### "Hidden" built-in collection
-`Collection` with `isSystem = true, systemType = "hidden"`. Visible only when Preferences → Library toggle is on. Right-click → "Unhide" (registered with `NSUndoManager`).
+`Collection` with `isSystem = true, systemType = "hidden"`. Contains all `calibreID`s where `BookState.isHidden == true`. Visible only inside Preferences or when the master reveal is on. Right-click → "Unhide" (registered with `NSUndoManager`). Do not show this collection in the normal collections sidebar — it is a Preferences-only UI.
 
 ---
 
-## Phase 14 — Reading Stats and Goals Dashboard
+## Phase 14 — Reading Stats, Goals Dashboard, and Read Tracking
 **Dependencies:** None for session logging. Phase 9 for accurate `words_read`. Track D.
 
 ### `reading_history` DDL
@@ -440,13 +644,47 @@ CREATE INDEX IF NOT EXISTS idx_reading_history_calibre ON reading_history(calibr
 CREATE INDEX IF NOT EXISTS idx_reading_history_start ON reading_history(session_start);
 ```
 
+### `book_opens` DDL
+A lightweight log separate from session data. Used for "Recently Opened" lists and open-count statistics without aggregating `reading_history`.
+
+```sql
+CREATE TABLE IF NOT EXISTS book_opens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    calibre_id INTEGER NOT NULL,
+    opened_at TEXT NOT NULL        -- ISO-8601
+);
+CREATE INDEX IF NOT EXISTS idx_book_opens_calibre ON book_opens(calibre_id);
+CREATE INDEX IF NOT EXISTS idx_book_opens_time ON book_opens(opened_at);
+```
+
+Write one row on every reader open (`viewDidAppear`), in the same call that starts the `reading_history` session. **Never delete rows** — this is a permanent append-only log. At 1 row per open, even 10,000 opens is ~400 KB; storage is not a concern.
+
+Queries used by the UI:
+```sql
+-- Recently opened (up to N distinct books, most recent first)
+SELECT DISTINCT calibre_id FROM book_opens ORDER BY opened_at DESC LIMIT 20;
+
+-- Open count for a book
+SELECT COUNT(*) FROM book_opens WHERE calibre_id = ?;
+```
+
 ### `ReadingHistoryLogger` — three write points
-1. **Open** (`viewDidAppear`): INSERT with `session_start = session_end = now`, `percent_start`. Capture inserted row `id`.
-2. **Autosave** (existing 5s timer): `UPDATE … SET session_end = now, percent_end = current`.
-3. **Close** (`viewWillDisappear`): final UPDATE.
+1. **Open** (`viewDidAppear`): INSERT into `book_opens`; INSERT into `reading_history` with `session_start = session_end = now`, `percent_start`. Capture inserted row `id`.
+2. **Autosave** (existing 5s timer): `UPDATE reading_history SET session_end = now, percent_end = current`. Also check auto-read threshold (see below).
+3. **Close** (`viewWillDisappear`): final UPDATE to `reading_history`. Final auto-read check.
 4. **Crash recovery** (on next `viewDidAppear`): close zombie rows where `session_end == session_start`.
 
 `words_read = (percent_end - percent_start) * word_count` from `ao3_metadata`. Store `NULL` if unavailable.
+
+### Automatic "Read" marking
+In `ReadingHistoryLogger`, after every autosave and on close:
+```swift
+if !bookState.isRead && (bookState.totalReadPercent >= 0.98) {
+    bookState.isRead = true
+    try? modelContext.save()
+}
+```
+This is the only place `isRead` is set automatically. The user may also set it manually at any time (see Phase 19 UI). Setting `isRead = true` does NOT reset progress or scroll position.
 
 ### `StatsView`
 `NSPanel` from Window menu / toolbar. SwiftUI sections:
@@ -462,6 +700,8 @@ FROM reading_history
 WHERE percent_end BETWEEN 0.05 AND 0.95
 GROUP BY calibre_id ORDER BY MAX(session_end) DESC
 ```
+
+**Recently opened:** Query `book_opens` for top 10 distinct `calibre_id` by most recent `opened_at`. Display as a horizontal scroll strip with cover thumbnails.
 
 **Goals:** Read existing `ReadingGoal @Model` in full before implementing. Add progress bars. Do not duplicate fields.
 
@@ -673,7 +913,7 @@ Heart button (kudos, grey→red when given). Bookmark button. Both show tooltip 
 
 ---
 
-## Phase 19 — Collections and Saved Searches
+## Phase 19 — Collections, Saved Searches, Favourite Authors, and Saved Quotes
 **Dependencies:** None. Track E.
 
 **Read existing `Collection @Model` in full before writing any code. A migration is required for new fields.**
@@ -681,20 +921,43 @@ Heart button (kudos, grey→red when given). Bookmark button. Both show tooltip 
 ### Collections — new `@Model` fields
 ```swift
 var isSystem: Bool = false
-var systemType: String? = nil  // "readLater" | "hidden"
+var systemType: String? = nil  // "readLater" | "liked" | "hidden"
 ```
 `calibreIDsData: Data` stores JSON-encoded `[Int]` — invariant 1.
 
-On first launch (`UserDefaults` flag `"systemCollectionsCreated"`): insert "Read Later" (`isSystem=true, systemType="readLater"`) and "Hidden" (`isSystem=true, systemType="hidden"`). System collections cannot be renamed or deleted.
+On first launch (`UserDefaults` flag `"systemCollectionsCreated"`): insert three system collections. System collections cannot be renamed or deleted.
+
+| `systemType` | Display Name | Purpose |
+|---|---|---|
+| `"readLater"` | "Read Later" | Mark for later; bookmark icon in rows |
+| `"liked"` | "Liked" | Mirrors `BookState.isLiked`; star icon in toolbar |
+| `"hidden"` | "Hidden" | All `BookState.isHidden == true` books; Preferences-only |
+
+**Liked collection sync:** `BookState.isLiked` is the source of truth. When `isLiked` changes, also update the Liked system collection's `calibreIDsData` in the same `ModelContext.save()` call. On app launch, do a one-time reconciliation pass to make sure the Liked collection's IDs match all `BookState.isLiked == true` records. The Liked collection exists so users can apply collection-level operations to liked books (e.g. hide liked from library view, or export the list).
 
 ### Read Later UX
-Bookmark icon in every book row and cover card. Tap toggles `calibreID` in `calibreIDsData`. Register with `NSUndoManager`.
+Bookmark icon in every book row (list view), every cover card (grid view), and in the email view detail pane. Tap toggles `calibreID` in `calibreIDsData`. Register with `NSUndoManager`.
+
+**Email view — "Mark for Later" button:** Add a bookmark toolbar button in the email view's detail pane header (SwiftUI `Button` with `bookmark` SF Symbol). State reflects whether the current selection's `calibreID` is in the Read Later collection. Also add to the `NSTableView` sidebar context menu alongside "Open" and "Like/Unlike".
 
 Collection toolbar when Read Later selected:
 - "Open Random" — random `calibreID` from `calibreIDsData`, open in reader
 - "Clear" — empty `calibreIDsData` (undo: "Clear Read Later")
 
-### Saved searches DDL
+### Liked UX
+**Toolbar star button:** Add a `⭐` (`star` / `star.fill` SF Symbol) button to the main library `NSToolbar` for the currently selected book. When no book is selected the button is disabled. Toggling updates `BookState.isLiked` and syncs the Liked collection. Register with `NSUndoManager`. Action name: "Like" / "Unlike".
+
+In list view rows and email view sidebar, the existing like/unlike context menu item remains. The toolbar button is the new primary affordance for keyboard-driven users.
+
+### Mark as Read UX
+Manual read-marking is available in:
+- Book row context menu: "Mark as Read" / "Mark as Unread"
+- Email view detail pane: a "✓ Read" badge button in the header
+- Reader toolbar: a checkmark button (sets `isRead = true` immediately, same as auto-mark)
+
+All operations register with `NSUndoManager`. Setting `isRead = false` does NOT modify `totalReadPercent`.
+
+### Saved searches DDL (`ambrosia_meta.db`)
 ```sql
 CREATE TABLE IF NOT EXISTS saved_searches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -706,6 +969,50 @@ CREATE TABLE IF NOT EXISTS saved_searches (
 ```
 
 UI: bookmark icon at trailing end of search bar (active when any search/filter applied). Popover: name field + Save button. Dropdown of saved searches below search bar. Selecting one restores `LibraryToolbarState.searchText` and deserialises `filter_rules_json` into `FilterDrawer` rules. Trash button to delete (undo supported).
+
+### Favourite Authors DDL (`ambrosia_meta.db`)
+```sql
+CREATE TABLE IF NOT EXISTS favourite_authors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    author_name TEXT NOT NULL UNIQUE,     -- matches Calibre `authors.name` exactly
+    note TEXT,                            -- optional personal note
+    added_at TEXT NOT NULL               -- ISO-8601
+);
+CREATE INDEX IF NOT EXISTS idx_fav_authors_name ON favourite_authors(author_name);
+```
+
+**Why `ambrosia_meta.db` and not `UserDefaults`:** Unlike hidden authors (a small exclusion list), favourite authors may accumulate to hundreds of entries and benefit from indexed lookup. Keeping it in SQLite also makes it exportable alongside other user data.
+
+**UX:**
+- Book row context menu: "Favourite Author" / "Unfavourite Author" (one item per author; submenu if multiple authors)
+- Author pill tap in list view: popover shows author name + "☆ Favourite" toggle
+- Favourited authors shown with a star chip in the author list (Preferences → Library → Favourite Authors) with remove button and optional note field
+- Library sort: "Favourite Authors First" option in sort picker — books with any favourited author sort above others, then by existing sort within each group
+
+### Saved Quotes DDL (`ambrosia_meta.db`)
+Distinct from annotations. Quotes are passages the user wants to remember outside the reading context — more curated, shareable, and not tied to a specific annotation colour or note workflow.
+
+```sql
+CREATE TABLE IF NOT EXISTS saved_quotes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    calibre_id INTEGER NOT NULL,
+    spine_index INTEGER NOT NULL,
+    start_char INTEGER NOT NULL,
+    end_char INTEGER NOT NULL,
+    selected_text TEXT NOT NULL,
+    attribution TEXT,                -- e.g. "Chapter 3" or custom label
+    note TEXT,
+    created_at TEXT NOT NULL,        -- ISO-8601
+    tags_json TEXT                   -- JSON [String] for user-defined quote tags
+);
+CREATE INDEX IF NOT EXISTS idx_saved_quotes_calibre ON saved_quotes(calibre_id);
+```
+
+**UX:**
+- Reader context menu: "Save Quote" (alongside "Add Annotation…"). Opens a small `NSPopover` with the selected text (read-only), an attribution field (pre-filled with spine/chapter name), an optional note field, and optional tag field.
+- Quotes panel: `NSPanel` (or a third tab in the annotation panel from Phase 15 — evaluate at implementation time). Sorted by book then position. Each row: book title, attribution, first 120 chars of text, note. Double-click navigates to position in reader.
+- Export: "Copy Quote" → clipboard as `"[text]" — [book title], [attribution]`. NSSavePanel CSV export from the quotes panel.
+- **Character offset contract:** `start_char` and `end_char` use the same UTF-16 convention as annotations (invariant 5).
 
 ---
 
@@ -811,7 +1118,7 @@ window.level = bookState.isPinnedToTop ? .floating : .normal
 
 ---
 
-## Phase 23 — macOS Music Player Integration
+## Phase 23 — macOS Music Player Integration (Stub)
 **Dependencies:** Phase 15 merged. **Track I — DO NOT START. Blocked on product owner decisions.**
 
 ### What is blocked (confirm with product owner first)
@@ -827,6 +1134,123 @@ In reader, when position advances past a bookmark's `startChar` and `musicTrigge
 NotificationCenter.default.post(name: .ambrosiaMusicCheckpointReached, object: trigger)
 ```
 Leave the notification handler as a stub. **Do not wire up any player until product owner confirms integration target.**
+
+---
+
+## Phase 24 — Music Playlist System
+**Dependencies:** Phase 23 product owner decisions resolved. Phase 15 merged (for `Annotation` extension and character offset infrastructure). **Track I — DO NOT START until Phase 23 blockers are resolved.**
+
+**Goal:** Let users associate music with their reading. Three trigger modes per playlist: position-based (a specific character offset triggers a song), chapter-based (one song per spine item), or vibe-based (songs tagged with a vibe are shuffled when a chapter/location matches that vibe). Songs have user-defined tags for vibe matching.
+
+### DDL (`ambrosia_meta.db`)
+
+```sql
+-- A playlist belongs to one book (or NULL for a global/default playlist)
+CREATE TABLE IF NOT EXISTS music_playlists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    calibre_id INTEGER,              -- NULL = global playlist; non-NULL = book-specific
+    trigger_mode TEXT NOT NULL,      -- 'position' | 'chapter' | 'vibe'
+    created_at TEXT NOT NULL,
+    UNIQUE(calibre_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_music_playlists_calibre ON music_playlists(calibre_id);
+
+-- Individual songs in a playlist
+CREATE TABLE IF NOT EXISTS playlist_songs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    playlist_id INTEGER NOT NULL REFERENCES music_playlists(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    artist TEXT,
+    player_uri TEXT,                 -- player-specific URI (MusicKit catalogID, file path, etc.)
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(playlist_id, sort_order)
+);
+CREATE INDEX IF NOT EXISTS idx_playlist_songs_playlist ON playlist_songs(playlist_id);
+
+-- User-defined vibe tags on songs (many-to-many)
+CREATE TABLE IF NOT EXISTS song_tags (
+    song_id INTEGER NOT NULL REFERENCES playlist_songs(id) ON DELETE CASCADE,
+    tag TEXT NOT NULL,
+    PRIMARY KEY (song_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_song_tags_tag ON song_tags(tag);
+
+-- Position triggers: 'position' mode — a specific char offset → a specific song
+CREATE TABLE IF NOT EXISTS music_position_triggers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    playlist_id INTEGER NOT NULL REFERENCES music_playlists(id) ON DELETE CASCADE,
+    song_id INTEGER NOT NULL REFERENCES playlist_songs(id) ON DELETE CASCADE,
+    spine_index INTEGER NOT NULL,
+    char_offset INTEGER NOT NULL,    -- UTF-16, text nodes only — invariant 5
+    UNIQUE(playlist_id, spine_index, char_offset)
+);
+
+-- Chapter triggers: 'chapter' mode — one song per spine index
+CREATE TABLE IF NOT EXISTS music_chapter_triggers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    playlist_id INTEGER NOT NULL REFERENCES music_playlists(id) ON DELETE CASCADE,
+    spine_index INTEGER NOT NULL,
+    song_id INTEGER,                 -- NULL = randomise from playlist
+    UNIQUE(playlist_id, spine_index)
+);
+
+-- Vibe triggers: 'vibe' mode — spine index → vibe tag → pick matching song at random
+CREATE TABLE IF NOT EXISTS music_vibe_triggers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    playlist_id INTEGER NOT NULL REFERENCES music_playlists(id) ON DELETE CASCADE,
+    spine_index INTEGER NOT NULL,
+    vibe_tag TEXT NOT NULL,          -- matches song_tags.tag
+    UNIQUE(playlist_id, spine_index)
+);
+```
+
+### Trigger resolution at runtime
+When the reader's position changes (scroll or page turn), `MusicTriggerEngine` evaluates:
+
+1. **Position mode:** Query `music_position_triggers` for triggers in the current spine whose `char_offset` has been passed. Fire on first pass only (track fired trigger IDs in memory for the session). Post `ambrosiaMusicCheckpointReached` with the resolved `player_uri`.
+
+2. **Chapter mode:** On every spine change, query `music_chapter_triggers` for the new `spine_index`. If `song_id` is non-NULL, use that song. If `song_id` is NULL, pick a random song from the playlist. Post notification.
+
+3. **Vibe mode:** On every spine change, query `music_vibe_triggers` for the new `spine_index`. Get the `vibe_tag`. Query all `song_tags` rows matching that tag, join to `playlist_songs`. Pick one at random. Post notification.
+
+```swift
+actor MusicTriggerEngine {
+    private var firedTriggerIDs: Set<Int> = []   // reset on book open
+    
+    func evaluatePositionChange(
+        spineIndex: Int, charOffset: Int, playlistID: Int
+    ) async -> String? { /* ... */ }
+    
+    func evaluateChapterChange(
+        spineIndex: Int, playlistID: Int
+    ) async -> String? { /* ... */ }
+}
+```
+
+`MusicTriggerEngine` must not block the main thread. All DB queries are read-only and go through a `Connection(path, readonly: true)` — no actor for reads (see `ambrosia_meta.db` read pattern).
+
+### Playlist editor UI
+`NSPanel` or sheet, launched from Reader toolbar (music note SF Symbol: `music.note.list`).
+
+- Playlist picker at top (book-specific vs global)
+- Trigger mode segmented control: Position / Chapter / Vibe
+- Song list (`NSTableView`): title, artist, vibe tags, drag to reorder
+- "Add Song…" button: opens player-specific picker (implementation deferred to player integration)
+- Per-song: edit vibe tags (token field), remove button
+- Trigger assignment:
+  - **Position mode:** "Set Trigger Here" button in reader injects current position into the editor. Triggers appear as rows with spine + offset.
+  - **Chapter mode:** table of spine items; each row has a song picker or "Random" toggle.
+  - **Vibe mode:** table of spine items; each row has a vibe tag text field.
+
+### Vibe tag design
+Vibe tags are arbitrary user strings ("tense", "soft", "epic", "sad", etc.). No canonical list is enforced. Autocomplete from existing `song_tags` entries when typing. The user assigns the same tags to multiple songs and to spine locations — the engine then randomly selects a matching song.
+
+### Open questions (resolve before implementing)
+1. Player confirmed by product owner (Phase 23 blocker)?
+2. Crossfade duration configurable or fixed?
+3. Should position triggers fire only once per session, or re-fire if the user scrolls back?
+4. Behaviour when no song matches the vibe tag (fallback to random from playlist, or silence)?
 
 ---
 
@@ -865,11 +1289,23 @@ No other new packages. `SQLite.swift` and `ZIPFoundation` already cover all othe
 19. ELO score updates must commit both books' `eloScore` and `eloMatchCount` in a single `ModelContext.save()`. Never update one without the other.
 20. `SeriesGroup` is a computed value type. Never persist it in SwiftData, `ambrosia_meta.db`, or any store.
 21. Any new `@Model` field requires a `VersionedSchema` + `SchemaMigrationPlan` before the build ships. Existing crash-and-retry recovery deletes all user state.
-22. All `BookState` field lookups use in-memory filter after `FetchDescriptor`. Applies to all new fields: `isHidden`, `eloScore`, `eloMatchCount`, `isPinnedToTop`.
+22. All `BookState` field lookups use in-memory filter after `FetchDescriptor`. Applies to all new fields: `isHidden`, `isRead`, `eloScore`, `eloMatchCount`, `isPinnedToTop`.
 23. `SeriesGroup.works` is always ordered by `series_index ASC`. Never sort by `calibreID` or title.
 24. `NSPanel.styleMask` including `.nonactivatingPanel` must be set at init time. Setting it post-init has no effect.
 25. `NSFontPanel` does not call a delegate. Selection is delivered via `changeFont(_:)` walked up the responder chain.
 26. `Task.detached(priority: .background)` for all EPUB extraction and `ambrosia_meta.db` writes. Never block the main thread.
+27. `book_opens` is append-only. Never delete rows. Never add a purge/truncate code path.
+28. `isRead` is set automatically only in `ReadingHistoryLogger` when `totalReadPercent >= 0.98`. All other automatic setting of `isRead` is forbidden. Manual user overrides via context menu, detail pane, or reader toolbar are the only other valid write sites.
+29. The Liked system collection's `calibreIDsData` must be kept in sync with `BookState.isLiked` in the same `ModelContext.save()` call. Never update one without reconciling the other.
+30. `saved_quotes` `start_char` and `end_char` use the same UTF-16 text-node convention as annotations (invariant 5). No exceptions.
+31. `music_position_triggers` `char_offset` uses the same UTF-16 text-node convention (invariant 5).
+32. `MusicTriggerEngine` read queries must use a read-only `Connection` — not the `AmbrosiaMetaDB` write actor. Read-only connections do not need actor isolation.
+33. Book suppression (hidden/read/seen/author/tag/collection) is applied exclusively in the in-memory post-filter pass, never in SQL. Calibre SQL must remain unaware of all suppression state.
+34. Never use `fandom_hierarchy` as a table name anywhere in the codebase. The correct table is `tag_parent_links`. `AO3TagSeeds.loadIfNeeded` targets `tag_parent_links` — using the wrong name will silently produce empty hierarchy results.
+35. Calibre's `tags` table is type-blind — it mixes fandoms, relationships, characters, and additional tags in a single flat list. Never infer tag type from the Calibre `tags` table. Tag type comes from `ao3_metadata`'s separate JSON columns (populated by EPUB extraction) or from `canonical_tags.tag_type`.
+36. Category tags (`F/F`, `Gen`, `M/M`, etc.) are a closed vocabulary and are **not** stored in `canonical_tags`. They are stored in `ao3_metadata.category_json` only. Never pass category values through `TagSynonymResolver`.
+37. `TagSynonymResolver` must use `canonicalBatch(for:)` for any multi-tag input. Never call `canonical(for:)` in a loop — it creates N separate read-only DB round-trips.
+38. Fandom hierarchy expansion (`tag_parent_links` recursive CTE) applies only to `'fandom'`, `'character'`, and `'relationship'` tag types. Never expand `'additional'` tags via the hierarchy.
 
 ---
 
@@ -909,6 +1345,8 @@ No other new packages. `SQLite.swift` and `ZIPFoundation` already cover all othe
 - [ ] No bare Swift collections on `@Model`. JSON `Data` or delimited `String` only.
 - [ ] `#Predicate` only against `@Model` keypaths — never against plain struct properties.
 - [ ] `ModelConfiguration` takes `String` name, not URL, on macOS 14.
+- [ ] `isRead` auto-set only in `ReadingHistoryLogger`. No other automatic write sites.
+- [ ] Liked collection `calibreIDsData` synced in same `save()` call as `BookState.isLiked` change.
 
 **WKWebView**
 - [ ] `WKWebViewConfiguration` fully configured (all handlers added) before `WKWebView` is initialised.
@@ -920,13 +1358,20 @@ No other new packages. `SQLite.swift` and `ZIPFoundation` already cover all othe
 - [ ] All `db.prepare(sql, args)` use `[Binding?]` (optional array).
 - [ ] No write PRAGMAs on Calibre read-only connection.
 - [ ] `CREATE TABLE IF NOT EXISTS` on all tables.
+- [ ] Music trigger `char_offset` and quote `start_char`/`end_char`: UTF-16, text nodes only.
+- [ ] `book_opens` is append-only — no DELETE or TRUNCATE ever.
 
 **AppKit**
 - [ ] `NSPanel.styleMask` including `.nonactivatingPanel` set **at init time**.
 - [ ] `NSFontPanel` selection via `changeFont(_:)` in responder chain — no delegate.
 - [ ] `NSUndoManager` per-window and ephemeral — correct macOS behaviour.
 
-**Concurrency**
-- [ ] `Task.detached(priority: .background)` for all EPUB extraction and DB writes.
+**Tag system**
+- [ ] Table name is `tag_parent_links`, never `fandom_hierarchy`.
+- [ ] Tag type lookup uses `ao3_metadata` JSON columns, never Calibre `tags` table.
+- [ ] Category tags (`F/F`, `Gen`, etc.) never passed through `TagSynonymResolver`.
+- [ ] Multi-tag resolution uses `canonicalBatch(for:)`, never `canonical(for:)` in a loop.
+- [ ] Hierarchy expansion only for `'fandom'`/`'character'`/`'relationship'` — never `'additional'`.
 - [ ] All `archiveofourown.org` requests through `AO3RateLimiter.shared.throttled`.
 - [ ] `AmbrosiaMetaDB` write access through single `actor`.
+- [ ] `MusicTriggerEngine` reads use a separate read-only `Connection`, not the write actor.

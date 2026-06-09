@@ -2,7 +2,7 @@
 
 ## What This Application Is
 
-Ambrosia is a native macOS EPUB reader designed specifically for AO3 fanfiction libraries managed by [Calibre](https://calibre-ebook.com/). It is a read-only query layer over an existing Calibre database — it never imports, copies, or modifies Calibre's data. The app targets macOS 14+ (Sonoma) and is distributed as a notarized DMG.
+Ambrosia is a native macOS EPUB reader designed specifically for AO3 fanfiction libraries managed by [Calibre](https://calibre-ebook.com/). It is a read-only query layer over an existing Calibre database — it never imports, copies, or modifies Calibre's data. The app targets macOS 15+ (Sequoia) and is distributed as a notarized DMG.
 
 Key design principles:
 - All publisher CSS is stripped; the user controls all styling.
