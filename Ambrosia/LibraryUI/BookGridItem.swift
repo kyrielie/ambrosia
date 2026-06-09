@@ -444,23 +444,36 @@ struct BookListRow: View, Equatable {
         }
     }
 
+    // Performance: cap total visible tag pills at 6 to bound CachedFlowLayout passes.
+    // AO3 category/rating/warning pills (higher signal) are included first.
+    private var cappedTags: (ratings: [String], categories: [String],
+                              warnings: [String], regular: [String]) {
+        var remaining = 6
+        let r = Array(buckets.ratings.prefix(remaining));    remaining -= r.count
+        let c = Array(buckets.categories.prefix(remaining)); remaining -= c.count
+        let w = Array(buckets.warnings.prefix(remaining));   remaining -= w.count
+        let g = Array(buckets.regular.prefix(remaining))
+        return (r, c, w, g)
+    }
+
     @ViewBuilder
     private var tagsRow: some View {
-        let hasAny = !buckets.ratings.isEmpty || !buckets.warnings.isEmpty
-                   || !buckets.categories.isEmpty || !buckets.regular.isEmpty
+        let t = cappedTags
+        let hasAny = !t.ratings.isEmpty || !t.warnings.isEmpty
+                   || !t.categories.isEmpty || !t.regular.isEmpty
 
         if hasAny {
             CachedFlowLayout(spacing: 4) {
-                ForEach(buckets.ratings, id: \.self) { tag in
+                ForEach(t.ratings, id: \.self) { tag in
                     ao3Pill(tag, color: .orange) { onTagTap(tag, .rating) }
                 }
-                ForEach(buckets.categories, id: \.self) { tag in
+                ForEach(t.categories, id: \.self) { tag in
                     ao3Pill(tag, color: .blue)   { onTagTap(tag, .category) }
                 }
-                ForEach(buckets.warnings, id: \.self) { tag in
+                ForEach(t.warnings, id: \.self) { tag in
                     ao3Pill(tag, color: .red)    { onTagTap(tag, .warning) }
                 }
-                ForEach(buckets.regular, id: \.self) { tag in
+                ForEach(t.regular, id: \.self) { tag in
                     regularPill(tag) { onTagTap(tag, .tag) }
                 }
             }
@@ -487,8 +500,13 @@ struct BookListRow: View, Equatable {
 
     @ViewBuilder
     private var descriptionRow: some View {
-        if let comment = book.displayComment {
-            CollapsibleText(text: comment)
+        // Performance: truncate to 300 chars before passing to Text so layout
+        // measurement is bounded regardless of fic description length.
+        if let comment = book.displayComment, !comment.isEmpty {
+            let truncated = comment.count > 300
+                ? String(comment.prefix(300)) + "…"
+                : comment
+            CollapsibleText(text: truncated)
         }
     }
 
@@ -541,46 +559,65 @@ struct BookListRow: View, Equatable {
 
 // MARK: - Cached flow layout
 
-/// `FlowLayout` with a size cache so `placeSubviews` doesn't remeasure every subview.
+/// NSCache-backed result for CachedFlowLayout. Keyed on "subviewCount|width" string.
+private final class FlowLayoutResultBox {
+    let result: FlowLayoutResult
+    init(_ r: FlowLayoutResult) { result = r }
+}
+private struct FlowLayoutResult {
+    var sizes:     [CGSize]
+    var positions: [CGPoint]
+    var totalSize: CGSize
+}
+private let flowLayoutCache: NSCache<NSString, FlowLayoutResultBox> = {
+    let c = NSCache<NSString, FlowLayoutResultBox>()
+    c.countLimit = 400   // ≈ 4 pages of 100 rows
+    return c
+}()
+
+/// Flow layout that measures each pill once and caches the result in a
+/// process-lifetime NSCache so rows that scroll off and back skip remeasurement.
 struct CachedFlowLayout: Layout {
     var spacing: CGFloat = 4
 
     struct Cache {
-        var sizes: [CGSize] = []
-        var proposedWidth: CGFloat = 0
+        var cachedKey: NSString?    // the key we stored under, so placeSubviews can retrieve
     }
 
     func makeCache(subviews: Subviews) -> Cache { Cache() }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         let maxWidth = proposal.width ?? 600
-        if cache.sizes.count != subviews.count || cache.proposedWidth != maxWidth {
-            cache.sizes = subviews.map { $0.sizeThatFits(.unspecified) }
-            cache.proposedWidth = maxWidth
+        let key = "\(subviews.count)|\(maxWidth)|\(spacing)" as NSString
+        if let box = flowLayoutCache.object(forKey: key) {
+            cache.cachedKey = key
+            return box.result.totalSize
         }
-        return layout(sizes: cache.sizes, maxWidth: maxWidth, spacing: spacing).totalSize
+        let result = computeLayout(subviews: subviews, maxWidth: maxWidth)
+        flowLayoutCache.setObject(FlowLayoutResultBox(result), forKey: key)
+        cache.cachedKey = key
+        return result.totalSize
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
         let maxWidth = bounds.width
-        if cache.sizes.count != subviews.count || cache.proposedWidth != maxWidth {
-            cache.sizes = subviews.map { $0.sizeThatFits(.unspecified) }
-            cache.proposedWidth = maxWidth
+        let key = cache.cachedKey ?? ("\(subviews.count)|\(maxWidth)|\(spacing)" as NSString)
+        let result: FlowLayoutResult
+        if let box = flowLayoutCache.object(forKey: key) {
+            result = box.result
+        } else {
+            result = computeLayout(subviews: subviews, maxWidth: maxWidth)
+            flowLayoutCache.setObject(FlowLayoutResultBox(result), forKey: key)
         }
-        let positions = layout(sizes: cache.sizes, maxWidth: maxWidth, spacing: spacing).positions
-        for (i, sub) in subviews.enumerated() where i < positions.count {
-            sub.place(at: CGPoint(x: bounds.minX + positions[i].x,
-                                  y: bounds.minY + positions[i].y),
+        for (i, sub) in subviews.enumerated() where i < result.positions.count {
+            sub.place(at: CGPoint(x: bounds.minX + result.positions[i].x,
+                                  y: bounds.minY + result.positions[i].y),
                       proposal: .unspecified)
         }
     }
 
-    private struct LayoutResult {
-        var positions: [CGPoint]
-        var totalSize: CGSize
-    }
-
-    private func layout(sizes: [CGSize], maxWidth: CGFloat, spacing: CGFloat) -> LayoutResult {
+    private func computeLayout(subviews: Subviews, maxWidth: CGFloat) -> FlowLayoutResult {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
         var positions: [CGPoint] = []
         var x: CGFloat = 0, y: CGFloat = 0, rowH: CGFloat = 0
         for size in sizes {
@@ -591,7 +628,8 @@ struct CachedFlowLayout: Layout {
             rowH = max(rowH, size.height)
             x += size.width + spacing
         }
-        return LayoutResult(positions: positions, totalSize: CGSize(width: maxWidth, height: y + rowH))
+        return FlowLayoutResult(sizes: sizes, positions: positions,
+                                totalSize: CGSize(width: maxWidth, height: y + rowH))
     }
 }
 

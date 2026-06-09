@@ -27,6 +27,8 @@ final class EmailSidebarViewController: NSViewController,
     var onLoadMore:    (() -> Void)?
     var onEditFilter:  (() -> Void)?
     var onClearFilter: (() -> Void)?
+    var onContextMenuLike: ((CalibreBook) -> Void)?
+    var onContextMenuOpen: ((CalibreBook) -> Void)?
 
     // MARK: - Dependencies
 
@@ -49,7 +51,9 @@ final class EmailSidebarViewController: NSViewController,
     override func loadView() {
         let container = NSView()
 
-        tableView = NSTableView()
+        let tv = SidebarTableView()
+        tableView = tv
+        tv.sidebarVC = self
         tableView.dataSource = self
         tableView.delegate   = self
         tableView.headerView = nil
@@ -173,6 +177,43 @@ final class EmailSidebarViewController: NSViewController,
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.hasTriggeredLoadMore = false
         }
+    }
+
+    // MARK: - Context menu (called by SidebarTableView on right-click)
+
+    func contextMenu(for row: Int) -> NSMenu? {
+        guard row >= 0, row < books.count else { return nil }
+        let book = books[row]
+
+        let menu = NSMenu()
+
+        // Open
+        let openItem = NSMenuItem(title: "Open", action: #selector(contextOpen(_:)), keyEquivalent: "")
+        openItem.target = self
+        openItem.representedObject = book
+        menu.addItem(openItem)
+
+        menu.addItem(.separator())
+
+        // Like / Unlike
+        let bookState = bookStates[book.id]
+        let likeTitle = bookState?.isLiked == true ? "Unlike" : "Like"
+        let likeItem  = NSMenuItem(title: likeTitle, action: #selector(contextLike(_:)), keyEquivalent: "")
+        likeItem.target = self
+        likeItem.representedObject = book
+        menu.addItem(likeItem)
+
+        return menu
+    }
+
+    @objc private func contextOpen(_ sender: NSMenuItem) {
+        guard let book = sender.representedObject as? CalibreBook else { return }
+        onContextMenuOpen?(book)
+    }
+
+    @objc private func contextLike(_ sender: NSMenuItem) {
+        guard let book = sender.representedObject as? CalibreBook else { return }
+        onContextMenuLike?(book)
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
@@ -340,5 +381,19 @@ final class EmailBookCellView: NSTableCellView {
         } else {
             progressBar.isHidden = true
         }
+    }
+}
+// MARK: - SidebarTableView
+//
+// NSTableView subclass that forwards right-clicks to the sidebar VC so it can
+// build a context menu from the clicked row — matching the list-view context menu.
+
+final class SidebarTableView: NSTableView {
+    weak var sidebarVC: EmailSidebarViewController?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        let row   = self.row(at: point)
+        return sidebarVC?.contextMenu(for: row) ?? super.menu(for: event)
     }
 }

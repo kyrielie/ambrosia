@@ -36,6 +36,8 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Pagination
 
     private var books:      [CalibreBook]    = []
+    /// Exposed for FilterSheetCarrier export action.
+    var currentBooks: [CalibreBook] { books }
     var bookStates: [Int: BookState] = [:]        // internal(set) for FilterSheetCarrier
     private var currentPage = 0
     private var hasNextPage = false
@@ -99,6 +101,24 @@ final class EmailLibraryViewController: NSViewController {
             toolbarState.filterExpression   = FilterExpression()
             toolbarState.activeFilterResult = nil
             loadPage(reset: true)
+        }
+        sidebarVC.onContextMenuOpen = { [weak self] book in
+            guard let self else { return }
+            let ctx = ModelContext(modelContainer)
+            AppDelegate.shared?.openReaderWindow(book: book, modelContext: ctx)
+        }
+        sidebarVC.onContextMenuLike = { [weak self] book in
+            guard let self else { return }
+            if let existing = bookStates[book.id] {
+                existing.isLiked.toggle()
+            } else {
+                let ctx = ModelContext(modelContainer)
+                let s = BookState(calibreID: book.id)
+                s.isLiked = true
+                ctx.insert(s)
+                try? ctx.save()
+            }
+            refreshBookStates()
         }
 
         splitVC = NSSplitViewController()
@@ -354,9 +374,13 @@ final class EmailLibraryViewController: NSViewController {
 // MARK: - FilterSheetCarrier
 //
 // Zero-size SwiftUI view permanently embedded in EmailLibraryViewController's
-// view hierarchy. It owns the .sheet() presentation so that @Environment(\.dismiss)
-// inside FilterDrawerView resolves through SwiftUI's sheet system, making both
-// the X button and Apply button work correctly.
+// view hierarchy. It owns ALL sheet presentations driven by toolbarState trigger
+// flags — FilterDrawer, Collections, ReadingGoal, and Export — mirroring what
+// LibraryRootView handles in list mode.
+//
+// Using a SwiftUI sheet host (rather than NSPanel/beginSheet) is required so that
+// @Environment(\.dismiss) resolves correctly inside FilterDrawerView. Collections
+// and ReadingGoalView get the same treatment for consistency.
 
 struct FilterSheetCarrier: View {
     let toolbarState:   LibraryToolbarState
@@ -366,6 +390,7 @@ struct FilterSheetCarrier: View {
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
+            // Filter drawer
             .sheet(isPresented: Binding(
                 get: { toolbarState.showFilterDrawer },
                 set: { toolbarState.showFilterDrawer = $0 }
@@ -386,6 +411,44 @@ struct FilterSheetCarrier: View {
                 )
                 .environment(toolbarState)
                 .modelContainer(modelContainer)
+            }
+            // Collections
+            .sheet(isPresented: Binding(
+                get: { toolbarState.showCollections },
+                set: { toolbarState.showCollections = $0 }
+            )) {
+                CollectionsView(onSelectCollection: { collection in
+                    // Add a collection filter rule, same as list view behaviour
+                    let rule = FilterRule(field: .collection, op: .equals, value: collection.name)
+                    var expr = toolbarState.filterExpression
+                    if expr.groups.isEmpty {
+                        expr.groups = [FilterGroup(rules: [rule])]
+                    } else {
+                        expr.groups[0].rules.removeAll { $0.field == .collection }
+                        expr.groups[0].rules.append(rule)
+                    }
+                    toolbarState.filterExpression = expr
+                    toolbarState.showCollections  = false
+                    emailVC?.applyFilterRules()
+                })
+                .modelContainer(modelContainer)
+            }
+            // Reading goal
+            .sheet(isPresented: Binding(
+                get: { toolbarState.showReadingGoal },
+                set: { toolbarState.showReadingGoal = $0 }
+            )) {
+                ReadingGoalView()
+                    .modelContainer(modelContainer)
+            }
+            // Export — no sheet; fire-and-forget save panel
+            .onChange(of: toolbarState.triggerExport) {
+                if toolbarState.triggerExport {
+                    if let books = emailVC?.currentBooks {
+                        ExportManager.presentExportPanel(books: books)
+                    }
+                    toolbarState.triggerExport = false
+                }
             }
     }
 }

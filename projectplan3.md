@@ -30,7 +30,7 @@ annotationsData: Data?
 
 ---
 
-## Session Discipline — Required Every Session
+## Session Discipline
 
 **Rule 1 — Diagnose before writing:**
 ```bash
