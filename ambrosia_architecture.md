@@ -54,6 +54,7 @@ All `db.prepare(sql, args)` calls use `[Binding?]` (optional array). Non-optiona
 - Reading progress (`totalReadPercent`, `totalReadingTimeSeconds`)
 - Reading position (`lastSpineIndex`, `lastCharacterOffset`, `lastScrollOffset`)
 - Annotations serialized as `annotationsData: Data?` (JSON-encoded `[Annotation]`)
+- `readingModeRaw: String` — legacy column retained to avoid SwiftData migration; never read or written by current code
 
 **Critical SwiftData constraint**: bare Swift collections (`[String]`, `[Int]`, etc.) cannot be stored directly on `@Model` — they cause a silent CoreData fault at runtime. All collections are stored as delimited `String` or JSON `Data` with computed property accessors.
 
@@ -73,9 +74,9 @@ AmbrosiaApp (SwiftUI App)
 │   └── LibraryWindowController (NSWindowController)
 │       ├── NSToolbar (native, delegates to LibraryToolbarState)
 │       └── LibraryViewController (NSViewController)
-│           └── NSHostingView<LibraryRootView>   [list view]
-│           └── EmailLibraryViewController       [email/split view]
-│           └── GridLibraryViewController        [grid view]
+│           └── NSHostingView<LibraryRootView>       [list view]
+│           └── EmailLibraryViewController            [email/split view]
+│           └── (scaffold placeholder)               [ranking view — D3 not yet built]
 │
 └── ReaderWindowController (NSWindowController)
     └── ReaderViewController (NSViewController, WKWebView)
@@ -89,39 +90,33 @@ The app entry point (`AmbrosiaApp`) creates the SwiftData `ModelContainer`, init
 
 ### Views
 
-The library has three display modes controlled by `LibraryToolbarState.viewMode`:
+The library has three display modes controlled by `LibraryToolbarState.viewMode` (`LibraryViewMode`: `.list`, `.email`, `.ranking`):
 
-**List view** (`LibraryRootView`): AO3-style list. Each row shows title, series, authors (tappable → quick author filter), tag pills (tappable → quick tag filter), stat chips, and description. Paginated at 100 books per page with a 0.3s debounce on search input.
+**List view** (`LibraryRootView`): AO3-style list. Each row shows title, series, authors (tappable → quick author filter), tag pills in a wrapping flow layout (tappable → quick tag filter), stat chips, and description. Paginated at 25 books per page (configurable in a future settings section) with a 0.3s debounce on search input. Tags use `FlowLayout` and wrap freely across multiple lines — all tags are displayed with no cap.
 
-**Email view** (`EmailLibraryViewController`): An `NSSplitViewController` with an `NSTableView` sidebar (AppKit, 52pt rows, title + author) and a SwiftUI detail pane. Single-click updates the detail pane; double-click opens the reader.
+**Email view** (`EmailLibraryViewController`): An `NSSplitViewController` with an `NSTableView` sidebar (AppKit, 64pt rows, title + author + read-progress bar) and a SwiftUI detail pane. Single-click updates the detail pane; double-click opens the reader. The sidebar context menu mirrors the list-view context menu: Open, Like/Unlike, and an "Add to Collection" submenu populated from the current collection list. There is no filter-pill header in the sidebar; filter state is shown only in the list view.
 
-**Grid view** (`GridLibraryViewController`): A SwiftUI `LazyVGrid` of cover art cards (160×210pt). Cover images are loaded from Calibre's `cover.jpg` files via `file://` URLs using `AsyncImage`.
+**Ranking view** (scaffold placeholder): Currently displays a "Ranking view coming in D3" placeholder. The toolbar segment uses the `list.number` SF Symbol. Full implementation is planned for session D3.
 
 ### Filtering
 
 There are two filter modes that compose together:
 
-**Quick filter** (`LibraryFilter.author` / `.tag`): set by tapping an author or tag in a book row.
+**Quick filter**: set by tapping an author or tag pill in a book row.
 
-**Rule filter** (`FilterResult`): set via the filter drawer (`FilterDrawerView`). Rules have a field (`title`, `authorName`, `tag`, `series`, `wordCountGT/LT`, `kudosGT/LT`, `isLiked`), an operator (`contains`, `notContains`, `equals`, `startsWith`), and a value. `FilterBuilder` translates rules into SQL WHERE/JOIN fragments. It uses two stages: SQL for Calibre-owned fields, then in-memory post-filtering for `isLiked` (which lives in SwiftData). The result is a `FilterResult { calibreIDs: [Int], totalCount: Int }`.
+**Rule filter** (`FilterResult`): set via the filter drawer (`FilterDrawerView`). Rules have a field (`title`, `authorName`, `tag`, `series`, `wordCountGT/LT`, `kudosGT/LT`, `isLiked`, `collection`), an operator (`contains`, `notContains`, `equals`, `startsWith`), and a value. `FilterBuilder` translates rules into SQL WHERE/JOIN fragments. It uses two stages: SQL for Calibre-owned fields, then in-memory post-filtering for `isLiked` and `collection` (which live in SwiftData). The result is a `FilterResult { calibreIDs: [Int], totalCount: Int }`.
+
+An active filter shows as a chip strip at the top of the list view with Edit and dismiss (×) controls. The chip strip is not shown in email view.
 
 ### Search
 
-Search input is parsed by `SearchQueryParser` before reaching the database. Supported syntax:
-- `tag:value` — filter by tag
-- `author:value` — filter by author name
-- `title:value` — filter by title
-- plain text — fuzzy title/author search
-
-Multiple tokens stack with AND logic. Prefix tokens combine additively with active `FilterDrawer` rules.
-
-Autocomplete suggestions appear as a floating overlay: tag suggestions for plain text (≥2 characters), author suggestions after `author:`, title suggestions after `title:`. Suggestions are fetched directly from the Calibre database, sorted by frequency for tags.
-
-If `full-text-search.db` exists alongside `metadata.db`, `CalibreFTSLibrary` opens it read-only and uses FTS5 MATCH for plain-text queries (up to 500 results). If the file is absent or errors, the search falls back transparently to SQL LIKE.
+Search input passes a raw string to `CalibreLibrary`'s fuzzy title/author condition. There is no prefix-syntax parsing, autocomplete, or FTS5 integration yet — those are planned for sessions I1, I2, and I3. The debounce is 0.3s.
 
 ### Toolbar
 
 A native `NSToolbar` delegates to `LibraryToolbarState` (`@Observable`). Default items: Search · Filter · Sort · Divider · Collections · Reading Goal · Export · View Mode. The toolbar communicates with `LibraryRootView` entirely through `LibraryToolbarState` properties — no direct references between the AppKit toolbar and SwiftUI views.
+
+`LibraryToolbarState` also carries trigger flags (`showFilterDrawer`, `showCollections`, `showReadingGoal`, `triggerExport`, `toggleEmailSidebar`) that views observe and act on, then reset to `false`. In email mode, the filter sheet is presented via a zero-size `NSHostingView<FilterSheetCarrier>` permanently embedded in the view hierarchy so that `@Environment(\.dismiss)` resolves correctly through SwiftUI's sheet system.
 
 ---
 
@@ -145,11 +140,13 @@ A native `NSToolbar` delegates to `LibraryToolbarState` (`@Observable`). Default
 
 ### Architecture
 
-`ReaderWindowController` creates or fetches the `BookState` for the opened book, initializes `EPUBParser`, and constructs `ReaderViewController`. The reader window is opened from `BookListRow` on double-click.
+`ReaderWindowController` creates or fetches the `BookState` for the opened book, initializes `EPUBParser`, and constructs `ReaderViewController`. The reader window is opened from `BookListRow` on double-click, or from a single-click in email view.
 
 `ReaderViewController` hosts a `WKWebView` configured at construction time with a `WKUserContentController`. `WKWebViewConfiguration` must be set up before `WKWebView` is initialized — handlers cannot be added after construction.
 
-Two reading modes are available, controlled by `ReaderPreferences.shared.defaultReadingMode` (a global preference, not per-book):
+The reader always opens in scroll mode (`currentMode = .scroll`). A per-session mode switch (scroll ↔ paginated) is available via toolbar buttons; the chosen mode is not persisted between opens. A global default reading mode preference is planned for Section H but not yet implemented.
+
+`ReaderViewController` subscribes to `ReaderPreferences.shared.objectWillChange` via Combine. Any preference change triggers an immediate `reloadHTML()` — full HTML is regenerated from the EPUB and the new CSS, and the WKWebView reloads. There is no deferred or manual reload mode.
 
 **Scroll mode**: loads `mergedHTML` into the WKWebView, restores `bookState.lastScrollOffset` on load, and injects a passive scroll event listener that posts `positionUpdate` messages back to Swift. Position is auto-saved every 5 seconds and on `viewWillDisappear`.
 
@@ -165,17 +162,27 @@ Text selection is captured via a `mouseup` JavaScript listener that uses a `Tree
 
 Keyboard shortcuts: `⌘D` creates a point annotation at the current position; `⌘B` toggles the annotation sidebar.
 
-The reader presents a custom `NSMenu` context menu (suppressing the default WebKit menu) with "Search in Browser", "Add Annotation…", and "Copy".
+The reader presents a custom `NSMenu` context menu (suppressing the default WebKit menu). Items are configurable via `ContextMenuPreferences` (a value type on `ReaderPreferences`, not persisted to UserDefaults): "Search in Browser" and "Add Annotation…". "Copy" is always present.
+
+`BookState` retains two orphaned fields (`bookmarksData`, `highlightsData`) from the pre-unified annotation model. They are never read or written; retained only to avoid SwiftData migration.
 
 ---
 
 ## Preferences
 
-`ReaderPreferences` is an `@Published`-based observable singleton. It stores font family (as a CSS font stack, classified by `NSFontManager` traits into Serif/Sans-Serif/Monospace/Other), font size, line height, max width, background/text colors, default reading mode, window size defaults, and the reload strategy.
+`ReaderPreferences` is an `ObservableObject` singleton (`@Published` properties). It stores:
 
-The reload strategy (`immediate`, `onNextOpen`, `manual`) controls when preference changes trigger a reader reload. In `manual` mode, "Apply to All Open Windows" sends `applyPreferences` up the responder chain to all open `ReaderViewController` instances.
+**Reader appearance**: font family (as a CSS font stack chosen from 10 named presets: Iowan Old Style, New York, Georgia, Palatino, Times New Roman, Charter, System/SF Pro, Avenir Next, Seravek, Courier New), font size, line height, max width, horizontal/vertical padding, background color, text color.
 
-Custom column labels for word count and kudos are configured here and stored in `CustomColumnConfig.shared`.
+**Library appearance**: colour mode (`LibraryColorMode`: `.systemDefault`, `.accentColor`, `.custom`) and appearance mode (`LibraryAppearanceMode`: `.system`, `.light`, `.dark`). Custom mode stores separate light and dark hex color pairs for background and text.
+
+**Window size**: `useScreenFraction` (bool), `defaultWindowWidth` (CGFloat), `defaultWindowHeight` (CGFloat). When `useScreenFraction` is true the reader window opens at a fraction of the screen; otherwise the stored pixel dimensions are used.
+
+**Not yet implemented**: default reading mode (planned Section H), configurable reload strategy (currently always immediate).
+
+Preference changes always trigger immediate reload of all open reader windows via Combine. The Preferences window has a static informational note stating this behaviour.
+
+Custom column labels for word count and kudos are configured in Preferences and stored in `CustomColumnConfig.shared`.
 
 ---
 
@@ -195,6 +202,6 @@ These rules apply across all code in the project. Violations cause runtime crash
 10. The pagination `WKWebView` must be in the view hierarchy with a real non-zero frame.
 11. Regenerate full HTML on any style change — never patch the live DOM.
 12. Image temp directory lifetime is the app session. Clean up in `applicationWillTerminate`.
-13. `CalibreFTSLibrary` is opened read-only. Always return `nil` on error to allow LIKE fallback.
-14. All `evaluateJavaScript` calls must pass `completionHandler: nil` explicitly.
-15. Fetch https://developer.apple.com/documentation/swiftdata before writing any `@Model` code.
+13. All `evaluateJavaScript` calls must pass `completionHandler: nil` explicitly.
+14. Fetch https://developer.apple.com/documentation/swiftdata before writing any `@Model` code.
+15. `NSHostingView` used as a full-pane content view must set `sizingOptions = []` to prevent the `{inf, 88}` intrinsic-size crash during state-change layout passes.
