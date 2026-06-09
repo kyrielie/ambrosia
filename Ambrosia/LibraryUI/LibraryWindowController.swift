@@ -36,7 +36,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
         )
         window.title = "Ambrosia"
         window.titleVisibility = .hidden   // suppress "Ambrosia" — count label replaces it
-        window.toolbarStyle    = .expanded  // taller toolbar — fits two-line label and icons
+        window.toolbarStyle    = .unified  // icons inline with traffic-light buttons
         window.minSize = NSSize(width: 700, height: 500)
         window.isReleasedWhenClosed = false
         window.center()
@@ -60,7 +60,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
     // MARK: - Toolbar setup
 
     private func configureToolbar(window: NSWindow) {
-        let toolbar = NSToolbar(identifier: "LibraryToolbar2")
+        let toolbar = NSToolbar(identifier: "LibraryToolbar3")
         toolbar.delegate = self
         toolbar.allowsUserCustomization = true
         toolbar.autosavesConfiguration  = true

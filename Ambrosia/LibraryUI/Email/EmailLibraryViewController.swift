@@ -308,7 +308,7 @@ final class EmailLibraryViewController: NSViewController {
     func refreshBookStates() {
         let ctx = ModelContext(modelContainer)
         let all = (try? ctx.fetch(FetchDescriptor<BookState>())) ?? []
-        bookStates = Dictionary(uniqueKeysWithValues: all.map { ($0.calibreID, $0) })
+        bookStates = all.reduce(into: [:]) { $0[$1.calibreID] = $1 }
         sidebarVC?.bookStates = bookStates
     }
 

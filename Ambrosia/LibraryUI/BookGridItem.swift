@@ -179,7 +179,8 @@ struct LibraryRootView: View {
     /// Fetch all BookState rows once. O(n) over ever-opened books, not per visible row.
     private func refreshBookStates() {
         let all = (try? modelContext.fetch(FetchDescriptor<BookState>())) ?? []
-        bookStates = Dictionary(uniqueKeysWithValues: all.map { ($0.calibreID, $0) })
+        // Use reduce so duplicate calibreIDs (from racing ModelContext writes) don't crash.
+        bookStates = all.reduce(into: [:]) { $0[$1.calibreID] = $1 }
     }
 
     private func applyFilterRules() {

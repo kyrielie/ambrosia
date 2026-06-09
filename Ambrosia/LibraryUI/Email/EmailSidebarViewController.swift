@@ -105,7 +105,7 @@ final class EmailSidebarViewController: NSViewController,
             onClear: { [weak self] in self?.onClearFilter?() }
         )
         let hv = NSHostingView(rootView: pillsView)
-        hv.sizingOptions = []   // constraint-driven; avoids intrinsicContentSize {inf} crash
+        hv.sizingOptions = .preferredContentSize  // lets SwiftUI height drive the constraint
         hv.translatesAutoresizingMaskIntoConstraints = false
 
         let container = view
