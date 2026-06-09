@@ -31,8 +31,6 @@ final class LibrarySession {
     // MARK: - Opening / closing
 
     /// Open a Calibre library at the given URL.
-    /// Validates that metadata.db exists, opens a Connection, caches total count.
-    /// Replaces any previously open library — no migration needed.
     func open(url: URL) {
         lastError = nil
         do {
@@ -56,17 +54,40 @@ final class LibrarySession {
         activePath = nil
     }
 
-    // MARK: - Count refresh (call after debounced search input)
+    // MARK: - Count refresh
 
-    func refreshCount(search: String?, filter: LibraryFilter = .none) {
+    func refreshCount(query: SearchQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])) {
         guard let library else { return }
-        totalCount = library.bookCount(search: search, filter: filter)
+        if query.isEmpty {
+            totalCount = library.bookCount()
+        } else {
+            totalCount = library.bookCount(query: query)
+        }
+    }
+
+    // MARK: - FTS resolution
+
+    /// Attempts FTS resolution for plain terms; falls back to LIKE if FTS unavailable or empty.
+    /// Shared between list view and email view — single source of truth.
+    func resolvedQuery(_ query: SearchQuery) -> SearchQuery {
+        guard !query.plainTerms.isEmpty,
+              let fts = ftsLibrary else { return query }
+        let plainText = query.plainTerms.joined(separator: " ")
+        guard let ftsIDs = fts.search(query: plainText), !ftsIDs.isEmpty else {
+            return query
+        }
+        return SearchQuery(
+            tagTerms:     query.tagTerms,
+            authorTerms:  query.authorTerms,
+            titleTerms:   query.titleTerms,
+            seriesTerms:  query.seriesTerms,
+            plainTerms:   [],
+            ftsMatchedIDs: ftsIDs
+        )
     }
 
     // MARK: - Re-open saved library on launch
 
-    /// Attempt to reopen the last used library from UserDefaults.
-    /// Silent failure — if the path is gone, the user gets the empty state.
     func reopenIfNeeded() {
         guard library == nil,
               let path = LibraryRegistry.shared.activePath,

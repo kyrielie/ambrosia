@@ -46,11 +46,10 @@ struct LibraryRootView: View {
     @State private var currentPage  = 0
     @State private var filteredCount: Int? = nil
 
-    // BookState dictionary keyed by calibreID — fetched ONCE here, never per-row
     @State private var bookStates: [Int: BookState] = [:]
 
     private let pageSize = 25
-    private let debouncer = DebounceTimer(delay: 0.3)
+    private let debouncer = DebounceTimer(delay: 0.4)
 
     var displayCount: Int {
         toolbarState.activeFilterResult?.totalCount ?? filteredCount ?? session.totalCount
@@ -83,8 +82,13 @@ struct LibraryRootView: View {
             currentPage = 0
             debouncer.schedule {
                 loadPage()
-                filteredCount = toolbarState.searchText.isEmpty ? nil
-                    : session.library?.bookCount(search: toolbarState.searchText)
+                if toolbarState.searchText.isEmpty {
+                    filteredCount = nil
+                } else {
+                    let query = SearchQueryParser.parse(toolbarState.searchText)
+                    let resolved = session.resolvedQuery(query)
+                    filteredCount = session.library?.bookCount(query: resolved)
+                }
             }
         }
         .onChange(of: toolbarState.activeFilterResult?.calibreIDs) {
@@ -107,8 +111,15 @@ struct LibraryRootView: View {
         }
         .onAppear {
             if session.isOpen { loadPage(); refreshBookStates() }
+            // Register so LibraryWindowController can deliver committed filter rules
+            toolbarState.registerFilterCommitHandler { [self] rule in
+                addOrReplaceRule(rule)
+            }
         }
-        // Sheet presentations driven by toolbarState trigger flags
+        .onDisappear {
+            // Deregister when this view leaves the hierarchy (view mode switch)
+            toolbarState.filterCommitHandler = nil
+        }
         .sheet(isPresented: Binding(
             get: { toolbarState.showFilterDrawer },
             set: { toolbarState.showFilterDrawer = $0 }
@@ -152,55 +163,36 @@ struct LibraryRootView: View {
 
     private func loadPage() {
         guard let library = session.library else { books = []; return }
-        let rawSearch = toolbarState.searchText.isEmpty ? nil : toolbarState.searchText
-        let query: SearchQuery = rawSearch.map { SearchQueryParser.parse($0) }
-            ?? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+        let rawQuery = toolbarState.searchText.isEmpty
+            ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+            : SearchQueryParser.parse(toolbarState.searchText)
+        let query = session.resolvedQuery(rawQuery)
 
         if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
-            let effectiveQuery = resolvedQuery(query)
+            let ids = query.ftsMatchedIDs ?? result.calibreIDs
             let raw = library.books(
-                ids: effectiveQuery.ftsMatchedIDs ?? result.calibreIDs,
+                ids: ids,
                 offset: currentPage * pageSize, limit: pageSize + 1,
                 sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                query: effectiveQuery
+                query: query
             )
             hasNextPage = raw.count > pageSize
             books = Array(raw.prefix(pageSize))
         } else if toolbarState.activeFilterResult != nil {
             books = []; hasNextPage = false
         } else {
-            let effectiveQuery = resolvedQuery(query)
             let raw = library.books(
                 offset: currentPage * pageSize, limit: pageSize + 1,
                 sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                query: effectiveQuery
+                query: query
             )
             hasNextPage = raw.count > pageSize
             books = Array(raw.prefix(pageSize))
         }
     }
 
-    /// Attempts FTS resolution for plain terms; falls back to LIKE if FTS unavailable or empty.
-    private func resolvedQuery(_ query: SearchQuery) -> SearchQuery {
-        guard !query.plainTerms.isEmpty,
-              let fts = session.ftsLibrary else { return query }
-        let plainText = query.plainTerms.joined(separator: " ")
-        guard let ftsIDs = fts.search(query: plainText), !ftsIDs.isEmpty else {
-            return query
-        }
-        return SearchQuery(
-            tagTerms: query.tagTerms,
-            authorTerms: query.authorTerms,
-            titleTerms: query.titleTerms,
-            plainTerms: [],
-            ftsMatchedIDs: ftsIDs
-        )
-    }
-
-    /// Fetch all BookState rows once. O(n) over ever-opened books, not per visible row.
     private func refreshBookStates() {
         let all = (try? modelContext.fetch(FetchDescriptor<BookState>())) ?? []
-        // Use reduce so duplicate calibreIDs (from racing ModelContext writes) don't crash.
         bookStates = all.reduce(into: [:]) { $0[$1.calibreID] = $1 }
     }
 
@@ -234,6 +226,8 @@ struct LibraryRootView: View {
         currentPage = 0; loadPage()
     }
 
+    /// Add or replace a filter rule. All quick taps (tag, author, rating, etc.)
+    /// go through this path — no separate LibraryFilter system.
     private func addOrReplaceRule(_ rule: FilterRule) {
         if toolbarState.filterExpression.groups.isEmpty {
             toolbarState.filterExpression.groups = [FilterGroup()]
@@ -243,8 +237,9 @@ struct LibraryRootView: View {
             $0.field == rule.field && $0.value == rule.value && $0.op == rule.op
         }
         guard !isDuplicate else { return }
-        if rule.field == .authorName {
-            toolbarState.filterExpression.groups[0].rules.removeAll { $0.field == .authorName }
+        // For single-value fields (author, series) replace instead of stacking
+        if rule.field == .authorName || rule.field == .series {
+            toolbarState.filterExpression.groups[0].rules.removeAll { $0.field == rule.field }
         }
         toolbarState.filterExpression.groups[0].rules.append(rule)
         applyFilterRules()
@@ -373,20 +368,14 @@ struct LibraryRootView: View {
 
 // MARK: - Book list row
 
-/// A single row in the library list.
-///
-/// Performance contract:
-/// - NO SwiftData fetches inside this view. `bookState` is passed in by the parent.
-/// - `AO3TagBuckets` is computed once from `book.tags` at init time (stored struct, not recomputed).
 struct BookListRow: View, Equatable {
     let book: CalibreBook
-    let bookState: BookState?       // pre-fetched by parent; nil if never opened
+    let bookState: BookState?
     let modelContext: ModelContext
     let onTagTap: (String, FilterField) -> Void
     let onAuthorTap: (String) -> Void
     let onLikeToggle: () -> Void
 
-    // Equatable: closures cannot be compared so we only check data fields.
     static func == (lhs: BookListRow, rhs: BookListRow) -> Bool {
         lhs.book == rhs.book
             && lhs.bookState?.calibreID        == rhs.bookState?.calibreID
@@ -394,7 +383,6 @@ struct BookListRow: View, Equatable {
             && lhs.bookState?.totalReadPercent == rhs.bookState?.totalReadPercent
     }
 
-    // Computed once at struct init time — not recomputed on re-render
     private let buckets: AO3TagBuckets
 
     init(book: CalibreBook, bookState: BookState?, modelContext: ModelContext,
@@ -509,8 +497,6 @@ struct BookListRow: View, Equatable {
 
     @ViewBuilder
     private var descriptionRow: some View {
-        // Performance: truncate to 300 chars before passing to Text so layout
-        // measurement is bounded regardless of fic description length.
         if let comment = book.displayComment, !comment.isEmpty {
             let truncated = comment.count > 300
                 ? String(comment.prefix(300)) + "…"
@@ -537,11 +523,6 @@ struct BookListRow: View, Equatable {
         return f.string(from: date)
     }
 
-    // MARK: - Pill builders
-
-    /// Single pill view: `Text` with coloured or neutral background.
-    /// Using `Text` + `.onTapGesture` instead of `Button` + `.buttonStyle(.plain)`
-    /// reduces the SwiftUI node count significantly (no ButtonStyle resolution per pill).
     private func tagPill(_ label: String, color: Color?) -> some View {
         Text(label)
             .font(.caption2)
@@ -584,7 +565,6 @@ struct CollapsibleText: View {
 struct FlowLayout: Layout {
     var spacing: CGFloat = 4
 
-    // Cache stores pre-measured subview sizes and the resolved layout at the last width.
     struct Cache {
         var subviewSizes: [CGSize] = []
         var lastWidth: CGFloat = -1
@@ -593,17 +573,15 @@ struct FlowLayout: Layout {
     }
 
     func makeCache(subviews: Subviews) -> Cache {
-        // Measure each subview once; sizes are stable unless subviews change identity.
         var c = Cache()
         c.subviewSizes = subviews.map { $0.sizeThatFits(.unspecified) }
         return c
     }
 
     func updateCache(_ cache: inout Cache, subviews: Subviews) {
-        // Re-measure only when subview count changes (tags don't change per row).
         if cache.subviewSizes.count != subviews.count {
             cache.subviewSizes = subviews.map { $0.sizeThatFits(.unspecified) }
-            cache.lastWidth = -1   // invalidate row layout
+            cache.lastWidth = -1
         }
     }
 
@@ -617,8 +595,6 @@ struct FlowLayout: Layout {
         rebuildRows(in: &cache, maxWidth: bounds.width)
         var rowIdx = 0
         var x = bounds.minX
-        var currentRowY: CGFloat = bounds.minY
-        var currentRowH: CGFloat = 0
 
         for (i, sub) in subviews.enumerated() {
             let size = cache.subviewSizes[i]
@@ -626,15 +602,14 @@ struct FlowLayout: Layout {
                 rowIdx += 1
                 x = bounds.minX
             }
-            currentRowY = bounds.minY + cache.rows[rowIdx].y
-            currentRowH = cache.rows[rowIdx].height
-            let yOffset = (currentRowH - size.height) / 2   // vertically centre within row
+            let currentRowY = bounds.minY + cache.rows[rowIdx].y
+            let currentRowH = cache.rows[rowIdx].height
+            let yOffset = (currentRowH - size.height) / 2
             sub.place(at: CGPoint(x: x, y: currentRowY + yOffset), proposal: .unspecified)
             x += size.width + spacing
         }
     }
 
-    // Recompute row positions only when width changes.
     private func rebuildRows(in cache: inout Cache, maxWidth: CGFloat) {
         guard abs(cache.lastWidth - maxWidth) > 0.5 else { return }
         cache.lastWidth = maxWidth

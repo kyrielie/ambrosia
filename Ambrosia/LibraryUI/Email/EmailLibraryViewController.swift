@@ -3,13 +3,6 @@ import SwiftUI
 import SwiftData
 
 // MARK: - EmailLibraryViewController
-//
-// Email-style split view: hideable left sidebar + right inline reader pane.
-//
-// The sidebar header shows active filter chips. The filter sheet is presented
-// via a persistent zero-size SwiftUI hosting view so @Environment(\.dismiss)
-// resolves correctly through SwiftUI's sheet system — not through NSPanel/beginSheet
-// (which breaks FilterDrawerView's built-in X and Apply buttons).
 
 final class EmailLibraryViewController: NSViewController {
 
@@ -25,8 +18,7 @@ final class EmailLibraryViewController: NSViewController {
     private var sidebarVC: EmailSidebarViewController!
 
     // MARK: - Filter sheet host
-    // A zero-size NSHostingView permanently in the hierarchy that carries the
-    // SwiftUI .sheet() modifier. This lets @Environment(\.dismiss) work correctly.
+
     private var filterSheetHost: NSHostingView<FilterSheetCarrier>?
 
     // MARK: - Sidebar state
@@ -36,9 +28,8 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Pagination
 
     private var books:      [CalibreBook]    = []
-    /// Exposed for FilterSheetCarrier export action.
     var currentBooks: [CalibreBook] { books }
-    var bookStates: [Int: BookState] = [:]        // internal(set) for FilterSheetCarrier
+    var bookStates: [Int: BookState] = [:]
     private var collectionMembership: [String: Set<Int>] = [:]
     private var currentPage = 0
     private var hasNextPage = false
@@ -51,7 +42,7 @@ final class EmailLibraryViewController: NSViewController {
     private var lastAscending: Bool      = true
     private var lastFilterIDs: [Int]?    = nil
 
-    private let debouncer = DebounceTimer(delay: 0.3)
+    private let debouncer = DebounceTimer(delay: 0.4)
 
     private var selectedBook: CalibreBook? { didSet { updateReaderPane() } }
 
@@ -81,6 +72,10 @@ final class EmailLibraryViewController: NSViewController {
         refreshCollections()
         loadPage(reset: true)
         startObservingToolbarState()
+        // Register so LibraryWindowController can deliver committed filter rules
+        toolbarState.registerFilterCommitHandler { [weak self] rule in
+            self?.addOrReplaceRule(rule)
+        }
     }
 
     // MARK: - Split-view setup
@@ -168,7 +163,7 @@ final class EmailLibraryViewController: NSViewController {
         ])
     }
 
-    // MARK: - Filter sheet host (SwiftUI .sheet carrier)
+    // MARK: - Filter sheet host
 
     private func addFilterSheetHost() {
         let carrier = FilterSheetCarrier(
@@ -177,10 +172,9 @@ final class EmailLibraryViewController: NSViewController {
             emailVC:        self
         )
         let hv = NSHostingView(rootView: carrier)
-        hv.sizingOptions = []          // purely constraint-driven; never intrinsicContentSize
+        hv.sizingOptions = []
         hv.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(hv)
-        // Zero size — purely a SwiftUI sheet presenter
         NSLayoutConstraint.activate([
             hv.widthAnchor.constraint(equalToConstant: 0),
             hv.heightAnchor.constraint(equalToConstant: 0),
@@ -211,7 +205,7 @@ final class EmailLibraryViewController: NSViewController {
         )
     }
 
-    // MARK: - Sidebar toggle (called from toolbar via toolbarState trigger flag)
+    // MARK: - Sidebar toggle
 
     @objc func performSidebarToggle() {
         isSidebarHidden.toggle()
@@ -258,19 +252,39 @@ final class EmailLibraryViewController: NSViewController {
                    || newFilterIDs != lastFilterIDs
 
         guard changed else { return }
+
+        let searchChanged = newSearch != lastSearch
         lastSearch    = newSearch
         lastSort      = newSort
         lastAscending = newAscending
         lastFilterIDs = newFilterIDs
 
-        if newSearch != lastSearch {
+        if searchChanged {
             debouncer.schedule { [weak self] in self?.loadPage(reset: true) }
         } else {
             loadPage(reset: true)
         }
     }
 
-    // MARK: - Filter application (called from FilterSheetCarrier after Apply)
+    // MARK: - Quick filter helper (mirrors BookGridItem.addOrReplaceRule)
+
+    func addOrReplaceRule(_ rule: FilterRule) {
+        if toolbarState.filterExpression.groups.isEmpty {
+            toolbarState.filterExpression.groups = [FilterGroup()]
+        }
+        let allRules = toolbarState.filterExpression.groups.flatMap(\.rules)
+        let isDuplicate = allRules.contains {
+            $0.field == rule.field && $0.value == rule.value && $0.op == rule.op
+        }
+        guard !isDuplicate else { return }
+        if rule.field == .authorName || rule.field == .series {
+            toolbarState.filterExpression.groups[0].rules.removeAll { $0.field == rule.field }
+        }
+        toolbarState.filterExpression.groups[0].rules.append(rule)
+        applyFilterRules()
+    }
+
+    // MARK: - Filter application
 
     func applyFilterRules() {
         guard let library = session.library else { return }
@@ -308,7 +322,7 @@ final class EmailLibraryViewController: NSViewController {
         loadPage(reset: true)
     }
 
-    // MARK: - Data loading
+    // MARK: - Data loading (uses SearchQuery path — mirrors BookGridItem exactly)
 
     func loadPage(reset: Bool) {
         guard let library = session.library else {
@@ -316,19 +330,29 @@ final class EmailLibraryViewController: NSViewController {
         }
         if reset { currentPage = 0; books = []; selectedBook = nil }
 
-        let search = toolbarState.searchText.isEmpty ? nil : toolbarState.searchText
+        // Parse search text into a structured query — same path as list view
+        let rawQuery = toolbarState.searchText.isEmpty
+            ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+            : SearchQueryParser.parse(toolbarState.searchText)
+        let query = session.resolvedQuery(rawQuery)
+
         let raw: [CalibreBook]
         if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
-            raw = library.books(ids: result.calibreIDs,
-                                offset: currentPage * pageSize, limit: pageSize + 1,
-                                sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                                search: search)
+            let ids = query.ftsMatchedIDs ?? result.calibreIDs
+            raw = library.books(
+                ids: ids,
+                offset: currentPage * pageSize, limit: pageSize + 1,
+                sort: toolbarState.sortField, ascending: toolbarState.ascending,
+                query: query
+            )
         } else if toolbarState.activeFilterResult != nil {
             raw = []
         } else {
-            raw = library.books(offset: currentPage * pageSize, limit: pageSize + 1,
-                                sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                                search: search)
+            raw = library.books(
+                offset: currentPage * pageSize, limit: pageSize + 1,
+                sort: toolbarState.sortField, ascending: toolbarState.ascending,
+                query: query
+            )
         }
 
         hasNextPage = raw.count > pageSize
@@ -401,15 +425,6 @@ final class EmailLibraryViewController: NSViewController {
 }
 
 // MARK: - FilterSheetCarrier
-//
-// Zero-size SwiftUI view permanently embedded in EmailLibraryViewController's
-// view hierarchy. It owns ALL sheet presentations driven by toolbarState trigger
-// flags — FilterDrawer, Collections, ReadingGoal, and Export — mirroring what
-// LibraryRootView handles in list mode.
-//
-// Using a SwiftUI sheet host (rather than NSPanel/beginSheet) is required so that
-// @Environment(\.dismiss) resolves correctly inside FilterDrawerView. Collections
-// and ReadingGoalView get the same treatment for consistency.
 
 struct FilterSheetCarrier: View {
     let toolbarState:   LibraryToolbarState
@@ -419,7 +434,6 @@ struct FilterSheetCarrier: View {
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
-            // Filter drawer
             .sheet(isPresented: Binding(
                 get: { toolbarState.showFilterDrawer },
                 set: { toolbarState.showFilterDrawer = $0 }
@@ -429,9 +443,7 @@ struct FilterSheetCarrier: View {
                         get: { toolbarState.filterExpression },
                         set: { toolbarState.filterExpression = $0 }
                     ),
-                    onApply: {
-                        emailVC?.applyFilterRules()
-                    },
+                    onApply: { emailVC?.applyFilterRules() },
                     onClear: {
                         toolbarState.filterExpression   = FilterExpression()
                         toolbarState.activeFilterResult = nil
@@ -441,13 +453,11 @@ struct FilterSheetCarrier: View {
                 .environment(toolbarState)
                 .modelContainer(modelContainer)
             }
-            // Collections
             .sheet(isPresented: Binding(
                 get: { toolbarState.showCollections },
                 set: { toolbarState.showCollections = $0 }
             )) {
                 CollectionsView(onSelectCollection: { collection in
-                    // Add a collection filter rule, same as list view behaviour
                     let rule = FilterRule(field: .collection, op: .equals, value: collection.name)
                     var expr = toolbarState.filterExpression
                     if expr.groups.isEmpty {
@@ -462,7 +472,6 @@ struct FilterSheetCarrier: View {
                 })
                 .modelContainer(modelContainer)
             }
-            // Reading goal
             .sheet(isPresented: Binding(
                 get: { toolbarState.showReadingGoal },
                 set: { toolbarState.showReadingGoal = $0 }
@@ -470,7 +479,6 @@ struct FilterSheetCarrier: View {
                 ReadingGoalView()
                     .modelContainer(modelContainer)
             }
-            // Export — no sheet; fire-and-forget save panel
             .onChange(of: toolbarState.triggerExport) {
                 if toolbarState.triggerExport {
                     if let books = emailVC?.currentBooks {

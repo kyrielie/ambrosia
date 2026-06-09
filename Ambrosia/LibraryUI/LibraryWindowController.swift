@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import SwiftData
 
 // MARK: - Toolbar item identifiers
@@ -17,17 +18,33 @@ extension NSToolbarItem.Identifier {
 
 // MARK: - LibraryWindowController
 
-class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSTextFieldDelegate, NSSearchFieldDelegate {
+class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFieldDelegate {
 
     private weak var toolbarState: LibraryToolbarState?
     private weak var session: LibrarySession?
     private var viewModeControl: NSSegmentedControl?
     private var sortMenuToolbarItem: NSMenuToolbarItem?
-    /// Two-line count label in the toolbar centre.
     private var ficCountLabel: NSTextField?
     private var readCountLabel: NSTextField?
-    /// Retained search field so we can set delegate and push completions.
-    private weak var searchField: NSSearchField?
+
+    // The search toolbar item — kept strongly so we can anchor the popover.
+    private var searchToolbarItem: NSSearchToolbarItem?
+
+    // MARK: - Suggestion popover
+    //
+    // NSPopover is used instead of a child NSWindow because:
+    // - It correctly resolves the coordinate space for NSSearchToolbarItem, which
+    //   lives inside a private NSToolbarItemViewer and cannot be reliably converted
+    //   via convert(_:to:nil) + convertToScreen.
+    // - It does not steal first responder from the search field.
+    // - It sizes itself from SwiftUI content naturally.
+    // - .semitransient behaviour closes on content-area clicks but not on field edits.
+
+    private var suggestionPopover: NSPopover?
+    private var suggestionHostingVC: NSHostingController<SearchSuggestionsView>?
+    private let suggestionDebouncer = DebounceTimer(delay: 0.2)
+
+    // MARK: - Init
 
     init(modelContainer: ModelContainer, session: LibrarySession) {
         let window = NSWindow(
@@ -37,8 +54,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSTextFiel
             defer: false
         )
         window.title = "Ambrosia"
-        window.titleVisibility = .hidden   // suppress "Ambrosia" — count label replaces it
-        window.toolbarStyle    = .unified  // icons inline with traffic-light buttons
+        window.titleVisibility = .hidden
+        window.toolbarStyle    = .unified
         window.minSize = NSSize(width: 700, height: 500)
         window.isReleasedWhenClosed = false
         window.center()
@@ -94,54 +111,42 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSTextFiel
 
         case .librarySearch:
             let item = NSSearchToolbarItem(itemIdentifier: identifier)
-            item.toolTip = "Search titles and authors"
+            item.toolTip = "Search — or type tag:, author:, series:, title: to add a filter"
             item.resignsFirstResponderWithCancel = true
+            item.searchField.delegate = self
+            item.searchField.placeholderString = "Search, or tag: / author: / series:"
+            // Action fires on every keypress — we debounce manually in the delegate
             item.searchField.target = self
             item.searchField.action = #selector(searchFieldChanged(_:))
-            item.searchField.delegate = self
-            searchField = item.searchField
+            searchToolbarItem = item
             return item
 
         case .librarySidebarToggle:
-            return makeIconItem(
-                identifier, label: "Sidebar",
-                image: "sidebar.left",
-                action: #selector(triggerSidebarToggle)
-            )
+            return makeIconItem(identifier, label: "Sidebar",
+                                image: "sidebar.left", action: #selector(triggerSidebarToggle))
 
         case .libraryTitle:
             return makeTitleItem(identifier)
 
         case .libraryFilter:
-            return makeIconItem(
-                identifier, label: "Filter",
-                image: "line.3.horizontal.decrease.circle",
-                action: #selector(toggleFilter)
-            )
+            return makeIconItem(identifier, label: "Filter",
+                                image: "line.3.horizontal.decrease.circle",
+                                action: #selector(toggleFilter))
 
         case .librarySort:
             return makeSortItem(identifier)
 
         case .libraryCollections:
-            return makeIconItem(
-                identifier, label: "Collections",
-                image: "tray.2",
-                action: #selector(showCollections)
-            )
+            return makeIconItem(identifier, label: "Collections",
+                                image: "tray.2", action: #selector(showCollections))
 
         case .libraryReadingGoal:
-            return makeIconItem(
-                identifier, label: "Goal",
-                image: "target",
-                action: #selector(showReadingGoal)
-            )
+            return makeIconItem(identifier, label: "Goal",
+                                image: "target", action: #selector(showReadingGoal))
 
         case .libraryExport:
-            return makeIconItem(
-                identifier, label: "Export",
-                image: "arrow.up.doc",
-                action: #selector(triggerExport)
-            )
+            return makeIconItem(identifier, label: "Export",
+                                image: "arrow.up.doc", action: #selector(triggerExport))
 
         case .libraryViewMode:
             return makeViewModeItem(identifier)
@@ -154,17 +159,16 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSTextFiel
     // MARK: - Item builders
 
     private func makeIconItem(_ identifier: NSToolbarItem.Identifier,
-                               label: String,
-                               image: String,
+                               label: String, image: String,
                                action: Selector) -> NSToolbarItem {
         let item = NSToolbarItem(itemIdentifier: identifier)
         item.label   = label
         item.toolTip = label
         let cfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-        item.image   = NSImage(systemSymbolName: image, accessibilityDescription: label)?
+        item.image  = NSImage(systemSymbolName: image, accessibilityDescription: label)?
             .withSymbolConfiguration(cfg)
-        item.target  = self
-        item.action  = action
+        item.target = self
+        item.action = action
         return item
     }
 
@@ -172,26 +176,27 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSTextFiel
         let item = NSMenuToolbarItem(itemIdentifier: identifier)
         item.label   = "Sort"
         item.toolTip = "Sort order"
-        let sortCfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-        item.image   = NSImage(systemSymbolName: "arrow.up.arrow.down", accessibilityDescription: "Sort")?
-            .withSymbolConfiguration(sortCfg)
+        let cfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        item.image = NSImage(systemSymbolName: "arrow.up.arrow.down",
+                             accessibilityDescription: "Sort")?.withSymbolConfiguration(cfg)
         item.showsIndicator = true
 
         let menu = NSMenu()
         for field in SortField.allCases {
-            let mi = NSMenuItem(title: field.label, action: #selector(sortMenuItemSelected(_:)), keyEquivalent: "")
+            let mi = NSMenuItem(title: field.label,
+                                action: #selector(sortMenuItemSelected(_:)),
+                                keyEquivalent: "")
             mi.target = self
             mi.representedObject = field
             menu.addItem(mi)
         }
         menu.addItem(.separator())
-        let ascItem = NSMenuItem(title: "Ascending",  action: #selector(setSortAscending),  keyEquivalent: "")
-        let descItem = NSMenuItem(title: "Descending", action: #selector(setSortDescending), keyEquivalent: "")
-        ascItem.target  = self
-        descItem.target = self
-        menu.addItem(ascItem)
-        menu.addItem(descItem)
-
+        let asc  = NSMenuItem(title: "Ascending",  action: #selector(setSortAscending),  keyEquivalent: "")
+        let desc = NSMenuItem(title: "Descending", action: #selector(setSortDescending), keyEquivalent: "")
+        asc.target  = self
+        desc.target = self
+        menu.addItem(asc)
+        menu.addItem(desc)
         item.menu = menu
         sortMenuToolbarItem = item
         return item
@@ -200,9 +205,9 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSTextFiel
     private func makeViewModeItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
         let seg = NSSegmentedControl(
             images: [
-                NSImage(systemSymbolName: "list.bullet",   accessibilityDescription: "List")!,
-                NSImage(systemSymbolName: "envelope",       accessibilityDescription: "Email")!,
-                NSImage(systemSymbolName: "list.number", accessibilityDescription: "Ranking")!,
+                NSImage(systemSymbolName: "list.bullet",  accessibilityDescription: "List")!,
+                NSImage(systemSymbolName: "envelope",     accessibilityDescription: "Email")!,
+                NSImage(systemSymbolName: "list.number",  accessibilityDescription: "Ranking")!,
             ],
             trackingMode: .selectOne,
             target: self,
@@ -210,7 +215,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSTextFiel
         )
         seg.selectedSegment = 0
         viewModeControl = seg
-
         let item = NSToolbarItem(itemIdentifier: identifier)
         item.label = "View"
         item.view  = seg
@@ -218,8 +222,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSTextFiel
     }
 
     private func makeTitleItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
-        // Two-line block: "1,234 fics" (semibold) + "— read" scaffold (small, tertiary).
-        // Left-aligned so it sits naturally after the sidebar toggle button.
         let ficLabel = NSTextField(labelWithString: "")
         ficLabel.font      = NSFont.systemFont(ofSize: 12, weight: .semibold)
         ficLabel.textColor = .labelColor
@@ -227,30 +229,20 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSTextFiel
         ficLabel.setContentHuggingPriority(.required, for: .vertical)
         ficLabel.setContentCompressionResistancePriority(.required, for: .vertical)
 
-        let readLabel = NSTextField(labelWithString: "— read")
-        readLabel.font      = NSFont.systemFont(ofSize: 10)
-        readLabel.textColor = .tertiaryLabelColor
-        readLabel.alignment = .left
-        readLabel.setContentHuggingPriority(.required, for: .vertical)
-        readLabel.setContentCompressionResistancePriority(.required, for: .vertical)
-
-        let stack = NSStackView(views: [ficLabel, readLabel])
-        stack.orientation  = .vertical
-        stack.alignment    = .leading
-        stack.spacing      = 1
+        let stack = NSStackView(views: [ficLabel])
+        stack.orientation = .vertical
+        stack.alignment   = .leading
+        stack.spacing     = 1
         stack.setHuggingPriority(.required, for: .vertical)
         stack.setContentCompressionResistancePriority(.required, for: .vertical)
-        // Give the stack a concrete frame so the toolbar item doesn't clip it
-        stack.frame = NSRect(x: 0, y: 0, width: 140, height: 38)
+        stack.frame = NSRect(x: 0, y: 0, width: 140, height: 28)
 
-        ficCountLabel  = ficLabel
-        readCountLabel = readLabel
+        ficCountLabel = ficLabel
         updateCountLabel()
 
         let item = NSToolbarItem(itemIdentifier: identifier)
         item.label = "Library"
         item.view  = stack
-        // minSize/maxSize deprecated on macOS 12+; constrain the view directly instead
         stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 100).isActive = true
         stack.widthAnchor.constraint(lessThanOrEqualToConstant: 220).isActive    = true
         return item
@@ -259,86 +251,175 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSTextFiel
     private func updateCountLabel() {
         guard let ts = toolbarState, let sess = session else { return }
         let count = ts.activeFilterResult?.totalCount ?? sess.totalCount
-        let fmt = NumberFormatter()
+        let fmt   = NumberFormatter()
         fmt.numberStyle = .decimal
-        let str = fmt.string(from: NSNumber(value: count)) ?? "\(count)"
-        ficCountLabel?.stringValue = "\(str) fics"
+        ficCountLabel?.stringValue = "\(fmt.string(from: NSNumber(value: count)) ?? "\(count)") fics"
     }
 
-    /// Observation loop: re-fires whenever filter result or total count changes.
-    private func startObservingCounts() {
-        scheduleCounting()
-    }
+    private func startObservingCounts() { scheduleCounting() }
 
     private func scheduleCounting() {
         withObservationTracking {
             _ = toolbarState?.activeFilterResult?.totalCount
             _ = session?.totalCount
         } onChange: { [weak self] in
-            DispatchQueue.main.async {
-                self?.updateCountLabel()
-                self?.scheduleCounting()
+            DispatchQueue.main.async { self?.updateCountLabel(); self?.scheduleCounting() }
+        }
+    }
+
+    // MARK: - NSSearchFieldDelegate
+
+    /// Called on every keypress via the field's action (target/action set above).
+    @objc private func searchFieldChanged(_ sender: NSSearchField) {
+        let text = sender.stringValue
+        // Update searchText immediately for display, but page load is debounced
+        // inside BookGridItem / EmailLibraryViewController (0.4 s).
+        toolbarState?.searchText = text
+
+        if text.isEmpty {
+            closeSuggestionPopover()
+        } else {
+            suggestionDebouncer.schedule { [weak self] in
+                self?.refreshSuggestions(for: text)
             }
         }
     }
 
-    // MARK: - Actions
-
-    @objc private func searchFieldChanged(_ sender: NSSearchField) {
-        toolbarState?.searchText = sender.stringValue
-    }
-
-    // MARK: - NSTextFieldDelegate (search field completions)
-
-    /// Called by AppKit when the user pauses typing in the search field.
-    /// Return strings and AppKit renders them in a native dropdown, properly
-    /// positioned under the search field — identical to Finder's behaviour.
-    func control(_ control: NSControl,
-                 textView: NSTextView,
-                 completions words: [String],
-                 forPartialWordRange charRange: NSRange,
-                 indexOfSelectedItem index: UnsafeMutablePointer<Int>) -> [String] {
-        guard let library = session?.library else { return [] }
-        let fullText = (control as? NSSearchField)?.stringValue ?? textView.string
-        let typed = (fullText as NSString).substring(with: charRange)
-        guard !typed.isEmpty else { return [] }
-
-        // Route completions based on active prefix, mirroring computeSuggestions logic.
-        if let prefix = fullText.activePrefixValue(for: "author:"), !prefix.isEmpty {
-            return library.authorSuggestions(prefix: prefix, limit: 8)
-                .map { "author:\"\($0)\"" }
+    /// Called when the user presses Return in the search field.
+    func control(_ control: NSControl, textView: NSTextView,
+                 doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            commitCurrentSearchText()
+            return true
         }
-        if let prefix = fullText.activePrefixValue(for: "title:"), !prefix.isEmpty {
-            return library.titleSuggestions(prefix: prefix, limit: 8)
-                .map { "title:\"\($0)\"" }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            closeSuggestionPopover()
+            return false  // let NSSearchToolbarItem handle the Cancel button normally
         }
-        // Plain text — tag suggestions for the last word (≥2 chars, no colon)
-        let lastWord = fullText.components(separatedBy: .whitespaces).last ?? ""
-        if lastWord.count >= 2, !lastWord.contains(":") {
-            return library.tagSuggestions(prefix: lastWord, limit: 8)
-        }
-        return []
+        return false
     }
 
-    @objc private func toggleFilter() {
-        toolbarState?.showFilterDrawer = true
+    func searchFieldDidEndSearching(_ sender: NSSearchField) {
+        // Small delay so a popover row click can fire before we close.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.closeSuggestionPopover()
+        }
     }
 
-    @objc private func triggerSidebarToggle() {
-        toolbarState?.toggleEmailSidebar = true
+    // MARK: - Commit: search text → filter rule or plain FTS
+
+    /// Called when the user presses Return. If the text is a recognised scoped
+    /// prefix (tag:, author:, series:, title:) the whole value is committed as a
+    /// FilterRule and the field is cleared. Otherwise the text is kept for FTS.
+    private func commitCurrentSearchText() {
+        guard let field = searchToolbarItem?.searchField else { return }
+        let text = field.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { closeSuggestionPopover(); return }
+
+        let query = SearchQueryParser.parse(text)
+
+        if let rule = query.asSingleFilterRule {
+            // Scoped token: add as filter rule and clear the search field
+            commitFilterRule(rule)
+            clearSearchField()
+        }
+        // Plain text: leave in field — BookGridItem will FTS within any active filter
+
+        closeSuggestionPopover()
     }
+
+    /// Commits a suggestion row tap: always produces a filter rule and clears the field.
+    private func commitSuggestion(_ suggestion: SearchSuggestion) {
+        commitFilterRule(suggestion.asFilterRule)
+        clearSearchField()
+        closeSuggestionPopover()
+    }
+
+    /// Delivers a FilterRule to the active content view via the registered handler.
+    private func commitFilterRule(_ rule: FilterRule) {
+        toolbarState?.filterCommitHandler?(rule)
+    }
+
+    private func clearSearchField() {
+        searchToolbarItem?.searchField.stringValue = ""
+        toolbarState?.searchText = ""
+    }
+
+    // MARK: - Suggestion popover
+
+    private func refreshSuggestions(for text: String) {
+        guard let library = session?.library else { closeSuggestionPopover(); return }
+
+        // Run on a background thread — SQLite is fast but avoid blocking the main thread
+        // on large libraries. Results are dispatched back to main before presenting.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let sections = computeSectionedSuggestions(for: text, library: library)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if sections.allSatisfy({ $0.suggestions.isEmpty }) {
+                    self.closeSuggestionPopover()
+                } else {
+                    self.showSuggestionPopover(sections: sections)
+                }
+            }
+        }
+    }
+
+    private func showSuggestionPopover(sections: [SuggestionSection]) {
+        guard let item = searchToolbarItem else { return }
+
+        let view = SearchSuggestionsView(sections: sections) { [weak self] suggestion in
+            self?.commitSuggestion(suggestion)
+        }
+
+        if let existing = suggestionPopover, existing.isShown,
+           let vc = suggestionHostingVC {
+            // Update content in place — avoids flicker on each keystroke
+            vc.rootView = view
+            return
+        }
+
+        // Create fresh popover
+        let vc      = NSHostingController(rootView: view)
+        let popover = NSPopover()
+        popover.contentViewController = vc
+        popover.behavior              = .semitransient
+        popover.animates              = false   // instant feel, like Finder
+        // Size will be updated by SwiftUI — set a reasonable initial value
+        popover.contentSize           = CGSize(width: 320, height: 200)
+
+        suggestionHostingVC = vc
+        suggestionPopover   = popover
+
+        // Anchor to the search field view inside the toolbar item.
+        // NSSearchToolbarItem.searchField is the NSSearchField itself — a valid
+        // NSView that AppKit can use as a popover anchor regardless of its position
+        // in the toolbar's private view hierarchy.
+        popover.show(relativeTo: item.searchField.bounds,
+                     of: item.searchField,
+                     preferredEdge: .maxY)
+    }
+
+    private func closeSuggestionPopover() {
+        suggestionPopover?.close()
+        suggestionPopover   = nil
+        suggestionHostingVC = nil
+    }
+
+    // MARK: - Other toolbar actions
+
+    @objc private func toggleFilter()        { toolbarState?.showFilterDrawer   = true }
+    @objc private func triggerSidebarToggle(){ toolbarState?.toggleEmailSidebar = true }
+    @objc private func showCollections()     { toolbarState?.showCollections    = true }
+    @objc private func showReadingGoal()     { toolbarState?.showReadingGoal    = true }
+    @objc private func triggerExport()       { toolbarState?.triggerExport      = true }
 
     @objc private func sortMenuItemSelected(_ sender: NSMenuItem) {
         guard let field = sender.representedObject as? SortField else { return }
         toolbarState?.sortField = field
     }
-
     @objc private func setSortAscending()  { toolbarState?.ascending = true  }
     @objc private func setSortDescending() { toolbarState?.ascending = false }
-
-    @objc private func showCollections()  { toolbarState?.showCollections  = true }
-    @objc private func showReadingGoal()  { toolbarState?.showReadingGoal  = true }
-    @objc private func triggerExport()    { toolbarState?.triggerExport    = true }
 
     @objc private func viewModeSegmentChanged(_ sender: NSSegmentedControl) {
         switch sender.selectedSegment {
