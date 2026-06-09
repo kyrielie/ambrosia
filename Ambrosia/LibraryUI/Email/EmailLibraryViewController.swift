@@ -39,9 +39,10 @@ final class EmailLibraryViewController: NSViewController {
     /// Exposed for FilterSheetCarrier export action.
     var currentBooks: [CalibreBook] { books }
     var bookStates: [Int: BookState] = [:]        // internal(set) for FilterSheetCarrier
+    private var collectionMembership: [String: Set<Int>] = [:]
     private var currentPage = 0
     private var hasNextPage = false
-    private let pageSize    = 100
+    private let pageSize    = 25
 
     // MARK: - Toolbar snapshots
 
@@ -77,6 +78,7 @@ final class EmailLibraryViewController: NSViewController {
         buildSplitView()
         addFilterSheetHost()
         refreshBookStates()
+        refreshCollections()
         loadPage(reset: true)
         startObservingToolbarState()
     }
@@ -119,6 +121,24 @@ final class EmailLibraryViewController: NSViewController {
                 try? ctx.save()
             }
             refreshBookStates()
+        }
+        sidebarVC.onContextMenuToggleCollection = { [weak self] book, collectionName in
+            guard let self else { return }
+            let ctx = ModelContext(modelContainer)
+            let all = (try? ctx.fetch(FetchDescriptor<Collection>())) ?? []
+            if let col = all.first(where: { $0.name == collectionName }) {
+                if col.contains(calibreID: book.id) {
+                    col.remove(calibreID: book.id)
+                } else {
+                    col.add(calibreID: book.id)
+                }
+                try? ctx.save()
+                refreshCollections()
+            }
+        }
+        sidebarVC.onContextMenuNewCollection = { [weak self] _ in
+            guard let self else { return }
+            toolbarState.showCollections = true
         }
 
         splitVC = NSSplitViewController()
@@ -330,6 +350,15 @@ final class EmailLibraryViewController: NSViewController {
         let all = (try? ctx.fetch(FetchDescriptor<BookState>())) ?? []
         bookStates = all.reduce(into: [:]) { $0[$1.calibreID] = $1 }
         sidebarVC?.bookStates = bookStates
+    }
+
+    func refreshCollections() {
+        let ctx = ModelContext(modelContainer)
+        let all = (try? ctx.fetch(FetchDescriptor<Collection>())) ?? []
+        collectionMembership = Dictionary(uniqueKeysWithValues:
+            all.map { ($0.name, Set($0.calibreIDs)) }
+        )
+        sidebarVC?.collectionMembership = collectionMembership
     }
 
     // MARK: - Inline reader pane

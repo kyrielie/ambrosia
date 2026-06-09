@@ -168,7 +168,7 @@ private struct BookDetailContent: View {
     }
 
     private var tagsBlock: some View {
-        CachedFlowLayout(spacing: 4) {
+        FlowLayout(spacing: 4) {
             ForEach(buckets.ratings, id: \.self)    { tag in tagPill(tag, .orange) }
             ForEach(buckets.categories, id: \.self) { tag in tagPill(tag, .blue)   }
             ForEach(buckets.warnings, id: \.self)   { tag in tagPill(tag, .red)    }

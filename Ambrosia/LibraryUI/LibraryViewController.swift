@@ -91,9 +91,9 @@ class LibraryViewController: NSViewController {
                 childVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             ])
 
-        case .grid:
+        case .ranking:
             let placeholder = AnyView(
-                Text("Grid view coming in D3")
+                Text("Ranking view coming in D3")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .font(.title3)
                     .foregroundStyle(.secondary)

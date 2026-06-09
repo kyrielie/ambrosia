@@ -198,7 +198,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
             images: [
                 NSImage(systemSymbolName: "list.bullet",   accessibilityDescription: "List")!,
                 NSImage(systemSymbolName: "envelope",       accessibilityDescription: "Email")!,
-                NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: "Grid")!,
+                NSImage(systemSymbolName: "list.number", accessibilityDescription: "Ranking")!,
             ],
             trackingMode: .selectOne,
             target: self,
@@ -307,7 +307,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate {
     @objc private func viewModeSegmentChanged(_ sender: NSSegmentedControl) {
         switch sender.selectedSegment {
         case 1:  toolbarState?.viewMode = .email
-        case 2:  toolbarState?.viewMode = .grid
+        case 2:  toolbarState?.viewMode = .ranking
         default: toolbarState?.viewMode = .list
         }
     }

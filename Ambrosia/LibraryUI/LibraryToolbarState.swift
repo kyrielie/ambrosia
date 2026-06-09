@@ -4,11 +4,11 @@ import Observation
 // MARK: - View mode
 
 /// The three display modes for the library window.
-/// D3 (grid) is defined here so LibraryViewController can compile the full switch now.
+/// D3 (ranking view) is defined here so LibraryViewController can compile the full switch now.
 enum LibraryViewMode: Int {
-    case list  = 0
-    case email = 1
-    case grid  = 2
+    case list    = 0
+    case email   = 1
+    case ranking = 2
 }
 
 // MARK: - LibraryToolbarState
@@ -18,7 +18,7 @@ enum LibraryViewMode: Int {
 /// Created once by LibraryViewController, injected into:
 ///   - The SwiftUI environment so LibraryRootView observes it directly.
 ///   - LibraryWindowController so the NSToolbar delegate can mutate it.
-///   - EmailLibraryViewController (and future GridLibraryViewController) so they
+///   - EmailLibraryViewController (and future RankingLibraryViewController) so they
 ///     respond to toolbar changes with no extra wiring.
 ///
 /// Filter state also lives here (not in individual views) so all three view modes

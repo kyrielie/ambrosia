@@ -8,9 +8,7 @@ import SwiftData
 //
 // Layout (top to bottom):
 //   ┌──────────────────────┐
-//   │  SidebarFilterPillsView │  SwiftUI, variable height, hidden when no filter active
-//   ├──────────────────────┤
-//   │  NSScrollView        │  fills remaining space
+//   │  NSScrollView        │  fills all space
 //   │  └─ NSTableView      │  64pt rows: title / author / progress text + bar
 //   └──────────────────────┘
 //
@@ -27,8 +25,10 @@ final class EmailSidebarViewController: NSViewController,
     var onLoadMore:    (() -> Void)?
     var onEditFilter:  (() -> Void)?
     var onClearFilter: (() -> Void)?
-    var onContextMenuLike: ((CalibreBook) -> Void)?
-    var onContextMenuOpen: ((CalibreBook) -> Void)?
+    var onContextMenuLike:             ((CalibreBook) -> Void)?
+    var onContextMenuOpen:             ((CalibreBook) -> Void)?
+    var onContextMenuToggleCollection: ((CalibreBook, String) -> Void)?
+    var onContextMenuNewCollection:    ((CalibreBook) -> Void)?
 
     // MARK: - Dependencies
 
@@ -38,12 +38,13 @@ final class EmailSidebarViewController: NSViewController,
 
     var books:      [CalibreBook]    = [] { didSet { tableView?.reloadData() } }
     var bookStates: [Int: BookState] = [:] { didSet { tableView?.reloadData() } }
+    /// Collection snapshot for building context menu submenus. Key = name, value = member calibreIDs.
+    var collectionMembership: [String: Set<Int>] = [:]
 
     // MARK: - Private
 
     private var tableView:  NSTableView!
     private var scrollView: NSScrollView!
-    private var pillsHost:  NSHostingView<SidebarFilterPillsView>?
     private var hasTriggeredLoadMore = false
 
     // MARK: - Lifecycle
@@ -81,8 +82,8 @@ final class EmailSidebarViewController: NSViewController,
             name: NSScrollView.didLiveScrollNotification, object: scrollView
         )
 
-        // Scroll view fills the whole container initially;
-        // installPillsHost() will re-pin its top edge after the pills view is added.
+
+
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: container.topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -97,36 +98,6 @@ final class EmailSidebarViewController: NSViewController,
         super.viewDidLoad()
         tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         tableView.tableColumns.first?.width = tableView.bounds.width
-        if let ts = toolbarState { installPillsHost(ts: ts) }
-    }
-
-    // MARK: - Pills header
-
-    private func installPillsHost(ts: LibraryToolbarState) {
-        let pillsView = SidebarFilterPillsView(
-            toolbarState: ts,
-            onEdit:  { [weak self] in self?.onEditFilter?()  },
-            onClear: { [weak self] in self?.onClearFilter?() }
-        )
-        let hv = NSHostingView(rootView: pillsView)
-        hv.sizingOptions = .preferredContentSize  // lets SwiftUI height drive the constraint
-        hv.translatesAutoresizingMaskIntoConstraints = false
-
-        let container = view
-        container.addSubview(hv, positioned: .above, relativeTo: scrollView)
-
-        // Remove the scroll view's top-to-container constraint, re-pin below pills
-        if let topC = scrollView.constraints.first(where: {
-            $0.firstAttribute == .top && $0.secondItem === container
-        }) { topC.isActive = false }
-
-        NSLayoutConstraint.activate([
-            hv.topAnchor.constraint(equalTo: container.topAnchor),
-            hv.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            hv.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: hv.bottomAnchor),
-        ])
-        pillsHost = hv
     }
 
     // MARK: - NSTableViewDataSource
@@ -203,6 +174,34 @@ final class EmailSidebarViewController: NSViewController,
         likeItem.representedObject = book
         menu.addItem(likeItem)
 
+        menu.addItem(.separator())
+
+        // Add to Collection submenu
+        let collectionSubmenu = NSMenu(title: "Add to Collection")
+        let sortedNames = collectionMembership.keys.sorted()
+        for name in sortedNames {
+            let isMember = collectionMembership[name]?.contains(book.id) == true
+            let item = NSMenuItem(
+                title: isMember ? "✓ \(name)" : name,
+                action: #selector(contextToggleCollection(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = ["book": book, "collection": name] as [String: Any]
+            collectionSubmenu.addItem(item)
+        }
+        if !sortedNames.isEmpty {
+            collectionSubmenu.addItem(.separator())
+        }
+        let newItem = NSMenuItem(title: "New Collection…", action: #selector(contextNewCollection(_:)), keyEquivalent: "")
+        newItem.target = self
+        newItem.representedObject = book
+        collectionSubmenu.addItem(newItem)
+
+        let collectionMenuItem = NSMenuItem(title: "Add to Collection", action: nil, keyEquivalent: "")
+        collectionMenuItem.submenu = collectionSubmenu
+        menu.addItem(collectionMenuItem)
+
         return menu
     }
 
@@ -216,77 +215,19 @@ final class EmailSidebarViewController: NSViewController,
         onContextMenuLike?(book)
     }
 
-    deinit { NotificationCenter.default.removeObserver(self) }
-}
-
-// MARK: - SidebarFilterPillsView
-//
-// SwiftUI view that renders filter pills matching the list-view chip style.
-// Returns zero height (empty) when no filter is active, so no space is wasted.
-
-struct SidebarFilterPillsView: View {
-    let toolbarState: LibraryToolbarState
-    let onEdit:  () -> Void
-    let onClear: () -> Void
-
-    var body: some View {
-        let rules   = toolbarState.filterExpression.groups.flatMap(\.rules).filter(\.isComplete)
-        let hasFilter = toolbarState.activeFilterResult != nil && !rules.isEmpty
-
-        if hasFilter {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Image(systemName: "line.3.horizontal.decrease.circle.fill")
-                        .foregroundStyle(Color.accentColor)
-                        .font(.caption)
-                    let count = toolbarState.activeFilterResult?.totalCount ?? 0
-                    Text("\(count) result\(count == 1 ? "" : "s")")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Edit") { onEdit() }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                    Button { onClear() } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                }
-
-                FlowLayout(spacing: 4) {
-                    ForEach(rules) { rule in
-                        let negated = rule.op == .notContains || rule.op == .notEquals
-                        HStack(spacing: 3) {
-                            if negated {
-                                Text("NOT")
-                                    .font(.caption2.bold())
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 4).padding(.vertical, 1)
-                                    .background(Color.red.opacity(0.85))
-                                    .clipShape(Capsule())
-                            }
-                            Text(rule.field.label)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            if !rule.value.isEmpty {
-                                Text(rule.value).font(.caption2.bold())
-                            }
-                        }
-                        .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(negated ? Color.red.opacity(0.08) : Color.accentColor.opacity(0.12))
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(
-                            negated ? Color.red.opacity(0.3) : Color.accentColor.opacity(0.3),
-                            lineWidth: 0.5))
-                    }
-                }
-            }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(Color(NSColor.controlBackgroundColor))
-            .overlay(alignment: .bottom) { Divider() }
-        }
+    @objc private func contextToggleCollection(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let book = dict["book"] as? CalibreBook,
+              let name = dict["collection"] as? String else { return }
+        onContextMenuToggleCollection?(book, name)
     }
+
+    @objc private func contextNewCollection(_ sender: NSMenuItem) {
+        guard let book = sender.representedObject as? CalibreBook else { return }
+        onContextMenuNewCollection?(book)
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
 }
 
 // MARK: - EmailBookCellView
