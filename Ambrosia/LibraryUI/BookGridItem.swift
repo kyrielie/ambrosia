@@ -76,8 +76,7 @@ struct LibraryRootView: View {
         }
         .background(libraryBGColor)
         .foregroundStyle(libraryTextColor)
-        .preferredColorScheme(prefs.libraryAppearanceMode == .system ? nil
-            : prefs.libraryAppearanceMode == .light ? .light : .dark)
+        .preferredColorScheme(prefs.resolvedLibraryColorScheme)
         .onChange(of: currentPage)                { loadPage() }
         .onChange(of: toolbarState.sortField)     { currentPage = 0; loadPage() }
         .onChange(of: toolbarState.ascending)     { currentPage = 0; loadPage() }
@@ -147,6 +146,7 @@ struct LibraryRootView: View {
                     currentPage = 0; loadPage()
                 }
             )
+            .preferredColorScheme(prefs.resolvedLibraryColorScheme)
         }
         .sheet(isPresented: Binding(
             get: { toolbarState.showCollections },
@@ -155,12 +155,14 @@ struct LibraryRootView: View {
             CollectionsView(onSelectCollection: { collection in
                 addOrReplaceRule(FilterRule(field: .collection, op: .equals, value: collection.name))
             })
+            .preferredColorScheme(prefs.resolvedLibraryColorScheme)
         }
         .sheet(isPresented: Binding(
             get: { toolbarState.showReadingGoal },
             set: { toolbarState.showReadingGoal = $0 }
         )) {
             ReadingGoalView()
+                .preferredColorScheme(prefs.resolvedLibraryColorScheme)
         }
         .onChange(of: toolbarState.triggerExport) {
             if toolbarState.triggerExport {
@@ -442,7 +444,15 @@ struct BookListRow: View, Equatable {
     let onMarkRead: () -> Void
 
     static func == (lhs: BookListRow, rhs: BookListRow) -> Bool {
-        lhs.book == rhs.book
+        lhs.book.id                       == rhs.book.id
+            && lhs.book.title             == rhs.book.title
+            && lhs.book.series            == rhs.book.series
+            && lhs.book.seriesIndex       == rhs.book.seriesIndex
+            && lhs.book.wordCount         == rhs.book.wordCount
+            && lhs.book.kudos             == rhs.book.kudos
+            && lhs.book.authors           == rhs.book.authors
+            && lhs.book.tags              == rhs.book.tags
+            && lhs.book.comment           == rhs.book.comment
             && lhs.bookState?.calibreID        == rhs.bookState?.calibreID
             && lhs.isLiked                     == rhs.isLiked
             && lhs.bookState?.totalReadPercent == rhs.bookState?.totalReadPercent
@@ -570,10 +580,10 @@ struct BookListRow: View, Equatable {
     @ViewBuilder
     private var descriptionRow: some View {
         if let comment = book.displayComment, !comment.isEmpty {
-            let truncated = comment.count > 300
-                ? String(comment.prefix(300)) + "…"
-                : comment
-            CollapsibleText(text: truncated)
+            Text(comment)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -610,26 +620,6 @@ struct BookListRow: View, Equatable {
 
     private func statChip(_ label: String, icon: String) -> some View {
         Label(label, systemImage: icon).font(.caption2).foregroundStyle(.tertiary)
-    }
-}
-
-// MARK: - Collapsible text
-
-struct CollapsibleText: View {
-    let text: String
-    var collapsedLineLimit: Int = 4
-    @State private var expanded = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(text)
-                .font(.caption).foregroundStyle(.secondary)
-                .lineLimit(expanded ? nil : collapsedLineLimit)
-            if text.count > 300 {
-                Button(expanded ? "Less ↑" : "More ↓") { expanded.toggle() }
-                    .font(.caption2).buttonStyle(.plain).foregroundStyle(Color.accentColor)
-            }
-        }
     }
 }
 

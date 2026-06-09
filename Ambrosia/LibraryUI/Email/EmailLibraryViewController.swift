@@ -21,7 +21,8 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Filter sheet host
 
     private var filterSheetHost: NSHostingView<FilterSheetCarrier>?
-    private var prefsCancellable: AnyCancellable?
+    private var skippedCollectionCancellable: AnyCancellable?
+    private var appearanceCancellable: AnyCancellable?
 
     // MARK: - Sidebar state
 
@@ -85,7 +86,7 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func startObservingPreferences() {
-        prefsCancellable = ReaderPreferences.shared.$showSkippedCollection
+        skippedCollectionCancellable = ReaderPreferences.shared.$showSkippedCollection
             .dropFirst()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
@@ -96,6 +97,21 @@ final class EmailLibraryViewController: NSViewController {
                     loadPage(reset: true)
                 }
             }
+
+        appearanceCancellable = ReaderPreferences.shared.$libraryAppearanceMode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.applyLibraryAppearance()
+            }
+    }
+
+    private func applyLibraryAppearance() {
+        let appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
+        view.appearance = appearance
+        splitVC?.view.appearance = appearance
+        sidebarVC?.view.appearance = appearance
+        filterSheetHost?.appearance = appearance
+        sidebarVC?.reloadAppearance()
     }
 
     // MARK: - Split-view setup
@@ -160,6 +176,7 @@ final class EmailLibraryViewController: NSViewController {
         splitVC = NSSplitViewController()
         splitVC.splitView.isVertical   = true
         splitVC.splitView.autosaveName = "AmbrosiaEmailSplitView"
+        applyLibraryAppearance()
 
         let sidebarItem = NSSplitViewItem(viewController: sidebarVC)
         sidebarItem.minimumThickness           = 200
@@ -195,6 +212,7 @@ final class EmailLibraryViewController: NSViewController {
         )
         let hv = NSHostingView(rootView: carrier)
         hv.sizingOptions = []
+        hv.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
         hv.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(hv)
         NSLayoutConstraint.activate([
@@ -224,6 +242,7 @@ final class EmailLibraryViewController: NSViewController {
                     .frame(maxWidth: 280)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
         )
     }
 
@@ -470,6 +489,7 @@ final class EmailLibraryViewController: NSViewController {
     private func makeRightVC() -> NSViewController {
         guard let book = selectedBook else { return makePlaceholderVC() }
         let rvc = ReaderViewController(book: book, modelContainer: modelContainer)
+        rvc.view.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
         let cid = book.id
         Task.detached { [mc = modelContainer] in
             let ctx = ModelContext(mc)
@@ -494,6 +514,7 @@ final class EmailLibraryViewController: NSViewController {
             oldVC.removeFromParent()
         }
         splitVC.addChild(vc)
+        vc.view.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
         let item = NSSplitViewItem(viewController: vc)
         item.minimumThickness = 420
         splitVC.addSplitViewItem(item)
@@ -530,6 +551,7 @@ struct FilterSheetCarrier: View {
                 .environment(toolbarState)
                 .environment(session)
                 .modelContainer(modelContainer)
+                .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
             }
             .sheet(isPresented: Binding(
                 get: { toolbarState.showCollections },
@@ -550,6 +572,7 @@ struct FilterSheetCarrier: View {
                 })
                 .modelContainer(modelContainer)
                 .environment(session)
+                .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
             }
             .sheet(isPresented: Binding(
                 get: { toolbarState.showReadingGoal },
@@ -557,6 +580,7 @@ struct FilterSheetCarrier: View {
             )) {
                 ReadingGoalView()
                     .modelContainer(modelContainer)
+                    .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
             }
             .onChange(of: toolbarState.triggerExport) {
                 if toolbarState.triggerExport {

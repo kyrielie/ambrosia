@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Combine
+import SwiftUI
 
 // MARK: - LibraryColorMode
 
@@ -129,6 +130,28 @@ final class ReaderPreferences: ObservableObject {
             return "__system_label__"
         case .custom:
             return isDark ? libraryDarkTextColor : libraryLightTextColor
+        }
+    }
+
+    var resolvedLibraryNSAppearance: NSAppearance? {
+        switch libraryAppearanceMode {
+        case .system:
+            return nil
+        case .light:
+            return NSAppearance(named: .aqua)
+        case .dark:
+            return NSAppearance(named: .darkAqua)
+        }
+    }
+
+    var resolvedLibraryColorScheme: ColorScheme? {
+        switch libraryAppearanceMode {
+        case .system:
+            return nil
+        case .light:
+            return .light
+        case .dark:
+            return .dark
         }
     }
 

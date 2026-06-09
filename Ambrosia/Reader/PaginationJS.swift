@@ -18,8 +18,10 @@ import Foundation
 //   window.ambrosiaPaginate(pageHeightPx)
 //     → posts paginationResult: { boundaries: [{startChar, endChar}] }
 //       or  paginationResult: { error: 'layout_not_ready' }
+//   window.ambrosiaBuildPageHTML(startChar, endChar)
+//     → returns a complete HTML document containing only that rendered range
 //   window.ambrosiaRenderPage(startChar, endChar)
-//     → scrolls to startChar position, hides overflow
+//     → legacy scroll/clipped renderer, kept for compatibility
 //   window.ambrosiaHighlight(offset)
 //     → 2-second yellow flash at offset position
 //   window.ambrosiaTotalChars()
@@ -127,7 +129,8 @@ enum PaginationJS {
             return;
         }
 
-        var pageH = pageHeightPx;
+        var lineSafety = Math.max(4, Math.ceil(measuredLineHeight() * 0.5));
+        var pageH = Math.max(1, pageHeightPx - lineSafety);
         var currentStartChar = 0;
         var safetyLimit = 5000;  // max pages — prevents infinite loop on malformed content
         var iterations = 0;
@@ -143,22 +146,22 @@ enum PaginationJS {
             // Fast path: try a full page worth first
             // Average chars per page estimation: ~2000 chars as starting guess
             var guess = Math.min(totalChars, currentStartChar + 2000);
-            var guessPos = charToPageTop(guess);
-            if (guessPos !== null && guessPos - charToPageTop(currentStartChar) < pageH) {
-                lo = guess;
-            }
+            var guessBottom = charToLineBottom(guess);
 
             // Binary search for the last char that fits within pageH
             var startTop = charToPageTop(currentStartChar);
             if (startTop === null) { break; }
+            if (guessBottom !== null && guessBottom - startTop <= pageH) {
+                lo = guess;
+            }
 
             var bsIter = 0;
             while (lo < hi && bsIter < 30) {
                 bsIter++;
                 var mid = Math.floor((lo + hi + 1) / 2);
-                var midTop = charToPageTop(mid);
-                if (midTop === null) { hi = mid - 1; continue; }
-                if (midTop - startTop < pageH) {
+                var midBottom = charToLineBottom(mid);
+                if (midBottom === null) { hi = mid - 1; continue; }
+                if (midBottom - startTop <= pageH) {
                     lo = mid;
                     bestEnd = mid;
                 } else {
@@ -220,6 +223,37 @@ enum PaginationJS {
         return y;
     }
 
+    // Returns an estimated rendered line bottom for the text line containing
+    // charOffset. Page breaks use this instead of marker top so the viewport
+    // cannot clip through the lower half of glyphs on the final visible line.
+    function charToLineBottom(charOffset) {
+        var pos = nodeAtChar(charOffset);
+        if (!pos) return null;
+
+        var range = document.createRange();
+        range.setStart(pos.node, pos.localOffset);
+        range.collapse(true);
+
+        var marker = document.createElement('span');
+        marker.style.cssText = 'display:inline-block;width:0;height:1em;line-height:1;vertical-align:baseline;padding:0;margin:0;border:0;';
+        range.insertNode(marker);
+
+        var rect = marker.getBoundingClientRect();
+        var y = rect.bottom + window.scrollY;
+        marker.parentNode.removeChild(marker);
+        return y;
+    }
+
+    function measuredLineHeight() {
+        var style = window.getComputedStyle(document.body);
+        var parsed = parseFloat(style.lineHeight);
+        if (!isNaN(parsed) && parsed > 0) return parsed;
+
+        var fontSize = parseFloat(style.fontSize);
+        if (!isNaN(fontSize) && fontSize > 0) return fontSize * 1.4;
+        return 24;
+    }
+
     // ─── Core: ambrosiaRenderPage ───────────────────────────────────────────────
 
     window.ambrosiaRenderPage = function(startChar, endChar) {
@@ -251,6 +285,59 @@ enum PaginationJS {
         window._ambrosiaPageEnd   = endChar;
     };
 
+    // ─── Core: ambrosiaBuildPageHTML ───────────────────────────────────────────
+
+    function escapeScriptString(value) {
+        return String(value)
+            .replace(/\\/g, '\\\\')
+            .replace(/'/g, "\\'")
+            .replace(/\\n/g, '\\n')
+            .replace(/\\r/g, '\\r')
+            .replace(/<\\/script/gi, '<\\\\/script');
+    }
+
+    window.ambrosiaBuildPageHTML = function(startChar, endChar, userCSS) {
+        var start = Math.max(0, startChar);
+        var end = Math.max(start, endChar);
+        var total = countAllTextChars();
+        start = Math.min(start, total);
+        end = Math.min(end, total);
+
+        var startPos = nodeAtChar(start);
+        var endPos = nodeAtChar(end);
+        if (!startPos || !endPos) return null;
+
+        var range = document.createRange();
+        range.setStart(startPos.node, startPos.localOffset);
+        range.setEnd(endPos.node, endPos.localOffset);
+
+        var fragment = range.cloneContents();
+        var container = document.createElement('main');
+        container.setAttribute('id', 'ambrosia-page');
+        container.appendChild(fragment);
+
+        var headHTML = document.head ? document.head.innerHTML : '';
+        return [
+            '<!DOCTYPE html>',
+            '<html>',
+            '<head>',
+            headHTML,
+            '<style>',
+            userCSS || '',
+            '</style>',
+            '<script>',
+            'window._ambrosiaPageStart = ' + start + ';',
+            'window._ambrosiaPageEnd = ' + end + ';',
+            'window._ambrosiaPageSource = \\'paginated-fragment\\';',
+            '<\\/script>',
+            '</head>',
+            '<body>',
+            container.outerHTML,
+            '</body>',
+            '</html>'
+        ].join('');
+    };
+
     // ─── Core: ambrosiaHighlight ────────────────────────────────────────────────
 
     window.ambrosiaHighlight = function(offset) {
@@ -258,11 +345,16 @@ enum PaginationJS {
         var existing = document.getElementById('__ambrosia_highlight__');
         if (existing) existing.parentNode.removeChild(existing);
 
-        var pos = nodeAtChar(offset);
+        var pageStart = window._ambrosiaPageStart || 0;
+        var pageEnd = window._ambrosiaPageEnd || Number.MAX_SAFE_INTEGER;
+        var localOffset = offset - pageStart;
+        if (offset < pageStart || offset > pageEnd) return;
+
+        var pos = nodeAtChar(localOffset);
         if (!pos) return;
 
         // Find end of the sentence (up to 80 chars) for the highlight span
-        var endOffset = Math.min(offset + 80, window.ambrosiaTotalChars());
+        var endOffset = Math.min(localOffset + 80, window.ambrosiaTotalChars());
         var endPos = nodeAtChar(endOffset);
         if (!endPos) return;
 
@@ -302,14 +394,15 @@ enum PaginationJS {
     // ─── Char offset for a DOM node + local offset (used by HighlightBridge) ───
 
     window.ambrosiaCharOffset = function(node, localOffset) {
+        var pageStart = window._ambrosiaPageStart || 0;
         var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
         var count = 0;
         var current;
         while ((current = walker.nextNode()) !== null) {
-            if (current === node) return count + localOffset;
+            if (current === node) return pageStart + count + localOffset;
             count += current.length;
         }
-        return count + localOffset;
+        return pageStart + count + localOffset;
     };
 
     })(); // end IIFE

@@ -103,6 +103,13 @@ final class EmailSidebarViewController: NSViewController,
         tableView.tableColumns.first?.width = tableView.bounds.width
     }
 
+    func reloadAppearance() {
+        view.needsDisplay = true
+        scrollView?.needsDisplay = true
+        tableView?.reloadData()
+        tableView?.needsDisplay = true
+    }
+
     // MARK: - NSTableViewDataSource
 
     func numberOfRows(in tableView: NSTableView) -> Int { books.count }

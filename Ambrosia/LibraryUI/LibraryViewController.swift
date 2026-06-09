@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import SwiftData
 
@@ -12,6 +13,7 @@ class LibraryViewController: NSViewController {
 
     /// Tracks the hosting view for list mode so we can remove it on mode switch.
     private var listHostingView: NSHostingView<AnyView>?
+    private var appearanceCancellable: AnyCancellable?
 
     init(modelContainer: ModelContainer, session: LibrarySession) {
         self.modelContainer = modelContainer
@@ -29,8 +31,27 @@ class LibraryViewController: NSViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        applyLibraryAppearance()
         applyViewMode(toolbarState.viewMode)
         startObservingViewMode()
+        startObservingAppearance()
+    }
+
+    // MARK: - Appearance
+
+    private func applyLibraryAppearance() {
+        let appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
+        view.appearance = appearance
+        children.forEach { $0.view.appearance = appearance }
+        listHostingView?.appearance = appearance
+    }
+
+    private func startObservingAppearance() {
+        appearanceCancellable = ReaderPreferences.shared.$libraryAppearanceMode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.applyLibraryAppearance()
+            }
     }
 
     // MARK: - View mode switching
@@ -65,6 +86,7 @@ class LibraryViewController: NSViewController {
             )
             let hv = NSHostingView(rootView: root)
             hv.sizingOptions = []                             // ← the real fix
+            hv.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
             hv.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(hv)
             NSLayoutConstraint.activate([
@@ -82,6 +104,7 @@ class LibraryViewController: NSViewController {
                 toolbarState: toolbarState
             )
             addChild(childVC)
+            childVC.view.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
             childVC.view.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(childVC.view)
             NSLayoutConstraint.activate([
@@ -100,6 +123,7 @@ class LibraryViewController: NSViewController {
             )
             let childVC = NSHostingController(rootView: placeholder)
             addChild(childVC)
+            childVC.view.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
             childVC.view.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(childVC.view)
             NSLayoutConstraint.activate([

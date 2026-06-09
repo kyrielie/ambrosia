@@ -13,15 +13,16 @@ enum HighlightBridge {
         window.__ambrosiaHighlightListenerInstalled = true;
 
         function getCharOffset(node, localOffset) {
+            var pageStart = window._ambrosiaPageStart || 0;
             var walker = document.createTreeWalker(
                 document.body, NodeFilter.SHOW_TEXT, null
             );
             var count = 0, current;
             while ((current = walker.nextNode()) !== null) {
-                if (current === node) return count + localOffset;
+                if (current === node) return pageStart + count + localOffset;
                 count += current.length;
             }
-            return count + localOffset;
+            return pageStart + count + localOffset;
         }
 
         document.addEventListener('mouseup', function(e) {
@@ -99,6 +100,13 @@ enum HighlightBridge {
             var hid          = '\(highlightID)';
             var hasNote      = \(hasNoteJS);
             var useUnderline = \(useUnderJS);
+            var pageStart    = window._ambrosiaPageStart || 0;
+            var pageEnd      = window._ambrosiaPageEnd || Number.MAX_SAFE_INTEGER;
+
+            if (endChar <= pageStart || startChar >= pageEnd) return;
+            startChar = Math.max(startChar, pageStart) - pageStart;
+            endChar = Math.min(endChar, pageEnd) - pageStart;
+            if (endChar <= startChar) return;
 
             if (document.getElementById('hl-' + hid + '-0')) return;
             if (document.getElementById('hl-' + hid)) return;

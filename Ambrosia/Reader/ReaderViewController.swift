@@ -40,7 +40,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     // Paginated mode
     private var pages: [PaginationEngine.PageBoundary] = []
     private var currentPageIndex: Int = 0
-    private var paginationEngine: PaginationEngine?
+    private var paginationSession: PaginationEngine?
+    private var paginationRetryCount: Int = 0
 
     // Resize debounce
     private let resizeDebounce = DebounceTimer(delay: 0.3)
@@ -107,10 +108,23 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         config.userContentController.add(self, name: "highlightAdded")   // capture selection only
         config.userContentController.add(self, name: "highlightTapped")  // note popup trigger
 
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.backgroundColor = Self.nsColor(hex: ReaderPreferences.shared.readerBackgroundColor)?.cgColor
+
         webView = ReaderMenuWebView(frame: .zero, configuration: config)
         webView.viewController = self
         webView.navigationDelegate = self
-        view = webView
+        webView.translatesAutoresizingMaskIntoConstraints = false
+
+        container.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: container.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        view = container
     }
 
     override func viewDidLoad() {
@@ -128,10 +142,22 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     override func viewDidLayout() {
         super.viewDidLayout()
         repositionFindBar()
+        if currentMode == .paginated, pages.isEmpty, !currentHTML.isEmpty {
+            resizeDebounce.schedule { [weak self] in
+                self?.paginateCurrentContent()
+            }
+            return
+        }
         guard currentMode == .paginated, !pages.isEmpty else { return }
         resizeDebounce.schedule { [weak self] in
             self?.repaginatePreservingPosition()
         }
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        guard currentMode == .paginated, pages.isEmpty, !currentHTML.isEmpty else { return }
+        paginateCurrentContent()
     }
 
     override func viewWillDisappear() {
@@ -168,7 +194,11 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 self.parser       = p
                 self.imageBaseURL = imgBase
                 self.currentHTML  = html
-                self.webView.loadHTMLString(html, baseURL: imgBase)
+                if self.currentMode == .paginated {
+                    self.paginateCurrentContent()
+                } else {
+                    self.webView.loadHTMLString(html, baseURL: imgBase)
+                }
             }
         } catch {
             await MainActor.run { self.showError(error.localizedDescription) }
@@ -182,7 +212,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         do {
             let html = try p.mergedHTML(userCSS: ReaderPreferences.shared.css)
             currentHTML = html
-            webView.loadHTMLString(html, baseURL: imageBaseURL)
+            pages = []
+            paginationSession?.invalidate()
+            paginationSession = nil
+            if currentMode == .paginated {
+                paginateCurrentContent()
+            } else {
+                webView.loadHTMLString(html, baseURL: imageBaseURL)
+            }
         } catch {
             print("[ReaderVC] reloadHTML error: \(error)")
         }
@@ -202,13 +239,21 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     // MARK: - Mode switching
 
     func switchToScrollMode() {
-        currentMode = .scroll
-        saveCurrentCharOffset { [weak self] _ in self?.reloadHTML() }
+        saveCurrentCharOffset { [weak self] _ in
+            guard let self else { return }
+            self.currentMode = .scroll
+            self.paginationSession?.invalidate()
+            self.paginationSession = nil
+            self.reloadHTML()
+        }
     }
 
     func switchToPaginatedMode() {
-        currentMode = .paginated
-        paginateCurrentContent()
+        saveCurrentCharOffset { [weak self] _ in
+            guard let self else { return }
+            self.currentMode = .paginated
+            self.paginateCurrentContent()
+        }
     }
 
     // MARK: - WKNavigationDelegate
@@ -224,7 +269,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             injectScrollTracker()
             startAutoSave()
         case .paginated:
-            paginateCurrentContent()
+            startAutoSave()
         }
     }
 
@@ -259,15 +304,33 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     private func paginateCurrentContent() {
         guard !currentHTML.isEmpty else { return }
-        let pageHeight = max(1, webView.bounds.height - 2.0)
-        let engine = PaginationEngine(parentView: view)
-        paginationEngine = engine
-        engine.paginate(html: currentHTML, pageHeight: pageHeight, baseURL: imageBaseURL) { [weak self] boundaries in
-            guard let self else { return }
-            self.paginationEngine = nil
-            if boundaries.isEmpty {
-                self.switchToScrollMode(); return
+        let pageHeight = webView.bounds.height - 2.0
+        guard pageHeight > 100, view.window != nil else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self, self.currentMode == .paginated, self.pages.isEmpty else { return }
+                self.paginateCurrentContent()
             }
+            return
+        }
+
+        let session = PaginationEngine(parentView: view)
+        paginationSession?.invalidate()
+        paginationSession = session
+        session.load(html: currentHTML, pageHeight: pageHeight, userCSS: ReaderPreferences.shared.css, baseURL: imageBaseURL) { [weak self] boundaries in
+            guard let self else { return }
+            if boundaries.isEmpty {
+                self.paginationRetryCount += 1
+                guard self.paginationRetryCount <= 3 else {
+                    print("[ReaderVC] Pagination failed after retries; staying in paginated mode.")
+                    return
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                    guard let self, self.currentMode == .paginated else { return }
+                    self.paginateCurrentContent()
+                }
+                return
+            }
+            self.paginationRetryCount = 0
             self.pages = boundaries
             let savedOffset = self.bookState?.lastCharacterOffset ?? 0
             self.currentPageIndex = self.pageIndex(forCharOffset: savedOffset)
@@ -281,25 +344,45 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         saveCurrentCharOffset { [weak self] savedOffset in
             guard let self else { return }
             let pageHeight = max(1, self.webView.bounds.height - 2.0)
-            let engine = PaginationEngine(parentView: self.view)
-            self.paginationEngine = engine
-            engine.paginate(html: self.currentHTML, pageHeight: pageHeight, baseURL: self.imageBaseURL) { [weak self] boundaries in
+            guard pageHeight > 100 else { return }
+            let session: PaginationEngine
+            if let existing = self.paginationSession {
+                session = existing
+            } else {
+                session = PaginationEngine(parentView: self.view)
+                self.paginationSession = session
+            }
+
+            let finish: ([PaginationEngine.PageBoundary]) -> Void = { [weak self] boundaries in
                 guard let self else { return }
-                self.paginationEngine = nil
                 guard !boundaries.isEmpty else { return }
                 self.pages = boundaries
                 self.currentPageIndex = self.pageIndex(forCharOffset: savedOffset)
-                self.renderCurrentPage()
-                self.webView.evaluateJavaScript("window.ambrosiaHighlight(\(savedOffset));", completionHandler: nil)
+                self.renderCurrentPage(highlightOffset: savedOffset)
+            }
+
+            if self.paginationSession === session, !self.pages.isEmpty {
+                session.repaginate(pageHeight: pageHeight, completion: finish)
+            } else {
+                session.load(html: self.currentHTML, pageHeight: pageHeight, userCSS: ReaderPreferences.shared.css, baseURL: self.imageBaseURL, completion: finish)
             }
         }
     }
 
-    func renderCurrentPage() {
+    func renderCurrentPage(highlightOffset: Int? = nil) {
         guard !pages.isEmpty else { return }
         let idx  = max(0, min(currentPageIndex, pages.count - 1))
         let page = pages[idx]
-        webView.evaluateJavaScript("window.ambrosiaRenderPage(\(page.startChar), \(page.endChar));", completionHandler: nil)
+        guard let session = paginationSession else { return }
+        session.pageHTML(startChar: page.startChar, endChar: page.endChar) { [weak self] html in
+            guard let self, let html else { return }
+            self.webView.loadHTMLString(html, baseURL: self.imageBaseURL)
+            if let highlightOffset {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    self.webView.evaluateJavaScript("window.ambrosiaHighlight(\(highlightOffset));", completionHandler: nil)
+                }
+            }
+        }
         bookState?.totalReadPercent = Double(idx + 1) / Double(pages.count)
     }
 
@@ -323,14 +406,55 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     private func saveCurrentCharOffset(completion: @escaping (Int) -> Void) {
         if currentMode == .paginated {
-            let offset = pages.isEmpty ? 0 : pages[max(0, currentPageIndex)].startChar
+            let idx = max(0, min(currentPageIndex, pages.count - 1))
+            let offset = pages.isEmpty ? 0 : pages[idx].startChar
             bookState?.lastCharacterOffset = offset
             completion(offset)
         } else {
-            webView.evaluateJavaScript("[window.scrollY, document.body.scrollHeight]") { [weak self] result, _ in
-                guard let arr = result as? [Double], arr.count == 2, arr[1] > 0 else { completion(0); return }
-                self?.bookState?.lastScrollOffset = arr[0]
-                completion(0)
+            let js = """
+            (function() {
+                var targetY = window.scrollY + 20;
+                var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+                var cumulative = 0;
+                var node;
+
+                function bottomFor(node, localOffset) {
+                    var range = document.createRange();
+                    range.setStart(node, Math.max(0, Math.min(localOffset, node.length)));
+                    range.collapse(true);
+                    var marker = document.createElement('span');
+                    marker.style.cssText = 'display:inline-block;width:0;height:1em;line-height:1;vertical-align:baseline;padding:0;margin:0;border:0;';
+                    range.insertNode(marker);
+                    var rect = marker.getBoundingClientRect();
+                    var bottom = rect.bottom + window.scrollY;
+                    marker.parentNode.removeChild(marker);
+                    return bottom;
+                }
+
+                while ((node = walker.nextNode()) !== null) {
+                    if (node.length === 0) continue;
+                    var endBottom = bottomFor(node, node.length);
+                    if (endBottom >= targetY) {
+                        var lo = 0, hi = node.length;
+                        while (lo < hi) {
+                            var mid = Math.floor((lo + hi) / 2);
+                            if (bottomFor(node, mid) < targetY) lo = mid + 1;
+                            else hi = mid;
+                        }
+                        return { scrollY: window.scrollY, charOffset: cumulative + lo };
+                    }
+                    cumulative += node.length;
+                }
+                return { scrollY: window.scrollY, charOffset: cumulative };
+            })();
+            """
+            webView.evaluateJavaScript(js) { [weak self] result, _ in
+                guard let dict = result as? [String: Any] else { completion(0); return }
+                let scrollY = Self.cgFloat(from: dict["scrollY"])
+                let charOffset = dict["charOffset"] as? Int ?? 0
+                self?.bookState?.lastScrollOffset = Double(scrollY)
+                self?.bookState?.lastCharacterOffset = charOffset
+                completion(charOffset)
             }
         }
     }
@@ -481,7 +605,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         // CHANGE 2: Extract surrounding sentence from the live DOM as preview text.
         let sentenceJS = """
         (function() {
-            var target = \(offset);
+            var pageStart = window._ambrosiaPageStart || 0;
+            var target = Math.max(0, \(offset) - pageStart);
             var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
             var remaining = target;
             var node;
@@ -671,6 +796,18 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         if let value = value as? Int { return CGFloat(value) }
         if let value = value as? NSNumber { return CGFloat(truncating: value) }
         return 0
+    }
+
+    private static func nsColor(hex: String) -> NSColor? {
+        var value = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.hasPrefix("#") { value.removeFirst() }
+        guard value.count == 6, let intValue = Int(value, radix: 16) else { return nil }
+        return NSColor(
+            red: CGFloat((intValue >> 16) & 0xFF) / 255.0,
+            green: CGFloat((intValue >> 8) & 0xFF) / 255.0,
+            blue: CGFloat(intValue & 0xFF) / 255.0,
+            alpha: 1.0
+        )
     }
 
     // MARK: - Restore annotations after page load

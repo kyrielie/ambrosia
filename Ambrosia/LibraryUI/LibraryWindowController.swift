@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import SwiftData
 
@@ -26,6 +27,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private var sortMenuToolbarItem: NSMenuToolbarItem?
     private var ficCountLabel: NSTextField?
     private var readCountLabel: NSTextField?
+    private var appearanceCancellable: AnyCancellable?
 
     // The search toolbar item — kept strongly so we can anchor the popover.
     private var searchToolbarItem: NSSearchToolbarItem?
@@ -74,11 +76,30 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         self.session    = session
         toolbarState    = libraryVC.toolbarState
         configureToolbar(window: window)
+        applyLibraryAppearance()
+        startObservingAppearance()
         startObservingCounts()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    // MARK: - Appearance
+
+    private func applyLibraryAppearance() {
+        let appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
+        window?.appearance = appearance
+        window?.contentView?.appearance = appearance
+        suggestionPanel?.appearance = appearance
+    }
+
+    private func startObservingAppearance() {
+        appearanceCancellable = ReaderPreferences.shared.$libraryAppearanceMode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.applyLibraryAppearance()
+            }
+    }
 
     // MARK: - Toolbar setup
 
@@ -397,6 +418,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             backing: .buffered,
             defer: false
         )
+        panel.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
         panel.contentViewController = vc
         panel.isOpaque = false
         panel.backgroundColor = .clear
