@@ -12,6 +12,35 @@ enum AO3Rating: String, CaseIterable {
     case mature            = "Mature"
     case explicit          = "Explicit"
     case notRated          = "Not Rated"
+
+    // MARK: - Ordinal hierarchy
+    //
+    // "Not Rated" sits outside the linear scale — a book tagged "Not Rated" could
+    // be anything, so it is treated as unrated rather than given a position.
+    // The four rated values form a strict ascending order used by the ceiling filter.
+
+    /// Numeric level for hierarchy comparisons. nil means "outside the scale".
+    var level: Int? {
+        switch self {
+        case .generalAudiences: return 1
+        case .teenAndUp:        return 2
+        case .mature:           return 3
+        case .explicit:         return 4
+        case .notRated:         return nil
+        }
+    }
+
+    /// All ratings that are strictly higher than this one on the linear scale.
+    var higherRatings: [AO3Rating] {
+        guard let myLevel = level else { return [] }
+        return AO3Rating.allCases.filter { ($0.level ?? 0) > myLevel }
+    }
+
+    /// All ratings that are strictly lower than this one on the linear scale.
+    var lowerRatings: [AO3Rating] {
+        guard let myLevel = level else { return [] }
+        return AO3Rating.allCases.filter { ($0.level ?? Int.max) < myLevel }
+    }
 }
 
 enum AO3Warning: String, CaseIterable {

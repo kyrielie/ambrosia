@@ -211,6 +211,9 @@ extension CalibreLibrary {
                 return ("b.id NOT IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name = ?)", [v])
             case .startsWith:
                 return ("b.id IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name LIKE ?)", ["\(v)%"])
+            case .ratingAtMost, .ratingAtLeast:
+                // Rating hierarchy operators don't apply to generic tags; treat as equals.
+                return ("b.id IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name = ?)", [v])
             }
         case .rating:
             return ao3TagFragment(op: rule.op, value: v)
@@ -266,6 +269,10 @@ extension CalibreLibrary {
             return ("\(null)\(column) != ?\(end)", [value])
         case .startsWith:
             return ("\(column) LIKE ?", ["\(value)%"])
+        case .ratingAtMost, .ratingAtLeast:
+            // These operators only make sense for the .rating field (routed via ao3TagFragment).
+            // If reached here, fall back to exact match.
+            return ("\(column) = ?", [value])
         }
     }
 
@@ -283,6 +290,53 @@ extension CalibreLibrary {
             return ("b.id NOT IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name LIKE ?)", ["%\(value)%"])
         case .startsWith:
             return ("b.id IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name LIKE ?)", ["\(value)%"])
+
+        case .ratingAtMost:
+            // "Show me books rated AT MOST X."
+            //
+            // A book passes iff it has NO tag with a rating level HIGHER than X.
+            // This correctly handles:
+            //   - books with a single rating tag at or below X → ✓
+            //   - books with multiple rating tags where one is above X → ✗
+            //   - books tagged only "Not Rated" → ✓ (no higher tag exists)
+            //   - books with no rating tag at all → ✓
+            guard let rating = AO3Rating(rawValue: value) else {
+                return ao3TagFragment(op: .equals, value: value)
+            }
+            let higher = rating.higherRatings
+            if higher.isEmpty {
+                // Explicit is the maximum — ratingAtMost Explicit matches everything
+                return ("1 = 1", [])
+            }
+            // Build: NOT IN (books that have any higher-rated tag)
+            let placeholders = higher.map { _ in "?" }.joined(separator: ", ")
+            let args: [Binding?] = higher.map { $0.rawValue as Binding? }
+            return (
+                "b.id NOT IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name IN (\(placeholders)))",
+                args
+            )
+
+        case .ratingAtLeast:
+            // "Show me books rated AT LEAST X."
+            //
+            // A book passes iff it has AT LEAST ONE tag with a rating level >= X.
+            // Books tagged only "Not Rated" do NOT pass (level is nil).
+            guard let rating = AO3Rating(rawValue: value) else {
+                return ao3TagFragment(op: .equals, value: value)
+            }
+            guard let myLevel = rating.level else {
+                // "Not Rated" as a floor is undefined; fall back to exact match
+                return ao3TagFragment(op: .equals, value: value)
+            }
+            // Collect all ratings at or above this level
+            let qualified = AO3Rating.allCases.filter { ($0.level ?? 0) >= myLevel }
+            if qualified.isEmpty { return ("0 = 1", []) }
+            let placeholders = qualified.map { _ in "?" }.joined(separator: ", ")
+            let args: [Binding?] = qualified.map { $0.rawValue as Binding? }
+            return (
+                "b.id IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name IN (\(placeholders)))",
+                args
+            )
         }
     }
 

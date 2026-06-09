@@ -65,22 +65,31 @@ enum FilterOperator: String, CaseIterable, Identifiable, Codable {
     case equals
     case notEquals
     case startsWith
+    /// Rating ceiling: matches books whose highest rating is ≤ this value.
+    /// Books with "Not Rated" ARE included (they are not higher than anything).
+    case ratingAtMost
+    /// Rating floor: matches books whose lowest rating is ≥ this value.
+    /// Books with "Not Rated" are excluded.
+    case ratingAtLeast
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .contains:    return "contains"
-        case .notContains: return "does not contain"
-        case .equals:      return "equals"
-        case .notEquals:   return "does not equal"
-        case .startsWith:  return "starts with"
+        case .contains:     return "contains"
+        case .notContains:  return "does not contain"
+        case .equals:       return "is"
+        case .notEquals:    return "is not"
+        case .startsWith:   return "starts with"
+        case .ratingAtMost: return "max rating"
+        case .ratingAtLeast:return "min rating"
         }
     }
 
     static var numericOperators: [FilterOperator] { [.equals, .notEquals] }
-    static var textOperators: [FilterOperator] { allCases.filter { $0 != .notEquals } }
+    static var textOperators: [FilterOperator] { [.contains, .notContains, .equals, .startsWith] }
     static var exactOperators: [FilterOperator] { [.equals, .notEquals] }
+    static var ratingOperators: [FilterOperator] { [.equals, .notEquals, .ratingAtMost, .ratingAtLeast] }
 }
 
 // MARK: - Filter conjunction
@@ -122,8 +131,9 @@ struct FilterRule: Identifiable, Codable {
     /// Operators valid for the current field.
     var availableOperators: [FilterOperator] {
         switch field {
-        case .rating, .warning, .category, .collection:
-            // Exact match only — contains/startsWith don't make sense for collections
+        case .rating:
+            return FilterOperator.ratingOperators
+        case .warning, .category, .collection:
             return FilterOperator.exactOperators
         case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT:
             return FilterOperator.numericOperators

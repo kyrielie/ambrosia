@@ -35,7 +35,7 @@ enum SuggestionKind {
     /// The FilterField this suggestion kind maps to when committed.
     var filterField: FilterField {
         switch self {
-        case .tag:    return .tag
+        case .tag:    return .tag      // may be overridden to .rating by asFilterRule
         case .author: return .authorName
         case .title:  return .title
         case .series: return .series
@@ -43,10 +43,19 @@ enum SuggestionKind {
     }
 
     /// The FilterOperator to use when creating a rule from this suggestion.
-    var filterOperator: FilterOperator {
+    /// Tags are classified through AO3TagKind so rating tags default to .ratingAtMost.
+    func filterOperator(for value: String) -> FilterOperator {
         switch self {
-        case .tag, .author: return .equals
-        case .title, .series: return .contains
+        case .tag:
+            // AO3 rating tags get ratingAtMost as the default — "show me books
+            // rated at most X" is almost always what the user wants when they
+            // pick a rating from suggestions.
+            if case .rating = AO3TagKind.classify(value) { return .ratingAtMost }
+            return .equals
+        case .author:
+            return .equals
+        case .title, .series:
+            return .contains
         }
     }
 }
@@ -60,7 +69,16 @@ struct SearchSuggestion: Identifiable {
 
     /// The FilterRule this suggestion produces when committed.
     var asFilterRule: FilterRule {
-        FilterRule(field: kind.filterField, op: kind.filterOperator, value: value)
+        let op    = kind.filterOperator(for: value)
+        // AO3TagKind drives the field for rating/warning/category tags
+        let field: FilterField
+        switch kind {
+        case .tag:
+            field = AO3TagKind.classify(value).filterField
+        default:
+            field = kind.filterField
+        }
+        return FilterRule(field: field, op: op, value: value)
     }
 }
 
@@ -107,7 +125,9 @@ struct SuggestionSection: Identifiable {
 
 // MARK: - SearchSuggestionsView
 
-/// Sectioned suggestion list rendered inside the NSPopover.
+/// Sectioned suggestion list rendered inside a non-activating NSPanel.
+/// Carries its own .regularMaterial background so the panel window can be
+/// fully transparent — the same approach used by Spotlight and Xcode Quick Open.
 struct SearchSuggestionsView: View {
     let sections:  [SuggestionSection]
     let onSelect:  (SearchSuggestion) -> Void
@@ -128,6 +148,14 @@ struct SearchSuggestionsView: View {
         }
         .frame(minWidth: 280, maxWidth: 400)
         .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.regularMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
+        )
     }
 
     private func sectionHeader(_ kind: SuggestionKind) -> some View {

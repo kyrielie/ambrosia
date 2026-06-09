@@ -12,6 +12,26 @@ enum AO3Rating: String, CaseIterable {
     case mature            = "Mature"
     case explicit          = "Explicit"
     case notRated          = "Not Rated"
+
+    var level: Int? {
+        switch self {
+        case .generalAudiences: return 1
+        case .teenAndUp:        return 2
+        case .mature:           return 3
+        case .explicit:         return 4
+        case .notRated:         return nil
+        }
+    }
+
+    var higherRatings: [AO3Rating] {
+        guard let myLevel = level else { return [] }
+        return AO3Rating.allCases.filter { ($0.level ?? 0) > myLevel }
+    }
+
+    var lowerRatings: [AO3Rating] {
+        guard let myLevel = level else { return [] }
+        return AO3Rating.allCases.filter { ($0.level ?? Int.max) < myLevel }
+    }
 }
 
 enum AO3Warning: String, CaseIterable {

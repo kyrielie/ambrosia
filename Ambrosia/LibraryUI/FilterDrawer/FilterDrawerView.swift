@@ -239,7 +239,22 @@ struct FilterRuleRow: View {
         case .rating:
             Picker("", selection: $rule.value) {
                 Text("— pick —").tag("")
-                ForEach(AO3Rating.allCases, id: \.rawValue) { r in Text(r.rawValue).tag(r.rawValue) }
+                // Display in hierarchy order: General (lowest) → Explicit (highest)
+                // Not Rated sits outside the scale and is shown last.
+                let orderedRatings: [AO3Rating] = [
+                    .generalAudiences, .teenAndUp, .mature, .explicit, .notRated
+                ]
+                ForEach(orderedRatings, id: \.rawValue) { r in
+                    HStack {
+                        Text(r.rawValue)
+                        if let level = r.level {
+                            Text("(\(["", "low", "", "", "high"][min(level, 4)]))")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        }
+                    }
+                    .tag(r.rawValue)
+                }
             }.labelsHidden().frame(maxWidth: .infinity)
         case .warning:
             Picker("", selection: $rule.value) {

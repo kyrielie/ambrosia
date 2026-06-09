@@ -30,17 +30,21 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     // The search toolbar item — kept strongly so we can anchor the popover.
     private var searchToolbarItem: NSSearchToolbarItem?
 
-    // MARK: - Suggestion popover
+    // MARK: - Suggestion panel
     //
-    // NSPopover is used instead of a child NSWindow because:
-    // - It correctly resolves the coordinate space for NSSearchToolbarItem, which
-    //   lives inside a private NSToolbarItemViewer and cannot be reliably converted
-    //   via convert(_:to:nil) + convertToScreen.
-    // - It does not steal first responder from the search field.
-    // - It sizes itself from SwiftUI content naturally.
-    // - .semitransient behaviour closes on content-area clicks but not on field edits.
+    // A non-activating NSPanel child window replaces NSPopover because
+    // NSPopover.show() transfers key focus away from the search field, causing
+    // keystrokes to be dropped while the suggestion list is visible.
+    //
+    // NSPanel with .nonactivatingPanel style mask never takes key focus, so the
+    // user can keep typing while suggestions update — the same mechanism used by
+    // Xcode's completion list and Spotlight's suggestion area.
+    //
+    // The panel is positioned by converting the search field's frame to screen
+    // coordinates. We hold a direct strong reference to the NSSearchField so
+    // this conversion is always reliable, regardless of toolbar item hierarchy.
 
-    private var suggestionPopover: NSPopover?
+    private var suggestionPanel: NSPanel?
     private var suggestionHostingVC: NSHostingController<SearchSuggestionsView>?
     private let suggestionDebouncer = DebounceTimer(delay: 0.2)
 
@@ -277,7 +281,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         toolbarState?.searchText = text
 
         if text.isEmpty {
-            closeSuggestionPopover()
+            closeSuggestionPanel()
         } else {
             suggestionDebouncer.schedule { [weak self] in
                 self?.refreshSuggestions(for: text)
@@ -293,16 +297,17 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             return true
         }
         if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
-            closeSuggestionPopover()
+            closeSuggestionPanel()
             return false  // let NSSearchToolbarItem handle the Cancel button normally
         }
         return false
     }
 
     func searchFieldDidEndSearching(_ sender: NSSearchField) {
-        // Small delay so a popover row click can fire before we close.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.closeSuggestionPopover()
+        // Delay so a panel row click fires before we close.
+        // mouseUp on the NSPanel row arrives ~50 ms after endSearching.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            self?.closeSuggestionPanel()
         }
     }
 
@@ -314,7 +319,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private func commitCurrentSearchText() {
         guard let field = searchToolbarItem?.searchField else { return }
         let text = field.stringValue.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty else { closeSuggestionPopover(); return }
+        guard !text.isEmpty else { closeSuggestionPanel(); return }
 
         let query = SearchQueryParser.parse(text)
 
@@ -325,14 +330,14 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         }
         // Plain text: leave in field — BookGridItem will FTS within any active filter
 
-        closeSuggestionPopover()
+        closeSuggestionPanel()
     }
 
     /// Commits a suggestion row tap: always produces a filter rule and clears the field.
     private func commitSuggestion(_ suggestion: SearchSuggestion) {
         commitFilterRule(suggestion.asFilterRule)
         clearSearchField()
-        closeSuggestionPopover()
+        closeSuggestionPanel()
     }
 
     /// Delivers a FilterRule to the active content view via the registered handler.
@@ -345,64 +350,108 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         toolbarState?.searchText = ""
     }
 
-    // MARK: - Suggestion popover
+    // MARK: - Suggestion panel
 
     private func refreshSuggestions(for text: String) {
-        guard let library = session?.library else { closeSuggestionPopover(); return }
+        guard let library = session?.library else { closeSuggestionPanel(); return }
 
-        // Run on a background thread — SQLite is fast but avoid blocking the main thread
-        // on large libraries. Results are dispatched back to main before presenting.
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let sections = computeSectionedSuggestions(for: text, library: library)
             DispatchQueue.main.async {
                 guard let self else { return }
                 if sections.allSatisfy({ $0.suggestions.isEmpty }) {
-                    self.closeSuggestionPopover()
+                    self.closeSuggestionPanel()
                 } else {
-                    self.showSuggestionPopover(sections: sections)
+                    self.showSuggestionPanel(sections: sections)
                 }
             }
         }
     }
 
-    private func showSuggestionPopover(sections: [SuggestionSection]) {
-        guard let item = searchToolbarItem else { return }
+    private func showSuggestionPanel(sections: [SuggestionSection]) {
+        guard let searchField = searchToolbarItem?.searchField,
+              let parentWindow = window else { return }
 
         let view = SearchSuggestionsView(sections: sections) { [weak self] suggestion in
             self?.commitSuggestion(suggestion)
         }
 
-        if let existing = suggestionPopover, existing.isShown,
-           let vc = suggestionHostingVC {
-            // Update content in place — avoids flicker on each keystroke
+        // Update content in-place if already visible — avoids flicker on each keystroke.
+        if let panel = suggestionPanel, panel.isVisible, let vc = suggestionHostingVC {
             vc.rootView = view
+            repositionPanel(panel, relativeTo: searchField)
             return
         }
 
-        // Create fresh popover
-        let vc      = NSHostingController(rootView: view)
-        let popover = NSPopover()
-        popover.contentViewController = vc
-        popover.behavior              = .semitransient
-        popover.animates              = false   // instant feel, like Finder
-        // Size will be updated by SwiftUI — set a reasonable initial value
-        popover.contentSize           = CGSize(width: 320, height: 200)
+        // Build hosting controller
+        let vc = NSHostingController(rootView: view)
+        vc.view.frame = NSRect(x: 0, y: 0, width: 320, height: 200)
+        vc.view.layoutSubtreeIfNeeded()
+        let fittingSize = vc.sizeThatFits(in: NSSize(width: 360, height: 600))
+
+        // NSPanel with .nonactivatingPanel never steals key focus.
+        // The search field stays first responder throughout the suggestion lifecycle.
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: fittingSize),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.contentViewController = vc
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .popUpMenu
+
+        // No layer clipping needed — the SwiftUI content draws its own
+        // rounded-rectangle background with material and border.
+        vc.view.wantsLayer = true
+        vc.view.layer?.backgroundColor = CGColor.clear
 
         suggestionHostingVC = vc
-        suggestionPopover   = popover
+        suggestionPanel = panel
 
-        // Anchor to the search field view inside the toolbar item.
-        // NSSearchToolbarItem.searchField is the NSSearchField itself — a valid
-        // NSView that AppKit can use as a popover anchor regardless of its position
-        // in the toolbar's private view hierarchy.
-        popover.show(relativeTo: item.searchField.bounds,
-                     of: item.searchField,
-                     preferredEdge: .maxY)
+        repositionPanel(panel, relativeTo: searchField)
+
+        // Attach as child so it follows the parent window and hides on miniaturise.
+        parentWindow.addChildWindow(panel, ordered: .above)
+        panel.orderFront(nil)
+
+        // Restore first responder. orderFront can shift the key window on first show.
+        // After makeFirstResponder, NSSearchField selects-all by default — move the
+        // insertion point to end of string so the next keystroke appends rather than
+        // replacing the whole query.
+        parentWindow.makeFirstResponder(searchField)
+        if let editor = searchField.currentEditor() {
+            let end = (searchField.stringValue as NSString).length
+            editor.selectedRange = NSRange(location: end, length: 0)
+        }
     }
 
-    private func closeSuggestionPopover() {
-        suggestionPopover?.close()
-        suggestionPopover   = nil
+    /// Positions the panel flush below the search field, right-aligned.
+    private func repositionPanel(_ panel: NSPanel, relativeTo searchField: NSSearchField) {
+        guard let fieldWindow = searchField.window else { return }
+        let fieldFrameInWindow = searchField.convert(searchField.bounds, to: nil)
+        let fieldFrameOnScreen = fieldWindow.convertToScreen(fieldFrameInWindow)
+        let size: NSSize
+        if let vc = suggestionHostingVC {
+            size = vc.sizeThatFits(in: NSSize(width: 360, height: 600))
+        } else {
+            size = panel.frame.size
+        }
+        let origin = NSPoint(
+            x: fieldFrameOnScreen.maxX - size.width,
+            y: fieldFrameOnScreen.minY - size.height - 4
+        )
+        panel.setFrame(NSRect(origin: origin, size: size), display: true)
+    }
+
+    private func closeSuggestionPanel() {
+        if let panel = suggestionPanel {
+            panel.parent?.removeChildWindow(panel)
+            panel.orderOut(nil)
+        }
+        suggestionPanel = nil
         suggestionHostingVC = nil
     }
 

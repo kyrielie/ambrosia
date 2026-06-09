@@ -42,7 +42,17 @@ struct SearchQuery {
         // Exactly one scoped term and no plain text
         if tagTerms.count == 1 && authorTerms.isEmpty && titleTerms.isEmpty
             && seriesTerms.isEmpty && plainTerms.isEmpty {
-            return FilterRule(field: .tag, op: .equals, value: tagTerms[0])
+            let v = tagTerms[0]
+            // AO3 rating/warning/category tags get their proper field and operator.
+            // Rating tags default to .ratingAtMost — almost always the right intent.
+            let kind = AO3TagKind.classify(v)
+            let field = kind.filterField
+            let op: FilterOperator
+            switch kind {
+            case .rating: op = .ratingAtMost
+            default:      op = .equals
+            }
+            return FilterRule(field: field, op: op, value: v)
         }
         if authorTerms.count == 1 && tagTerms.isEmpty && titleTerms.isEmpty
             && seriesTerms.isEmpty && plainTerms.isEmpty {
