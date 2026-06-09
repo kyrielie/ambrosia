@@ -12,6 +12,9 @@ final class LibrarySession {
     /// The open library connection. Nil until the user picks a folder.
     private(set) var library: CalibreLibrary?
 
+    /// Optional full-text-search connection. Nil if full-text-search.db doesn't exist.
+    private(set) var ftsLibrary: CalibreFTSLibrary?
+
     /// Cached total book count from metadata.db. Refreshed on library open
     /// and on search input (debounced). Never recomputed on page turns.
     private(set) var totalCount: Int = 0
@@ -37,6 +40,7 @@ final class LibrarySession {
             library    = newLibrary
             activePath = url.path
             totalCount = newLibrary.bookCount()
+            ftsLibrary = CalibreFTSLibrary(libraryURL: url)
             LibraryRegistry.shared.register(url)
             print("[LibrarySession] Opened \(url.lastPathComponent) — \(totalCount) books")
         } catch {
@@ -47,6 +51,7 @@ final class LibrarySession {
 
     func close() {
         library    = nil
+        ftsLibrary = nil
         totalCount = 0
         activePath = nil
     }

@@ -129,6 +129,13 @@ final class ReaderPreferences: ObservableObject {
         }
     }
 
+    // MARK: - Reading mode
+
+    @Published var defaultReadingMode: ReadingMode {
+        didSet { UserDefaults.standard.set(defaultReadingMode.rawValue,
+                                           forKey: Keys.defaultReadingMode) }
+    }
+
     // MARK: - Window size
 
     @Published var useScreenFraction: Bool {
@@ -164,6 +171,7 @@ final class ReaderPreferences: ObservableObject {
         static let useScreenFraction           = true
         static let defaultWindowWidth          = CGFloat(960)
         static let defaultWindowHeight         = CGFloat(1080)
+        static let defaultReadingMode          = ReadingMode.scroll
     }
 
     private enum Keys {
@@ -184,6 +192,7 @@ final class ReaderPreferences: ObservableObject {
         static let useScreenFraction           = "pref.useScreenFraction"
         static let defaultWindowWidth          = "pref.windowWidth"
         static let defaultWindowHeight         = "pref.windowHeight"
+        static let defaultReadingMode          = "rp.defaultReadingMode"
     }
 
     private init() {
@@ -233,6 +242,9 @@ final class ReaderPreferences: ObservableObject {
         let sh = ud.double(forKey: Keys.defaultWindowHeight)
         defaultWindowWidth  = sw > 0 ? CGFloat(sw) : Defaults.defaultWindowWidth
         defaultWindowHeight = sh > 0 ? CGFloat(sh) : Defaults.defaultWindowHeight
+
+        let rawMode = ud.string(forKey: Keys.defaultReadingMode) ?? Defaults.defaultReadingMode.rawValue
+        defaultReadingMode = ReadingMode(rawValue: rawMode) ?? .scroll
     }
 
     // MARK: - CSS (reader only)
@@ -315,6 +327,7 @@ final class ReaderPreferences: ObservableObject {
         readerTextColor       = Defaults.readerTextColor
         paddingH              = Defaults.paddingH
         paddingV              = Defaults.paddingV
+        defaultReadingMode    = Defaults.defaultReadingMode
     }
 
     func resetLibraryToDefaults() {

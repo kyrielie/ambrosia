@@ -113,6 +113,18 @@ private struct ReaderTab: View {
                     Label("Reader Colours", systemImage: "paintbrush").font(.headline)
                 }
 
+                // ── Default reading mode ──────────────────────────────────────
+                Section {
+                    Picker("Default reading mode", selection: $prefs.defaultReadingMode) {
+                        ForEach(ReadingMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Label("Reading Mode", systemImage: "book.pages").font(.headline)
+                }
+
                 // ── Preferences update behaviour ──────────────────────────────
                 Section {
                     HStack(spacing: 6) {

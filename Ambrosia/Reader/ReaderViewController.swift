@@ -115,7 +115,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     override func viewDidLoad() {
         super.viewDidLoad()
         ensureBookState()
-        currentMode = .scroll
+        currentMode = ReaderPreferences.shared.defaultReadingMode
         subscribeToPreferences()
 
         Task.detached(priority: .userInitiated) { [weak self] in

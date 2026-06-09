@@ -46,6 +46,10 @@ struct LibraryRootView: View {
     @State private var currentPage  = 0
     @State private var filteredCount: Int? = nil
 
+    // Autocomplete suggestions (I2)
+    @State private var suggestions: [SearchSuggestion] = []
+    private let suggestionDebouncer = DebounceTimer(delay: 0.15)
+
     // BookState dictionary keyed by calibreID — fetched ONCE here, never per-row
     @State private var bookStates: [Int: BookState] = [:]
 
@@ -57,20 +61,33 @@ struct LibraryRootView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Divider()
-            if toolbarState.hasActiveFilter {
-                activeFilterChip(count: toolbarState.activeFilterResult!.totalCount)
+        ZStack(alignment: .top) {
+            VStack(spacing: 0) {
+                Divider()
+                if toolbarState.hasActiveFilter {
+                    activeFilterChip(count: toolbarState.activeFilterResult!.totalCount)
+                }
+                if !session.isOpen {
+                    emptyLibraryState
+                } else if books.isEmpty && toolbarState.searchText.isEmpty && !toolbarState.hasActiveFilter {
+                    loadingState
+                } else {
+                    bookList
+                }
+                Divider()
+                footer
             }
-            if !session.isOpen {
-                emptyLibraryState
-            } else if books.isEmpty && toolbarState.searchText.isEmpty && !toolbarState.hasActiveFilter {
-                loadingState
-            } else {
-                bookList
+
+            // Autocomplete suggestion overlay (I2)
+            if !suggestions.isEmpty {
+                SearchSuggestionsView(suggestions: suggestions) { selected in
+                    toolbarState.searchText = applyingSuggestion(selected, to: toolbarState.searchText)
+                    suggestions = []
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .zIndex(10)
             }
-            Divider()
-            footer
         }
         .background(libraryBGColor)
         .foregroundStyle(libraryTextColor)
@@ -81,6 +98,14 @@ struct LibraryRootView: View {
         .onChange(of: toolbarState.ascending)     { currentPage = 0; loadPage() }
         .onChange(of: toolbarState.searchText) {
             currentPage = 0
+            // Suggestion update on faster debounce
+            suggestionDebouncer.schedule {
+                if let lib = session.library {
+                    suggestions = computeSuggestions(for: toolbarState.searchText, library: lib)
+                } else {
+                    suggestions = []
+                }
+            }
             debouncer.schedule {
                 loadPage()
                 filteredCount = toolbarState.searchText.isEmpty ? nil
@@ -152,28 +177,49 @@ struct LibraryRootView: View {
 
     private func loadPage() {
         guard let library = session.library else { books = []; return }
-        let effectiveSearch = toolbarState.searchText.isEmpty ? nil : toolbarState.searchText
+        let rawSearch = toolbarState.searchText.isEmpty ? nil : toolbarState.searchText
+        let query: SearchQuery = rawSearch.map { SearchQueryParser.parse($0) }
+            ?? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
 
         if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
+            let effectiveQuery = resolvedQuery(query)
             let raw = library.books(
-                ids: result.calibreIDs,
+                ids: effectiveQuery.ftsMatchedIDs ?? result.calibreIDs,
                 offset: currentPage * pageSize, limit: pageSize + 1,
                 sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                search: effectiveSearch
+                query: effectiveQuery
             )
             hasNextPage = raw.count > pageSize
             books = Array(raw.prefix(pageSize))
         } else if toolbarState.activeFilterResult != nil {
             books = []; hasNextPage = false
         } else {
+            let effectiveQuery = resolvedQuery(query)
             let raw = library.books(
                 offset: currentPage * pageSize, limit: pageSize + 1,
                 sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                search: effectiveSearch
+                query: effectiveQuery
             )
             hasNextPage = raw.count > pageSize
             books = Array(raw.prefix(pageSize))
         }
+    }
+
+    /// Attempts FTS resolution for plain terms; falls back to LIKE if FTS unavailable or empty.
+    private func resolvedQuery(_ query: SearchQuery) -> SearchQuery {
+        guard !query.plainTerms.isEmpty,
+              let fts = session.ftsLibrary else { return query }
+        let plainText = query.plainTerms.joined(separator: " ")
+        guard let ftsIDs = fts.search(query: plainText), !ftsIDs.isEmpty else {
+            return query
+        }
+        return SearchQuery(
+            tagTerms: query.tagTerms,
+            authorTerms: query.authorTerms,
+            titleTerms: query.titleTerms,
+            plainTerms: [],
+            ftsMatchedIDs: ftsIDs
+        )
     }
 
     /// Fetch all BookState rows once. O(n) over ever-opened books, not per visible row.
