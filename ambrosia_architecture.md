@@ -1,207 +1,210 @@
-# Project Ambrosia — Architecture Overview
+# Project Ambrosia - Architecture Overview
 
-## What This Application Is
+Concise current-state reference for AI engineers working in this repo.
 
-Ambrosia is a native macOS EPUB reader designed specifically for AO3 fanfiction libraries managed by [Calibre](https://calibre-ebook.com/). It is a read-only query layer over an existing Calibre database — it never imports, copies, or modifies Calibre's data. The app targets macOS 15+ (Sequoia) and is distributed as a notarized DMG.
+## Product Shape
 
-Key design principles:
-- All publisher CSS is stripped; the user controls all styling.
-- No Readium. The reader is built on a custom `WKWebView` with injected JavaScript.
-- No sandboxing, no cloud sync, no OPDS.
-- Calibre's `metadata.db` is the single source of truth, opened read-only via SQLite.
+Ambrosia is a native macOS EPUB reader for AO3-heavy Calibre libraries.
 
----
+- Target: macOS 15+.
+- Calibre is the source of truth for book metadata and EPUB files.
+- Calibre `metadata.db` is opened read-only and never modified.
+- Publisher CSS/scripts are stripped; reader styling is fully app/user controlled.
+- Reader is custom `WKWebView` + injected JavaScript. No Readium.
+- No sandboxing, cloud sync, or OPDS.
 
-## Technology Stack
+## Stack
 
-- **UI**: AppKit + SwiftUI hybrid. Top-level window management is AppKit (`NSWindowController`, `NSViewController`); most views are SwiftUI hosted via `NSHostingView`.
-- **Persistence (app state only)**: SwiftData with three models: `BookState`, `Collection`, `ReadingGoal`. The `ModelConfiguration` uses a string name (`"Ambrosia"`), not a URL — this is a macOS 14 API constraint.
-- **Calibre data**: SQLite.swift (`readonly: true` connection). No write PRAGMAs ever.
-- **EPUB parsing**: ZIPFoundation + `NSXMLParser` (SAX). No third-party EPUB library.
-- **Reader rendering**: `WKWebView` with custom JavaScript injected at runtime.
-- **SPM packages**: `SQLite.swift` and `ZIPFoundation`, added via Xcode UI (never hand-authored in `Package.resolved`).
+- App lifecycle/windowing: SwiftUI `App` + AppKit `NSApplicationDelegate`, `NSWindowController`, `NSViewController`.
+- UI: AppKit shell with SwiftUI content hosted via `NSHostingView`/`NSHostingController`.
+- Calibre DB: SQLite.swift, read-only.
+- App SwiftData store: `BookState`, `ReadingGoal` only.
+- Per-library app SQLite DB: `AmbrosiaMetaDB` actor, writable, under `~/Library/Application Support/Ambrosia/libraries/<hash>/ambrosia_meta.db`.
+- EPUB parsing: ZIPFoundation + `NSXMLParser`.
+- Rendering: `WKWebView`.
+- Packages: SQLite.swift, ZIPFoundation.
 
----
+## Storage Ownership
 
-## Data Layer
+### Calibre `metadata.db`
 
-### Calibre database (`CalibreLibrary`)
+`CalibreLibrary` owns a read-only SQLite connection to a selected library root. It is created by `LibrarySession.open(url:)` and replaced wholesale on library switch.
 
-`CalibreLibrary` opens `metadata.db` with a read-only SQLite connection. One instance exists per open library and is replaced wholesale on library switch. It is held by `LibrarySession` (an `@Observable` singleton injected into the SwiftUI environment).
+Important schema facts:
 
-The Calibre `books` table schema is:
-```
-id, title, sort, timestamp, pubdate, series_index, author_sort, isbn, lccn, path, flags, uuid, has_cover, last_modified
-```
+- `books` has no `series` column. Series requires `books_series_link -> series`.
+- Authors/tags/publishers are normalized via link tables.
+- Comments/descriptions live in `comments`.
+- Custom columns are discovered from `custom_columns`; runtime labels come from `CustomColumnConfig.shared`.
+- Every `db.prepare(sql, args)` call must use `[Binding?]`.
 
-There is **no `series` column on `books`**. Series data always requires a JOIN:
-```sql
-LEFT JOIN books_series_link bsl ON bsl.book = b.id
-LEFT JOIN series s ON s.id = bsl.series
-```
-Authors, tags, and publishers follow the same normalized link-table pattern (`books_authors_link → authors`, etc.). Comments (descriptions) are in a separate `comments` table.
+`CalibreLibrary.books(...)` fetches `pageSize + 1` rows for next-page detection, then bulk-loads authors/tags/comments with page-level JOIN queries.
 
-Custom columns are discovered at runtime via the `custom_columns` table, with data stored in `custom_column_N` tables. Word count and kudos are custom columns whose labels are configured by the user in Preferences and stored in `CustomColumnConfig.shared`.
+### SwiftData
 
-The primary fetch method `books(offset:limit:sort:ascending:search:filter:)` returns `pageSize + 1` rows to allow next-page detection without a separate `COUNT` query. Bulk metadata (authors, tags, comments) is fetched in three JOIN queries per page, not per book.
+`AmbrosiaApp` creates a persistent `ModelContainer("Ambrosia")` with:
 
-All `db.prepare(sql, args)` calls use `[Binding?]` (optional array). Non-optional `[Binding]` resolves to the wrong SQLite.swift overload and produces a compile error.
+- `BookState`: keyed by `calibreID`, stores reading progress, reading position, and ELO fields.
+- `ReadingGoal`: reading-goal state.
 
-### App state (`BookState`, `Collection`, `ReadingGoal`)
+SwiftData no longer stores collections or annotations.
 
-`BookState` is the only `@Model` that stores per-book reading data. It is keyed by `calibreID: Int` and stores:
-- Like/hidden flags
-- Reading progress (`totalReadPercent`, `totalReadingTimeSeconds`)
-- Reading position (`lastSpineIndex`, `lastCharacterOffset`, `lastScrollOffset`)
-- Annotations serialized as `annotationsData: Data?` (JSON-encoded `[Annotation]`)
-- `readingModeRaw: String` — legacy column retained to avoid SwiftData migration; never read or written by current code
+On SwiftData store init failure, the app shows an alert and falls back to in-memory `AmbrosiaRecovery`; it does not delete existing support files.
 
-**Critical SwiftData constraint**: bare Swift collections (`[String]`, `[Int]`, etc.) cannot be stored directly on `@Model` — they cause a silent CoreData fault at runtime. All collections are stored as delimited `String` or JSON `Data` with computed property accessors.
+### Per-Library App DB
 
-`#Predicate` cannot compare a `@Model` keypath against a property of a plain struct. All `BookState` lookups use an in-memory filter: `fetch(FetchDescriptor<BookState>()).first { $0.calibreID == targetID }`.
+`AmbrosiaMetaDB` is an actor-backed writable SQLite DB scoped by hash of the Calibre library path. It stores:
 
-### `LibraryRegistry`
+- `collections`, `collection_members`.
+- `annotations`.
+- `ao3_metadata`, `series_cache`.
 
-A singleton that persists known library paths and the active path in `UserDefaults`. It is readable before `ModelContainer` loads, so it has no SwiftData dependency.
+`CollectionStore` wraps collection operations. Bootstrapped system collections:
 
----
+- Read Later
+- Liked
+- Skipped
+- Finished
+- In Progress
+- Has Annotations
+
+Annotation inserts/deletes maintain `Has Annotations` membership.
+
+### Registry
+
+`LibraryRegistry` stores known library paths and active path in `UserDefaults`; it is available before SwiftData is initialized.
+
+## Session Model
+
+`LibrarySession` is an `@Observable @MainActor` singleton injected into SwiftUI environment.
+
+It owns:
+
+- `library: CalibreLibrary?`
+- `ftsLibrary: CalibreFTSLibrary?`
+- `metaDB: AmbrosiaMetaDB?`
+- `collectionStore: CollectionStore?`
+- `extractionProgress`
+- active path and total count
+
+On library open it:
+
+1. Opens `metadata.db` read-only.
+2. Opens/creates per-library `ambrosia_meta.db`.
+3. Opens optional `full-text-search.db`.
+4. Registers the library path and index record.
+5. Starts background AO3 metadata extraction from EPUB prefaces.
 
 ## Application Structure
 
-```
-AmbrosiaApp (SwiftUI App)
-├── AppDelegate (NSApplicationDelegate)
-│   └── LibraryWindowController (NSWindowController)
-│       ├── NSToolbar (native, delegates to LibraryToolbarState)
-│       └── LibraryViewController (NSViewController)
-│           └── NSHostingView<LibraryRootView>       [list view]
-│           └── EmailLibraryViewController            [email/split view]
-│           └── (scaffold placeholder)               [ranking view — D3 not yet built]
-│
-└── ReaderWindowController (NSWindowController)
-    └── ReaderViewController (NSViewController, WKWebView)
+```text
+AmbrosiaApp
+├── AppDelegate
+│   └── LibraryWindowController
+│       ├── native NSToolbar -> LibraryToolbarState
+│       └── LibraryViewController
+│           ├── LibraryRootView              [list mode]
+│           ├── EmailLibraryViewController   [split email mode]
+│           └── placeholder                  [ranking mode]
+└── ReaderWindowController
+    └── ReaderViewController -> WKWebView
 ```
 
-The app entry point (`AmbrosiaApp`) creates the SwiftData `ModelContainer`, initializes `LibrarySession`, and passes both to `AppDelegate`. On schema mismatch (stale entities from old model versions), it catches the init error, deletes all files matching `"Ambrosia"` in `~/Library/Application Support/Ambrosia/`, and retries.
-
----
+`LibraryToolbarState` is the bridge between native toolbar controls and SwiftUI/AppKit content. It carries search/sort/filter/view state plus trigger booleans for sheets/actions.
 
 ## Library UI
 
-### Views
+Modes:
 
-The library has three display modes controlled by `LibraryToolbarState.viewMode` (`LibraryViewMode`: `.list`, `.email`, `.ranking`):
+- List: SwiftUI AO3-style rows with title, series, authors, tags, stats, description, pagination.
+- Email: AppKit split view with table sidebar and SwiftUI detail pane.
+- Ranking: placeholder text only; `BookState` already has ELO fields.
 
-**List view** (`LibraryRootView`): AO3-style list. Each row shows title, series, authors (tappable → quick author filter), tag pills in a wrapping flow layout (tappable → quick tag filter), stat chips, and description. Paginated at 25 books per page (configurable in a future settings section) with a 0.3s debounce on search input. Tags use `FlowLayout` and wrap freely across multiple lines — all tags are displayed with no cap.
+Search:
 
-**Email view** (`EmailLibraryViewController`): An `NSSplitViewController` with an `NSTableView` sidebar (AppKit, 64pt rows, title + author + read-progress bar) and a SwiftUI detail pane. Single-click updates the detail pane; double-click opens the reader. The sidebar context menu mirrors the list-view context menu: Open, Like/Unlike, and an "Add to Collection" submenu populated from the current collection list. There is no filter-pill header in the sidebar; filter state is shown only in the list view.
+- Raw text is parsed by `SearchQueryParser`.
+- Prefixes: `tag:`, `author:`, `title:`, `series:`.
+- Single committed prefix tokens become `FilterRule`s.
+- Plain terms prefer `CalibreFTSLibrary` (`full-text-search.db`, FTS5) when available, otherwise fall back to fuzzy title LIKE.
+- Suggestions query Calibre authors/tags/titles/series directly.
 
-**Ranking view** (scaffold placeholder): Currently displays a "Ranking view coming in D3" placeholder. The toolbar segment uses the `list.number` SF Symbol. Full implementation is planned for session D3.
+Filters:
 
-### Filtering
-
-There are two filter modes that compose together:
-
-**Quick filter**: set by tapping an author or tag pill in a book row.
-
-**Rule filter** (`FilterResult`): set via the filter drawer (`FilterDrawerView`). Rules have a field (`title`, `authorName`, `tag`, `series`, `wordCountGT/LT`, `kudosGT/LT`, `isLiked`, `collection`), an operator (`contains`, `notContains`, `equals`, `startsWith`), and a value. `FilterBuilder` translates rules into SQL WHERE/JOIN fragments. It uses two stages: SQL for Calibre-owned fields, then in-memory post-filtering for `isLiked` and `collection` (which live in SwiftData). The result is a `FilterResult { calibreIDs: [Int], totalCount: Int }`.
-
-An active filter shows as a chip strip at the top of the list view with Edit and dismiss (×) controls. The chip strip is not shown in email view.
-
-### Search
-
-Search input passes a raw string to `CalibreLibrary`'s fuzzy title/author condition. There is no prefix-syntax parsing, autocomplete, or FTS5 integration yet — those are planned for sessions I1, I2, and I3. The debounce is 0.3s.
-
-### Toolbar
-
-A native `NSToolbar` delegates to `LibraryToolbarState` (`@Observable`). Default items: Search · Filter · Sort · Divider · Collections · Reading Goal · Export · View Mode. The toolbar communicates with `LibraryRootView` entirely through `LibraryToolbarState` properties — no direct references between the AppKit toolbar and SwiftUI views.
-
-`LibraryToolbarState` also carries trigger flags (`showFilterDrawer`, `showCollections`, `showReadingGoal`, `triggerExport`, `toggleEmailSidebar`) that views observe and act on, then reset to `false`. In email mode, the filter sheet is presented via a zero-size `NSHostingView<FilterSheetCarrier>` permanently embedded in the view hierarchy so that `@Environment(\.dismiss)` resolves correctly through SwiftUI's sheet system.
-
----
+- `FilterExpression` contains groups of `FilterRule`s.
+- SQL-evaluable rules run against Calibre.
+- App-owned rules (`isLiked`, `collection`) are applied in memory using `CollectionStore` membership maps.
+- AO3 rating/warning/category rules are implemented as tag-based SQL fragments.
 
 ## EPUB Parser
 
-`EPUBParser` (a Swift struct) handles all EPUB reading:
+`EPUBParser`:
 
-1. Opens the EPUB zip via ZIPFoundation.
-2. Parses `META-INF/container.xml` to find the OPF path.
-3. Parses the OPF with `NSXMLParser` (SAX) to extract the manifest, spine, and `dc:title`.
-4. Provides `html(for:userCSS:)` for a single spine item and `mergedHTML(userCSS:)` for all spine items concatenated.
-5. Provides `plainText(for:)` for character offset arithmetic.
-6. Strips all publisher CSS (`<link>`, `<style>`, `style="..."`, `<script>`) and injects user CSS before `</head>`.
-7. Extracts images to a temporary directory at `/tmp/ambrosia/<calibreID>/` and provides the base URL to `WKWebView`.
+1. Opens the EPUB zip.
+2. Reads `META-INF/container.xml`.
+3. Parses OPF manifest/spine/title via SAX.
+4. Produces stripped, merged HTML with injected user CSS.
+5. Provides plain text for offset arithmetic.
+6. Extracts images to `/tmp/ambrosia/<calibreID>/`.
 
-**Character offset contract** (must be consistent across all components): offsets are **UTF-16 code units, text node content only, no HTML tags**. `EPUBParser`, `PaginationJS`, `HighlightBridge`, and all annotation code must use this convention without exception. Any deviation causes irreproducible position drift.
-
----
+Offset contract everywhere: UTF-16 code units, text-node content only, no HTML tags.
 
 ## Reader
 
-### Architecture
+`ReaderWindowController.open(book:modelContainer:)` de-duplicates one reader window per Calibre book ID. It updates `BookState.lastOpenedDate` on open and accumulates `totalReadingTimeSeconds` on close.
 
-`ReaderWindowController` creates or fetches the `BookState` for the opened book, initializes `EPUBParser`, and constructs `ReaderViewController`. The reader window is opened from `BookListRow` on double-click, or from a single-click in email view.
+`ReaderViewController`:
 
-`ReaderViewController` hosts a `WKWebView` configured at construction time with a `WKUserContentController`. `WKWebViewConfiguration` must be set up before `WKWebView` is initialized — handlers cannot be added after construction.
+- Builds `WKWebViewConfiguration` before `WKWebView` creation.
+- Registers message handlers at construction: `positionUpdate`, `pageAction`, `highlightAdded`, `highlightTapped`, `consoleLog`.
+- Loads merged EPUB HTML from the active library path.
+- Starts in `ReaderPreferences.shared.defaultReadingMode`.
+- Reloads full HTML immediately on reader preference changes.
+- Auto-saves position periodically and on disappearance.
 
-The reader always opens in scroll mode (`currentMode = .scroll`). A per-session mode switch (scroll ↔ paginated) is available via toolbar buttons; the chosen mode is not persisted between opens. A global default reading mode preference is planned for Section H but not yet implemented.
+Scroll mode loads merged HTML normally and restores scroll offset.
 
-`ReaderViewController` subscribes to `ReaderPreferences.shared.objectWillChange` via Combine. Any preference change triggers an immediate `reloadHTML()` — full HTML is regenerated from the EPUB and the new CSS, and the WKWebView reloads. There is no deferred or manual reload mode.
+Paginated mode uses one visible `WKWebView` with CSS multi-column layout. One column is one page; page turns set horizontal scroll. There is no hidden measurement web view and no DOM slicing. Resize repagination is debounced.
 
-**Scroll mode**: loads `mergedHTML` into the WKWebView, restores `bookState.lastScrollOffset` on load, and injects a passive scroll event listener that posts `positionUpdate` messages back to Swift. Position is auto-saved every 5 seconds and on `viewWillDisappear`.
+Find uses `WKFindConfiguration`.
 
-**Paginated mode**: uses `PaginationEngine` — a hidden-but-framed `WKWebView` (invisible but in the view hierarchy with a real non-zero frame, required for `getBoundingClientRect()` to return non-zero values). The JavaScript pagination engine (`PaginationJS.swift`) performs TreeWalker-based pagination and exposes `window.ambrosiaPaginate(pageHeightPx)`, `window.ambrosiaRenderPage(startChar, endChar)`, `window.ambrosiaHighlight(offset)`, and `window.ambrosiaTotalChars()`. On window resize, a 300ms debounce timer triggers repagination with position preservation and a 2-second highlight at the restored offset. A 2px safety margin is applied to page height.
+## Annotations
 
-HTML is fully regenerated on any style change — the live DOM is never patched, as partial DOM updates corrupt pagination state.
+Unified `Annotation` represents point annotations and ranged highlights:
 
-### Annotations
+- `startChar == endChar`: point annotation.
+- `startChar != endChar`: ranged annotation/highlight.
 
-Annotations use a unified model (`struct Annotation: Codable, Identifiable`) stored as JSON in `BookState.annotationsData: Data?`. Both point annotations (bookmarks, `startChar == endChar`) and ranged annotations (highlights, `startChar != endChar`) use this single type. Fields: `id`, `spineIndex`, `startChar`, `endChar`, `selectedText`, `note`, `colorHex`, `createdDate`.
+Annotations are persisted in `AmbrosiaMetaDB.annotations`, not SwiftData. JS selection capture computes UTF-16 offsets with a TreeWalker. Highlights are restored through `HighlightBridge`; sidebar UI is SwiftUI in an `NSPanel`.
 
-Text selection is captured via a `mouseup` JavaScript listener that uses a `TreeWalker` to compute UTF-16 character offsets and posts a `highlightAdded` message to Swift. Annotations are restored after each spine load by `HighlightBridge.restoreHighlights(_:into:)`, which inserts colored `<span>` elements at the stored offsets.
-
-Keyboard shortcuts: `⌘D` creates a point annotation at the current position; `⌘B` toggles the annotation sidebar.
-
-The reader presents a custom `NSMenu` context menu (suppressing the default WebKit menu). Items are configurable via `ContextMenuPreferences` (a value type on `ReaderPreferences`, not persisted to UserDefaults): "Search in Browser" and "Add Annotation…". "Copy" is always present.
-
-`BookState` retains two orphaned fields (`bookmarksData`, `highlightsData`) from the pre-unified annotation model. They are never read or written; retained only to avoid SwiftData migration.
-
----
+`BookmarkManager` is a compile-retained legacy stub. Current bookmark behavior is handled by the annotation system.
 
 ## Preferences
 
-`ReaderPreferences` is an `ObservableObject` singleton (`@Published` properties). It stores:
+`ReaderPreferences` is an `ObservableObject` singleton backed by `UserDefaults`/published properties.
 
-**Reader appearance**: font family (as a CSS font stack chosen from 10 named presets: Iowan Old Style, New York, Georgia, Palatino, Times New Roman, Charter, System/SF Pro, Avenir Next, Seravek, Courier New), font size, line height, max width, horizontal/vertical padding, background color, text color.
+It controls:
 
-**Library appearance**: colour mode (`LibraryColorMode`: `.systemDefault`, `.accentColor`, `.custom`) and appearance mode (`LibraryAppearanceMode`: `.system`, `.light`, `.dark`). Custom mode stores separate light and dark hex color pairs for background and text.
+- Reader typography, spacing, colors, max width.
+- Default reading mode.
+- Library color/appearance mode.
+- Reader default window sizing.
+- Context-menu preferences.
 
-**Window size**: `useScreenFraction` (bool), `defaultWindowWidth` (CGFloat), `defaultWindowHeight` (CGFloat). When `useScreenFraction` is true the reader window opens at a fraction of the screen; otherwise the stored pixel dimensions are used.
+Reader windows subscribe via Combine and regenerate/reload full HTML on changes.
 
-**Not yet implemented**: default reading mode (planned Section H), configurable reload strategy (currently always immediate).
-
-Preference changes always trigger immediate reload of all open reader windows via Combine. The Preferences window has a static informational note stating this behaviour.
-
-Custom column labels for word count and kudos are configured in Preferences and stored in `CustomColumnConfig.shared`.
-
----
+Custom Calibre column labels for word count/kudos are configured via Preferences and stored in `CustomColumnConfig.shared`.
 
 ## Key Invariants
 
-These rules apply across all code in the project. Violations cause runtime crashes or data corruption.
-
-1. Never store bare Swift collections (`[String]`, `[Int]`, etc.) on `@Model`. Use delimited `String` or JSON `Data`.
-2. Never use `#Predicate` to compare `@Model` keypaths against `CalibreBook` properties. Use in-memory filter with `FetchDescriptor`.
-3. `ModelConfiguration` takes a `String` name, not a URL, on macOS 14.
-4. `ModelContext` has no `reset()` method.
-5. Character offsets are UTF-16 code units, text nodes only, no HTML tags — everywhere.
-6. `books` table has no `series` column. Always `LEFT JOIN books_series_link + series`.
-7. All `db.prepare(sql, args)` calls use `[Binding?]` (optional). Non-optional causes a compile error.
-8. Never call any write PRAGMA on the read-only Calibre connection.
-9. Never hand-author `Package.resolved`. Add SPM packages via Xcode UI only.
-10. The pagination `WKWebView` must be in the view hierarchy with a real non-zero frame.
-11. Regenerate full HTML on any style change — never patch the live DOM.
-12. Image temp directory lifetime is the app session. Clean up in `applicationWillTerminate`.
-13. All `evaluateJavaScript` calls must pass `completionHandler: nil` explicitly.
-14. Fetch https://developer.apple.com/documentation/swiftdata before writing any `@Model` code.
-15. `NSHostingView` used as a full-pane content view must set `sizingOptions = []` to prevent the `{inf, 88}` intrinsic-size crash during state-change layout passes.
+1. Calibre DB connections are read-only; never write or issue write PRAGMAs.
+2. `books.series` does not exist; always join through `books_series_link`.
+3. SQLite.swift SQL bindings use `[Binding?]`.
+4. SwiftData schema is only `BookState` and `ReadingGoal`.
+5. Do not store bare Swift collections on `@Model`; use scalar columns, delimited strings, or JSON data.
+6. Character offsets are UTF-16 code units in text nodes only.
+7. `WKWebViewConfiguration` handlers must be registered before `WKWebView` init.
+8. Full HTML is regenerated on style changes; avoid live DOM patching.
+9. All `evaluateJavaScript` fire-and-forget calls pass `completionHandler: nil`.
+10. Full-pane `NSHostingView` must use `sizingOptions = []` when Auto Layout controls size.
+11. Image temp directory lifetime is the app session; clean up on app termination.
+12. Do not hand-edit `Package.resolved`; add packages through Xcode/SPM workflow.
