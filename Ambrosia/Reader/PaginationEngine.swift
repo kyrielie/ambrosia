@@ -3,260 +3,353 @@ import WebKit
 
 // MARK: - PaginationEngine
 //
-// CSS-columns-based pagination engine for Ambrosia.
+// Manages per-spine horizontal CSS multi-column layout in the visible WKWebView.
 //
-// APPROACH (replaces old TreeWalker/scroll-and-clip design):
-//   The full merged HTML document is loaded once into the single visible
-//   WKWebView. Pagination is achieved entirely by the browser's own CSS
-//   multi-column layout engine:
+// DESIGN — no hidden measurement WebView:
+//   CSS multi-column does not require a separate layout pass. The browser reflows
+//   the spine's HTML into columns automatically once column-width and column-gap
+//   are applied to document.body. There is nothing to measure upfront — column
+//   count is read from scrollWidth after layout settles.
 //
-//     body {
-//       column-width: <viewportWidth>px;   /* one column = one page */
-//       column-gap:   0px;
-//       column-fill:  auto;
-//       height:       <viewportHeight>px;
-//       overflow:     hidden;
-//     }
+//   The previous PaginationEngine used a hidden WKWebView + binary-search to
+//   find vertical page boundaries. That approach is retired. Column boundaries
+//   are implicit in the CSS layout; scrollWidth / colAndGap gives the total count.
 //
-//   "Turning a page" is a single scrollLeft assignment:
-//     document.documentElement.scrollLeft = pageIndex * viewportWidth
+// SPINE LOADING:
+//   Call loadSpine(html:baseURL:) to load a new spine item.
+//   The engine applies CSS multi-column in webView(_:didFinish:) once layout is ready.
+//   On completion it calls the spineDidLoad callback with the total column count.
 //
-//   No DOM slicing, no hidden measurement WebView, no Range.cloneContents(),
-//   no per-page loadHTMLString, no offset translation layer.
+//   On nextSpineItem / prevSpineItem messages from JS, the engine calls the
+//   spineNavigationHandler so ReaderViewController can load the adjacent spine.
 //
-// CHARACTER OFFSET INVARIANT:
-//   The TreeWalker UTF-16 offset contract is preserved unchanged. Because
-//   the DOM is never modified or split, all existing annotation, highlight,
-//   and bookmark offset values remain valid with no adjustment.
+// COLUMN LAYOUT MATH (computed from WKWebView.bounds at layout time):
+//   gap      = max(1, marginLeft + marginRight)   from ReaderPreferences
+//   colSize  = (viewportWidth + gap) / colsPerScreen − gap
+//   The +gap / −gap dance ensures: colSize * n + (n−1) * gap = viewportWidth exactly.
 //
-// THREAD SAFETY: All methods must be called on the main thread.
+// KEY REPEAT SUPPRESSION:
+//   Swift intercepts keyDown in ReaderViewController. The engine exposes
+//   handleKeyDown(_:) which ReaderViewController calls directly — the WKWebView
+//   never sees raw keystrokes. One physical keypress = one JS call, no exceptions.
+//
+// THREAD SAFETY: All public methods must be called on the main thread.
 
-final class PaginationEngine {
+// MARK: - ColsPerScreen preference
 
-    // MARK: - Geometry
+enum ColsPerScreen: Int, CaseIterable {
+    case one   = 1
+    case two   = 2
+    case three = 3
 
-    struct Geometry: Equatable {
-        let pageWidth:  CGFloat   // one column width = one viewport width
-        let pageHeight: CGFloat
-        let pageCount:  Int
-
-        var isEmpty: Bool { pageCount == 0 }
-    }
-
-    // MARK: - State
-
-    private(set) var geometry: Geometry = Geometry(pageWidth: 0, pageHeight: 0, pageCount: 0)
-
-    // MARK: - CSS injection
-
-    /// Returns CSS that turns the document into a horizontally-paged column layout.
-    /// This is injected as part of userCSS in mergedHTML — not via evaluateJavaScript —
-    /// so it is present from the first paint and never causes a layout flash.
-    static func columnCSS(viewportWidth: CGFloat, viewportHeight: CGFloat) -> String {
-        // Use `columns: 1` (column-count, not column-width) so the browser creates
-        // exactly one column whose width equals the body width. column-width is a
-        // *hint* the browser can exceed; column-count: 1 is exact.
-        //
-        // html carries the true viewport clip. We set overflow-x: hidden there so
-        // the next column's left edge is never visible. overflow-y is also hidden so
-        // no vertical scrollbar appears.
-        //
-        // body width is set to exactly viewportWidth with box-sizing: border-box so
-        // padding doesn't cause it to exceed the clip boundary. margin/max-width are
-        // both zeroed so the user's prose width preference doesn't narrow the body
-        // below viewportWidth and cause the column algorithm to shrink columns.
-        //
-        // The padding for readable line length is handled by an inner wrapper on the
-        // content itself (set via paddingH/paddingV in user CSS applied before this).
-        // We preserve that by NOT zeroing padding here — we only zero margin/max-width.
-        let vw = Int(viewportWidth)
-        let vh = Int(viewportHeight)
-        let imgMaxH = max(40, Int(viewportHeight) - 40)
-        return """
-        /* === Ambrosia paginated column layout === */
-
-        /*
-         * SCROLL MODEL:
-         * html must be overflow-x: scroll (not hidden) so that it is a proper
-         * scroll container. window.scrollTo() only works when the root element
-         * is scrollable. overflow: hidden makes it a clipping box — not a
-         * scroll container — and window.scrollTo silently no-ops.
-         *
-         * The scrollbar is hidden via ::-webkit-scrollbar so it's invisible
-         * to the user while the element remains programmatically scrollable.
-         *
-         * body overflow-x must NOT be hidden either, because the CSS column
-         * boxes need to extend horizontally past the body's own boundary for
-         * the browser to know there's content to scroll to.
-         */
-        html {
-            width: \(vw)px !important;
-            height: \(vh)px !important;
-            overflow-x: scroll !important;
-            overflow-y: hidden !important;
-            scrollbar-width: none !important; /* Firefox */
+    var label: String {
+        switch self {
+        case .one:   return "1 column"
+        case .two:   return "2 columns"
+        case .three: return "3 columns"
         }
-        html::-webkit-scrollbar {
-            display: none !important;          /* WebKit/Blink */
-        }
-        body {
-            -webkit-columns: 1 !important;
-            columns: 1 !important;
-            column-gap: 0px !important;
-            column-fill: auto !important;
-            width: \(vw)px !important;
-            height: \(vh)px !important;
-            max-width: none !important;
-            margin-left: 0 !important;
-            margin-right: 0 !important;
-            overflow-x: visible !important;  /* columns extend past body boundary */
-            overflow-y: hidden !important;
-            box-sizing: border-box !important;
-        }
-        img {
-            max-width: 100% !important;
-            max-height: \(imgMaxH)px !important;
-            object-fit: contain !important;
-        }
-        /* Avoid mid-paragraph column breaks where possible */
-        p, li, blockquote { break-inside: avoid-column; }
-        h1, h2, h3, h4, h5, h6 { break-after: avoid-column; }
-        """
-    }
-
-    // MARK: - Compute page count from a loaded WKWebView
-
-    /// After the webView has finished loading a document with columnCSS injected,
-    /// call this to compute the total page count from scrollWidth.
-    /// The completion is called synchronously if the measurement succeeds, or
-    /// with a zero-count Geometry on failure.
-    func measurePageCount(in webView: WKWebView,
-                          viewportWidth: CGFloat,
-                          viewportHeight: CGFloat,
-                          completion: @escaping (Geometry) -> Void) {
-        // scrollWidth is the total horizontal extent of all columns.
-        // Dividing by viewportWidth gives the column (page) count.
-        // We read both scrollWidth and the actual column width the browser computed
-        // to guard against sub-pixel rounding.
-        let js = """
-        (function() {
-            var sw  = document.documentElement.scrollWidth;
-            var bsw = document.body.scrollWidth;
-            var vw  = \(Int(viewportWidth));
-            var htmlOverflow = getComputedStyle(document.documentElement).overflowX;
-            var bodyOverflow = getComputedStyle(document.body).overflowX;
-            var colCount = getComputedStyle(document.body).columnCount;
-            console.log('[Ambrosia][measurePageCount] scrollWidth=' + sw
-                + ' bodyScrollWidth=' + bsw
-                + ' vw=' + vw
-                + ' html.overflowX=' + htmlOverflow
-                + ' body.overflowX=' + bodyOverflow
-                + ' body.columnCount=' + colCount);
-            if (sw <= 0 || vw <= 0) {
-                console.log('[Ambrosia][measurePageCount] BAILING: sw=' + sw + ' vw=' + vw);
-                return { scrollWidth: 0, pageCount: 0 };
-            }
-            var pageCount = Math.max(1, Math.round(sw / vw));
-            console.log('[Ambrosia][measurePageCount] pageCount=' + pageCount);
-            return { scrollWidth: sw, pageCount: pageCount };
-        })();
-        """
-        webView.evaluateJavaScript(js) { [weak self] result, error in
-            guard let self else { return }
-            if let error {
-                print("[PaginationEngine] measurePageCount JS error: \(error)")
-                completion(Geometry(pageWidth: viewportWidth,
-                                    pageHeight: viewportHeight,
-                                    pageCount: 0))
-                return
-            }
-            guard let dict = result as? [String: Any],
-                  let pageCount = dict["pageCount"] as? Int,
-                  pageCount > 0
-            else {
-                completion(Geometry(pageWidth: viewportWidth,
-                                    pageHeight: viewportHeight,
-                                    pageCount: 0))
-                return
-            }
-            let geo = Geometry(pageWidth: viewportWidth,
-                               pageHeight: viewportHeight,
-                               pageCount: pageCount)
-            self.geometry = geo
-            completion(geo)
-        }
-    }
-
-    // MARK: - Navigate to a page
-
-    /// Scrolls the document to the given 0-based page index by setting scrollLeft.
-    /// This is the entire "page turn" implementation.
-    static func scrollTo(pageIndex: Int, in webView: WKWebView, pageWidth: CGFloat, completion: (() -> Void)? = nil) {
-        let targetX = Int(CGFloat(pageIndex) * pageWidth)
-        // MUST use window.scrollTo — assigning document.documentElement.scrollLeft
-        // is silently dropped by WKWebView in standards-mode documents.
-        // html must also be overflow-x: scroll (not hidden) for this to take effect.
-        let js = """
-        (function() {
-            var before = document.documentElement.scrollLeft;
-            window.scrollTo({ left: \(targetX), top: 0, behavior: 'instant' });
-            var after = document.documentElement.scrollLeft;
-            console.log('[Ambrosia][scrollTo] page=\(pageIndex) targetX=\(targetX) before=' + before + ' after=' + after + ' moved=' + (after !== before));
-        })();
-        """
-        webView.evaluateJavaScript(js, completionHandler: nil)
-        completion?()
-    }
-
-    // MARK: - Page index for a character offset
-
-    /// Returns the 0-based page index that contains the given UTF-16 character offset.
-    /// Inserts a zero-size marker span at the offset, reads its getBoundingClientRect().left
-    /// (which in a multi-column layout is the column's left edge relative to the viewport),
-    /// then derives the page index from scrollLeft + rect.left.
-    static func pageIndex(forCharOffset offset: Int,
-                          in webView: WKWebView,
-                          pageWidth: CGFloat,
-                          completion: @escaping (Int) -> Void) {
-        guard pageWidth > 0 else { completion(0); return }
-
-        let js = """
-        (function() {
-            var target = \(offset);
-            var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
-            var remaining = target;
-            var node;
-            while ((node = walker.nextNode()) !== null) {
-                if (remaining <= node.length) {
-                    var range = document.createRange();
-                    range.setStart(node, remaining);
-                    range.collapse(true);
-                    var marker = document.createElement('span');
-                    marker.style.cssText = 'display:inline;font-size:0;line-height:0;';
-                    range.insertNode(marker);
-                    var rect = marker.getBoundingClientRect();
-                    var x = rect.left + document.documentElement.scrollLeft;
-                    marker.parentNode.removeChild(marker);
-                    var pageW = \(Int(pageWidth));
-                    return pageW > 0 ? Math.floor(x / pageW) : 0;
-                }
-                remaining -= node.length;
-            }
-            return 0;
-        })();
-        """
-        webView.evaluateJavaScript(js) { result, _ in
-            let idx = result as? Int ?? 0
-            completion(max(0, idx))
-        }
-    }
-
-    // MARK: - Current page from scrollLeft
-
-    /// Derives the current page index purely from the webView's current scrollLeft.
-    /// No JS evaluation needed — cheap to call on every scroll event if desired.
-    static func currentPageIndex(scrollLeft: CGFloat, pageWidth: CGFloat) -> Int {
-        guard pageWidth > 0 else { return 0 }
-        return max(0, Int((scrollLeft / pageWidth).rounded()))
     }
 }
+
+// MARK: - PaginationEngine
+
+final class PaginationEngine: NSObject {
+
+    // MARK: - Public callbacks
+
+    /// Called after a spine finishes loading and CSS layout is applied.
+    /// Receives the total number of columns in the spine.
+    var spineDidLoad: ((Int) -> Void)?
+
+    /// Called when JS requests navigation to the next or previous spine item.
+    /// `forward: true` → next spine, `forward: false` → previous spine.
+    var spineNavigationHandler: ((_ forward: Bool) -> Void)?
+
+    /// Called after every column navigation (page turn or restore).
+    /// Receives (currentColumn, totalColumns) so ReaderViewController can
+    /// update BookState progress and the toolbar position indicator.
+    var positionDidChange: ((_ column: Int, _ total: Int) -> Void)?
+
+    // MARK: - Private state
+
+    private weak var webView: WKWebView?
+    private var colsPerScreen: Int = 1
+    private var colSize: CGFloat   = 0
+    private var gap: CGFloat       = 0
+    private var colAndGap: CGFloat = 0
+
+    /// Whether the current spine has finished loading and ambrosiaSetup has been called.
+    private var isReady = false
+
+    /// Pending fraction to restore once the spine finishes loading.
+    /// Set by the caller before loadSpine when returning to a previously read position.
+    var pendingFraction: Double? = nil
+
+    // MARK: - Init
+
+    /// - Parameter webView: The visible reader WKWebView. Weak reference — the engine
+    ///   does not own the web view.
+    init(webView: WKWebView) {
+        self.webView = webView
+        super.init()
+    }
+
+    // MARK: - Configuration
+
+    /// Update the columns-per-screen setting. Takes effect on the next loadSpine call.
+    func setColsPerScreen(_ n: ColsPerScreen) {
+        colsPerScreen = n.rawValue
+    }
+
+    // MARK: - Spine loading
+
+    /// Load a new spine item. The engine will apply CSS multi-column layout in
+    /// webViewDidFinishNavigation and call spineDidLoad when ready.
+    ///
+    /// - Parameters:
+    ///   - html: The merged HTML string from EPUBParser for this spine item.
+    ///   - baseURL: The EPUB's content base URL (for relative image paths).
+    ///   - restoreFraction: If non-nil, the engine scrolls to this saved progress
+    ///     fraction (0–1) instead of column 0 after loading.
+    func loadSpine(html: String, baseURL: URL?, restoreFraction: Double? = nil) {
+        isReady = false
+        pendingFraction = restoreFraction
+        webView?.loadHTMLString(html, baseURL: baseURL)
+    }
+
+    // MARK: - Layout (called from WKNavigationDelegate in ReaderViewController)
+
+    /// Apply CSS multi-column layout and inject PaginationJS.
+    /// ReaderViewController must call this from webView(_:didFinish:).
+    func applyLayout() {
+        guard let wv = webView else { return }
+
+        // Compute column geometry from the web view's current bounds.
+        let viewWidth = wv.bounds.width
+        computeColumnGeometry(viewportWidth: viewWidth)
+
+        // Inject PaginationJS and call ambrosiaSetup in one evaluation.
+        // Using a completionHandler here (not nil) because we need to know when
+        // setup is done so we can read back the column count for spineDidLoad.
+        let js = """
+        \(PaginationJS.script)
+        window.ambrosiaSetup(\(colSize), \(gap), \(colsPerScreen));
+        window.ambrosiaColumnCount();
+        """
+
+        wv.evaluateJavaScript(js) { [weak self] result, error in
+            guard let self else { return }
+            if let error {
+                print("[PaginationEngine] applyLayout JS error: \(error)")
+                self.spineDidLoad?(1)
+                return
+            }
+            let totalCols = (result as? Int) ?? (result as? Double).map(Int.init) ?? 1
+            self.isReady = true
+
+            if let frac = self.pendingFraction {
+                self.pendingFraction = nil
+                self.scrollToFraction(frac)
+            }
+            self.spineDidLoad?(totalCols)
+        }
+    }
+
+    /// Re-apply layout after a window resize. ReaderViewController calls this from
+    /// its resize handler (debounced — do not call on every frame).
+    /// Preserves the current progress fraction across the resize.
+    func reapplyLayout() {
+        guard let wv = webView, isReady else { return }
+
+        // Read current fraction before invalidating layout.
+        wv.evaluateJavaScript("window.ambrosiaProgressFraction();") { [weak self] result, _ in
+            guard let self else { return }
+            let frac = (result as? Double) ?? 0.0
+            self.pendingFraction = frac
+            self.isReady = false
+            self.applyLayout()
+        }
+    }
+
+    // MARK: - Keyboard navigation
+    //
+    // ReaderViewController calls handleKeyDown(_:) from its keyDown override.
+    // The WKWebView never receives these events — see ReaderViewController for
+    // the key-repeat suppression logic.
+
+    enum NavigationKey {
+        case forward   // right arrow, down arrow, space
+        case backward  // left arrow, up arrow
+    }
+
+    func handleKeyDown(_ key: NavigationKey) {
+        guard isReady else { return }
+        switch key {
+        case .forward:
+            webView?.evaluateJavaScript("window.ambrosiaNextPage();",
+                                        completionHandler: nil)
+        case .backward:
+            webView?.evaluateJavaScript("window.ambrosiaPrevPage();",
+                                        completionHandler: nil)
+        }
+    }
+
+    // MARK: - Programmatic navigation
+
+    func scrollToColumn(_ column: Int) {
+        guard isReady else { return }
+        webView?.evaluateJavaScript(
+            "window.ambrosiaScrollToColumn(\(column));",
+            completionHandler: nil
+        )
+    }
+
+    func scrollToFraction(_ fraction: Double) {
+        guard isReady else { return }
+        let clamped = max(0.0, min(1.0, fraction))
+        webView?.evaluateJavaScript(
+            "window.ambrosiaScrollToFraction(\(clamped));",
+            completionHandler: nil
+        )
+    }
+
+    func scrollToOffset(_ charOffset: Int) {
+        guard isReady else { return }
+        webView?.evaluateJavaScript(
+            "window.ambrosiaNavigateToOffset(\(charOffset));",
+            completionHandler: nil
+        )
+    }
+
+    // MARK: - Progress query
+
+    /// Ask JS for the current progress fraction and deliver it asynchronously.
+    func queryProgress(completion: @escaping (Double, Int, Int) -> Void) {
+        guard isReady, let wv = webView else {
+            completion(0, 0, 1)
+            return
+        }
+        let js = "JSON.stringify({ f: window.ambrosiaProgressFraction(), c: window.ambrosiaCurrentColumn(), t: window.ambrosiaColumnCount() });"
+        wv.evaluateJavaScript(js) { result, _ in
+            guard let str = result as? String,
+                  let data = str.data(using: .utf8),
+                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Double]
+            else {
+                completion(0, 0, 1)
+                return
+            }
+            let frac  = dict["f"] ?? 0
+            let col   = Int(dict["c"] ?? 0)
+            let total = Int(dict["t"] ?? 1)
+            completion(frac, col, total)
+        }
+    }
+
+    // MARK: - Column geometry
+
+    private func computeColumnGeometry(viewportWidth: CGFloat) {
+        // Gap: use reader horizontal padding, minimum 1px to avoid WebKit
+        // scrolling bugs with zero-width column gaps.
+        let prefs = ReaderPreferences.shared
+        let horizontalPadding = CGFloat(prefs.paddingH * 2)
+        gap = max(1, horizontalPadding)
+
+        let n = CGFloat(colsPerScreen)
+
+        if n == 1 {
+            colSize = viewportWidth - gap
+        } else {
+            // Adjust gap so columns fit pixel-perfectly:
+            //   colSize * n + (n-1) * gap = viewportWidth
+            //   overhang = (viewportWidth + gap) % n
+            let raw = viewportWidth + gap
+            let overhang = raw.truncatingRemainder(dividingBy: n)
+            if overhang != 0 { gap += n - overhang }
+            colSize = (viewportWidth + gap) / n - gap
+        }
+
+        colAndGap = colSize + gap
+    }
+}
+
+// MARK: - ReaderViewController integration notes
+//
+// The following additions are needed in ReaderViewController.
+// They are described here rather than in a separate file so the engine
+// and its host are documented together.
+//
+// 1. MESSAGE HANDLER REGISTRATION
+//    Register "pageAction" and "positionUpdate" handlers at WKWebViewConfiguration
+//    construction time (before WKWebView init — invariant 7).
+//    PaginationEngine does not register these itself because ReaderViewController
+//    owns the WKWebViewConfiguration and the message routing.
+//
+//    In userContentController(_:didReceive:):
+//
+//      case "pageAction":
+//          guard let body = message.body as? String,
+//                let data = body.data(using: .utf8),
+//                let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+//                let action = dict["action"] as? String else { return }
+//          switch action {
+//          case "nextSpineItem": loadNextSpine()
+//          case "prevSpineItem": loadPrevSpine()
+//          default: break
+//          }
+//
+//      case "positionUpdate":
+//          guard let body = message.body as? String,
+//                let data = body.data(using: .utf8),
+//                let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+//          else { return }
+//          let fraction = dict["fraction"] as? Double ?? 0
+//          let column   = dict["column"]   as? Int    ?? 0
+//          let total    = dict["totalColumns"] as? Int ?? 1
+//          paginationEngine.positionDidChange?(column, total)
+//          saveProgress(fraction: fraction)
+//
+// 2. NAVIGATION DELEGATE
+//    In webView(_:didFinish:):
+//        paginationEngine.applyLayout()
+//
+// 3. KEY REPEAT SUPPRESSION
+//    WKWebView swallows keyDown by default. To intercept:
+//    - Subclass WKWebView or use a parent NSView that overrides keyDown.
+//    - The critical property is NSEvent.isARepeat. When true, drop the event.
+//
+//    override func keyDown(with event: NSEvent) {
+//        // Drop key-repeat events — one physical press = one page turn.
+//        guard !event.isARepeat else { return }
+//
+//        switch event.keyCode {
+//        case 124, 125:   // right arrow (124), down arrow (125)
+//            paginationEngine.handleKeyDown(.forward)
+//        case 123, 126:   // left arrow (123), up arrow (126)
+//            paginationEngine.handleKeyDown(.backward)
+//        case 49:         // space bar
+//            paginationEngine.handleKeyDown(.forward)
+//        default:
+//            super.keyDown(with: event)
+//        }
+//    }
+//
+//    NOTE: WKWebView does not forward keyDown to its superview by default.
+//    The cleanest approach is to make the NSWindow's firstResponder the parent
+//    NSViewController (not the WKWebView) and call acceptsFirstResponder = true.
+//    Alternatively, override keyDown in a WKWebView subclass and forward
+//    non-pagination keys up the responder chain via super.keyDown(with:).
+//
+// 4. RESIZE HANDLING
+//    On NSView.setFrameSize or window resize notification:
+//    Debounce with ~150ms before calling paginationEngine.reapplyLayout().
+//    Do not call on every frame — reapplyLayout reads the current fraction,
+//    recomputes geometry, re-injects JS, and restores position.
+//
+// 5. SCROLLBAR SUPPRESSION
+//    After WKWebView is added to the hierarchy:
+//        webView.enclosingScrollView?.hasHorizontalScroller = false
+//        webView.enclosingScrollView?.hasVerticalScroller   = false
+//        webView.enclosingScrollView?.horizontalScrollElasticity = .none
+//        webView.enclosingScrollView?.verticalScrollElasticity   = .none
+//    JS also sets document.documentElement overflow:hidden but the native
+//    scrollview suppression is needed as a belt-and-suspenders.

@@ -50,10 +50,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     fileprivate var currentMode: ReadingMode = .scroll
     private var currentHTML: String = ""
 
-    // Paginated mode — geometry is computed after didFinish by measuring scrollWidth
-    private var paginationGeometry: PaginationEngine.Geometry = .init(pageWidth: 0, pageHeight: 0, pageCount: 0)
-    private var currentPageIndex: Int = 0
-    private let paginationEngine = PaginationEngine()
+    private var currentSpineIndex: Int = 0
+    private var pendingAnnotationJump: Annotation?
+    private var paginationEngine: PaginationEngine?
 
     // Resize debounce
     private let resizeDebounce = DebounceTimer(delay: 0.3)
@@ -137,6 +136,18 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         webView = ReaderMenuWebView(frame: .zero, configuration: config)
         webView.viewController = self
         webView.navigationDelegate = self
+        let engine = PaginationEngine(webView: webView)
+        engine.spineNavigationHandler = { [weak self] forward in
+            forward ? self?.loadNextSpineItem() : self?.loadPreviousSpineItem()
+        }
+        engine.positionDidChange = { [weak self] _, _ in
+            self?.savePaginatedProgress()
+        }
+        engine.spineDidLoad = { [weak self] _ in
+            self?.performPendingAnnotationJumpIfNeeded()
+            self?.savePaginatedProgress()
+        }
+        paginationEngine = engine
         webView.translatesAutoresizingMaskIntoConstraints = false
 
         // Disable bounce scroll — in paginated mode horizontal bounce looks wrong
@@ -168,13 +179,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     override func viewDidLayout() {
         super.viewDidLayout()
         repositionFindBar()
-        guard currentMode == .paginated, !paginationGeometry.isEmpty else { return }
-        let newW = webView.bounds.width
-        let newH = webView.bounds.height
-        guard abs(newW - paginationGeometry.pageWidth)  > 1 ||
-              abs(newH - paginationGeometry.pageHeight) > 1 else { return }
+        guard currentMode == .paginated else { return }
         resizeDebounce.schedule { [weak self] in
-            self?.repaginatePreservingPosition()
+            self?.paginationEngine?.reapplyLayout()
         }
     }
 
@@ -265,7 +272,6 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         do {
             let html = try p.mergedHTML(userCSS: ReaderPreferences.shared.css)
             currentHTML = html
-            paginationGeometry = PaginationEngine.Geometry(pageWidth: 0, pageHeight: 0, pageCount: 0)
             loadCurrentHTML()
         } catch {
             print("[ReaderVC] reloadHTML error: \(error)")
@@ -287,34 +293,35 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     /// containing the column layout CSS, then loads it. The column CSS is sized
     /// to the current webView bounds. If bounds aren't ready yet, defers briefly.
     private func loadPaginatedHTML() {
+        let spineCount = parser?.spine.count ?? 0
+        let savedSpine = min(max(0, bookState?.lastSpineIndex ?? currentSpineIndex), max(0, spineCount - 1))
+        let savedPage = Int(bookState?.lastScrollOffset ?? 0)
+        loadSpineItem(index: savedSpine, restorePage: savedPage)
+    }
+
+    private func loadSpineItem(index: Int, restorePage: Int? = nil) {
+        guard let parser, index >= 0, index < parser.spine.count else { return }
         let vw = webView.bounds.width
         let vh = webView.bounds.height
 
         guard vw > 50, vh > 50, view.window != nil else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
                 guard let self, self.currentMode == .paginated else { return }
-                self.loadPaginatedHTML()
+                self.loadSpineItem(index: index, restorePage: restorePage)
             }
             return
         }
 
-        // Inject column CSS into the HTML. We do a simple insertion before </head>
-        // rather than rebuilding the document — EPUBParser.mergedHTML already has a
-        // well-formed <head>. Column CSS must come after user CSS so it wins on
-        // specificity for the properties we need to control (column-width, height, etc.)
-        let colCSS = PaginationEngine.columnCSS(viewportWidth: vw, viewportHeight: vh)
-        let colStyleBlock = "<style>\n\(colCSS)\n</style>"
+        currentSpineIndex = index
+        bookState?.lastSpineIndex = index
 
-        let paginatedHTML: String
-        if let range = currentHTML.range(of: "</head>", options: .caseInsensitive) {
-            var html = currentHTML
-            html.insert(contentsOf: colStyleBlock, at: range.lowerBound)
-            paginatedHTML = html
-        } else {
-            paginatedHTML = colStyleBlock + currentHTML
+        let item = parser.spine[index]
+        do {
+            let html = try parser.html(for: item, userCSS: ReaderPreferences.shared.css)
+            paginationEngine?.loadSpine(html: html, baseURL: imageBaseURL, restoreFraction: restorePage.map(Double.init) ?? bookState?.lastScrollOffset)
+        } catch {
+            showError(error.localizedDescription)
         }
-
-        webView.loadHTMLString(paginatedHTML, baseURL: imageBaseURL)
     }
 
     // MARK: - Preferences subscription
@@ -333,9 +340,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     func switchToScrollMode() {
         saveCurrentPositionSync { [weak self] in
             guard let self else { return }
-            self.currentMode = .paginated  // temporarily keep paginated so save logic works
             self.currentMode = .scroll
-            self.paginationGeometry = PaginationEngine.Geometry(pageWidth: 0, pageHeight: 0, pageCount: 0)
+            self.currentSpineIndex = 0
+            self.pendingAnnotationJump = nil
             self.reloadHTML()
         }
     }
@@ -344,83 +351,69 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         saveCurrentPositionSync { [weak self] in
             guard let self else { return }
             self.currentMode = .paginated
-            self.loadPaginatedHTML()
+            let spineCount = self.parser?.spine.count ?? 0
+            let savedSpine = min(max(0, self.bookState?.lastSpineIndex ?? self.currentSpineIndex), max(0, spineCount - 1))
+            self.loadSpineItem(index: savedSpine, restorePage: nil)
         }
     }
 
     // MARK: - WKNavigationDelegate
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        // Route JS console.log → Xcode output via webkit.messageHandlers.consoleLog
         let consoleBridgeJS = """
         (function() {
-            var _origLog  = console.log.bind(console);
-            var _origWarn = console.warn.bind(console);
-            var _origErr  = console.error.bind(console);
-            function _fwd(prefix, args) {
-                var msg = prefix + Array.prototype.slice.call(args).join(' ');
-                try { window.webkit.messageHandlers.consoleLog.postMessage(msg); } catch(e) {}
-            }
-            console.log   = function() { _origLog.apply(console, arguments);  _fwd('',       arguments); };
-            console.warn  = function() { _origWarn.apply(console, arguments); _fwd('[WARN] ', arguments); };
-            console.error = function() { _origErr.apply(console, arguments);  _fwd('[ERR] ',  arguments); };
+          if (window.__ambrosiaConsoleBridgeInstalled) return;
+          window.__ambrosiaConsoleBridgeInstalled = true;
+          const oldLog = console.log;
+          console.log = function() {
+            try { window.webkit.messageHandlers.consoleLog.postMessage(Array.from(arguments).join(" ")); } catch(e) {}
+            oldLog.apply(console, arguments);
+          };
         })();
         """
         webView.evaluateJavaScript(consoleBridgeJS, completionHandler: nil)
-        // Inject PaginationJS utilities (highlight, charOffset, etc.) on every load.
-        // In paginated mode this also sets _ambrosiaPageStart/End sentinels so
-        // HighlightBridge works unchanged.
-        webView.evaluateJavaScript(PaginationJS.script, completionHandler: nil)
+
+        if currentMode == .paginated {
+            injectPaginatedKeyTrap()
+            paginationEngine?.applyLayout()
+        }
+
         HighlightBridge.injectSelectionListener(into: webView)
         restoreAnnotations()
 
-        switch currentMode {
-        case .scroll:
+        if currentMode == .scroll {
             restoreScrollPosition()
             injectScrollTracker()
-            startAutoSave()
-
-        case .paginated:
-            // Delay measurement slightly — didFinish fires before WebKit commits
-            // compositing, so scrollWidth can be stale (too small or zero) if we
-            // measure immediately. 80ms is enough for the layout pass to settle
-            // without being perceptible to the user.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-                guard let self, self.currentMode == .paginated else { return }
-                let vw = self.webView.bounds.width
-                let vh = self.webView.bounds.height
-                self.paginationEngine.measurePageCount(
-                    in: self.webView,
-                    viewportWidth: vw,
-                    viewportHeight: vh
-                ) { [weak self] geo in
-                    guard let self else { return }
-                    if geo.isEmpty {
-                        // Layout still not ready — retry once more after a longer delay
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                            guard let self, self.currentMode == .paginated else { return }
-                            self.paginationEngine.measurePageCount(
-                                in: self.webView,
-                                viewportWidth: self.webView.bounds.width,
-                                viewportHeight: self.webView.bounds.height,
-                                completion: { [weak self] retryGeo in
-                                    guard let self else { return }
-                                    print("[Pagination] retry measurePageCount → pageCount=\(retryGeo.pageCount) pageWidth=\(Int(retryGeo.pageWidth))")
-                                    self.paginationGeometry = retryGeo
-                                    self.restorePaginatedPosition()
-                                    self.startAutoSave()
-                                }
-                            )
-                        }
-                        return
-                    }
-                    print("[Pagination] measurePageCount → pageCount=\(geo.pageCount) pageWidth=\(Int(geo.pageWidth))")
-                    self.paginationGeometry = geo
-                    self.restorePaginatedPosition()
-                    self.startAutoSave()
-                }
-            }
         }
+
+        startAutoSave()
+    }
+
+    private func injectPaginatedKeyTrap() {
+        let js = """
+        (function() {
+          if (window.__ambrosiaPaginatedKeyTrapInstalled) return;
+          window.__ambrosiaPaginatedKeyTrapInstalled = true;
+          window.addEventListener('keydown', function(event) {
+            var target = event.target;
+            var tag = target && target.tagName ? target.tagName.toLowerCase() : '';
+            if (tag === 'input' || tag === 'textarea' || tag === 'select' || (target && target.isContentEditable)) return;
+
+            var action = null;
+            if (event.key === 'ArrowRight' || event.key === 'ArrowDown') action = 'next';
+            else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') action = 'prev';
+            else if (event.key === ' ') action = event.shiftKey ? 'prev' : 'next';
+            else return;
+
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            console.log('[PaginationKeyDOM] key=' + event.key + ' action=' + action + ' repeat=' + event.repeat);
+            try { window.webkit.messageHandlers.pageAction.postMessage(action); } catch (e) {}
+          }, true);
+        })();
+        """
+        webView.evaluateJavaScript(js, completionHandler: nil)
     }
 
     func webView(_ webView: WKWebView,
@@ -460,81 +453,74 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     // MARK: - Paginated mode: position restore
 
     private func restorePaginatedPosition() {
-        let savedOffset = bookState?.lastCharacterOffset ?? 0
-        guard savedOffset > 0 else {
-            // No saved position — start at page 0
-            currentPageIndex = 0
-            updateProgressForCurrentPage()
-            return
-        }
-
-        PaginationEngine.pageIndex(
-            forCharOffset: savedOffset,
-            in: webView,
-            pageWidth: paginationGeometry.pageWidth
-        ) { [weak self] pageIdx in
-            guard let self else { return }
-            self.currentPageIndex = max(0, min(pageIdx, self.paginationGeometry.pageCount - 1))
-            PaginationEngine.scrollTo(
-                pageIndex: self.currentPageIndex,
-                in: self.webView,
-                pageWidth: self.paginationGeometry.pageWidth
-            )
-            self.updateProgressForCurrentPage()
-        }
+        let fraction = bookState?.lastScrollOffset ?? 0
+        paginationEngine?.scrollToFraction(fraction)
+        savePaginatedProgress()
     }
 
-    // MARK: - Paginated mode: repaginate on resize
+    private func performPendingAnnotationJumpIfNeeded() {
+        guard let annotation = pendingAnnotationJump,
+              currentMode == .paginated,
+              annotation.spineIndex == currentSpineIndex else { return }
 
-    /// Called when the window is resized. Saves position, reloads with new column CSS.
+        pendingAnnotationJump = nil
+        let offset = annotation.startChar
+        let js = """
+        if (window.ambrosiaNavigateToOffset) { window.ambrosiaNavigateToOffset(\(offset)); }
+        if (window.ambrosiaHighlight) { window.ambrosiaHighlight(\(offset)); }
+        """
+        webView.evaluateJavaScript(js, completionHandler: nil)
+        savePaginatedProgress()
+    }
+
     private func repaginatePreservingPosition() {
         guard currentMode == .paginated else { return }
-        saveCurrentPositionSync { [weak self] in
+        paginationEngine?.queryProgress { [weak self] fraction, _, _ in
             guard let self else { return }
-            self.paginationGeometry = PaginationEngine.Geometry(pageWidth: 0, pageHeight: 0, pageCount: 0)
-            self.loadPaginatedHTML()
+            self.paginationEngine?.applyLayout()
+            self.paginationEngine?.scrollToFraction(fraction)
         }
     }
 
-    // MARK: - Page navigation
-
     func goToNextPage() {
-        print("[Pagination] goToNextPage — currentPage=\(currentPageIndex) pageCount=\(paginationGeometry.pageCount) mode=\(currentMode)")
-        guard currentMode == .paginated,
-              !paginationGeometry.isEmpty,
-              currentPageIndex < paginationGeometry.pageCount - 1 else { return }
-        currentPageIndex += 1
-        PaginationEngine.scrollTo(
-            pageIndex: currentPageIndex,
-            in: webView,
-            pageWidth: paginationGeometry.pageWidth
-        )
-        updateProgressForCurrentPage()
-        saveCurrentPage()
+        guard currentMode == .paginated else { return }
+        paginationEngine?.handleKeyDown(.forward)
     }
 
     func goToPreviousPage() {
-        print("[Pagination] goToPreviousPage — currentPage=\(currentPageIndex) pageCount=\(paginationGeometry.pageCount) mode=\(currentMode)")
-        guard currentMode == .paginated, currentPageIndex > 0 else { return }
-        currentPageIndex -= 1
-        PaginationEngine.scrollTo(
-            pageIndex: currentPageIndex,
-            in: webView,
-            pageWidth: paginationGeometry.pageWidth
-        )
-        updateProgressForCurrentPage()
-        saveCurrentPage()
+        guard currentMode == .paginated else { return }
+        paginationEngine?.handleKeyDown(.backward)
+    }
+
+    private func loadNextSpineItem() {
+        guard let parser, currentSpineIndex + 1 < parser.spine.count else { return }
+        savePaginatedProgress()
+        loadSpineItem(index: currentSpineIndex + 1, restorePage: 0)
+    }
+
+    private func loadPreviousSpineItem() {
+        guard currentSpineIndex > 0 else { return }
+        savePaginatedProgress()
+        loadSpineItem(index: currentSpineIndex - 1, restorePage: 1)
+    }
+
+    private func savePaginatedProgress() {
+        guard currentMode == .paginated else { return }
+        paginationEngine?.queryProgress { [weak self] fraction, col, total in
+            guard let self else { return }
+            // total==1 with col==0 means ambrosiaSetup hasn't run yet — don't
+            // write 100% progress from a spurious 1.0 fraction.
+            guard total > 1 || col > 0 else { return }
+            self.bookState?.lastSpineIndex = self.currentSpineIndex
+            self.bookState?.lastScrollOffset = fraction
+            self.bookState?.totalReadPercent = fraction
+            self.onReadingProgressChanged?()
+        }
     }
 
     private func updateProgressForCurrentPage() {
-        guard !paginationGeometry.isEmpty else { return }
-        bookState?.totalReadPercent = Double(currentPageIndex + 1) / Double(paginationGeometry.pageCount)
+        savePaginatedProgress()
     }
-
-    // MARK: - Position save helpers
-
-    /// Saves the current reading position synchronously-ish from the current mode's state,
-    /// then calls the completion. In paginated mode this is immediate (no JS needed).
     /// In scroll mode it fires an evaluateJavaScript call.
     private func saveCurrentPositionSync(completion: @escaping () -> Void) {
         if currentMode == .paginated {
@@ -588,57 +574,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     }
 
     private func saveCurrentPage() {
-        guard currentMode == .paginated, !paginationGeometry.isEmpty else { return }
-        // In paginated mode we save the scrollLeft as lastScrollOffset (for fast
-        // restore without JS) and compute a char offset via pageIndex for
-        // cross-mode position portability.
-        let sl = CGFloat(currentPageIndex) * paginationGeometry.pageWidth
-        bookState?.lastScrollOffset    = Double(sl)
-        bookState?.lastCharacterOffset = 0  // will be updated asynchronously below
-        bookState?.lastSpineIndex      = 0
-
-        // Async char offset save — for annotation jump-back and cross-mode restore.
-        // We read the char at the top-left of the current page by checking what
-        // text is at scrollLeft = currentPageIndex * pageWidth.
-        let targetX = Int(sl)
-        let js = """
-        (function() {
-            var savedLeft = document.documentElement.scrollLeft;
-            // Use window.scrollTo for writes — scrollLeft assignment is silently
-            // dropped by WKWebView in standards-mode documents.
-            window.scrollTo({ left: \(targetX), top: 0, behavior: 'instant' });
-            var vw = \(Int(paginationGeometry.pageWidth));
-            var vh = \(Int(paginationGeometry.pageHeight));
-            // Find topmost visible text in this column
-            var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
-            var cumulative = 0, node, best = 0;
-            while ((node = walker.nextNode()) !== null) {
-                var range = document.createRange();
-                range.selectNodeContents(node);
-                var rects = range.getClientRects();
-                for (var i = 0; i < rects.length; i++) {
-                    var r = rects[i];
-                    if (r.left >= -1 && r.left < vw && r.top >= 0 && r.top < vh) {
-                        best = cumulative;
-                        window.scrollTo({ left: savedLeft, top: 0, behavior: 'instant' });
-                        return best;
-                    }
-                }
-                cumulative += node.length;
-            }
-            window.scrollTo({ left: savedLeft, top: 0, behavior: 'instant' });
-            return best;
-        })();
-        """
-        webView.evaluateJavaScript(js) { [weak self] result, _ in
-            if let offset = result as? Int {
-                self?.bookState?.lastCharacterOffset = offset
-            }
-            self?.flushPosition()
-        }
+        savePaginatedProgress()
     }
-
-    // MARK: - BookState management
 
     private func ensureBookState() {
         let cid = book.id
@@ -690,8 +627,20 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
         case "pageAction":
             guard let body = message.body as? String else { return }
+            // Key trap posts plain "next"/"prev" for within-spine navigation.
+            // JS ambrosiaNextPage/PrevPage posts JSON { action: "nextSpineItem"/"prevSpineItem" }
+            // when crossing spine boundaries. Handle both.
             if body == "next" { goToNextPage() }
             else if body == "prev" { goToPreviousPage() }
+            else if let data = body.data(using: .utf8),
+                    let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                    let action = dict["action"] as? String {
+                switch action {
+                case "nextSpineItem": loadNextSpineItem()
+                case "prevSpineItem": loadPreviousSpineItem()
+                default: break
+                }
+            }
 
         case "highlightAdded":
             if let annotation = HighlightBridge.decodeAnnotation(from: message) {
@@ -943,7 +892,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             let loaded = (try? await AppDelegate.shared?.session.metaDB?.annotations(for: book.id)) ?? []
             await MainActor.run {
                 annotations = loaded
-                let ranged = loaded.filter { !$0.isPointAnnotation }
+                let ranged = loaded.filter {
+                    !$0.isPointAnnotation && (currentMode != .paginated || $0.spineIndex == currentSpineIndex)
+                }
                 HighlightBridge.restoreHighlights(ranged, into: webView)
                 refreshSidebarIfVisible()
             }
@@ -955,28 +906,21 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     func jumpToAnnotation(_ annotation: Annotation) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.view.window?.makeKeyAndOrderFront(nil)
-
             let offset = annotation.startChar
 
-            if self.currentMode == .paginated, !self.paginationGeometry.isEmpty {
-                PaginationEngine.pageIndex(
-                    forCharOffset: offset,
-                    in: self.webView,
-                    pageWidth: self.paginationGeometry.pageWidth
-                ) { [weak self] pageIdx in
-                    guard let self else { return }
-                    self.currentPageIndex = max(0, min(pageIdx, self.paginationGeometry.pageCount - 1))
-                    PaginationEngine.scrollTo(
-                        pageIndex: self.currentPageIndex,
-                        in: self.webView,
-                        pageWidth: self.paginationGeometry.pageWidth
-                    )
-                    self.webView.evaluateJavaScript(
-                        "if (window.ambrosiaHighlight) window.ambrosiaHighlight(\(offset));",
-                        completionHandler: nil
-                    )
+            if self.currentMode == .paginated {
+                if annotation.spineIndex != self.currentSpineIndex {
+                    self.pendingAnnotationJump = annotation
+                    self.loadSpineItem(index: annotation.spineIndex, restorePage: 0)
+                    return
                 }
+
+                let js = """
+                if (window.ambrosiaNavigateToOffset) { window.ambrosiaNavigateToOffset(\(offset)); }
+                if (window.ambrosiaHighlight) { window.ambrosiaHighlight(\(offset)); }
+                """
+                self.webView.evaluateJavaScript(js, completionHandler: nil)
+                self.savePaginatedProgress()
                 return
             }
 
@@ -1284,16 +1228,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     #if DEBUG
     func runPaginationHarness() {
-        guard !paginationGeometry.isEmpty else {
-            print("[Harness] No pagination geometry — is paginated mode active?")
-            return
-        }
-        print("[Harness] pageCount=\(paginationGeometry.pageCount) pageWidth=\(Int(paginationGeometry.pageWidth)) pageHeight=\(Int(paginationGeometry.pageHeight))")
-        webView.evaluateJavaScript("document.documentElement.scrollWidth") { result, _ in
-            let sw = result as? Int ?? 0
-            print("[Harness] scrollWidth=\(sw) — computed pages=\(Int((Double(sw) / Double(self.paginationGeometry.pageWidth)).rounded()))")
-        }
+        // Pagination harness removed with the old geometry-based engine.
     }
+
     #endif
 }
 
@@ -1340,37 +1277,31 @@ private class ReaderMenuWebView: WKWebView {
             super.keyDown(with: event)
             return
         }
+        print("[PaginationKey] keyDown code=\(event.keyCode) chars=\(event.charactersIgnoringModifiers ?? "") modifiers=\(event.modifierFlags.rawValue) repeat=\(event.isARepeat)")
         switch event.keyCode {
         case 123, 126:       // ← ↑
             vc.goToPreviousPage()
         case 124, 125:       // → ↓
             vc.goToNextPage()
         case 49:             // Space
-            if event.modifierFlags.contains(.shift) { vc.goToPreviousPage() }
-            else { vc.goToNextPage() }
+            if event.modifierFlags.contains(.shift) {
+                vc.goToPreviousPage()
+            } else {
+                vc.goToNextPage()
+            }
         default:
             super.keyDown(with: event)
         }
     }
 
-    // Block trackpad/mouse horizontal scroll in paginated mode.
-    // html is overflow-x: scroll so the user could otherwise swipe to mid-column
-    // positions between page boundaries. All navigation must go through goToNextPage
-    // / goToPreviousPage so we stay on exact page boundaries.
+    // Block trackpad/mouse scrolling in paginated mode. Page turns must go through
+    // goToNextPage/goToPreviousPage so the view stays on exact column boundaries.
     override func scrollWheel(with event: NSEvent) {
         guard let vc = viewController, vc.currentMode == .paginated else {
             super.scrollWheel(with: event)
             return
         }
-        // Allow vertical scrolling to fall through only if there's no horizontal
-        // component — WKWebView uses scrollWheel for inertia etc., so we must not
-        // swallow events with a non-zero deltaX or the momentum phase will stall.
-        if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
-            // Predominantly horizontal swipe — absorb it; page turns are keyboard-only.
-            return
-        }
-        // Purely vertical scroll (e.g. two-finger scroll on a landscape book) — pass through.
-        super.scrollWheel(with: event)
+        return
     }
 
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
