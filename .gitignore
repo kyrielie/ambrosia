@@ -6,6 +6,12 @@ finished/
 AGENTS.md
 
 
+### Xcode ###
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+
 
 # General
 .DS_Store

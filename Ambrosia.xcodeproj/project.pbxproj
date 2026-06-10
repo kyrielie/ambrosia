@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		00D6889E038A44BD866CAB5EF /* ReaderPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00D6889E038A44BD866CAB5E /* ReaderPreferences.swift */; };
+		01EF0559DBE5881E10712105F /* BookmarkSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87293BD4CB51E144CC4057EC /* BookmarkSidebarView.swift */; };
 		14E71F3DACC447CF8B4FF29BF /* PaginationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14E71F3DACC447CF8B4FF29B /* PaginationEngine.swift */; };
 		18225FAA0945438AB71AB285F /* ReaderViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18225FAA0945438AB71AB285 /* ReaderViewController.swift */; };
 		1EEFE8E535A844FABA1ACC5A /* CustomColumnConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88C9DE92AB9B4816872BCD08 /* CustomColumnConfig.swift */; };
@@ -15,9 +16,11 @@
 		289A4ED0240F4884963BAF9AF /* LibraryViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 289A4ED0240F4884963BAF9A /* LibraryViewController.swift */; };
 		2FC91CA366334CFE8E8EAD54F /* FilterDrawerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FC91CA366334CFE8E8EAD54 /* FilterDrawerView.swift */; };
 		36E517D472614A1788F9CEDEF /* Tag.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36E517D472614A1788F9CEDE /* Tag.swift */; };
+		3752F8ABCEECBBFFEC4065BBF /* PreferencesWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCF05383F236D5093B604921 /* PreferencesWindowController.swift */; };
 		3EF30D6D00BA40B691EA8110F /* EPUBParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EF30D6D00BA40B691EA8110 /* EPUBParser.swift */; };
 		4D1E361C90E1497DA1CD75E2F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D1E361C90E1497DA1CD75E2 /* AppDelegate.swift */; };
 		5037BC30F5C947B49D7196AEF /* LibraryWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5037BC30F5C947B49D7196AE /* LibraryWindowController.swift */; };
+		56289C63BFA2118454C7D2C7F /* ReadingGoalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49EB97076C4987CADEC037C /* ReadingGoalView.swift */; };
 		5CE859818988473590FC2997 /* CalibreLibraryPhase2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C767EA792624845BFBF18EC /* CalibreLibraryPhase2.swift */; };
 		73D871CF8BD14E60B94CB491F /* ReadingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73D871CF8BD14E60B94CB491 /* ReadingState.swift */; };
 		7E96791E70E24692B2282A1EF /* FilterRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E96791E70E24692B2282A1E /* FilterRule.swift */; };
@@ -25,6 +28,7 @@
 		87229515E83E4AC59B9B2A95F /* ReadingGoal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87229515E83E4AC59B9B2A95 /* ReadingGoal.swift */; };
 		898749FB003147C58A876E92F /* BookmarkManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 898749FB003147C58A876E92 /* BookmarkManager.swift */; };
 		904C7DC3FE504D28A3C90A2BF /* Author.swift in Sources */ = {isa = PBXBuildFile; fileRef = 904C7DC3FE504D28A3C90A2B /* Author.swift */; };
+		99F7BE9279DA0BDF718EAAADF /* TagSynonymStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2F7D6C9C832E5FAE1048A46 /* TagSynonymStore.swift */; };
 		9D4E67B889EA4F2999FBE7D4F /* PaginationJS.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D4E67B889EA4F2999FBE7D4 /* PaginationJS.swift */; };
 		A1D0BEF497D14BD099B5D5ECF /* Book.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D0BEF497D14BD099B5D5EC /* Book.swift */; };
 		AA000000000000000000SPF1 /* SQLite in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000SPM1 /* SQLite */; };
@@ -34,16 +38,29 @@
 		AA1000000000000000000002 /* LibraryIndexManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000012 /* LibraryIndexManager.swift */; };
 		AA1000000000000000000003 /* SystemCollectionID.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000013 /* SystemCollectionID.swift */; };
 		AA1000000000000000000004 /* CollectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000014 /* CollectionStore.swift */; };
+		AA11223344556677889900AAF /* AnnotationSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677889900AA /* AnnotationSidebarView.swift */; };
 		AA2000000000000000000001 /* AO3MetadataExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000000000000000000011 /* AO3MetadataExtractor.swift */; };
 		AA2000000000000000000002 /* ExtractionProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000000000000000000012 /* ExtractionProgress.swift */; };
 		AA3000000000000000000001 /* AO3TagSeedDatabaseConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA3000000000000000000011 /* AO3TagSeedDatabaseConfig.swift */; };
 		B09DADA86BD349A1BC47BC12F /* BookGridItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B09DADA86BD349A1BC47BC12 /* BookGridItem.swift */; };
 		B7D4280E44CE40FC8478BC68F /* CalibreImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7D4280E44CE40FC8478BC68 /* CalibreImporter.swift */; };
+		BB11223344556677889900CCF /* ContextMenuPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB11223344556677889900CC /* ContextMenuPreferences.swift */; };
 		BB364F9ED5F842B9A84A141CF /* BaseStyles.css in Resources */ = {isa = PBXBuildFile; fileRef = BB364F9ED5F842B9A84A141C /* BaseStyles.css */; };
+		BB99887766554433221100BBF /* AnnotationPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB99887766554433221100BB /* AnnotationPopover.swift */; };
 		BC523994168D4B84897956DBF /* DebounceTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC523994168D4B84897956DB /* DebounceTimer.swift */; };
 		C0601B8F88CB49BDB51F0CE4F /* BookLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0601B8F88CB49BDB51F0CE4 /* BookLibrary.swift */; };
 		C5CF7F5D87034F05895A4539F /* HighlightBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5CF7F5D87034F05895A4539 /* HighlightBridge.swift */; };
+		CC11223344556677889900CCF /* FindBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11223344556677889900CC /* FindBarView.swift */; };
+		D100000000000001F /* LibraryToolbarState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000000000001 /* LibraryToolbarState.swift */; };
+		D100000000000002F /* EmailSidebarViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000000000002 /* EmailSidebarViewController.swift */; };
+		D100000000000003F /* EmailDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000000000003 /* EmailDetailView.swift */; };
+		D100000000000004F /* EmailLibraryViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000000000004 /* EmailLibraryViewController.swift */; };
+		D67DC672B21B9C67E2454465F /* CollectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE5E3EB1BF9C138C86AFF21F /* CollectionsView.swift */; };
 		DCB818E84DEF4B2BBC8A8147 /* AO3Metadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31EF9AEBF5CB4EE494463865 /* AO3Metadata.swift */; };
+		E200000000000001F /* SearchQueryParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000001 /* SearchQueryParser.swift */; };
+		E200000000000002F /* CalibreLibrarySearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000002 /* CalibreLibrarySearch.swift */; };
+		E200000000000003F /* CalibreFTSLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000003 /* CalibreFTSLibrary.swift */; };
+		E200000000000004F /* SearchSuggestionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000004 /* SearchSuggestionsView.swift */; };
 		EC41B135F47F481D94724963F /* AmbrosiaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC41B135F47F481D94724963 /* AmbrosiaApp.swift */; };
 		EE2E961A9DAB42CABB4D7F7BF /* ExportManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE2E961A9DAB42CABB4D7F7B /* ExportManager.swift */; };
 		F1142C6BB8354DB3B488C450F /* ReaderWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1142C6BB8354DB3B488C450 /* ReaderWindowController.swift */; };
@@ -54,23 +71,6 @@
 		FC001122334455667788DDEE2 /* CalibreLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788DDF0 /* CalibreLibrary.swift */; };
 		FC001122334455667788DDEE3 /* LibrarySession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788DDF1 /* LibrarySession.swift */; };
 		FD0FC465A08D4530A5C86C59F /* EPUBValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0FC465A08D4530A5C86C59 /* EPUBValidator.swift */; };
-		D67DC672B21B9C67E2454465F /* CollectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE5E3EB1BF9C138C86AFF21F /* CollectionsView.swift */; };
-		56289C63BFA2118454C7D2C7F /* ReadingGoalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49EB97076C4987CADEC037C /* ReadingGoalView.swift */; };
-		01EF0559DBE5881E10712105F /* BookmarkSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87293BD4CB51E144CC4057EC /* BookmarkSidebarView.swift */; };
-		AA11223344556677889900AAF /* AnnotationSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677889900AA /* AnnotationSidebarView.swift */; };
-		BB99887766554433221100BBF /* AnnotationPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB99887766554433221100BB /* AnnotationPopover.swift */; };
-		CC11223344556677889900CCF /* FindBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11223344556677889900CC /* FindBarView.swift */; };
-		99F7BE9279DA0BDF718EAAADF /* TagSynonymStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2F7D6C9C832E5FAE1048A46 /* TagSynonymStore.swift */; };
-		3752F8ABCEECBBFFEC4065BBF /* PreferencesWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCF05383F236D5093B604921 /* PreferencesWindowController.swift */; };
-		BB11223344556677889900CCF /* ContextMenuPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB11223344556677889900CC /* ContextMenuPreferences.swift */; };
-		D100000000000001F /* LibraryToolbarState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000000000001 /* LibraryToolbarState.swift */; };
-		D100000000000002F /* EmailSidebarViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000000000002 /* EmailSidebarViewController.swift */; };
-		D100000000000003F /* EmailDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000000000003 /* EmailDetailView.swift */; };
-		D100000000000004F /* EmailLibraryViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000000000004 /* EmailLibraryViewController.swift */; };
-		E200000000000001F /* SearchQueryParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000001 /* SearchQueryParser.swift */; };
-		E200000000000002F /* CalibreLibrarySearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000002 /* CalibreLibrarySearch.swift */; };
-		E200000000000003F /* CalibreFTSLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000003 /* CalibreFTSLibrary.swift */; };
-		E200000000000004F /* SearchSuggestionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000004 /* SearchSuggestionsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -90,26 +90,43 @@
 		7E96791E70E24692B2282A1E /* FilterRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterRule.swift; sourceTree = "<group>"; };
 		80EBF1ABC2834516B4FD8D2D /* FilterBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterBuilder.swift; sourceTree = "<group>"; };
 		87229515E83E4AC59B9B2A95 /* ReadingGoal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingGoal.swift; sourceTree = "<group>"; };
+		87293BD4CB51E144CC4057EC /* BookmarkSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarkSidebarView.swift; sourceTree = "<group>"; };
 		88C9DE92AB9B4816872BCD08 /* CustomColumnConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomColumnConfig.swift; sourceTree = "<group>"; };
 		898749FB003147C58A876E92 /* BookmarkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarkManager.swift; sourceTree = "<group>"; };
 		904C7DC3FE504D28A3C90A2B /* Author.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Author.swift; sourceTree = "<group>"; };
 		9D4E67B889EA4F2999FBE7D4 /* PaginationJS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaginationJS.swift; sourceTree = "<group>"; };
 		A1D0BEF497D14BD099B5D5EC /* Book.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Book.swift; sourceTree = "<group>"; };
+		A49EB97076C4987CADEC037C /* ReadingGoalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingGoalView.swift; sourceTree = "<group>"; };
 		AA000000000000000000PLIST /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA000000000000000000PROD1 /* Ambrosia.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ambrosia.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA1000000000000000000011 /* AmbrosiaMetaDB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbrosiaMetaDB.swift; sourceTree = "<group>"; };
 		AA1000000000000000000012 /* LibraryIndexManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryIndexManager.swift; sourceTree = "<group>"; };
 		AA1000000000000000000013 /* SystemCollectionID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemCollectionID.swift; sourceTree = "<group>"; };
 		AA1000000000000000000014 /* CollectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionStore.swift; sourceTree = "<group>"; };
+		AA11223344556677889900AA /* AnnotationSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationSidebarView.swift; sourceTree = "<group>"; };
 		AA2000000000000000000011 /* AO3MetadataExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AO3MetadataExtractor.swift; sourceTree = "<group>"; };
 		AA2000000000000000000012 /* ExtractionProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtractionProgress.swift; sourceTree = "<group>"; };
 		AA3000000000000000000011 /* AO3TagSeedDatabaseConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AO3TagSeedDatabaseConfig.swift; sourceTree = "<group>"; };
 		B09DADA86BD349A1BC47BC12 /* BookGridItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookGridItem.swift; sourceTree = "<group>"; };
 		B7D4280E44CE40FC8478BC68 /* CalibreImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreImporter.swift; sourceTree = "<group>"; };
+		BB11223344556677889900CC /* ContextMenuPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextMenuPreferences.swift; sourceTree = "<group>"; };
 		BB364F9ED5F842B9A84A141C /* BaseStyles.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = BaseStyles.css; sourceTree = "<group>"; };
+		BB99887766554433221100BB /* AnnotationPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationPopover.swift; sourceTree = "<group>"; };
 		BC523994168D4B84897956DB /* DebounceTimer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebounceTimer.swift; sourceTree = "<group>"; };
+		BE5E3EB1BF9C138C86AFF21F /* CollectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionsView.swift; sourceTree = "<group>"; };
 		C0601B8F88CB49BDB51F0CE4 /* BookLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookLibrary.swift; sourceTree = "<group>"; };
 		C5CF7F5D87034F05895A4539 /* HighlightBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightBridge.swift; sourceTree = "<group>"; };
+		CC11223344556677889900CC /* FindBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FindBarView.swift; sourceTree = "<group>"; };
+		CCF05383F236D5093B604921 /* PreferencesWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindowController.swift; sourceTree = "<group>"; };
+		D100000000000001 /* LibraryToolbarState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryToolbarState.swift; sourceTree = "<group>"; };
+		D100000000000002 /* EmailSidebarViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailSidebarViewController.swift; sourceTree = "<group>"; };
+		D100000000000003 /* EmailDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailDetailView.swift; sourceTree = "<group>"; };
+		D100000000000004 /* EmailLibraryViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailLibraryViewController.swift; sourceTree = "<group>"; };
+		D2F7D6C9C832E5FAE1048A46 /* TagSynonymStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagSynonymStore.swift; sourceTree = "<group>"; };
+		E200000000000001 /* SearchQueryParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchQueryParser.swift; sourceTree = "<group>"; };
+		E200000000000002 /* CalibreLibrarySearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreLibrarySearch.swift; sourceTree = "<group>"; };
+		E200000000000003 /* CalibreFTSLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreFTSLibrary.swift; sourceTree = "<group>"; };
+		E200000000000004 /* SearchSuggestionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchSuggestionsView.swift; sourceTree = "<group>"; };
 		EC41B135F47F481D94724963 /* AmbrosiaApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbrosiaApp.swift; sourceTree = "<group>"; };
 		EE2E961A9DAB42CABB4D7F7B /* ExportManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportManager.swift; sourceTree = "<group>"; };
 		F1142C6BB8354DB3B488C450 /* ReaderWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderWindowController.swift; sourceTree = "<group>"; };
@@ -120,23 +137,6 @@
 		FC001122334455667788DDF0 /* CalibreLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreLibrary.swift; sourceTree = "<group>"; };
 		FC001122334455667788DDF1 /* LibrarySession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySession.swift; sourceTree = "<group>"; };
 		FD0FC465A08D4530A5C86C59 /* EPUBValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBValidator.swift; sourceTree = "<group>"; };
-		BE5E3EB1BF9C138C86AFF21F /* CollectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionsView.swift; sourceTree = "<group>"; };
-		A49EB97076C4987CADEC037C /* ReadingGoalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingGoalView.swift; sourceTree = "<group>"; };
-		87293BD4CB51E144CC4057EC /* BookmarkSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarkSidebarView.swift; sourceTree = "<group>"; };
-		AA11223344556677889900AA /* AnnotationSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationSidebarView.swift; sourceTree = "<group>"; };
-		BB99887766554433221100BB /* AnnotationPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationPopover.swift; sourceTree = "<group>"; };
-		CC11223344556677889900CC /* FindBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FindBarView.swift; sourceTree = "<group>"; };
-		BB11223344556677889900CC /* ContextMenuPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextMenuPreferences.swift; sourceTree = "<group>"; };
-		D2F7D6C9C832E5FAE1048A46 /* TagSynonymStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagSynonymStore.swift; sourceTree = "<group>"; };
-		CCF05383F236D5093B604921 /* PreferencesWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindowController.swift; sourceTree = "<group>"; };
-		D100000000000001 /* LibraryToolbarState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryToolbarState.swift; sourceTree = "<group>"; };
-		D100000000000002 /* EmailSidebarViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailSidebarViewController.swift; sourceTree = "<group>"; };
-		D100000000000003 /* EmailDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailDetailView.swift; sourceTree = "<group>"; };
-		D100000000000004 /* EmailLibraryViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailLibraryViewController.swift; sourceTree = "<group>"; };
-		E200000000000001 /* SearchQueryParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchQueryParser.swift; sourceTree = "<group>"; };
-		E200000000000002 /* CalibreLibrarySearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreLibrarySearch.swift; sourceTree = "<group>"; };
-		E200000000000003 /* CalibreFTSLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreFTSLibrary.swift; sourceTree = "<group>"; };
-		E200000000000004 /* SearchSuggestionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchSuggestionsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -153,6 +153,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		0FB79E6B7F772FC94DF372BD /* Preferences */ = {
+			isa = PBXGroup;
+			children = (
+				CCF05383F236D5093B604921 /* PreferencesWindowController.swift */,
+			);
+			path = Preferences;
+			sourceTree = "<group>";
+		};
 		1C4325980DE54054B34FA01C /* FilterDrawer */ = {
 			isa = PBXGroup;
 			children = (
@@ -161,16 +169,6 @@
 				80EBF1ABC2834516B4FD8D2D /* FilterBuilder.swift */,
 			);
 			path = FilterDrawer;
-			sourceTree = "<group>";
-		};
-		D100000000000010 /* Email */ = {
-			isa = PBXGroup;
-			children = (
-				D100000000000002 /* EmailSidebarViewController.swift */,
-				D100000000000003 /* EmailDetailView.swift */,
-				D100000000000004 /* EmailLibraryViewController.swift */,
-			);
-			path = Email;
 			sourceTree = "<group>";
 		};
 		1CA363F1AB59489BA9407C58 /* Ambrosia */ = {
@@ -303,12 +301,14 @@
 			path = Utilities;
 			sourceTree = "<group>";
 		};
-		0FB79E6B7F772FC94DF372BD /* Preferences */ = {
+		D100000000000010 /* Email */ = {
 			isa = PBXGroup;
 			children = (
-				CCF05383F236D5093B604921 /* PreferencesWindowController.swift */,
+				D100000000000002 /* EmailSidebarViewController.swift */,
+				D100000000000003 /* EmailDetailView.swift */,
+				D100000000000004 /* EmailLibraryViewController.swift */,
 			);
-			path = Preferences;
+			path = Email;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -538,6 +538,8 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Ambrosia/Resources/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Ambrosia;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.books";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -625,6 +627,8 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Ambrosia/Resources/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Ambrosia;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.books";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
