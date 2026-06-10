@@ -34,6 +34,7 @@ final class EmailLibraryViewController: NSViewController {
     private var books:      [CalibreBook]    = []
     var currentBooks: [CalibreBook] { books }
     var bookStates: [Int: BookState] = [:]
+    private var ao3Metadata: [Int: AO3MetadataRecord] = [:]
     private var likedIDs: Set<Int> = []
     private var skippedIDs: Set<Int> = []
     private var seriesOrMergedIDs: Set<Int> = []
@@ -79,7 +80,11 @@ final class EmailLibraryViewController: NSViewController {
         addFilterSheetHost()
         refreshBookStates()
         refreshCollections()
-        loadPage(reset: true)
+        if toolbarState.filterExpression.hasCompleteRules {
+            applyFilterRules()
+        } else {
+            loadPage(reset: true)
+        }
         startObservingToolbarState()
         startObservingPreferences()
         // Register so LibraryWindowController can deliver committed filter rules
@@ -155,6 +160,13 @@ final class EmailLibraryViewController: NSViewController {
             guard let self else { return }
             Task {
                 try? await self.session.collectionStore?.setLiked(calibreIDs: books.map(\.id), liked: liked)
+                await self.refreshCollectionSnapshots()
+            }
+        }
+        sidebarVC.onContextMenuReadLater = { [weak self] books in
+            guard let self else { return }
+            Task {
+                try? await self.session.collectionStore?.bulkAdd(calibreIDs: books.map(\.id), to: SystemCollectionID.readLater)
                 await self.refreshCollectionSnapshots()
             }
         }
@@ -366,12 +378,23 @@ final class EmailLibraryViewController: NSViewController {
             let needsCollection = toolbarState.filterExpression.groups
                 .flatMap(\.rules).contains { $0.field == .collection }
             let collectionMap = needsCollection ? ((try? await session.collectionStore?.membershipMap()) ?? [:]) : [:]
+            let statusValues = Set(toolbarState.filterExpression.groups
+                .flatMap(\.rules)
+                .filter { $0.field == .status }
+                .compactMap { AO3CompletionStatus(userValue: $0.value) })
+            var statusMap: [AO3CompletionStatus: Set<Int>] = [:]
+            if let metaDB = session.metaDB {
+                for status in statusValues {
+                    statusMap[status] = (try? await metaDB.ao3CompletionStatusIDs(status)) ?? []
+                }
+            }
 
             let builder = FilterBuilder(library: library)
             let result = builder.matchingIDs(
                 expression: toolbarState.filterExpression,
                 likedIDs:      currentLikedIDs,
-                collectionMap: collectionMap
+                collectionMap: collectionMap,
+                statusMap: statusMap
             )
             let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
             let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
@@ -395,8 +418,10 @@ final class EmailLibraryViewController: NSViewController {
     func loadPage(reset: Bool) {
         guard let library = session.library else {
             books = []
+            ao3Metadata = [:]
             setSelectedBook(nil)
             sidebarVC?.books = []
+            sidebarVC?.ao3Metadata = [:]
             return
         }
         if reset { currentPage = 0; books = [] }
@@ -433,7 +458,28 @@ final class EmailLibraryViewController: NSViewController {
 
         sidebarVC?.books      = books
         sidebarVC?.bookStates = bookStates
+        sidebarVC?.ao3Metadata = ao3Metadata
         sidebarVC?.likedIDs = likedIDs
+        loadAO3MetadataForSidebarBooks()
+    }
+
+    private func loadAO3MetadataForSidebarBooks() {
+        let ids = books.map(\.id)
+        guard !ids.isEmpty, let metaDB = session.metaDB else {
+            ao3Metadata = [:]
+            sidebarVC?.ao3Metadata = [:]
+            return
+        }
+
+        Task {
+            let metadata = (try? await metaDB.ao3Metadata(for: ids)) ?? [:]
+            await MainActor.run {
+                let currentIDs = Set(self.books.map(\.id))
+                guard currentIDs == Set(ids) else { return }
+                self.ao3Metadata = metadata
+                self.sidebarVC?.ao3Metadata = metadata
+            }
+        }
     }
 
     private func visibleIDs(_ ids: [Int]) -> [Int] {

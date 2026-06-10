@@ -178,12 +178,51 @@ enum PaginationJS {
     // Total number of columns the browser laid out for this spine item.
     window.ambrosiaColumnCount = function () {
         if (!_ready || _colAndGap === 0) return 1;
-        // scrollWidth is the total inline size of the columnar content.
-        // (scrollWidth + gap) / colAndGap gives an exact integer when layout
-        // is working correctly. We floor to be safe.
-        return Math.max(1, Math.floor(
-            (document.documentElement.scrollWidth + _gap) / _colAndGap
-        ));
+        var width = _laidOutInlineWidth();
+        // (width + gap) / colAndGap gives an exact integer when layout is
+        // working correctly. Round instead of floor because WebKit can report
+        // sub-pixel scrollWidth values just below the true column extent.
+        return Math.max(1, Math.round((width + _gap) / _colAndGap));
+    };
+
+    function _laidOutInlineWidth() {
+        var de = document.documentElement;
+        var b  = document.body;
+        var se = document.scrollingElement;
+        var width = Math.max(
+            de ? de.scrollWidth : 0,
+            b  ? b.scrollWidth  : 0,
+            se ? se.scrollWidth : 0,
+            window.innerWidth
+        );
+
+        if (b) {
+            var nodes = b.getElementsByTagName('*');
+            for (var i = 0; i < nodes.length; i++) {
+                var rects = nodes[i].getClientRects();
+                for (var j = 0; j < rects.length; j++) {
+                    width = Math.max(width, rects[j].right + window.scrollX);
+                }
+            }
+        }
+        return width;
+    }
+
+    window.ambrosiaPaginationMetrics = function () {
+        var de = document.documentElement;
+        var b  = document.body;
+        var se = document.scrollingElement;
+        return JSON.stringify({
+            viewport: window.innerWidth,
+            colSize: _colSize,
+            gap: _gap,
+            colAndGap: _colAndGap,
+            htmlScrollWidth: de ? de.scrollWidth : 0,
+            bodyScrollWidth: b ? b.scrollWidth : 0,
+            scrollingScrollWidth: se ? se.scrollWidth : 0,
+            laidOutWidth: _laidOutInlineWidth(),
+            columns: window.ambrosiaColumnCount()
+        });
     };
 
     // Zero-based index of the leftmost currently visible column.

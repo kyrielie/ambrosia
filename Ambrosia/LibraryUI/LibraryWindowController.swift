@@ -136,10 +136,10 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
         case .librarySearch:
             let item = NSSearchToolbarItem(itemIdentifier: identifier)
-            item.toolTip = "Search — or type tag:, author:, series:, title: to add a filter"
+            item.toolTip = "Search — or type tag:, author:, series:, title:, status: to add a filter"
             item.resignsFirstResponderWithCancel = true
             item.searchField.delegate = self
-            item.searchField.placeholderString = "Search, or tag: / author: / series:"
+            item.searchField.placeholderString = "Search, or tag: / author: / series: / status:"
             // Action fires on every keypress — we debounce manually in the delegate
             item.searchField.target = self
             item.searchField.action = #selector(searchFieldChanged(_:))

@@ -374,7 +374,6 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         webView.evaluateJavaScript(consoleBridgeJS, completionHandler: nil)
 
         if currentMode == .paginated {
-            injectPaginatedKeyTrap()
             paginationEngine?.applyLayout()
         }
 
@@ -387,33 +386,6 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
 
         startAutoSave()
-    }
-
-    private func injectPaginatedKeyTrap() {
-        let js = """
-        (function() {
-          if (window.__ambrosiaPaginatedKeyTrapInstalled) return;
-          window.__ambrosiaPaginatedKeyTrapInstalled = true;
-          window.addEventListener('keydown', function(event) {
-            var target = event.target;
-            var tag = target && target.tagName ? target.tagName.toLowerCase() : '';
-            if (tag === 'input' || tag === 'textarea' || tag === 'select' || (target && target.isContentEditable)) return;
-
-            var action = null;
-            if (event.key === 'ArrowRight' || event.key === 'ArrowDown') action = 'next';
-            else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') action = 'prev';
-            else if (event.key === ' ') action = event.shiftKey ? 'prev' : 'next';
-            else return;
-
-            event.preventDefault();
-            event.stopPropagation();
-            event.stopImmediatePropagation();
-            console.log('[PaginationKeyDOM] key=' + event.key + ' action=' + action + ' repeat=' + event.repeat);
-            try { window.webkit.messageHandlers.pageAction.postMessage(action); } catch (e) {}
-          }, true);
-        })();
-        """
-        webView.evaluateJavaScript(js, completionHandler: nil)
     }
 
     func webView(_ webView: WKWebView,
@@ -617,22 +589,24 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         case "positionUpdate":
             guard let body = message.body as? String,
                   let data = body.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let y    = json["scrollY"] as? Double
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { return }
-            bookState?.lastScrollOffset = y
-            if let percent = Self.double(from: json["percent"]) {
+
+            if let y = Self.double(from: json["scrollY"]) {
+                bookState?.lastScrollOffset = y
+            }
+            if let fraction = Self.double(from: json["fraction"]) {
+                bookState?.lastSpineIndex = currentSpineIndex
+                bookState?.lastScrollOffset = min(max(fraction, 0), 1)
+                bookState?.totalReadPercent = min(max(fraction, 0), 1)
+            } else if let percent = Self.double(from: json["percent"]) {
                 bookState?.totalReadPercent = min(max(percent, 0), 1)
             }
 
         case "pageAction":
             guard let body = message.body as? String else { return }
-            // Key trap posts plain "next"/"prev" for within-spine navigation.
-            // JS ambrosiaNextPage/PrevPage posts JSON { action: "nextSpineItem"/"prevSpineItem" }
-            // when crossing spine boundaries. Handle both.
-            if body == "next" { goToNextPage() }
-            else if body == "prev" { goToPreviousPage() }
-            else if let data = body.data(using: .utf8),
+            // JS ambrosiaNextPage/PrevPage posts JSON only when crossing spine boundaries.
+            if let data = body.data(using: .utf8),
                     let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                     let action = dict["action"] as? String {
                 switch action {
@@ -1280,10 +1254,13 @@ private class ReaderMenuWebView: WKWebView {
         print("[PaginationKey] keyDown code=\(event.keyCode) chars=\(event.charactersIgnoringModifiers ?? "") modifiers=\(event.modifierFlags.rawValue) repeat=\(event.isARepeat)")
         switch event.keyCode {
         case 123, 126:       // ← ↑
+            guard !event.isARepeat else { return }
             vc.goToPreviousPage()
         case 124, 125:       // → ↓
+            guard !event.isARepeat else { return }
             vc.goToNextPage()
         case 49:             // Space
+            guard !event.isARepeat else { return }
             if event.modifierFlags.contains(.shift) {
                 vc.goToPreviousPage()
             } else {

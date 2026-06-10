@@ -198,7 +198,7 @@ struct FilterRuleRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Picker("", selection: $rule.field) {
-                ForEach(FilterField.allCases) { f in Text(f.label).tag(f) }
+                ForEach(visibleFields) { f in Text(f.label).tag(f) }
             }
             .labelsHidden().frame(width: 120)
             .onChange(of: rule.field) {
@@ -239,6 +239,13 @@ struct FilterRuleRow: View {
                 Text("— pick —").tag("")
                 ForEach(visibleCollections) { col in
                     Text(col.name).tag(col.name)
+                }
+            }.labelsHidden().frame(maxWidth: .infinity)
+        case .status:
+            Picker("", selection: $rule.value) {
+                Text("— pick —").tag("")
+                ForEach(AO3CompletionStatus.allCases) { status in
+                    Text(status.rawValue).tag(status.rawValue)
                 }
             }.labelsHidden().frame(maxWidth: .infinity)
         case .rating:
@@ -284,6 +291,10 @@ struct FilterRuleRow: View {
         collections.filter { col in
             col.id != SystemCollectionID.skipped || prefs.showSkippedCollection
         }
+    }
+
+    private var visibleFields: [FilterField] {
+        return FilterField.visibleCases
     }
 
     private var placeholder: String {

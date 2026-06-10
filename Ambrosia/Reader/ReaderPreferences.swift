@@ -107,6 +107,12 @@ final class ReaderPreferences: ObservableObject {
     @Published var showSkippedCollection: Bool {
         didSet { UserDefaults.standard.set(showSkippedCollection, forKey: Keys.showSkippedCollection) }
     }
+    @Published var hideFanworksTagPill: Bool {
+        didSet { UserDefaults.standard.set(hideFanworksTagPill, forKey: Keys.hideFanworksTagPill) }
+    }
+    @Published var correctCalibreAmpEntities: Bool {
+        didSet { UserDefaults.standard.set(correctCalibreAmpEntities, forKey: Keys.correctCalibreAmpEntities) }
+    }
 
     // MARK: - Derived: resolved library colour for current appearance
 
@@ -195,6 +201,8 @@ final class ReaderPreferences: ObservableObject {
         static let libraryLightTextColor       = "#1A1A1A"
         static let libraryDarkTextColor        = "#EBEBF0"
         static let showSkippedCollection       = false
+        static let hideFanworksTagPill         = true
+        static let correctCalibreAmpEntities   = true
         static let useScreenFraction           = true
         static let defaultWindowWidth          = CGFloat(960)
         static let defaultWindowHeight         = CGFloat(1080)
@@ -217,6 +225,8 @@ final class ReaderPreferences: ObservableObject {
         static let libraryLightText            = "rp.libraryLightText"
         static let libraryDarkText             = "rp.libraryDarkText"
         static let showSkippedCollection       = "rp.showSkippedCollection"
+        static let hideFanworksTagPill         = "rp.hideFanworksTagPill"
+        static let correctCalibreAmpEntities   = "rp.correctCalibreAmpEntities"
         static let useScreenFraction           = "pref.useScreenFraction"
         static let defaultWindowWidth          = "pref.windowWidth"
         static let defaultWindowHeight         = "pref.windowHeight"
@@ -263,6 +273,12 @@ final class ReaderPreferences: ObservableObject {
         showSkippedCollection = ud.object(forKey: Keys.showSkippedCollection) != nil
             ? ud.bool(forKey: Keys.showSkippedCollection)
             : Defaults.showSkippedCollection
+        hideFanworksTagPill = ud.object(forKey: Keys.hideFanworksTagPill) != nil
+            ? ud.bool(forKey: Keys.hideFanworksTagPill)
+            : Defaults.hideFanworksTagPill
+        correctCalibreAmpEntities = ud.object(forKey: Keys.correctCalibreAmpEntities) != nil
+            ? ud.bool(forKey: Keys.correctCalibreAmpEntities)
+            : Defaults.correctCalibreAmpEntities
 
         if ud.object(forKey: Keys.useScreenFraction) != nil {
             useScreenFraction = ud.bool(forKey: Keys.useScreenFraction)
@@ -369,6 +385,7 @@ final class ReaderPreferences: ObservableObject {
         libraryLightTextColor       = Defaults.libraryLightTextColor
         libraryDarkTextColor        = Defaults.libraryDarkTextColor
         showSkippedCollection       = Defaults.showSkippedCollection
+        hideFanworksTagPill         = Defaults.hideFanworksTagPill
     }
 }
 

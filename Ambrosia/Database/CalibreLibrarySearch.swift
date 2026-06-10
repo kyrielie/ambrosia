@@ -1,6 +1,81 @@
 import SQLite
 import Foundation
 
+enum AO3TagSearchResolver {
+    static func canonicalTerm(for term: String) -> String {
+        guard AO3TagSeedDatabaseConfig.shared.isEnabled,
+              AO3TagSeedDatabaseConfig.shared.validDatabaseURLIfEnabled() != nil,
+              let metaURL = activeMetaDatabaseURL(),
+              FileManager.default.fileExists(atPath: metaURL.path) else { return term }
+        do {
+            let meta = try Connection(metaURL.path, readonly: true)
+            let sql = """
+            SELECT c.name
+            FROM tag_synonyms s
+            JOIN canonical_tags c ON c.id = s.canonical_id
+            WHERE LOWER(s.synonym) = LOWER(?)
+            LIMIT 1
+            """
+            if let row = try meta.prepare(sql, [term as Binding?]).map({ $0 }).first,
+               let canonical = row[0] as? String {
+                return canonical
+            }
+            return term
+        } catch {
+            return term
+        }
+    }
+
+    static func expandedTerms(for term: String) -> [String] {
+        guard AO3TagSeedDatabaseConfig.shared.isEnabled,
+              AO3TagSeedDatabaseConfig.shared.validDatabaseURLIfEnabled() != nil,
+              let metaURL = activeMetaDatabaseURL(),
+              FileManager.default.fileExists(atPath: metaURL.path) else { return [term] }
+        do {
+            let meta = try Connection(metaURL.path, readonly: true)
+            let sql = """
+            WITH root(id, name) AS (
+                SELECT id, name FROM canonical_tags WHERE LOWER(name) = LOWER(?)
+                UNION
+                SELECT c.id, c.name
+                FROM tag_synonyms s
+                JOIN canonical_tags c ON c.id = s.canonical_id
+                WHERE LOWER(s.synonym) = LOWER(?)
+            )
+            SELECT name FROM root
+            UNION
+            SELECT synonym
+            FROM tag_synonyms
+            WHERE canonical_id IN (SELECT id FROM root)
+            """
+            let rows = try meta.prepare(sql, [term as Binding?, term as Binding?]).map { $0 }
+            var seen = Set<String>()
+            var terms: [String] = []
+            for row in rows {
+                guard let value = row[0] as? String else { continue }
+                if seen.insert(value.lowercased()).inserted {
+                    terms.append(value)
+                }
+            }
+            return terms.isEmpty ? [term] : terms
+        } catch {
+            return [term]
+        }
+    }
+
+    private static func activeMetaDatabaseURL() -> URL? {
+        guard let libraryURL = LibraryRegistry.shared.activeURL else { return nil }
+        do {
+            let hash = Ambrosia.libraryHash(for: libraryURL)
+            return try AmbrosiaMetaDB.librariesBaseDirectory()
+                .appendingPathComponent(hash)
+                .appendingPathComponent("ambrosia_meta.db")
+        } catch {
+            return nil
+        }
+    }
+}
+
 // MARK: - Search query integration
 
 extension CalibreLibrary {
@@ -35,7 +110,7 @@ extension CalibreLibrary {
                     WHERE btl2.book = b.id AND LOWER(t2.name) LIKE ?
                 )
                 """)
-                args.append("%\(term.lowercased())%" as Binding?)
+                args.append("%\((expandedTerms.first ?? term).lowercased())%" as Binding?)
             } else {
                 let conditions = expandedTerms.map { _ in "LOWER(t2.name) LIKE ?" }.joined(separator: " OR ")
                 clauses.append("""
@@ -154,51 +229,7 @@ extension CalibreLibrary {
         return rows.compactMap { $0[0] as? String }
     }
 
-    private func expandedAO3TagTerms(for term: String) -> [String] {
-        guard AO3TagSeedDatabaseConfig.shared.isEnabled,
-              AO3TagSeedDatabaseConfig.shared.validDatabaseURLIfEnabled() != nil,
-              let libraryURL = LibraryRegistry.shared.activeURL else { return [term] }
-        do {
-            let hash = Ambrosia.libraryHash(for: libraryURL)
-            let metaURL = try AmbrosiaMetaDB.librariesBaseDirectory()
-                .appendingPathComponent(hash)
-                .appendingPathComponent("ambrosia_meta.db")
-            guard FileManager.default.fileExists(atPath: metaURL.path) else { return [term] }
-            let meta = try Connection(metaURL.path, readonly: true)
-            let sql = """
-            WITH RECURSIVE
-            roots(id) AS (
-                SELECT id FROM canonical_tags WHERE LOWER(name) = LOWER(?)
-                UNION
-                SELECT canonical_id FROM tag_synonyms WHERE LOWER(synonym) = LOWER(?)
-            ),
-            descendants(id) AS (
-                SELECT id FROM roots
-                UNION
-                SELECT l.child_id
-                FROM tag_parent_links l
-                JOIN descendants d ON d.id = l.parent_id
-            )
-            SELECT name FROM canonical_tags WHERE id IN (SELECT id FROM descendants)
-            UNION
-            SELECT synonym
-            FROM tag_synonyms
-            WHERE canonical_id IN (SELECT id FROM descendants)
-            """
-            let rows = try meta.prepare(sql, [term as Binding?, term as Binding?]).map { $0 }
-            var seen = Set<String>()
-            var terms = [term]
-            seen.insert(term.lowercased())
-            for row in rows {
-                guard let value = row[0] as? String else { continue }
-                let key = value.lowercased()
-                if seen.insert(key).inserted {
-                    terms.append(value)
-                }
-            }
-            return terms
-        } catch {
-            return [term]
-        }
+    func expandedAO3TagTerms(for term: String) -> [String] {
+        AO3TagSearchResolver.expandedTerms(for: term)
     }
 }

@@ -21,7 +21,8 @@ struct CalibreBook: Identifiable, Hashable {
     // MARK: - Display accessors
 
     var displayTitle: String {
-        title.isEmpty ? "Untitled" : title
+        let value = title.isEmpty ? "Untitled" : title
+        return ReaderPreferences.shared.correctCalibreAmpEntities ? value.correctedCalibreAmpEntity : value
     }
 
     var displayAuthors: String {
@@ -54,7 +55,8 @@ struct CalibreBook: Identifiable, Hashable {
 
     var displayComment: String? {
         guard let raw = comment, !raw.isEmpty else { return nil }
-        return HTMLStripper.strip(raw)
+        let stripped = HTMLStripper.strip(raw)
+        return ReaderPreferences.shared.correctCalibreAmpEntities ? stripped.correctedCalibreAmpEntity : stripped
     }
 
     var isDescriptionAnthology: Bool {
@@ -82,6 +84,12 @@ struct CalibreBook: Identifiable, Hashable {
     // MARK: - Hashable
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
     static func == (lhs: CalibreBook, rhs: CalibreBook) -> Bool { lhs.id == rhs.id }
+}
+
+private extension String {
+    var correctedCalibreAmpEntity: String {
+        replacingOccurrences(of: "&amp;", with: "&")
+    }
 }
 
 struct SeriesCacheEntry: Hashable, Sendable {

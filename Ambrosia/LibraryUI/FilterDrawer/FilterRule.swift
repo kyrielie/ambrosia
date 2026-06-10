@@ -17,6 +17,7 @@ enum FilterField: String, CaseIterable, Identifiable, Codable {
     case kudosLT
     case isLiked
     case collection
+    case status
 
     var id: String { rawValue }
 
@@ -36,12 +37,13 @@ enum FilterField: String, CaseIterable, Identifiable, Codable {
         case .kudosLT:     return "Kudos <"
         case .isLiked:     return "Is liked"
         case .collection:  return "Collection"
+        case .status:      return "Status"
         }
     }
 
     var expectsText: Bool {
         switch self {
-        case .title, .authorName, .tag, .rating, .warning, .category, .series, .comment, .collection:
+        case .title, .authorName, .tag, .rating, .warning, .category, .series, .comment, .collection, .status:
             return true
         case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT, .isLiked:
             return false
@@ -53,6 +55,25 @@ enum FilterField: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .authorName, .tag, .rating, .warning, .category: return true
         default: return false
+        }
+    }
+
+    static var visibleCases: [FilterField] {
+        allCases.filter { $0 != .isLiked }
+    }
+}
+
+enum AO3CompletionStatus: String, CaseIterable, Identifiable {
+    case finished = "Finished"
+    case unfinished = "Unfinished"
+
+    var id: String { rawValue }
+
+    init?(userValue: String) {
+        switch userValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "finished": self = .finished
+        case "unfinished": self = .unfinished
+        default: return nil
         }
     }
 }
@@ -119,6 +140,8 @@ struct FilterRule: Identifiable, Codable {
         switch field {
         case .isLiked:
             return true
+        case .status:
+            return AO3CompletionStatus(userValue: value) != nil
         case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT:
             return Int(value) != nil
         default:
@@ -133,7 +156,7 @@ struct FilterRule: Identifiable, Codable {
         switch field {
         case .rating:
             return FilterOperator.ratingOperators
-        case .warning, .category, .collection:
+        case .warning, .category, .collection, .status:
             return FilterOperator.exactOperators
         case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT:
             return FilterOperator.numericOperators

@@ -55,10 +55,6 @@ private struct PreferencesRootView: View {
                 .tabItem { Label("Window", systemImage: "macwindow") }
                 .tag(PrefTab.window)
 
-            ColumnsTab()
-                .tabItem { Label("Columns", systemImage: "tablecells") }
-                .tag(PrefTab.columns)
-
             DataTab()
                 .tabItem { Label("Data", systemImage: "externaldrive") }
                 .tag(PrefTab.data)
@@ -67,7 +63,7 @@ private struct PreferencesRootView: View {
     }
 }
 
-private enum PrefTab { case reader, library, window, columns, data }
+private enum PrefTab { case reader, library, window, data }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MARK: - Reader Tab
@@ -287,19 +283,6 @@ private struct LibraryTab: View {
         ScrollView {
             Form {
                 Section {
-                    if knownLibraries.isEmpty {
-                        Text("No known libraries")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(knownLibraries) { entry in
-                            libraryIndexRow(entry)
-                        }
-                    }
-                } header: {
-                    Label("Libraries", systemImage: "externaldrive").font(.headline)
-                }
-
-                Section {
                     Toggle("Show skipped books", isOn: $prefs.showSkippedCollection)
                 } header: {
                     Label("Skipped Books", systemImage: "eye.slash").font(.headline)
@@ -321,43 +304,11 @@ private struct LibraryTab: View {
                 }
 
                 Section {
-                    Toggle("Use AO3 tag synonyms", isOn: $tagSeedConfig.isEnabled)
-
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(tagSeedConfig.databasePath?.isEmpty == false ? URL(fileURLWithPath: tagSeedConfig.databasePath!).lastPathComponent : "No database selected")
-                                .font(.callout)
-                            if let path = tagSeedConfig.databasePath, !path.isEmpty {
-                                Text(path)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
-                        }
-                        Spacer()
-                        Button("Choose Database...") {
-                            chooseTagSeedDatabase()
-                        }
-                        .controlSize(.small)
-                    }
-
-                    tagSeedStatusView
-
-                    Button("Clear imported synonym cache") {
-                        clearTagSynonymCache()
-                    }
-                    .disabled(AppDelegate.shared?.session?.metaDB == nil)
-
-                    if let tagSynonymCacheMessage {
-                        Text(tagSynonymCacheMessage)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    Toggle("Hide Fanworks tag pill", isOn: $prefs.hideFanworksTagPill)
                 } header: {
-                    Label("Tag Synonyms", systemImage: "tag").font(.headline)
+                    Label("Library Rows", systemImage: "list.bullet.rectangle").font(.headline)
                 } footer: {
-                    Text("Uses an external ao3_tag_seeds.db. When off or invalid, tag search uses the Calibre tags already in the library.")
+                    Text("Only hides the Fanworks pill in row view. Books and filters are unchanged.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
@@ -816,9 +767,71 @@ private struct ColumnsTab: View {
 // ─────────────────────────────────────────────────────────────────────────────
 
 private struct DataTab: View {
+    @ObservedObject private var prefs = ReaderPreferences.shared
+    @ObservedObject private var tagSeedConfig = AO3TagSeedDatabaseConfig.shared
+    @State private var knownLibraries: [LibraryIndexEntry] = []
+    @State private var tagSynonymCacheMessage: String?
+    @State private var wordCountLabel: String = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
+    @State private var kudosLabel: String = CustomColumnConfig.shared.kudosLabel ?? "(none)"
+    @State private var availableColumns: [String] = []
+
     var body: some View {
         ScrollView {
             Form {
+                Section {
+                    if knownLibraries.isEmpty {
+                        Text("No known libraries")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(knownLibraries) { entry in
+                            libraryIndexRow(entry)
+                        }
+                    }
+                } header: {
+                    Label("Libraries", systemImage: "externaldrive").font(.headline)
+                }
+
+                Section {
+                    Toggle("Use AO3 tag synonyms", isOn: $tagSeedConfig.isEnabled)
+
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(tagSeedConfig.databasePath?.isEmpty == false ? URL(fileURLWithPath: tagSeedConfig.databasePath!).lastPathComponent : "No database selected")
+                                .font(.callout)
+                            if let path = tagSeedConfig.databasePath, !path.isEmpty {
+                                Text(path)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                        }
+                        Spacer()
+                        Button("Choose Database...") {
+                            chooseTagSeedDatabase()
+                        }
+                        .controlSize(.small)
+                    }
+
+                    tagSeedStatusView
+
+                    Button("Clear imported synonym cache") {
+                        clearTagSynonymCache()
+                    }
+                    .disabled(AppDelegate.shared?.session?.metaDB == nil)
+
+                    if let tagSynonymCacheMessage {
+                        Text(tagSynonymCacheMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Label("Tag Synonyms", systemImage: "tag").font(.headline)
+                } footer: {
+                    Text("Uses an external ao3_tag_seeds.db. When off or invalid, tag search uses the Calibre tags already in the library.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
                 Section {
                     Button("Re-extract AO3 metadata") {
                         confirmReextract()
@@ -831,10 +844,153 @@ private struct DataTab: View {
                     Text("Clears extracted AO3 metadata and series cache for the active library, then scans EPUB header pages again in the background.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+
+                Section {
+                    if availableColumns.isEmpty {
+                        Text("Open a Calibre library to see available custom columns.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        let opts = ["(none)"] + availableColumns
+                        Picker("Word count column", selection: $wordCountLabel) {
+                            ForEach(opts, id: \.self) { Text($0).tag($0) }
+                        }
+                        .onChange(of: wordCountLabel) { _, v in
+                            CustomColumnConfig.shared.wordCountLabel = v == "(none)" ? nil : v
+                        }
+                        Picker("Kudos column", selection: $kudosLabel) {
+                            ForEach(opts, id: \.self) { Text($0).tag($0) }
+                        }
+                        .onChange(of: kudosLabel) { _, v in
+                            CustomColumnConfig.shared.kudosLabel = v == "(none)" ? nil : v
+                        }
+                    }
+                } header: {
+                    Label("Columns", systemImage: "tablecells").font(.headline)
+                } footer: {
+                    Text("Maps Calibre custom column labels to word count and kudos. Labels are case-sensitive.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Toggle("Correct &amp; to &", isOn: $prefs.correctCalibreAmpEntities)
+                } header: {
+                    Label("Calibre Display Cleanup", systemImage: "wand.and.stars").font(.headline)
+                } footer: {
+                    Text("Applies to displayed titles and descriptions only. Stored Calibre metadata is not changed.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             .formStyle(.grouped)
             .padding(.bottom, 8)
         }
+        .onAppear {
+            reloadKnownLibraries()
+            tagSeedConfig.refreshValidation()
+            loadAvailableColumns()
+        }
+    }
+
+    @ViewBuilder
+    private var tagSeedStatusView: some View {
+        switch tagSeedConfig.validationStatus {
+        case .disabled:
+            Label("Synonym matching is off.", systemImage: "pause.circle")
+                .foregroundStyle(.secondary)
+        case .notConfigured:
+            Label("Choose an ao3_tag_seeds.db file to enable synonym matching.", systemImage: "exclamationmark.circle")
+                .foregroundStyle(.secondary)
+        case .valid(let counts):
+            Label(
+                "\(counts.canonicalTags) canonical tags, \(counts.synonyms) synonyms, \(counts.hierarchyEdges) hierarchy edges",
+                systemImage: "checkmark.circle"
+            )
+            .foregroundStyle(.green)
+        case .invalid(let message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+        }
+    }
+
+    @ViewBuilder
+    private func libraryIndexRow(_ entry: LibraryIndexEntry) -> some View {
+        let reachable = FileManager.default.fileExists(atPath: entry.lastKnownPath)
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: reachable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(reachable ? Color.green : Color.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.displayName)
+                    .font(.callout.weight(.medium))
+                Text(entry.lastKnownPath)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text("Last opened \(entry.lastOpened)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer()
+            if !reachable {
+                Button("Re-link...") {
+                    relink(entry)
+                }
+                .controlSize(.small)
+            }
+        }
+    }
+
+    private func reloadKnownLibraries() {
+        knownLibraries = LibraryIndexManager.shared.entries()
+    }
+
+    private func relink(_ entry: LibraryIndexEntry) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the new location for \(entry.displayName)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try LibraryIndexManager.shared.relink(oldHash: entry.hash, newLibraryURL: url)
+            reloadKnownLibraries()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Could Not Re-link Library"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.runModal()
+        }
+    }
+
+    private func chooseTagSeedDatabase() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [UTType(filenameExtension: "db") ?? .data]
+        panel.message = "Choose ao3_tag_seeds.db"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        tagSeedConfig.chooseDatabase(url: url)
+    }
+
+    private func clearTagSynonymCache() {
+        tagSynonymCacheMessage = nil
+        guard let metaDB = AppDelegate.shared?.session?.metaDB else { return }
+        Task {
+            do {
+                try await metaDB.clearAO3TagSynonymCacheAndReloadSeeds()
+                tagSynonymCacheMessage = "Imported synonym cache cleared."
+            } catch {
+                tagSynonymCacheMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func loadAvailableColumns() {
+        guard let library = AppDelegate.shared?.session?.library else { return }
+        availableColumns = library.customColumns().map(\.label).sorted()
+        wordCountLabel = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
+        kudosLabel = CustomColumnConfig.shared.kudosLabel ?? "(none)"
     }
 
     private func confirmReextract() {

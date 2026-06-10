@@ -21,7 +21,8 @@ struct FilterBuilder {
     ///   Populated from SwiftData by the caller since FilterBuilder has no ModelContext.
     func matchingIDs(expression: FilterExpression,
                      likedIDs: Set<Int>,
-                     collectionMap: [String: Set<Int>] = [:]) -> FilterResult {
+                     collectionMap: [String: Set<Int>] = [:],
+                     statusMap: [AO3CompletionStatus: Set<Int>] = [:]) -> FilterResult {
         let completeGroups = expression.groups.filter(\.isComplete)
         guard !completeGroups.isEmpty else {
             return FilterResult(calibreIDs: [], totalCount: library.bookCount())
@@ -29,7 +30,7 @@ struct FilterBuilder {
 
         // Evaluate each group independently, then combine with groupConjunction
         let groupResults: [Set<Int>] = completeGroups.map { group in
-            Set(matchingIDsForGroup(group, likedIDs: likedIDs, collectionMap: collectionMap))
+            Set(matchingIDsForGroup(group, likedIDs: likedIDs, collectionMap: collectionMap, statusMap: statusMap))
         }
 
         let finalIDs: [Int]
@@ -48,14 +49,16 @@ struct FilterBuilder {
 
     private func matchingIDsForGroup(_ group: FilterGroup,
                                      likedIDs: Set<Int>,
-                                     collectionMap: [String: Set<Int>]) -> [Int] {
+                                     collectionMap: [String: Set<Int>],
+                                     statusMap: [AO3CompletionStatus: Set<Int>]) -> [Int] {
         let complete = group.completeRules
         guard !complete.isEmpty else { return library.allCalibreIDs() }
 
-        // Partition: SQL-evaluated vs app-evaluated (isLiked, collection)
-        let sqlRules        = complete.filter { $0.field != .isLiked && $0.field != .collection }
+        // Partition: SQL-evaluated vs app-evaluated (isLiked, collection, AO3 status)
+        let sqlRules        = complete.filter { $0.field != .isLiked && $0.field != .collection && $0.field != .status }
         let likedRules      = complete.filter { $0.field == .isLiked }
         let collectionRules = complete.filter { $0.field == .collection }
+        let statusRules     = complete.filter { $0.field == .status }
 
         var ids: [Int]
         if sqlRules.isEmpty {
@@ -99,16 +102,45 @@ struct FilterBuilder {
             ids = Array(idSet).sorted()
         }
 
+        if !statusRules.isEmpty {
+            var idSet = Set(ids)
+            if group.conjunction == .and {
+                for rule in statusRules {
+                    guard let status = AO3CompletionStatus(userValue: rule.value) else { continue }
+                    let memberIDs = statusMap[status] ?? []
+                    switch rule.op {
+                    case .equals:    idSet = idSet.intersection(memberIDs)
+                    case .notEquals: idSet = idSet.subtracting(memberIDs)
+                    default:         break
+                    }
+                }
+            } else {
+                var unionIDs = Set<Int>()
+                for rule in statusRules {
+                    guard let status = AO3CompletionStatus(userValue: rule.value) else { continue }
+                    let memberIDs = statusMap[status] ?? []
+                    switch rule.op {
+                    case .equals:    unionIDs.formUnion(idSet.intersection(memberIDs))
+                    case .notEquals: unionIDs.formUnion(idSet.subtracting(memberIDs))
+                    default:         break
+                    }
+                }
+                idSet = unionIDs
+            }
+            ids = Array(idSet).sorted()
+        }
+
         return ids
     }
 
     // Legacy single-group entry point — used by quick tag/author taps
     func matchingIDs(rules: [FilterRule], conjunction: FilterConjunction,
                      likedIDs: Set<Int>,
-                     collectionMap: [String: Set<Int>] = [:]) -> FilterResult {
+                     collectionMap: [String: Set<Int>] = [:],
+                     statusMap: [AO3CompletionStatus: Set<Int>] = [:]) -> FilterResult {
         var expr = FilterExpression()
         expr.groups = [FilterGroup(rules: rules, conjunction: conjunction)]
-        return matchingIDs(expression: expr, likedIDs: likedIDs, collectionMap: collectionMap)
+        return matchingIDs(expression: expr, likedIDs: likedIDs, collectionMap: collectionMap, statusMap: statusMap)
     }
 }
 
@@ -200,21 +232,7 @@ extension CalibreLibrary {
 
         case .tag:
             // Correlated subquery ensures AND works across multi-value tag fields.
-            switch rule.op {
-            case .contains:
-                return ("b.id IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name LIKE ?)", ["%\(v)%"])
-            case .notContains:
-                return ("b.id NOT IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name LIKE ?)", ["%\(v)%"])
-            case .equals:
-                return ("b.id IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name = ?)", [v])
-            case .notEquals:
-                return ("b.id NOT IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name = ?)", [v])
-            case .startsWith:
-                return ("b.id IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name LIKE ?)", ["\(v)%"])
-            case .ratingAtMost, .ratingAtLeast:
-                // Rating hierarchy operators don't apply to generic tags; treat as equals.
-                return ("b.id IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name = ?)", [v])
-            }
+            return expandedTagFragment(op: rule.op, value: v)
         case .rating:
             return ao3TagFragment(op: rule.op, value: v)
 
@@ -243,7 +261,7 @@ extension CalibreLibrary {
         case .isLiked:
             return nil
 
-        case .collection:
+        case .collection, .status:
             // Collection membership is evaluated in-memory against SwiftData.
             // SQL layer never sees this field.
             return nil
@@ -274,6 +292,46 @@ extension CalibreLibrary {
             // If reached here, fall back to exact match.
             return ("\(column) = ?", [value])
         }
+    }
+
+    private func expandedTagFragment(op: FilterOperator, value: String) -> (String, [Binding?])? {
+        let terms = expandedAO3TagTerms(for: value)
+        let matcher: String
+        let args: [Binding?]
+
+        switch op {
+        case .contains:
+            matcher = terms.map { _ in "t2.name LIKE ?" }.joined(separator: " OR ")
+            args = terms.map { "%\($0)%" as Binding? }
+            return tagMembershipFragment(matcher: matcher, args: args, negated: false)
+        case .notContains:
+            matcher = terms.map { _ in "t2.name LIKE ?" }.joined(separator: " OR ")
+            args = terms.map { "%\($0)%" as Binding? }
+            return tagMembershipFragment(matcher: matcher, args: args, negated: true)
+        case .equals, .ratingAtMost, .ratingAtLeast:
+            matcher = terms.map { _ in "t2.name = ?" }.joined(separator: " OR ")
+            args = terms.map { $0 as Binding? }
+            return tagMembershipFragment(matcher: matcher, args: args, negated: false)
+        case .notEquals:
+            matcher = terms.map { _ in "t2.name = ?" }.joined(separator: " OR ")
+            args = terms.map { $0 as Binding? }
+            return tagMembershipFragment(matcher: matcher, args: args, negated: true)
+        case .startsWith:
+            matcher = terms.map { _ in "t2.name LIKE ?" }.joined(separator: " OR ")
+            args = terms.map { "\($0)%" as Binding? }
+            return tagMembershipFragment(matcher: matcher, args: args, negated: false)
+        }
+    }
+
+    private func tagMembershipFragment(matcher: String,
+                                       args: [Binding?],
+                                       negated: Bool) -> (String, [Binding?])? {
+        guard !matcher.isEmpty else { return nil }
+        let operatorText = negated ? "NOT IN" : "IN"
+        return (
+            "b.id \(operatorText) (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE \(matcher))",
+            args
+        )
     }
 
     /// AO3 metadata (rating/warning/category) — all stored as tags in Calibre.

@@ -412,6 +412,25 @@ actor AmbrosiaMetaDB {
         return Set(rows.compactMap { $0.int(at: 0) })
     }
 
+    func ao3CompletionStatusIDs(_ status: AO3CompletionStatus) throws -> Set<Int> {
+        let predicate: String
+        switch status {
+        case .finished:
+            predicate = """
+            chapter_current IS NOT NULL
+              AND chapter_total IS NOT NULL
+              AND chapter_current = chapter_total
+            """
+        case .unfinished:
+            predicate = """
+            chapter_current IS NOT NULL
+              AND (chapter_total IS NULL OR chapter_current != chapter_total)
+            """
+        }
+        let rows = try prepare("SELECT calibre_id FROM ao3_metadata WHERE \(predicate)")
+        return Set(rows.compactMap { $0.int(at: 0) })
+    }
+
     func ao3ExtractionDiagnostics(for calibreIDs: [Int]) throws -> [Int: AO3ExtractionDiagnostic] {
         guard !calibreIDs.isEmpty else { return [:] }
         let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")

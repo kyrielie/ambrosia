@@ -9,7 +9,7 @@ import SwiftData
 // Layout (top to bottom):
 //   ┌──────────────────────┐
 //   │  NSScrollView        │  fills all space
-//   │  └─ NSTableView      │  64pt rows: title / author / progress text + bar
+//   │  └─ NSTableView      │  90pt rows: title / author+stats / AO3 pills / progress
 //   └──────────────────────┘
 //
 // No per-row SwiftData access — bookStates dict is populated by the parent.
@@ -30,6 +30,7 @@ final class EmailSidebarViewController: NSViewController,
     var onContextMenuMarkRead:         (([CalibreBook]) -> Void)?
     var onContextMenuResetProgress:    (([CalibreBook]) -> Void)?
     var onContextMenuOpen:             (([CalibreBook]) -> Void)?
+    var onContextMenuReadLater:        (([CalibreBook]) -> Void)?
     var onContextMenuToggleCollection: (([CalibreBook], String) -> Void)?
     var onContextMenuNewCollection:    (([CalibreBook]) -> Void)?
 
@@ -41,6 +42,7 @@ final class EmailSidebarViewController: NSViewController,
 
     var books:      [CalibreBook]    = [] { didSet { reloadBooksPreservingSingleSelection(from: oldValue) } }
     var bookStates: [Int: BookState] = [:] { didSet { reloadVisibleRows() } }
+    var ao3Metadata: [Int: AO3MetadataRecord] = [:] { didSet { reloadVisibleRows() } }
     var likedIDs: Set<Int> = []
     /// Collection snapshot for building context menu submenus. Key = name, value = member calibreIDs.
     var collectionMembership: [String: Set<Int>] = [:]
@@ -65,7 +67,7 @@ final class EmailSidebarViewController: NSViewController,
         tableView.headerView = nil
         tableView.allowsMultipleSelection = true
         tableView.selectionHighlightStyle = .regular
-        tableView.rowHeight  = 64
+        tableView.rowHeight  = 90
         tableView.intercellSpacing = NSSize(width: 0, height: 0)
         tableView.usesAutomaticRowHeights = false
 
@@ -131,11 +133,15 @@ final class EmailSidebarViewController: NSViewController,
             cell.identifier = id
         }
         let book = books[row]
-        cell.configure(book: book, readPercent: bookStates[book.id]?.totalReadPercent ?? 0)
+        cell.configure(
+            book: book,
+            readPercent: bookStates[book.id]?.totalReadPercent ?? 0,
+            ao3Metadata: ao3Metadata[book.id]
+        )
         return cell
     }
 
-    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { 64 }
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { 90 }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !isRestoringSelection else { return }
@@ -199,6 +205,11 @@ final class EmailSidebarViewController: NSViewController,
             likeItem.representedObject = ["books": selectedBooks, "liked": !likedIDs.contains(book.id)] as [String: Any]
             menu.addItem(likeItem)
         }
+
+        let readLaterItem = NSMenuItem(title: isBulk ? "Add Selected to Read Later" : "Read Later", action: #selector(contextReadLater(_:)), keyEquivalent: "")
+        readLaterItem.target = self
+        readLaterItem.representedObject = selectedBooks
+        menu.addItem(readLaterItem)
 
         let markReadItem = NSMenuItem(title: isBulk ? "Mark Selected as Read" : "Mark as Read", action: #selector(contextMarkRead(_:)), keyEquivalent: "")
         markReadItem.target = self
@@ -273,6 +284,11 @@ final class EmailSidebarViewController: NSViewController,
     @objc private func contextResetProgress(_ sender: NSMenuItem) {
         guard let books = sender.representedObject as? [CalibreBook] else { return }
         onContextMenuResetProgress?(books)
+    }
+
+    @objc private func contextReadLater(_ sender: NSMenuItem) {
+        guard let books = sender.representedObject as? [CalibreBook] else { return }
+        onContextMenuReadLater?(books)
     }
 
     @objc private func contextToggleCollection(_ sender: NSMenuItem) {
@@ -354,11 +370,13 @@ final class EmailSidebarViewController: NSViewController,
 
 // MARK: - EmailBookCellView
 
-/// Fixed 64pt table cell: title / author / inline progress row.
+/// Fixed 90pt table cell: title / author+metadata / AO3 pills / inline progress row.
 final class EmailBookCellView: NSTableCellView {
 
     private let titleLabel    = NSTextField(labelWithString: "")
     private let authorLabel   = NSTextField(labelWithString: "")
+    private let metadataClip  = NSView()
+    private let metadataStack = NSStackView()
     private let progressLabel = NSTextField(labelWithString: "")
     private let progressTrack = NSView()
     private let progressFill  = NSView()
@@ -384,6 +402,18 @@ final class EmailBookCellView: NSTableCellView {
         authorLabel.maximumNumberOfLines = 1
         authorLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(authorLabel)
+
+        metadataClip.wantsLayer = true
+        metadataClip.layer?.masksToBounds = true
+        metadataClip.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(metadataClip)
+
+        metadataStack.orientation = .horizontal
+        metadataStack.alignment = .centerY
+        metadataStack.spacing = 4
+        metadataStack.distribution = .gravityAreas
+        metadataStack.translatesAutoresizingMaskIntoConstraints = false
+        metadataClip.addSubview(metadataStack)
 
         progressLabel.font      = NSFont.systemFont(ofSize: 10)
         progressLabel.textColor = .tertiaryLabelColor
@@ -413,8 +443,17 @@ final class EmailBookCellView: NSTableCellView {
             authorLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
             authorLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
 
+            metadataClip.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            metadataClip.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
+            metadataClip.topAnchor.constraint(equalTo: authorLabel.bottomAnchor, constant: 5),
+            metadataClip.heightAnchor.constraint(equalToConstant: 18),
+
+            metadataStack.leadingAnchor.constraint(equalTo: metadataClip.leadingAnchor),
+            metadataStack.centerYAnchor.constraint(equalTo: metadataClip.centerYAnchor),
+            metadataStack.heightAnchor.constraint(lessThanOrEqualTo: metadataClip.heightAnchor),
+
             progressLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            progressLabel.topAnchor.constraint(equalTo: authorLabel.bottomAnchor, constant: 3),
+            progressLabel.topAnchor.constraint(equalTo: metadataClip.bottomAnchor, constant: 5),
             progressLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 42),
 
             progressTrack.leadingAnchor.constraint(equalTo: progressLabel.trailingAnchor, constant: 8),
@@ -431,9 +470,10 @@ final class EmailBookCellView: NSTableCellView {
 
     private var progressWidthConstraint: NSLayoutConstraint?
 
-    func configure(book: CalibreBook, readPercent: Double) {
+    func configure(book: CalibreBook, readPercent: Double, ao3Metadata: AO3MetadataRecord?) {
         titleLabel.stringValue  = book.displayTitle
-        authorLabel.stringValue = book.displayAuthors
+        authorLabel.attributedStringValue = Self.authorLine(for: book, ao3Metadata: ao3Metadata)
+        configureMetadataPills(ao3Metadata)
 
         if readPercent > 0.01 {
             let pct = Int((min(readPercent, 1.0) * 100).rounded())
@@ -458,6 +498,91 @@ final class EmailBookCellView: NSTableCellView {
         } else {
             progressFill.isHidden = true
         }
+    }
+
+    private func configureMetadataPills(_ metadata: AO3MetadataRecord?) {
+        metadataStack.arrangedSubviews.forEach { view in
+            metadataStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        guard let metadata else {
+            metadataClip.isHidden = true
+            return
+        }
+
+        var seen = Set<String>()
+        let pills = [
+            (metadata.fandoms, NSColor.systemPurple),
+            (metadata.relationships, NSColor.systemPink),
+            (metadata.characters, NSColor.systemTeal),
+        ].flatMap { values, color in
+            values.compactMap { value -> (String, NSColor)? in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return nil }
+                return (trimmed, color)
+            }
+        }
+
+        metadataClip.isHidden = pills.isEmpty
+        for (label, color) in pills {
+            metadataStack.addArrangedSubview(Self.metadataPill(label: label, color: color))
+        }
+    }
+
+    private static func authorLine(for book: CalibreBook, ao3Metadata: AO3MetadataRecord?) -> NSAttributedString {
+        let result = NSMutableAttributedString(
+            string: book.displayAuthors,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+        )
+
+        let details = [
+            (ao3Metadata?.wordCount ?? book.wordCount).map(formatWordCount),
+            completionStatus(for: ao3Metadata),
+        ].compactMap { $0 }
+
+        guard !details.isEmpty else { return result }
+        result.append(NSAttributedString(
+            string: "  \(details.joined(separator: "  "))",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 10),
+                .foregroundColor: NSColor.tertiaryLabelColor,
+            ]
+        ))
+        return result
+    }
+
+    private static func completionStatus(for metadata: AO3MetadataRecord?) -> String? {
+        guard let current = metadata?.chapterCurrent else { return nil }
+        guard let total = metadata?.chapterTotal else { return "Unfinished" }
+        return current == total ? "Finished" : "Unfinished"
+    }
+
+    private static func formatWordCount(_ count: Int) -> String {
+        switch count {
+        case 0..<1_000: return "\(count) words"
+        case 0..<1_000_000: return String(format: "%.1fk words", Double(count) / 1_000)
+        default: return String(format: "%.2fM words", Double(count) / 1_000_000)
+        }
+    }
+
+    private static func metadataPill(label: String, color: NSColor) -> NSTextField {
+        let pill = NSTextField(labelWithString: label)
+        pill.font = NSFont.systemFont(ofSize: 10)
+        pill.textColor = color
+        pill.lineBreakMode = .byTruncatingTail
+        pill.maximumNumberOfLines = 1
+        pill.drawsBackground = false
+        pill.isBezeled = false
+        pill.wantsLayer = true
+        pill.layer?.backgroundColor = color.withAlphaComponent(0.16).cgColor
+        pill.layer?.cornerRadius = 7
+        pill.setContentCompressionResistancePriority(.required, for: .horizontal)
+        pill.setContentHuggingPriority(.required, for: .horizontal)
+        return pill
     }
 }
 // MARK: - SidebarTableView

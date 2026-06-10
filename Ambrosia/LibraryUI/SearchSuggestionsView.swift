@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - SuggestionKind
 
 enum SuggestionKind {
-    case tag, author, title, series
+    case tag, author, title, series, status
 
     var icon: String {
         switch self {
@@ -11,6 +11,7 @@ enum SuggestionKind {
         case .author: return "person"
         case .title:  return "book"
         case .series: return "books.vertical"
+        case .status: return "checkmark.circle"
         }
     }
 
@@ -20,6 +21,7 @@ enum SuggestionKind {
         case .author: return "Author"
         case .title:  return "Title"
         case .series: return "Series"
+        case .status: return "Status"
         }
     }
 
@@ -29,6 +31,7 @@ enum SuggestionKind {
         case .author: return "author:"
         case .title:  return "title:"
         case .series: return "series:"
+        case .status: return "status:"
         }
     }
 
@@ -39,6 +42,7 @@ enum SuggestionKind {
         case .author: return .authorName
         case .title:  return .title
         case .series: return .series
+        case .status: return .status
         }
     }
 
@@ -52,7 +56,7 @@ enum SuggestionKind {
             // pick a rating from suggestions.
             if case .rating = AO3TagKind.classify(value) { return .ratingAtMost }
             return .equals
-        case .author:
+        case .author, .status:
             return .equals
         case .title, .series:
             return .contains
@@ -69,16 +73,27 @@ struct SearchSuggestion: Identifiable {
 
     /// The FilterRule this suggestion produces when committed.
     var asFilterRule: FilterRule {
-        let op    = kind.filterOperator(for: value)
+        let resolvedValue: String
+        switch kind {
+        case .tag:
+            resolvedValue = AO3TagSearchResolver.canonicalTerm(for: value)
+        case .status:
+            resolvedValue = AO3CompletionStatus(userValue: value)?.rawValue ?? value
+        default:
+            resolvedValue = value
+        }
+        let op = kind.filterOperator(for: resolvedValue)
         // AO3TagKind drives the field for rating/warning/category tags
         let field: FilterField
         switch kind {
         case .tag:
-            field = AO3TagKind.classify(value).filterField
+            field = AO3TagKind.classify(resolvedValue).filterField
+        case .status:
+            field = .status
         default:
             field = kind.filterField
         }
-        return FilterRule(field: field, op: op, value: value)
+        return FilterRule(field: field, op: op, value: resolvedValue)
     }
 }
 
@@ -223,6 +238,12 @@ func computeSectionedSuggestions(for searchText: String,
         return suggestions.isEmpty ? [] : [SuggestionSection(kind: .tag, suggestions: suggestions)]
     }
 
+    // status: prefix → fixed AO3 completion statuses only
+    if let prefix = text.activePrefixValue(for: "status:") {
+        let suggestions = statusSuggestions(prefix: prefix)
+        return suggestions.isEmpty ? [] : [SuggestionSection(kind: .status, suggestions: suggestions)]
+    }
+
     // Plain text (≥ 2 chars) → multi-section: titles, authors, tags, series
     guard text.count >= 2 else { return [] }
 
@@ -234,11 +255,26 @@ func computeSectionedSuggestions(for searchText: String,
         .map { SearchSuggestion(kind: .tag,    value: $0) }
     let seriesSugs = library.seriesSuggestions(prefix: text, limit: 3)
         .map { SearchSuggestion(kind: .series, value: $0) }
+    let statusSugs = statusSuggestions(prefix: text)
 
     return [
         SuggestionSection(kind: .title,  suggestions: titleSugs),
         SuggestionSection(kind: .author, suggestions: authorSugs),
         SuggestionSection(kind: .tag,    suggestions: tagSugs),
         SuggestionSection(kind: .series, suggestions: seriesSugs),
+        SuggestionSection(kind: .status, suggestions: statusSugs),
     ].filter { !$0.suggestions.isEmpty }
+}
+
+private func statusSuggestions(prefix: String) -> [SearchSuggestion] {
+    let needle = prefix.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard !needle.isEmpty else {
+        return AO3CompletionStatus.allCases.map { SearchSuggestion(kind: .status, value: $0.rawValue) }
+    }
+    return AO3CompletionStatus.allCases
+        .filter { status in
+            let value = status.rawValue.lowercased()
+            return value.hasPrefix(needle)
+        }
+        .map { SearchSuggestion(kind: .status, value: $0.rawValue) }
 }

@@ -9,6 +9,7 @@ import Foundation
 ///   author:<value>   → filter by author
 ///   title:<value>    → filter by title
 ///   series:<value>   → filter by series
+///   status:<value>   → filter by AO3 completion status
 ///   <plain text>     → full-text / fuzzy search
 ///
 /// Only ONE prefix token is expected per search string. When the user commits
@@ -20,6 +21,7 @@ struct SearchQuery {
     let authorTerms: [String]
     let titleTerms:  [String]
     let seriesTerms: [String]
+    let statusTerms: [String]
     let plainTerms:  [String]
 
     /// IDs matched by full-text search. When non-nil, plainTerms are replaced
@@ -29,6 +31,7 @@ struct SearchQuery {
     var isEmpty: Bool {
         tagTerms.isEmpty && authorTerms.isEmpty &&
         titleTerms.isEmpty && seriesTerms.isEmpty &&
+        statusTerms.isEmpty &&
         plainTerms.isEmpty &&
         (ftsMatchedIDs == nil || ftsMatchedIDs!.isEmpty)
     }
@@ -41,8 +44,8 @@ struct SearchQuery {
     var asSingleFilterRule: FilterRule? {
         // Exactly one scoped term and no plain text
         if tagTerms.count == 1 && authorTerms.isEmpty && titleTerms.isEmpty
-            && seriesTerms.isEmpty && plainTerms.isEmpty {
-            let v = tagTerms[0]
+            && seriesTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty {
+            let v = AO3TagSearchResolver.canonicalTerm(for: tagTerms[0])
             // AO3 rating/warning/category tags get their proper field and operator.
             // Rating tags default to .ratingAtMost — almost always the right intent.
             let kind = AO3TagKind.classify(v)
@@ -55,16 +58,21 @@ struct SearchQuery {
             return FilterRule(field: field, op: op, value: v)
         }
         if authorTerms.count == 1 && tagTerms.isEmpty && titleTerms.isEmpty
-            && seriesTerms.isEmpty && plainTerms.isEmpty {
+            && seriesTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty {
             return FilterRule(field: .authorName, op: .equals, value: authorTerms[0])
         }
         if titleTerms.count == 1 && tagTerms.isEmpty && authorTerms.isEmpty
-            && seriesTerms.isEmpty && plainTerms.isEmpty {
+            && seriesTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty {
             return FilterRule(field: .title, op: .contains, value: titleTerms[0])
         }
         if seriesTerms.count == 1 && tagTerms.isEmpty && authorTerms.isEmpty
-            && titleTerms.isEmpty && plainTerms.isEmpty {
+            && titleTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty {
             return FilterRule(field: .series, op: .contains, value: seriesTerms[0])
+        }
+        if statusTerms.count == 1 && tagTerms.isEmpty && authorTerms.isEmpty
+            && titleTerms.isEmpty && seriesTerms.isEmpty && plainTerms.isEmpty,
+           let status = AO3CompletionStatus(userValue: statusTerms[0]) {
+            return FilterRule(field: .status, op: .equals, value: status.rawValue)
         }
         return nil
     }
@@ -76,6 +84,7 @@ struct SearchQuery {
         self.authorTerms   = authorTerms
         self.titleTerms    = titleTerms
         self.seriesTerms   = []
+        self.statusTerms   = []
         self.plainTerms    = plainTerms
         self.ftsMatchedIDs = ftsMatchedIDs
     }
@@ -86,6 +95,18 @@ struct SearchQuery {
         self.authorTerms   = authorTerms
         self.titleTerms    = titleTerms
         self.seriesTerms   = seriesTerms
+        self.statusTerms   = []
+        self.plainTerms    = plainTerms
+        self.ftsMatchedIDs = ftsMatchedIDs
+    }
+
+    init(tagTerms: [String], authorTerms: [String], titleTerms: [String],
+         seriesTerms: [String], statusTerms: [String], plainTerms: [String], ftsMatchedIDs: [Int]? = nil) {
+        self.tagTerms      = tagTerms
+        self.authorTerms   = authorTerms
+        self.titleTerms    = titleTerms
+        self.seriesTerms   = seriesTerms
+        self.statusTerms   = statusTerms
         self.plainTerms    = plainTerms
         self.ftsMatchedIDs = ftsMatchedIDs
     }
@@ -109,6 +130,7 @@ struct SearchQueryParser {
         let prefixes: [(String, (String) -> SearchQuery)] = [
             ("author:", { v in SearchQuery(tagTerms: [], authorTerms: [v], titleTerms: [], seriesTerms: [], plainTerms: []) }),
             ("series:", { v in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [v], plainTerms: []) }),
+            ("status:", { v in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [], statusTerms: [v], plainTerms: []) }),
             ("title:",  { v in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [v], seriesTerms: [], plainTerms: []) }),
             ("tag:",    { v in SearchQuery(tagTerms: [v], authorTerms: [], titleTerms: [], seriesTerms: [], plainTerms: []) }),
         ]

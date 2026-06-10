@@ -128,30 +128,58 @@ final class PaginationEngine: NSObject {
         let viewWidth = wv.bounds.width
         computeColumnGeometry(viewportWidth: viewWidth)
 
-        // Inject PaginationJS and call ambrosiaSetup in one evaluation.
-        // Using a completionHandler here (not nil) because we need to know when
-        // setup is done so we can read back the column count for spineDidLoad.
+        // Inject PaginationJS and call ambrosiaSetup. Column count is read back
+        // after a short delay because WebKit updates CSS column layout
+        // asynchronously after the style mutation.
         let js = """
         \(PaginationJS.script)
         window.ambrosiaSetup(\(colSize), \(gap), \(colsPerScreen));
-        window.ambrosiaColumnCount();
         """
 
-        wv.evaluateJavaScript(js) { [weak self] result, error in
+        wv.evaluateJavaScript(js) { [weak self] _, error in
             guard let self else { return }
             if let error {
                 print("[PaginationEngine] applyLayout JS error: \(error)")
                 self.spineDidLoad?(1)
                 return
             }
-            let totalCols = (result as? Int) ?? (result as? Double).map(Int.init) ?? 1
-            self.isReady = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self else { return }
+                wv.evaluateJavaScript("window.ambrosiaPaginationMetrics();") { result, error in
+                    if let error {
+                        print("[PaginationEngine] column count JS error: \(error)")
+                        self.spineDidLoad?(1)
+                        return
+                    }
 
-            if let frac = self.pendingFraction {
-                self.pendingFraction = nil
-                self.scrollToFraction(frac)
+                    var totalCols = 1
+                    #if DEBUG
+                    if let metrics = result as? String {
+                        print("[PaginationEngine] metrics \(metrics)")
+                        if let data = metrics.data(using: .utf8),
+                           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let columns = json["columns"] as? NSNumber {
+                            totalCols = columns.intValue
+                        }
+                    }
+                    #else
+                    if let metrics = result as? String,
+                       let data = metrics.data(using: .utf8),
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let columns = json["columns"] as? NSNumber {
+                        totalCols = columns.intValue
+                    }
+                    #endif
+
+                    self.isReady = true
+
+                    if let frac = self.pendingFraction {
+                        self.pendingFraction = nil
+                        self.scrollToFraction(frac)
+                    }
+                    self.spineDidLoad?(totalCols)
+                }
             }
-            self.spineDidLoad?(totalCols)
         }
     }
 

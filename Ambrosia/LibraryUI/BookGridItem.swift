@@ -405,11 +405,22 @@ struct LibraryRootView: View {
             let currentLikedIDs = needsLiked ? ((try? await session.collectionStore?.likedIDs()) ?? []) : []
             let needsCollection = toolbarState.filterExpression.groups.flatMap(\.rules).contains { $0.field == .collection }
             let collectionMap = needsCollection ? ((try? await session.collectionStore?.membershipMap()) ?? [:]) : [:]
+            let statusValues = Set(toolbarState.filterExpression.groups
+                .flatMap(\.rules)
+                .filter { $0.field == .status }
+                .compactMap { AO3CompletionStatus(userValue: $0.value) })
+            var statusMap: [AO3CompletionStatus: Set<Int>] = [:]
+            if let metaDB = session.metaDB {
+                for status in statusValues {
+                    statusMap[status] = (try? await metaDB.ao3CompletionStatusIDs(status)) ?? []
+                }
+            }
             let builder = FilterBuilder(library: library)
             let result = builder.matchingIDs(
                 expression: toolbarState.filterExpression,
                 likedIDs: currentLikedIDs,
-                collectionMap: collectionMap
+                collectionMap: collectionMap,
+                statusMap: statusMap
             )
             let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
             let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
@@ -446,6 +457,11 @@ struct LibraryRootView: View {
         }
         toolbarState.filterExpression.groups[0].rules.append(rule)
         applyFilterRules()
+    }
+
+    private func addTagPillRule(tag: String, field: FilterField) {
+        let value = field == .tag ? AO3TagSearchResolver.canonicalTerm(for: tag) : tag
+        addOrReplaceRule(FilterRule(field: field, op: .equals, value: value))
     }
 
     // MARK: - Subviews
@@ -527,9 +543,11 @@ struct LibraryRootView: View {
             ao3ExtractionDiagnostic: ao3ExtractionDiagnostics[book.id],
             singletonSeriesWarning: singletonSeriesWarnings[book.id],
             isLiked: likedIDs.contains(book.id),
+            hideFanworksTagPill: prefs.hideFanworksTagPill,
+            correctCalibreAmpEntities: prefs.correctCalibreAmpEntities,
             modelContext: modelContext,
             onTagTap: { tag, field in
-                addOrReplaceRule(FilterRule(field: field, op: .equals, value: tag))
+                addTagPillRule(tag: tag, field: field)
             },
             onAuthorTap: { author in
                 addOrReplaceRule(FilterRule(field: .authorName, op: .equals, value: author))
@@ -538,6 +556,7 @@ struct LibraryRootView: View {
             onLikeToggle: { toggleLike(for: book) },
             onLikeSelected: { setLiked(selectedBooks(fallback: book), liked: true) },
             onUnlikeSelected: { setLiked(selectedBooks(fallback: book), liked: false) },
+            onReadLater: { addToReadLater(selectedBooks(fallback: book)) },
             onSkip: { skip(selectedBooks(fallback: book)) },
             onMarkRead: { markRead(selectedBooks(fallback: book)) },
             onResetProgress: { resetProgress(selectedBooks(fallback: book)) },
@@ -552,8 +571,9 @@ struct LibraryRootView: View {
     private func seriesRow(_ series: SeriesGroup) -> some View {
         SeriesListRow(
             series: series,
+            hideFanworksTagPill: prefs.hideFanworksTagPill,
             onTagTap: { tag, field in
-                addOrReplaceRule(FilterRule(field: field, op: .equals, value: tag))
+                addTagPillRule(tag: tag, field: field)
             },
             onOpen: { AppDelegate.shared?.openReaderWindow(target: .series(series), modelContext: modelContext) },
             onShowWorks: {},
@@ -614,6 +634,13 @@ struct LibraryRootView: View {
         Task {
             try? await session.collectionStore?.setLiked(calibreIDs: ids, liked: liked)
             likedIDs = (try? await session.collectionStore?.likedIDs()) ?? []
+        }
+    }
+
+    private func addToReadLater(_ books: [CalibreBook]) {
+        let ids = books.map(\.id)
+        Task {
+            try? await session.collectionStore?.bulkAdd(calibreIDs: ids, to: SystemCollectionID.readLater)
         }
     }
 
@@ -729,6 +756,8 @@ struct BookListRow: View, Equatable {
     let ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?
     let singletonSeriesWarning: SingletonSeriesWarning?
     let isLiked: Bool
+    let hideFanworksTagPill: Bool
+    let correctCalibreAmpEntities: Bool
     let modelContext: ModelContext
     let onTagTap: (String, FilterField) -> Void
     let onAuthorTap: (String) -> Void
@@ -736,6 +765,7 @@ struct BookListRow: View, Equatable {
     let onLikeToggle: () -> Void
     let onLikeSelected: () -> Void
     let onUnlikeSelected: () -> Void
+    let onReadLater: () -> Void
     let onSkip: () -> Void
     let onMarkRead: () -> Void
     let onResetProgress: () -> Void
@@ -757,19 +787,20 @@ struct BookListRow: View, Equatable {
             && lhs.singletonSeriesWarning == rhs.singletonSeriesWarning
             && lhs.bookState?.calibreID        == rhs.bookState?.calibreID
             && lhs.isLiked                     == rhs.isLiked
+            && lhs.hideFanworksTagPill         == rhs.hideFanworksTagPill
+            && lhs.correctCalibreAmpEntities   == rhs.correctCalibreAmpEntities
             && lhs.bookState?.totalReadPercent == rhs.bookState?.totalReadPercent
             && lhs.selectedCount               == rhs.selectedCount
     }
 
-    private let buckets: AO3TagBuckets
-
-    init(book: CalibreBook, bookState: BookState?, ao3Metadata: AO3MetadataRecord?, ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?, singletonSeriesWarning: SingletonSeriesWarning?, isLiked: Bool, modelContext: ModelContext,
+    init(book: CalibreBook, bookState: BookState?, ao3Metadata: AO3MetadataRecord?, ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?, singletonSeriesWarning: SingletonSeriesWarning?, isLiked: Bool, hideFanworksTagPill: Bool, correctCalibreAmpEntities: Bool, modelContext: ModelContext,
          onTagTap: @escaping (String, FilterField) -> Void,
          onAuthorTap: @escaping (String) -> Void,
          onOpenSelected: @escaping () -> Void,
          onLikeToggle: @escaping () -> Void,
          onLikeSelected: @escaping () -> Void,
          onUnlikeSelected: @escaping () -> Void,
+         onReadLater: @escaping () -> Void,
          onSkip: @escaping () -> Void,
          onMarkRead: @escaping () -> Void,
          onResetProgress: @escaping () -> Void,
@@ -781,6 +812,8 @@ struct BookListRow: View, Equatable {
         self.ao3ExtractionDiagnostic = ao3ExtractionDiagnostic
         self.singletonSeriesWarning = singletonSeriesWarning
         self.isLiked      = isLiked
+        self.hideFanworksTagPill = hideFanworksTagPill
+        self.correctCalibreAmpEntities = correctCalibreAmpEntities
         self.modelContext = modelContext
         self.onTagTap     = onTagTap
         self.onAuthorTap  = onAuthorTap
@@ -788,12 +821,12 @@ struct BookListRow: View, Equatable {
         self.onLikeToggle = onLikeToggle
         self.onLikeSelected = onLikeSelected
         self.onUnlikeSelected = onUnlikeSelected
+        self.onReadLater = onReadLater
         self.onSkip       = onSkip
         self.onMarkRead   = onMarkRead
         self.onResetProgress = onResetProgress
         self.selectedCount = selectedCount
         self.selectedIDs = selectedIDs
-        self.buckets      = AO3TagBuckets.from(tags: book.tags)
     }
 
     var body: some View {
@@ -820,6 +853,7 @@ struct BookListRow: View, Equatable {
                 Button("Like Selected") { onLikeSelected() }
                 Button("Unlike Selected") { onUnlikeSelected() }
             }
+            Button(selectedCount == 1 ? "Read Later" : "Add Selected to Read Later") { onReadLater() }
             Button(selectedCount == 1 ? "Mark as Read" : "Mark Selected as Read") { onMarkRead() }
             Button("Reset Reading Progress") { onResetProgress() }
             Button(selectedCount == 1 ? "Skip" : "Skip Selected") { onSkip() }
@@ -874,23 +908,12 @@ struct BookListRow: View, Equatable {
 
     @ViewBuilder
     private var tagsRow: some View {
-        if !buckets.isEmpty {
+        let pills = visibleTagPills
+        if !pills.isEmpty {
             FlowLayout(spacing: 4) {
-                ForEach(buckets.ratings, id: \.self) { tag in
-                    tagPill(tag, color: .orange)
-                        .onTapGesture { onTagTap(tag, .rating) }
-                }
-                ForEach(buckets.categories, id: \.self) { tag in
-                    tagPill(tag, color: .blue)
-                        .onTapGesture { onTagTap(tag, .category) }
-                }
-                ForEach(buckets.warnings, id: \.self) { tag in
-                    tagPill(tag, color: .red)
-                        .onTapGesture { onTagTap(tag, .warning) }
-                }
-                ForEach(buckets.regular, id: \.self) { tag in
-                    tagPill(tag, color: nil)
-                        .onTapGesture { onTagTap(tag, .tag) }
+                ForEach(pills) { pill in
+                    tagPill(pill.label, color: pill.color)
+                        .onTapGesture { onTagTap(pill.label, pill.field) }
                 }
             }
         }
@@ -991,6 +1014,14 @@ struct BookListRow: View, Equatable {
             .clipShape(Capsule())
     }
 
+    private var visibleTagPills: [TagPillDisplay] {
+        TagPillDisplay.make(
+            calibreTags: book.tags,
+            ao3Metadata: ao3Metadata,
+            hideFanworks: hideFanworksTagPill
+        )
+    }
+
     private func statChip(_ label: String, icon: String) -> some View {
         Label(label, systemImage: icon).font(.caption2).foregroundStyle(.tertiary)
     }
@@ -1044,6 +1075,91 @@ private struct LibraryStatsRow: View {
 
     private func statChip(_ label: String, icon: String) -> some View {
         Label(label, systemImage: icon).font(.caption2).foregroundStyle(.tertiary)
+    }
+}
+
+private struct TagPillDisplay: Identifiable, Equatable {
+    enum Role {
+        case rating
+        case fandom
+        case relationship
+        case character
+        case category
+        case warning
+        case regular
+    }
+
+    let label: String
+    let field: FilterField
+    let role: Role
+
+    var id: String { "\(role)-\(label)" }
+
+    var color: Color? {
+        switch role {
+        case .rating:       return .orange
+        case .fandom:       return .purple
+        case .relationship: return .pink
+        case .character:    return .teal
+        case .category:     return .blue
+        case .warning:      return .red
+        case .regular:      return nil
+        }
+    }
+
+    static func make(
+        calibreTags: [String],
+        ao3Metadata: AO3MetadataRecord?,
+        hideFanworks: Bool
+    ) -> [TagPillDisplay] {
+        var seen = Set<String>()
+        var pills: [TagPillDisplay] = []
+
+        func append(_ tags: [String], role: Role, field: FilterField = .tag) {
+            for tag in tags where shouldShow(tag, hideFanworks: hideFanworks) {
+                guard seen.insert(tag).inserted else { continue }
+                pills.append(TagPillDisplay(label: tag, field: field, role: role))
+            }
+        }
+
+        let buckets = AO3TagBuckets.from(tags: calibreTags)
+        append(buckets.ratings, role: .rating, field: .rating)
+
+        if let ao3Metadata {
+            append(ao3Metadata.fandoms, role: .fandom)
+            append(ao3Metadata.relationships, role: .relationship)
+            append(ao3Metadata.characters, role: .character)
+            append(ao3Metadata.categories, role: .category, field: .category)
+            append(buckets.categories, role: .category, field: .category)
+            append(buckets.warnings, role: .warning, field: .warning)
+            append(ao3Metadata.additionalTags, role: .regular)
+        } else {
+            append(buckets.categories, role: .category, field: .category)
+            append(buckets.warnings, role: .warning, field: .warning)
+        }
+
+        append(buckets.regular, role: .regular)
+        return pills
+    }
+
+    static func makeForSeries(
+        fandoms: [String],
+        tags: [String],
+        hideFanworks: Bool,
+        limit: Int
+    ) -> [TagPillDisplay] {
+        let buckets = AO3TagBuckets.from(tags: tags)
+        var pills = make(calibreTags: tags, ao3Metadata: nil, hideFanworks: hideFanworks)
+        let fandomPills = fandoms
+            .filter { shouldShow($0, hideFanworks: hideFanworks) }
+            .map { TagPillDisplay(label: $0, field: .tag, role: .fandom) }
+        pills.insert(contentsOf: fandomPills.filter { pill in !pills.contains { $0.label == pill.label } },
+                     at: min(buckets.ratings.count, pills.count))
+        return Array(pills.prefix(limit))
+    }
+
+    private static func shouldShow(_ tag: String, hideFanworks: Bool) -> Bool {
+        !(hideFanworks && tag == "Fanworks")
     }
 }
 
@@ -1184,6 +1300,7 @@ private func logMissingVisibleWorkMetadata(
 
 private struct SeriesListRow: View {
     let series: SeriesGroup
+    let hideFanworksTagPill: Bool
     let onTagTap: (String, FilterField) -> Void
     let onOpen: () -> Void
     let onShowWorks: () -> Void
@@ -1192,10 +1309,6 @@ private struct SeriesListRow: View {
     @State private var showIndex = false
     @State private var placeholderIndex = ""
     @State private var placeholderNote = ""
-
-    private var buckets: AO3TagBuckets {
-        AO3TagBuckets.from(tags: series.allFandoms + series.allTags)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1247,23 +1360,17 @@ private struct SeriesListRow: View {
 
     @ViewBuilder
     private var tagsRow: some View {
-        if !buckets.isEmpty {
+        let pills = TagPillDisplay.makeForSeries(
+            fandoms: series.allFandoms,
+            tags: series.allTags,
+            hideFanworks: hideFanworksTagPill,
+            limit: 10
+        )
+        if !pills.isEmpty {
             FlowLayout(spacing: 4) {
-                ForEach(Array(buckets.ratings.prefix(10)), id: \.self) { tag in
-                    tagPill(tag, color: .orange)
-                        .onTapGesture { onTagTap(tag, .rating) }
-                }
-                ForEach(Array(buckets.categories.prefix(max(0, 10 - buckets.ratings.count))), id: \.self) { tag in
-                    tagPill(tag, color: .blue)
-                        .onTapGesture { onTagTap(tag, .category) }
-                }
-                ForEach(Array(buckets.warnings.prefix(max(0, 10 - buckets.ratings.count - buckets.categories.count))), id: \.self) { tag in
-                    tagPill(tag, color: .red)
-                        .onTapGesture { onTagTap(tag, .warning) }
-                }
-                ForEach(Array(buckets.regular.prefix(max(0, 10 - buckets.ratings.count - buckets.categories.count - buckets.warnings.count))), id: \.self) { tag in
-                    tagPill(tag, color: nil)
-                        .onTapGesture { onTagTap(tag, .tag) }
+                ForEach(pills) { pill in
+                    tagPill(pill.label, color: pill.color)
+                        .onTapGesture { onTagTap(pill.label, pill.field) }
                 }
             }
         }
