@@ -1,6 +1,10 @@
 import Foundation
 import Observation
 
+extension Notification.Name {
+    static let seriesOrMergedCollectionDidChange = Notification.Name("Ambrosia.seriesOrMergedCollectionDidChange")
+}
+
 /// Holds the active CalibreLibrary connection for the current session.
 /// Opened when the user picks a folder or on launch if a path was saved.
 /// Replaced wholesale when the user switches libraries — no import, no sync.
@@ -130,7 +134,10 @@ final class LibrarySession {
         Task {
             do {
                 try await metaDB?.clearAO3Metadata()
-                await MainActor.run { self.startAO3Extraction(forceAll: true) }
+                await MainActor.run {
+                    self.seedCalibreSeriesCache()
+                    self.startAO3Extraction(forceAll: true)
+                }
             } catch {
                 print("[LibrarySession] AO3 metadata reset failed: \(error)")
             }
@@ -161,12 +168,21 @@ final class LibrarySession {
             for id in missing {
                 if Task.isCancelled { break }
                 var failureReason: String?
+                var failureStatus = "skipped"
+                var diagnosticEPUB: URL?
+                var spineItemsChecked: Int?
                 let metadata = autoreleasepool { () -> AO3MetadataRecord? in
-                    guard let epub = library.epubURL(calibreID: id) else { return nil }
+                    guard let epub = library.epubURL(calibreID: id) else {
+                        failureReason = "no EPUB found"
+                        return nil
+                    }
+                    diagnosticEPUB = epub
                     do {
                         var parser = EPUBParser(epubURL: epub)
                         try parser.parse()
-                        for item in parser.spine.prefix(5) {
+                        let checkedItems = Array(parser.spine.prefix(5))
+                        spineItemsChecked = checkedItems.count
+                        for item in checkedItems {
                             let html = try parser.html(for: item, userCSS: "")
                             if let metadata = AO3MetadataExtractor.extract(from: html) {
                                 return metadata
@@ -175,6 +191,7 @@ final class LibrarySession {
                         failureReason = "no dl.tags AO3 preface metadata in first \(min(parser.spine.count, 5)) spine items"
                         return nil
                     } catch {
+                        failureStatus = "failed"
                         failureReason = error.localizedDescription
                         return nil
                     }
@@ -182,6 +199,16 @@ final class LibrarySession {
                 if let metadata {
                     try? await metaDB.insert(metadata, calibreID: id)
                 } else {
+                    let diagnostic = AO3ExtractionDiagnostic(
+                        calibreID: id,
+                        status: failureStatus,
+                        reason: failureReason ?? "unknown reason",
+                        epubPath: diagnosticEPUB?.path,
+                        epubFilename: diagnosticEPUB?.lastPathComponent,
+                        spineItemsChecked: spineItemsChecked,
+                        attemptedAt: ISO8601DateFormatter().string(from: Date())
+                    )
+                    try? await metaDB.insert(diagnostic)
                     print("[LibrarySession] AO3 extraction skipped calibreID=\(id): \(failureReason ?? "unknown reason")")
                 }
                 DispatchQueue.main.async { [weak self] in
@@ -192,18 +219,34 @@ final class LibrarySession {
             DispatchQueue.main.async { [weak self] in
                 self?.extractionProgress.isRunning = false
             }
+            await self?.syncSeriesOrMergedCollection()
         }
     }
 
     private func seedCalibreSeriesCache() {
         guard let library, let metaDB else { return }
-        Task.detached(priority: .background) { [library, metaDB] in
+        Task.detached(priority: .background) { [weak self, library, metaDB] in
             let entries = library.allCalibreSeriesEntries()
             do {
                 try await metaDB.insertCalibreSeriesFallback(entries)
+                await self?.syncSeriesOrMergedCollection()
             } catch {
                 print("[LibrarySession] Calibre series cache seed failed: \(error)")
             }
+        }
+    }
+
+    func syncSeriesOrMergedCollection() async {
+        guard let library, let metaDB, let collectionStore else { return }
+        do {
+            var ids = try await metaDB.collapsedSeriesMemberIDs()
+            ids.formUnion(library.anthologyBookIDs())
+            try await collectionStore.replaceMembers(of: SystemCollectionID.seriesOrMerged, with: ids)
+            await MainActor.run {
+                NotificationCenter.default.post(name: .seriesOrMergedCollectionDidChange, object: nil)
+            }
+        } catch {
+            print("[LibrarySession] Series or Merged sync failed: \(error)")
         }
     }
 }

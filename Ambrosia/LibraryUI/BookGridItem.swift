@@ -49,8 +49,11 @@ struct LibraryRootView: View {
 
     @State private var bookStates: [Int: BookState] = [:]
     @State private var ao3Metadata: [Int: AO3MetadataRecord] = [:]
+    @State private var ao3ExtractionDiagnostics: [Int: AO3ExtractionDiagnostic] = [:]
+    @State private var singletonSeriesWarnings: [Int: SingletonSeriesWarning] = [:]
     @State private var likedIDs: Set<Int> = []
     @State private var skippedIDs: Set<Int> = []
+    @State private var seriesOrMergedIDs: Set<Int> = []
     @State private var selectedIDs: Set<Int> = []
 
     private let pageSize = 25
@@ -106,6 +109,18 @@ struct LibraryRootView: View {
                 } else {
                     loadPage()
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+                let persisted = UserDefaults.standard.bool(forKey: "groupBySeries")
+                if toolbarState.groupBySeries != persisted {
+                    toolbarState.groupBySeries = persisted
+                    selectedIDs.removeAll()
+                    currentPage = 0
+                    loadPage()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .seriesOrMergedCollectionDidChange)) { _ in
+                refreshBookStates()
             }
             .onChange(of: session.isOpen) {
                 if session.isOpen {
@@ -241,36 +256,48 @@ struct LibraryRootView: View {
         }
         let pageBooks = books
         Task {
-            let entries = (try? await metaDB.seriesEntries(for: pageBooks.map(\.id))) ?? []
-            let groupedEntries = Dictionary(grouping: entries.filter { !$0.isAnthology }, by: \.seriesName)
-            let seriesNames = groupedEntries.keys.sorted()
-            let allEntries = (try? await metaDB.seriesEntries(named: seriesNames)) ?? []
+            let pageIDs = pageBooks.map(\.id)
+            let pageMetadata = (try? await metaDB.ao3Metadata(for: pageIDs)) ?? [:]
+            let pageDiagnostics = (try? await metaDB.ao3ExtractionDiagnostics(for: pageIDs)) ?? [:]
+            let entries = (try? await metaDB.seriesEntries(for: pageIDs)) ?? []
+            let groupedEntries = Dictionary(grouping: entries.filter { !$0.isAnthology }, by: \.seriesKey)
+            let seriesKeys = groupedEntries.keys.sorted()
+            let allEntries = (try? await metaDB.seriesEntries(keys: seriesKeys)) ?? []
             let allIDs = Array(Set(allEntries.map(\.calibreID)))
             let allBooks = library.booksForIDs(allIDs)
-            let allMetadata = (try? await metaDB.ao3Metadata(for: allIDs)) ?? [:]
-            let placeholders = (try? await metaDB.placeholders(for: seriesNames)) ?? [:]
+            let seriesMetadata = (try? await metaDB.ao3Metadata(for: allIDs)) ?? [:]
+            let seriesDiagnostics = (try? await metaDB.ao3ExtractionDiagnostics(for: allIDs)) ?? [:]
+            let warnings = enrichWarnings((try? await metaDB.singletonNonLeadingSeriesEntries(for: pageIDs)) ?? [:], books: pageBooks)
+            let placeholders = (try? await metaDB.placeholders(for: seriesKeys)) ?? [:]
             let byID = Dictionary(uniqueKeysWithValues: allBooks.map { ($0.id, $0) })
-            let entriesBySeries = Dictionary(grouping: allEntries.filter { !$0.isAnthology }, by: \.seriesName)
-            let pageSeriesNames = Set(seriesNames)
+            let entriesBySeries = Dictionary(grouping: allEntries.filter { !$0.isAnthology }, by: \.seriesKey)
             var collapsedIDs = Set<Int>()
-            var seriesByName: [String: SeriesGroup] = [:]
+            var seriesByKey: [String: SeriesGroup] = [:]
 
-            for (name, entries) in entriesBySeries {
+            for (seriesKey, entries) in entriesBySeries {
                 let sortedEntries = entries.sorted { $0.seriesIndex < $1.seriesIndex }
                 let works = sortedEntries.compactMap { byID[$0.calibreID] }
-                guard works.count > 1 || pageSeriesNames.contains(name) else { continue }
+                guard works.count > 1 else { continue }
                 guard works.allSatisfy({ !isAnthology($0) }) else { continue }
                 collapsedIDs.formUnion(works.map(\.id))
-                let metadata = works.compactMap { allMetadata[$0.id] }
+                let metadata = works.compactMap { seriesMetadata[$0.id] }
+                let metadataByID = seriesMetadata
                 let indices = sortedEntries.map(\.seriesIndex)
                 let missing = missingIndices(in: indices)
                 let tags = Array(Set(works.flatMap(\.tags) + metadata.flatMap(\.additionalTags))).sorted()
                 let fandoms = Array(Set(metadata.flatMap(\.fandoms))).sorted()
                 let authors = Array(Set(works.flatMap(\.authors))).sorted()
                 let descriptions = works.compactMap(\.displayComment)
-                seriesByName[name] = SeriesGroup(
-                    id: name,
-                    seriesName: name,
+                let chapterRecords = works.compactMap { metadataByID[$0.id] }.filter { $0.chapterCurrent != nil }
+                let knownChapterCurrentTotal = chapterRecords.reduce(0) { $0 + ($1.chapterCurrent ?? 0) }
+                let chapterTotalKnownForAll = !chapterRecords.isEmpty && chapterRecords.count == works.count && chapterRecords.allSatisfy { $0.chapterTotal != nil }
+                #if DEBUG
+                works.forEach { logMissingVisibleWorkMetadata(book: $0, ao3Metadata: metadataByID[$0.id], diagnostic: seriesDiagnostics[$0.id]) }
+                #endif
+                seriesByKey[seriesKey] = SeriesGroup(
+                    id: seriesKey,
+                    seriesKey: seriesKey,
+                    seriesName: sortedEntries.first?.seriesName ?? seriesKey,
                     works: works.sorted { left, right in
                         (sortedEntries.first { $0.calibreID == left.id }?.seriesIndex ?? 0) <
                         (sortedEntries.first { $0.calibreID == right.id }?.seriesIndex ?? 0)
@@ -279,11 +306,17 @@ struct LibraryRootView: View {
                     allTags: tags,
                     allAuthors: authors,
                     allDescriptions: descriptions,
-                    totalWordCount: metadata.compactMap(\.wordCount).reduce(0, +),
+                    totalWordCount: works.reduce(0) { total, work in
+                        total + (seriesMetadata[work.id]?.wordCount ?? work.wordCount ?? 0)
+                    },
+                    chapterCurrentTotal: chapterRecords.isEmpty ? nil : knownChapterCurrentTotal,
+                    chapterTotalTotal: chapterTotalKnownForAll ? chapterRecords.reduce(0) { $0 + ($1.chapterTotal ?? 0) } : nil,
+                    hasUnknownChapterTotal: !chapterRecords.isEmpty && !chapterTotalKnownForAll,
                     earliestPublished: metadata.compactMap { parseISODate($0.publishedDate) }.min(),
                     latestUpdated: metadata.compactMap { parseISODate($0.updatedDate) }.max(),
+                    workIndices: indices,
                     missingIndices: missing,
-                    placeholders: placeholders[name] ?? [],
+                    placeholders: placeholders[seriesKey] ?? [],
                     isComplete: !metadata.isEmpty && metadata.allSatisfy(\.isComplete)
                 )
             }
@@ -292,17 +325,19 @@ struct LibraryRootView: View {
             var emittedSeries = Set<String>()
             for book in pageBooks {
                 if let entry = entries.first(where: { $0.calibreID == book.id && !$0.isAnthology }),
-                   let group = seriesByName[entry.seriesName],
-                   !emittedSeries.contains(entry.seriesName) {
+                   let group = seriesByKey[entry.seriesKey],
+                   !emittedSeries.contains(entry.seriesKey) {
                     nextItems.append(.series(group))
-                    emittedSeries.insert(entry.seriesName)
+                    emittedSeries.insert(entry.seriesKey)
                 } else if !collapsedIDs.contains(book.id) {
                     nextItems.append(.book(book))
                 }
             }
             await MainActor.run {
                 items = nextItems
-                ao3Metadata = allMetadata.filter { pageBooks.map(\.id).contains($0.key) }
+                ao3Metadata = pageMetadata
+                ao3ExtractionDiagnostics = pageDiagnostics
+                singletonSeriesWarnings = warnings
             }
         }
     }
@@ -311,22 +346,35 @@ struct LibraryRootView: View {
         let ids = books.map(\.id)
         guard !ids.isEmpty, let metaDB = session.metaDB else {
             ao3Metadata = [:]
+            ao3ExtractionDiagnostics = [:]
+            singletonSeriesWarnings = [:]
             return
         }
         Task {
             let metadata = (try? await metaDB.ao3Metadata(for: ids)) ?? [:]
+            let diagnostics = (try? await metaDB.ao3ExtractionDiagnostics(for: ids)) ?? [:]
+            let warnings = enrichWarnings((try? await metaDB.singletonNonLeadingSeriesEntries(for: ids)) ?? [:], books: books)
             await MainActor.run {
                 ao3Metadata = metadata
+                ao3ExtractionDiagnostics = diagnostics
+                singletonSeriesWarnings = warnings
             }
         }
     }
 
     private func visibleIDs(_ ids: [Int]) -> [Int] {
-        prefs.showSkippedCollection ? ids : ids.filter { !skippedIDs.contains($0) }
+        ids.filter { id in
+            (prefs.showSkippedCollection || !skippedIDs.contains(id)) &&
+            !seriesOrMergedIDs.contains(id)
+        }
     }
 
     private func visibleBooks(_ raw: [CalibreBook]) -> [CalibreBook] {
-        prefs.showSkippedCollection ? raw : raw.filter { !skippedIDs.contains($0.id) }
+        raw.filter { book in
+            (prefs.showSkippedCollection || !skippedIDs.contains(book.id)) &&
+            !seriesOrMergedIDs.contains(book.id) &&
+            !isAnthology(book)
+        }
     }
 
     private func refreshBookStates() {
@@ -335,9 +383,11 @@ struct LibraryRootView: View {
         Task {
             let currentLiked = (try? await session.collectionStore?.likedIDs()) ?? []
             let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
+            let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
             await MainActor.run {
             likedIDs = currentLiked
             skippedIDs = currentSkipped
+            seriesOrMergedIDs = currentSeriesOrMerged
             pruneSelection()
             currentPage = 0
             loadPage()
@@ -362,15 +412,18 @@ struct LibraryRootView: View {
                 collectionMap: collectionMap
             )
             let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
+            let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
             let filteredIDs = prefs.showSkippedCollection
                 ? result.calibreIDs
                 : result.calibreIDs.filter { !currentSkipped.contains($0) }
+            let visibleFilteredIDs = filteredIDs.filter { !currentSeriesOrMerged.contains($0) }
             toolbarState.activeFilterResult = FilterResult(
-                calibreIDs: filteredIDs,
-                totalCount: filteredIDs.count
+                calibreIDs: visibleFilteredIDs,
+                totalCount: visibleFilteredIDs.count
             )
             likedIDs = currentLikedIDs
             skippedIDs = currentSkipped
+            seriesOrMergedIDs = currentSeriesOrMerged
             selectedIDs.removeAll()
             currentPage = 0; loadPage()
         }
@@ -471,6 +524,8 @@ struct LibraryRootView: View {
             book: book,
             bookState: bookStates[book.id],
             ao3Metadata: ao3Metadata[book.id],
+            ao3ExtractionDiagnostic: ao3ExtractionDiagnostics[book.id],
+            singletonSeriesWarning: singletonSeriesWarnings[book.id],
             isLiked: likedIDs.contains(book.id),
             modelContext: modelContext,
             onTagTap: { tag, field in
@@ -497,17 +552,14 @@ struct LibraryRootView: View {
     private func seriesRow(_ series: SeriesGroup) -> some View {
         SeriesListRow(
             series: series,
-            onOpen: { AppDelegate.shared?.openReaderWindow(target: .series(series), modelContext: modelContext) },
-            onShowWorks: { selectedIDs = Set(series.works.map(\.id)) },
-            onToggleAnthology: {
-                Task {
-                    try? await session.metaDB?.setAnthology(seriesName: series.seriesName, isAnthology: true)
-                    await MainActor.run { loadPage() }
-                }
+            onTagTap: { tag, field in
+                addOrReplaceRule(FilterRule(field: field, op: .equals, value: tag))
             },
+            onOpen: { AppDelegate.shared?.openReaderWindow(target: .series(series), modelContext: modelContext) },
+            onShowWorks: {},
             onSavePlaceholder: { index, note in
                 Task {
-                    try? await session.metaDB?.upsertPlaceholder(seriesName: series.seriesName, partIndex: index, note: note)
+                    try? await session.metaDB?.upsertPlaceholder(seriesKey: series.seriesKey, seriesName: series.seriesName, partIndex: index, note: note)
                     await MainActor.run { loadPage() }
                 }
             }
@@ -526,6 +578,19 @@ struct LibraryRootView: View {
     private func open(_ books: [CalibreBook]) {
         for book in books {
             AppDelegate.shared?.openReaderWindow(book: book, modelContext: modelContext)
+        }
+    }
+
+    private func enrichWarnings(_ warnings: [Int: SingletonSeriesWarning], books: [CalibreBook]) -> [Int: SingletonSeriesWarning] {
+        let titlesByID = Dictionary(uniqueKeysWithValues: books.map { ($0.id, $0.displayTitle) })
+        return warnings.reduce(into: [:]) { result, pair in
+            let (id, warning) = pair
+            result[id] = SingletonSeriesWarning(
+                seriesKey: warning.seriesKey,
+                seriesName: warning.seriesName,
+                seriesIndex: warning.seriesIndex,
+                title: titlesByID[id] ?? warning.title
+            )
         }
     }
 
@@ -661,6 +726,8 @@ struct BookListRow: View, Equatable {
     let book: CalibreBook
     let bookState: BookState?
     let ao3Metadata: AO3MetadataRecord?
+    let ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?
+    let singletonSeriesWarning: SingletonSeriesWarning?
     let isLiked: Bool
     let modelContext: ModelContext
     let onTagTap: (String, FilterField) -> Void
@@ -686,6 +753,8 @@ struct BookListRow: View, Equatable {
             && lhs.book.tags              == rhs.book.tags
             && lhs.book.comment           == rhs.book.comment
             && lhs.ao3Metadata            == rhs.ao3Metadata
+            && lhs.ao3ExtractionDiagnostic == rhs.ao3ExtractionDiagnostic
+            && lhs.singletonSeriesWarning == rhs.singletonSeriesWarning
             && lhs.bookState?.calibreID        == rhs.bookState?.calibreID
             && lhs.isLiked                     == rhs.isLiked
             && lhs.bookState?.totalReadPercent == rhs.bookState?.totalReadPercent
@@ -694,7 +763,7 @@ struct BookListRow: View, Equatable {
 
     private let buckets: AO3TagBuckets
 
-    init(book: CalibreBook, bookState: BookState?, ao3Metadata: AO3MetadataRecord?, isLiked: Bool, modelContext: ModelContext,
+    init(book: CalibreBook, bookState: BookState?, ao3Metadata: AO3MetadataRecord?, ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?, singletonSeriesWarning: SingletonSeriesWarning?, isLiked: Bool, modelContext: ModelContext,
          onTagTap: @escaping (String, FilterField) -> Void,
          onAuthorTap: @escaping (String) -> Void,
          onOpenSelected: @escaping () -> Void,
@@ -709,6 +778,8 @@ struct BookListRow: View, Equatable {
         self.book         = book
         self.bookState    = bookState
         self.ao3Metadata  = ao3Metadata
+        self.ao3ExtractionDiagnostic = ao3ExtractionDiagnostic
+        self.singletonSeriesWarning = singletonSeriesWarning
         self.isLiked      = isLiked
         self.modelContext = modelContext
         self.onTagTap     = onTagTap
@@ -729,7 +800,7 @@ struct BookListRow: View, Equatable {
         VStack(alignment: .leading, spacing: 5) {
             titleRow
             authorsRow
-            ao3SummaryRow
+            LibraryStatsRow(stats: libraryStats)
             tagsRow
             statsRow
             descriptionRow
@@ -755,6 +826,9 @@ struct BookListRow: View, Equatable {
             Divider()
             AddToCollectionMenu(calibreIDs: selectedIDs)
         }
+        .onAppear {
+            logMissingDisplayedMetadataIfNeeded()
+        }
     }
 
     // MARK: - Row sections
@@ -771,6 +845,14 @@ struct BookListRow: View, Equatable {
                 Text(Self.formatLastOpened(s.lastOpenedDate))
                     .font(.caption).foregroundStyle(.tertiary)
             }
+            singletonSeriesWarningButton
+        }
+    }
+
+    @ViewBuilder
+    private var singletonSeriesWarningButton: some View {
+        if let warning = singletonSeriesWarning {
+            SingletonSeriesWarningButton(warning: warning)
         }
     }
 
@@ -815,34 +897,12 @@ struct BookListRow: View, Equatable {
     }
 
     @ViewBuilder
-    private var ao3SummaryRow: some View {
-        HStack(spacing: 10) {
-            let chapterLabel = ao3Metadata.flatMap(Self.chapterText) ?? "AO3 chapters unknown"
-            statChip(chapterLabel, icon: (ao3Metadata?.isComplete == true) ? "checkmark.circle" : "clock")
-            if let meta = ao3Metadata {
-                if let language = meta.language, !language.isEmpty {
-                    statChip(language, icon: "globe")
-                }
-                if let published = meta.publishedDate, !published.isEmpty {
-                    statChip("Pub \(published)", icon: "calendar")
-                }
-                if let updated = meta.updatedDate, !updated.isEmpty, updated != meta.publishedDate {
-                    statChip("Upd \(updated)", icon: "arrow.triangle.2.circlepath")
-                }
-            }
-            Spacer()
-        }
-    }
-
-    @ViewBuilder
     private var statsRow: some View {
-        let wc = ao3Metadata?.wordCount.map(Self.formatWordCount) ?? "AO3 words unknown"
         let k  = book.displayKudos
         let ao3Kudos = book.kudos == nil ? ao3Metadata?.kudosCount : nil
         let pct = bookState.map { $0.totalReadPercent }
-        if !wc.isEmpty || !k.isEmpty || ao3Kudos != nil || (pct ?? 0) > 0 {
+        if !k.isEmpty || ao3Kudos != nil || (pct ?? 0) > 0 {
             HStack(spacing: 14) {
-                if !wc.isEmpty { statChip(wc, icon: "text.word.spacing") }
                 if !k.isEmpty  { statChip(k,  icon: "heart") }
                 if let ao3Kudos { statChip(Self.formatKudos(ao3Kudos), icon: "heart") }
                 if let p = pct, p > 0 {
@@ -865,6 +925,16 @@ struct BookListRow: View, Equatable {
 
     // MARK: - Helpers
 
+    private var libraryStats: LibraryStats {
+        LibraryStats(
+            chapterText: ao3Metadata.flatMap(Self.chapterText),
+            isComplete: ao3Metadata?.isComplete == true,
+            wordText: (ao3Metadata?.wordCount ?? book.wordCount).map(Self.formatWordCount),
+            publishedText: Self.nonEmpty(ao3Metadata?.publishedDate),
+            updatedText: Self.nonEmpty(ao3Metadata?.updatedDate)
+        )
+    }
+
     private static func formatLastOpened(_ date: Date) -> String {
         let age = Date().timeIntervalSince(date)
         if age < 3600 { return "just now" }
@@ -879,6 +949,12 @@ struct BookListRow: View, Equatable {
         let f = DateFormatter()
         f.dateStyle = .short; f.timeStyle = .none
         return f.string(from: date)
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func chapterText(_ metadata: AO3MetadataRecord) -> String? {
@@ -904,6 +980,7 @@ struct BookListRow: View, Equatable {
     private func tagPill(_ label: String, color: Color?) -> some View {
         Text(label)
             .font(.caption2)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(
@@ -912,6 +989,57 @@ struct BookListRow: View, Equatable {
             )
             .foregroundStyle(color ?? .secondary)
             .clipShape(Capsule())
+    }
+
+    private func statChip(_ label: String, icon: String) -> some View {
+        Label(label, systemImage: icon).font(.caption2).foregroundStyle(.tertiary)
+    }
+
+    private func logMissingDisplayedMetadataIfNeeded() {
+        #if DEBUG
+        logMissingVisibleWorkMetadata(book: book, ao3Metadata: ao3Metadata, diagnostic: ao3ExtractionDiagnostic)
+        #endif
+    }
+}
+
+private struct LibraryStats: Equatable {
+    let chapterText: String?
+    let isComplete: Bool
+    let wordText: String?
+    let publishedText: String?
+    let updatedText: String?
+
+    var isEmpty: Bool {
+        chapterText == nil && wordText == nil && publishedText == nil && normalizedUpdatedText == nil
+    }
+
+    var normalizedUpdatedText: String? {
+        guard let updatedText, !updatedText.isEmpty, updatedText != publishedText else { return nil }
+        return updatedText
+    }
+}
+
+private struct LibraryStatsRow: View {
+    let stats: LibraryStats
+
+    var body: some View {
+        if !stats.isEmpty {
+            HStack(spacing: 14) {
+                if let chapterText = stats.chapterText {
+                    statChip(chapterText, icon: stats.isComplete ? "checkmark.circle" : "clock")
+                }
+                if let wordText = stats.wordText {
+                    statChip(wordText, icon: "text.word.spacing")
+                }
+                if let publishedText = stats.publishedText {
+                    statChip("Pub \(publishedText)", icon: "calendar")
+                }
+                if let updatedText = stats.normalizedUpdatedText {
+                    statChip("Upd \(updatedText)", icon: "arrow.triangle.2.circlepath")
+                }
+                Spacer()
+            }
+        }
     }
 
     private func statChip(_ label: String, icon: String) -> some View {
@@ -937,19 +1065,19 @@ struct FlowLayout: Layout {
     }
 
     func updateCache(_ cache: inout Cache, subviews: Subviews) {
-        if cache.subviewSizes.count != subviews.count {
-            cache.subviewSizes = subviews.map { $0.sizeThatFits(.unspecified) }
-            cache.lastWidth = -1
-        }
+        cache.subviewSizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        cache.lastWidth = -1
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         let maxWidth = proposal.width ?? 800
+        refreshSubviewSizes(in: &cache, subviews: subviews)
         rebuildRows(in: &cache, maxWidth: maxWidth)
         return CGSize(width: maxWidth, height: cache.totalHeight)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        refreshSubviewSizes(in: &cache, subviews: subviews)
         rebuildRows(in: &cache, maxWidth: bounds.width)
         var rowIdx = 0
         var x = bounds.minX
@@ -965,6 +1093,14 @@ struct FlowLayout: Layout {
             let yOffset = (currentRowH - size.height) / 2
             sub.place(at: CGPoint(x: x, y: currentRowY + yOffset), proposal: .unspecified)
             x += size.width + spacing
+        }
+    }
+
+    private func refreshSubviewSizes(in cache: inout Cache, subviews: Subviews) {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        if sizes != cache.subviewSizes {
+            cache.subviewSizes = sizes
+            cache.lastWidth = -1
         }
     }
 
@@ -994,16 +1130,14 @@ struct FlowLayout: Layout {
 }
 
 private func isAnthology(_ book: CalibreBook) -> Bool {
-    guard let comment = book.displayComment else { return false }
-    let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.range(of: "Anthology", options: [.caseInsensitive, .anchored]) != nil
+    book.isDescriptionAnthology
 }
 
 private func missingIndices(in indices: [Int]) -> [Int] {
     let unique = Array(Set(indices)).sorted()
-    guard let first = unique.first, let last = unique.last, last > first else { return [] }
+    guard let last = unique.last, last > 1 else { return [] }
     let present = Set(unique)
-    return (first...last).filter { !present.contains($0) }
+    return (1...last).filter { !present.contains($0) }
 }
 
 private func parseISODate(_ value: String?) -> Date? {
@@ -1015,16 +1149,53 @@ private func parseISODate(_ value: String?) -> Date? {
     return formatter.date(from: value)
 }
 
+private func logMissingVisibleWorkMetadata(
+    book: CalibreBook,
+    ao3Metadata: AO3MetadataRecord?,
+    diagnostic: AO3ExtractionDiagnostic?
+) {
+    #if DEBUG
+    let missingWords = (ao3Metadata?.wordCount ?? book.wordCount) == nil
+    let missingChapters = ao3Metadata?.chapterCurrent == nil
+    guard missingWords || missingChapters else { return }
+
+    var reasons: [String] = []
+    if ao3Metadata == nil {
+        if let diagnostic {
+            reasons.append("no AO3 metadata row; extractionStatus=\(diagnostic.status); extractionReason=\(diagnostic.reason)")
+        } else {
+            reasons.append("no AO3 metadata row; extraction has not recorded a status yet (pending, not attempted under diagnostics schema, or pre-diagnostics DB)")
+        }
+    } else {
+        if ao3Metadata?.wordCount == nil {
+            reasons.append("AO3 metadata has nil word count")
+        }
+        if ao3Metadata?.chapterCurrent == nil {
+            reasons.append("AO3 metadata has nil chapter current")
+        }
+    }
+    if missingWords, book.wordCount == nil {
+        reasons.append("Calibre fallback missing")
+    }
+
+    print("[LibraryMetadata] visible work missing displayed metadata reason=\(reasons.joined(separator: "; ")) calibreID=\(book.id) title=\"\(book.displayTitle)\" hasAO3Metadata=\(ao3Metadata != nil) ao3WorkID=\(ao3Metadata?.workID ?? "nil") ao3Words=\(ao3Metadata?.wordCount.map(String.init) ?? "nil") ao3ChapterCurrent=\(ao3Metadata?.chapterCurrent.map(String.init) ?? "nil") ao3ChapterTotal=\(ao3Metadata?.chapterTotal.map(String.init) ?? "nil") calibreWords=\(book.wordCount.map(String.init) ?? "nil") extractedAt=\(ao3Metadata?.extractedAt ?? "nil") extractionStatus=\(diagnostic?.status ?? "nil") extractionReason=\"\(diagnostic?.reason ?? "nil")\" attemptedAt=\(diagnostic?.attemptedAt ?? "nil") epubFilename=\"\(diagnostic?.epubFilename ?? "nil")\" epubPath=\"\(diagnostic?.epubPath ?? "nil")\" spineItemsChecked=\(diagnostic?.spineItemsChecked.map(String.init) ?? "nil")")
+    #endif
+}
+
 private struct SeriesListRow: View {
     let series: SeriesGroup
+    let onTagTap: (String, FilterField) -> Void
     let onOpen: () -> Void
     let onShowWorks: () -> Void
-    let onToggleAnthology: () -> Void
     let onSavePlaceholder: (Int, String?) -> Void
 
     @State private var showIndex = false
     @State private var placeholderIndex = ""
     @State private var placeholderNote = ""
+
+    private var buckets: AO3TagBuckets {
+        AO3TagBuckets.from(tags: series.allFandoms + series.allTags)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1035,15 +1206,10 @@ private struct SeriesListRow: View {
                 Text("\(series.works.count) works")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if !series.displayWordCount.isEmpty {
-                    Text(series.displayWordCount)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if !series.dateRangeText.isEmpty {
-                    Text(series.dateRangeText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if !series.indexRangeText.isEmpty {
+                    Text(series.indexRangeText)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(series.missingIndices.isEmpty ? Color.secondary : Color.orange)
                 }
                 Spacer()
                 Button {
@@ -1059,18 +1225,8 @@ private struct SeriesListRow: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            if !series.allFandoms.isEmpty || !series.allTags.isEmpty {
-                FlowLayout(spacing: 4) {
-                    ForEach(Array((series.allFandoms + series.allTags).prefix(10)), id: \.self) { tag in
-                        Text(tag)
-                            .font(.caption2)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(Color.accentColor.opacity(0.10))
-                            .clipShape(Capsule())
-                    }
-                }
-            }
+            LibraryStatsRow(stats: libraryStats)
+            tagsRow
             if !series.allDescriptions.isEmpty {
                 Text(series.allDescriptions.joined(separator: "\n\n"))
                     .font(.caption)
@@ -1082,9 +1238,67 @@ private struct SeriesListRow: View {
         .onTapGesture(count: 2, perform: onOpen)
         .contextMenu {
             Button("Open Series", action: onOpen)
-            Button("Show Individual Works", action: onShowWorks)
-            Button("Mark as Anthology", action: onToggleAnthology)
+            Button("Show Individual Works") {
+                showIndex = true
+                onShowWorks()
+            }
         }
+    }
+
+    @ViewBuilder
+    private var tagsRow: some View {
+        if !buckets.isEmpty {
+            FlowLayout(spacing: 4) {
+                ForEach(Array(buckets.ratings.prefix(10)), id: \.self) { tag in
+                    tagPill(tag, color: .orange)
+                        .onTapGesture { onTagTap(tag, .rating) }
+                }
+                ForEach(Array(buckets.categories.prefix(max(0, 10 - buckets.ratings.count))), id: \.self) { tag in
+                    tagPill(tag, color: .blue)
+                        .onTapGesture { onTagTap(tag, .category) }
+                }
+                ForEach(Array(buckets.warnings.prefix(max(0, 10 - buckets.ratings.count - buckets.categories.count))), id: \.self) { tag in
+                    tagPill(tag, color: .red)
+                        .onTapGesture { onTagTap(tag, .warning) }
+                }
+                ForEach(Array(buckets.regular.prefix(max(0, 10 - buckets.ratings.count - buckets.categories.count - buckets.warnings.count))), id: \.self) { tag in
+                    tagPill(tag, color: nil)
+                        .onTapGesture { onTagTap(tag, .tag) }
+                }
+            }
+        }
+    }
+
+    private var libraryStats: LibraryStats {
+        LibraryStats(
+            chapterText: series.displayChapterCount.nilIfEmptyForLibraryRow,
+            isComplete: series.isComplete,
+            wordText: series.displayWordCount.nilIfEmptyForLibraryRow,
+            publishedText: series.earliestPublished.map(Self.formatDate),
+            updatedText: series.latestUpdated.map(Self.formatDate)
+        )
+    }
+
+    private static func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    private func tagPill(_ label: String, color: Color?) -> some View {
+        Text(label)
+            .font(.caption2)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                color.map { $0.opacity(0.18) }
+                    ?? Color(NSColor.controlBackgroundColor)
+            )
+            .foregroundStyle(color ?? .secondary)
+            .clipShape(Capsule())
     }
 
     private var indexPopover: some View {
@@ -1118,5 +1332,48 @@ private struct SeriesListRow: View {
         }
         .padding(14)
         .frame(width: 340)
+    }
+}
+
+private extension String {
+    var nilIfEmptyForLibraryRow: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private struct SingletonSeriesWarningButton: View {
+    let warning: SingletonSeriesWarning
+    @State private var showIndex = false
+
+    var body: some View {
+        Button {
+            showIndex.toggle()
+        } label: {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+        }
+        .buttonStyle(.borderless)
+        .help(warning.displayText)
+        .popover(isPresented: $showIndex) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(warning.seriesName).font(.headline)
+                Text("Local index: #\(warning.seriesIndex)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Text("\(warning.seriesIndex).")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, alignment: .trailing)
+                    Text(warning.title).lineLimit(1)
+                }
+                Divider()
+                Text(warning.displayText)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            .padding(14)
+            .frame(width: 340)
+        }
     }
 }

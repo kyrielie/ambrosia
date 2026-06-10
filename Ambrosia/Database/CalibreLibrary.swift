@@ -90,6 +90,20 @@ final class CalibreLibrary {
         }
     }
 
+    func anthologyBookIDs() -> Set<Int> {
+        let rows = (try? db.prepare(
+            """
+            SELECT book
+            FROM comments
+            WHERE LOWER(LTRIM(text)) LIKE 'anthology%'
+            """
+        ).map { $0 }) ?? []
+        return Set(rows.compactMap { row in
+            if let value = row[0] as? Int64 { return Int(value) }
+            return row[0] as? Int
+        })
+    }
+
     // MARK: - Book list (pageSize + 1 rows — caller checks for next page)
 
     /// Fetch `limit` rows starting at `offset` using a structured SearchQuery.

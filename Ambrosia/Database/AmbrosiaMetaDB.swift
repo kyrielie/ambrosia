@@ -137,10 +137,49 @@ actor AmbrosiaMetaDB {
 
         CREATE TABLE IF NOT EXISTS series_placeholders (
             series_name TEXT NOT NULL,
+            series_key TEXT NOT NULL,
             part_index INTEGER NOT NULL,
             note TEXT,
-            PRIMARY KEY (series_name, part_index)
+            PRIMARY KEY (series_key, part_index)
         );
+
+        CREATE TABLE IF NOT EXISTS ao3_extraction_diagnostics (
+            calibre_id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            epub_path TEXT,
+            epub_filename TEXT,
+            spine_items_checked INTEGER,
+            attempted_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_series_cache_key
+            ON series_cache(COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name));
+
+        CREATE INDEX IF NOT EXISTS idx_ao3_extraction_diagnostics_status
+            ON ao3_extraction_diagnostics(status);
+
+        """)
+        _ = try? db.run("ALTER TABLE series_placeholders ADD COLUMN series_key TEXT")
+        try db.run("UPDATE series_placeholders SET series_key = 'calibre:' || series_name WHERE series_key IS NULL OR series_key = ''")
+        try db.execute("""
+        CREATE TABLE IF NOT EXISTS series_placeholders_keyed (
+            series_key TEXT NOT NULL,
+            series_name TEXT NOT NULL,
+            part_index INTEGER NOT NULL,
+            note TEXT,
+            PRIMARY KEY (series_key, part_index)
+        );
+
+        INSERT OR IGNORE INTO series_placeholders_keyed (series_key, series_name, part_index, note)
+        SELECT series_key, series_name, part_index, note
+        FROM series_placeholders
+        WHERE series_key IS NOT NULL AND series_key != '';
+
+        DROP TABLE series_placeholders;
+        ALTER TABLE series_placeholders_keyed RENAME TO series_placeholders;
+
+        CREATE INDEX IF NOT EXISTS idx_series_placeholders_key ON series_placeholders(series_key);
         """)
     }
 
@@ -243,6 +282,33 @@ actor AmbrosiaMetaDB {
     func existingAO3MetadataIDs() throws -> Set<Int> {
         let rows = try prepare("SELECT calibre_id FROM ao3_metadata")
         return Set(rows.compactMap { $0.int(at: 0) })
+    }
+
+    func ao3ExtractionDiagnostics(for calibreIDs: [Int]) throws -> [Int: AO3ExtractionDiagnostic] {
+        guard !calibreIDs.isEmpty else { return [:] }
+        let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")
+        let sql = """
+        SELECT calibre_id, status, reason, epub_path, epub_filename, spine_items_checked, attempted_at
+        FROM ao3_extraction_diagnostics
+        WHERE calibre_id IN (\(placeholders))
+        """
+        var result: [Int: AO3ExtractionDiagnostic] = [:]
+        for row in try prepare(sql, calibreIDs.map { $0 as Binding? }) {
+            guard let id = row.int(at: 0),
+                  let status = row[safe: 1] as? String,
+                  let reason = row[safe: 2] as? String,
+                  let attemptedAt = row[safe: 6] as? String else { continue }
+            result[id] = AO3ExtractionDiagnostic(
+                calibreID: id,
+                status: status,
+                reason: reason,
+                epubPath: row[safe: 3] as? String,
+                epubFilename: row[safe: 4] as? String,
+                spineItemsChecked: row.int(at: 5),
+                attemptedAt: attemptedAt
+            )
+        }
+        return result
     }
 
     func ao3Metadata(for calibreIDs: [Int]) throws -> [Int: AO3MetadataRecord] {
@@ -352,9 +418,29 @@ actor AmbrosiaMetaDB {
         }
     }
 
+    func insert(_ diagnostic: AO3ExtractionDiagnostic) throws {
+        try run(
+            """
+            INSERT OR REPLACE INTO ao3_extraction_diagnostics
+            (calibre_id, status, reason, epub_path, epub_filename, spine_items_checked, attempted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                diagnostic.calibreID,
+                diagnostic.status,
+                diagnostic.reason,
+                diagnostic.epubPath,
+                diagnostic.epubFilename,
+                diagnostic.spineItemsChecked,
+                diagnostic.attemptedAt,
+            ]
+        )
+    }
+
     func clearAO3Metadata() throws {
         try transaction {
             try run("DELETE FROM ao3_metadata")
+            try run("DELETE FROM ao3_extraction_diagnostics")
             try run("DELETE FROM series_cache")
         }
     }
@@ -382,16 +468,16 @@ actor AmbrosiaMetaDB {
         }
     }
 
-    func seriesEntries(named names: [String]) throws -> [SeriesCacheEntry] {
-        guard !names.isEmpty else { return [] }
-        let placeholders = names.map { _ in "?" }.joined(separator: ",")
+    func seriesEntries(keys: [String]) throws -> [SeriesCacheEntry] {
+        guard !keys.isEmpty else { return [] }
+        let placeholders = keys.map { _ in "?" }.joined(separator: ",")
         let sql = """
         SELECT calibre_id, series_name, series_index, ao3_series_id, is_anthology
         FROM series_cache
-        WHERE series_name IN (\(placeholders))
+        WHERE COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name) IN (\(placeholders))
         ORDER BY series_name, series_index
         """
-        return try prepare(sql, names.map { $0 as Binding? }).compactMap { row in
+        return try prepare(sql, keys.map { $0 as Binding? }).compactMap { row in
             guard let calibreID = row.int(at: 0),
                   let seriesName = row[safe: 1] as? String,
                   let seriesIndex = row.int(at: 2) else { return nil }
@@ -405,33 +491,70 @@ actor AmbrosiaMetaDB {
         }
     }
 
-    func placeholders(for seriesNames: [String]) throws -> [String: [SeriesPlaceholder]] {
-        guard !seriesNames.isEmpty else { return [:] }
-        let placeholders = seriesNames.map { _ in "?" }.joined(separator: ",")
+    func singletonNonLeadingSeriesEntries(for calibreIDs: [Int]) throws -> [Int: SingletonSeriesWarning] {
+        guard !calibreIDs.isEmpty else { return [:] }
+        let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")
         let sql = """
-        SELECT series_name, part_index, note
+        WITH counted AS (
+            SELECT calibre_id, series_name, series_index, is_anthology,
+                   COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name) AS series_key,
+                   COUNT(*) OVER (
+                       PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
+                   ) AS series_count,
+                   MAX(is_anthology) OVER (
+                       PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
+                   ) AS anthology
+            FROM series_cache
+        )
+        SELECT calibre_id, series_key, series_name, series_index
+        FROM counted
+        WHERE calibre_id IN (\(placeholders))
+          AND series_count = 1
+          AND anthology = 0
+          AND is_anthology = 0
+          AND series_index > 1
+        ORDER BY calibre_id, series_name
+        """
+        var result: [Int: SingletonSeriesWarning] = [:]
+        for row in try prepare(sql, calibreIDs.map { $0 as Binding? }) {
+            guard let calibreID = row.int(at: 0),
+                  result[calibreID] == nil,
+                  let seriesKey = row[safe: 1] as? String,
+                  let seriesName = row[safe: 2] as? String,
+                  let seriesIndex = row.int(at: 3) else { continue }
+            result[calibreID] = SingletonSeriesWarning(seriesKey: seriesKey, seriesName: seriesName, seriesIndex: seriesIndex, title: "")
+        }
+        return result
+    }
+
+    func placeholders(for seriesKeys: [String]) throws -> [String: [SeriesPlaceholder]] {
+        guard !seriesKeys.isEmpty else { return [:] }
+        let placeholders = seriesKeys.map { _ in "?" }.joined(separator: ",")
+        let sql = """
+        SELECT series_key, series_name, part_index, note
         FROM series_placeholders
-        WHERE series_name IN (\(placeholders))
-        ORDER BY series_name, part_index
+        WHERE series_key IN (\(placeholders))
+        ORDER BY series_key, part_index
         """
         var result: [String: [SeriesPlaceholder]] = [:]
-        for row in try prepare(sql, seriesNames.map { $0 as Binding? }) {
-            guard let seriesName = row[safe: 0] as? String,
-                  let partIndex = row.int(at: 1) else { continue }
-            result[seriesName, default: []].append(
-                SeriesPlaceholder(seriesName: seriesName, partIndex: partIndex, note: row[safe: 2] as? String)
+        for row in try prepare(sql, seriesKeys.map { $0 as Binding? }) {
+            guard let seriesKey = row[safe: 0] as? String,
+                  let seriesName = row[safe: 1] as? String,
+                  let partIndex = row.int(at: 2) else { continue }
+            result[seriesKey, default: []].append(
+                SeriesPlaceholder(seriesKey: seriesKey, seriesName: seriesName, partIndex: partIndex, note: row[safe: 3] as? String)
             )
         }
         return result
     }
 
-    func upsertPlaceholder(seriesName: String, partIndex: Int, note: String?) throws {
+    func upsertPlaceholder(seriesKey: String, seriesName: String, partIndex: Int, note: String?) throws {
         try run(
             """
-            INSERT OR REPLACE INTO series_placeholders (series_name, part_index, note)
-            VALUES (?, ?, ?)
+            INSERT OR REPLACE INTO series_placeholders (series_name, series_key, part_index, note)
+            VALUES (?, ?, ?, ?)
             """,
-            [seriesName, partIndex, note]
+            [seriesName, seriesKey, partIndex, note]
         )
     }
 
@@ -462,6 +585,31 @@ actor AmbrosiaMetaDB {
                 )
             }
         }
+    }
+
+    func collapsedSeriesMemberIDs() throws -> Set<Int> {
+        let sql = """
+        WITH ordered AS (
+            SELECT calibre_id,
+                   COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name) AS series_key,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
+                       ORDER BY series_index ASC, calibre_id ASC
+                   ) AS rn,
+                   COUNT(*) OVER (
+                       PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
+                   ) AS series_count,
+                   MAX(is_anthology) OVER (
+                       PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
+                   ) AS anthology
+            FROM series_cache
+        )
+        SELECT calibre_id
+        FROM ordered
+        WHERE series_count > 1 AND anthology = 0 AND rn > 1
+        """
+        let rows = try prepare(sql)
+        return Set(rows.compactMap { $0.int(at: 0) })
     }
 }
 

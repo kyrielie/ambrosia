@@ -9,7 +9,6 @@ extension NSToolbarItem.Identifier {
     static let librarySearch        = NSToolbarItem.Identifier("ambrosia.library.search")
     static let libraryFilter        = NSToolbarItem.Identifier("ambrosia.library.filter")
     static let librarySort          = NSToolbarItem.Identifier("ambrosia.library.sort")
-    static let libraryGroupSeries   = NSToolbarItem.Identifier("ambrosia.library.groupseries")
     static let libraryCollections   = NSToolbarItem.Identifier("ambrosia.library.collections")
     static let libraryReadingGoal   = NSToolbarItem.Identifier("ambrosia.library.readinggoal")
     static let libraryExport        = NSToolbarItem.Identifier("ambrosia.library.export")
@@ -25,7 +24,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private weak var toolbarState: LibraryToolbarState?
     private weak var session: LibrarySession?
     private var viewModeControl: NSSegmentedControl?
-    private var groupSeriesToolbarItem: NSToolbarItem?
     private var sortMenuToolbarItem: NSMenuToolbarItem?
     private var ficCountLabel: NSTextField?
     private var readCountLabel: NSTextField?
@@ -118,7 +116,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.librarySidebarToggle, .libraryTitle, .librarySearch, .libraryFilter, .librarySort,
-         .libraryGroupSeries,
          .flexibleSpace,
          .libraryCollections, .libraryReadingGoal, .libraryExport,
          .space,
@@ -127,7 +124,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.librarySidebarToggle, .librarySearch, .libraryFilter, .librarySort,
-         .libraryGroupSeries,
          .libraryCollections, .libraryReadingGoal, .libraryExport,
          .libraryViewMode, .libraryTitle,
          .space, .flexibleSpace]
@@ -164,13 +160,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
         case .librarySort:
             return makeSortItem(identifier)
-
-        case .libraryGroupSeries:
-            let item = makeIconItem(identifier, label: "Group Series",
-                                    image: toolbarState?.groupBySeries == true ? "link.circle.fill" : "link.circle",
-                                    action: #selector(toggleGroupSeries))
-            groupSeriesToolbarItem = item
-            return item
 
         case .libraryCollections:
             return makeIconItem(identifier, label: "Collections",
@@ -498,13 +487,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     // MARK: - Other toolbar actions
 
     @objc private func toggleFilter()        { toolbarState?.showFilterDrawer   = true }
-    @objc private func toggleGroupSeries() {
-        toolbarState?.groupBySeries.toggle()
-        let symbol = toolbarState?.groupBySeries == true ? "link.circle.fill" : "link.circle"
-        let cfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-        groupSeriesToolbarItem?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Group Series")?
-            .withSymbolConfiguration(cfg)
-    }
     @objc private func triggerSidebarToggle(){ toolbarState?.toggleEmailSidebar = true }
     @objc private func showCollections()     { toolbarState?.showCollections    = true }
     @objc private func showReadingGoal()     { toolbarState?.showReadingGoal    = true }

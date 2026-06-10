@@ -59,7 +59,7 @@ private struct PreferencesRootView: View {
                 .tag(PrefTab.columns)
 
             DataTab()
-                .tabItem { Label("Data", systemImage: "externaldrive.badge.gearshape") }
+                .tabItem { Label("Data", systemImage: "externaldrive") }
                 .tag(PrefTab.data)
         }
         .frame(width: 580)
@@ -305,6 +305,18 @@ private struct LibraryTab: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
+                Section {
+                    Toggle("Group series", isOn: Binding(
+                        get: { UserDefaults.standard.bool(forKey: "groupBySeries") },
+                        set: { UserDefaults.standard.set($0, forKey: "groupBySeries") }
+                    ))
+                } header: {
+                    Label("Series", systemImage: "link").font(.headline)
+                } footer: {
+                    Text("Collapses multi-work series into one library row and hides member books already represented by the series.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
                 // ── Appearance (light / dark / system) ───────────────────────
                 Section {
                     Picker("Color scheme", selection: $prefs.libraryAppearanceMode) {
@@ -347,7 +359,7 @@ private struct LibraryTab: View {
                     }
 
                 } header: {
-                    Label("Background Color", systemImage: "paintbucket").font(.headline)
+                    Label("Background Color", systemImage: "paintbrush").font(.headline)
                 }
 
                 // ── Live preview ──────────────────────────────────────────────

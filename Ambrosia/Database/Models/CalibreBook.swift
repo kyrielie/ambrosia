@@ -57,6 +57,12 @@ struct CalibreBook: Identifiable, Hashable {
         return HTMLStripper.strip(raw)
     }
 
+    var isDescriptionAnthology: Bool {
+        guard let comment = displayComment else { return false }
+        let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.range(of: "Anthology", options: [.caseInsensitive, .anchored]) != nil
+    }
+
     /// Absolute EPUB URL — requires the library root URL from LibrarySession.
     func epubURL(libraryRoot: URL) -> URL? {
         let folder = libraryRoot.appendingPathComponent(relativePath)
@@ -84,16 +90,36 @@ struct SeriesCacheEntry: Hashable, Sendable {
     let seriesIndex: Int
     let ao3SeriesID: String?
     let isAnthology: Bool
+
+    var seriesKey: String {
+        if let ao3SeriesID, !ao3SeriesID.isEmpty {
+            return "ao3:\(ao3SeriesID)"
+        }
+        return "calibre:\(seriesName)"
+    }
 }
 
 struct SeriesPlaceholder: Hashable, Sendable {
+    let seriesKey: String
     let seriesName: String
     let partIndex: Int
     let note: String?
 }
 
+struct SingletonSeriesWarning: Hashable, Sendable {
+    let seriesKey: String
+    let seriesName: String
+    let seriesIndex: Int
+    let title: String
+
+    var displayText: String {
+        "Only local work in series; starts at #\(seriesIndex)"
+    }
+}
+
 struct SeriesGroup: Identifiable, Hashable {
     let id: String
+    let seriesKey: String
     let seriesName: String
     let works: [CalibreBook]
     let allFandoms: [String]
@@ -101,8 +127,12 @@ struct SeriesGroup: Identifiable, Hashable {
     let allAuthors: [String]
     let allDescriptions: [String]
     let totalWordCount: Int
+    let chapterCurrentTotal: Int?
+    let chapterTotalTotal: Int?
+    let hasUnknownChapterTotal: Bool
     let earliestPublished: Date?
     let latestUpdated: Date?
+    let workIndices: [Int]
     let missingIndices: [Int]
     let placeholders: [SeriesPlaceholder]
     let isComplete: Bool
@@ -120,6 +150,14 @@ struct SeriesGroup: Identifiable, Hashable {
         }
     }
 
+    var displayChapterCount: String {
+        guard let chapterCurrentTotal else { return "" }
+        if hasUnknownChapterTotal || chapterTotalTotal == nil {
+            return "\(chapterCurrentTotal)/? ch"
+        }
+        return "\(chapterCurrentTotal)/\(chapterTotalTotal!) ch"
+    }
+
     var dateRangeText: String {
         let calendar = Calendar.current
         let years = [earliestPublished, latestUpdated].compactMap { $0 }.map {
@@ -130,6 +168,29 @@ struct SeriesGroup: Identifiable, Hashable {
     }
 
     var coverBook: CalibreBook? { works.first }
+
+    var indexRangeText: String {
+        let unique = Array(Set(workIndices)).sorted()
+        guard !unique.isEmpty else { return "" }
+        var ranges: [String] = []
+        var start = unique[0]
+        var previous = unique[0]
+        for value in unique.dropFirst() {
+            if value == previous + 1 {
+                previous = value
+            } else {
+                ranges.append(Self.formatRange(start: start, end: previous))
+                start = value
+                previous = value
+            }
+        }
+        ranges.append(Self.formatRange(start: start, end: previous))
+        return ranges.joined(separator: ", ")
+    }
+
+    private static func formatRange(start: Int, end: Int) -> String {
+        start == end ? "#\(start)" : "#\(start)-#\(end)"
+    }
 }
 
 enum LibraryItem: Identifiable, Hashable {

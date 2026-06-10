@@ -29,6 +29,16 @@ struct AO3MetadataRecord: Codable, Equatable, Sendable {
     var extractedAt: String
 }
 
+struct AO3ExtractionDiagnostic: Codable, Equatable, Sendable {
+    let calibreID: Int
+    let status: String
+    let reason: String
+    let epubPath: String?
+    let epubFilename: String?
+    let spineItemsChecked: Int?
+    let attemptedAt: String
+}
+
 enum AO3MetadataExtractor {
     static func extract(from html: String) -> AO3MetadataRecord? {
         do {
@@ -78,12 +88,18 @@ enum AO3MetadataExtractor {
                 }
             }
 
+            if record.chapterCurrent == nil && record.chapterTotal == nil {
+                record.chapterCurrent = 1
+                record.chapterTotal = 1
+            }
+
             record.isComplete = (
                 record.chapterCurrent != nil &&
                 record.chapterTotal != nil &&
                 record.chapterCurrent == record.chapterTotal
             ) || completedDate != nil
 
+            logMissingParsedFieldsIfNeeded(record)
             return record
         } catch {
             print("[AO3MetadataExtractor] Parse failed: \(error)")
@@ -114,6 +130,12 @@ enum AO3MetadataExtractor {
             record.ao3Collections = linkTexts(in: element)
         case "series":
             record.series = parseEPUBSeries(in: element)
+        case "words":
+            record.wordCount = parseInt((try? element.text()) ?? "")
+        case "chapters":
+            let chapters = parseChapters((try? element.text()) ?? "")
+            record.chapterCurrent = chapters.current
+            record.chapterTotal = chapters.total
         case "stats":
             parseStats((try? element.text()) ?? "", into: &record, completedDate: &completedDate)
         default:
@@ -217,6 +239,16 @@ enum AO3MetadataExtractor {
 
     private static func absoluteAO3URL(_ href: String) -> String {
         href.hasPrefix("http") ? href : "https://archiveofourown.org\(href)"
+    }
+
+    private static func logMissingParsedFieldsIfNeeded(_ record: AO3MetadataRecord) {
+        #if DEBUG
+        var missing: [String] = []
+        if record.wordCount == nil { missing.append("words") }
+        if record.chapterCurrent == nil { missing.append("chapter current") }
+        guard !missing.isEmpty else { return }
+        print("[AO3MetadataExtractor] Parsed AO3 metadata with nil fields missing=\(missing.joined(separator: ", ")) workID=\(record.workID ?? "nil") storyURL=\(record.storyURL ?? "nil") words=\(record.wordCount.map(String.init) ?? "nil") chapterCurrent=\(record.chapterCurrent.map(String.init) ?? "nil") chapterTotal=\(record.chapterTotal.map(String.init) ?? "nil") published=\(record.publishedDate ?? "nil") updated=\(record.updatedDate ?? "nil") extractedAt=\(record.extractedAt)")
+        #endif
     }
 }
 

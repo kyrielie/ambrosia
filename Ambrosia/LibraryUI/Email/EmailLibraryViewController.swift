@@ -22,6 +22,7 @@ final class EmailLibraryViewController: NSViewController {
 
     private var filterSheetHost: NSHostingView<FilterSheetCarrier>?
     private var skippedCollectionCancellable: AnyCancellable?
+    private var seriesOrMergedCancellable: AnyCancellable?
     private var appearanceCancellable: AnyCancellable?
 
     // MARK: - Sidebar state
@@ -35,6 +36,7 @@ final class EmailLibraryViewController: NSViewController {
     var bookStates: [Int: BookState] = [:]
     private var likedIDs: Set<Int> = []
     private var skippedIDs: Set<Int> = []
+    private var seriesOrMergedIDs: Set<Int> = []
     private var collectionMembership: [String: Set<Int>] = [:]
     private var pendingCollectionSeedIDs: [Int] = []
     private var currentPage = 0
@@ -103,6 +105,12 @@ final class EmailLibraryViewController: NSViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.applyLibraryAppearance()
+            }
+
+        seriesOrMergedCancellable = NotificationCenter.default.publisher(for: .seriesOrMergedCollectionDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.refreshCollections()
             }
     }
 
@@ -366,15 +374,18 @@ final class EmailLibraryViewController: NSViewController {
                 collectionMap: collectionMap
             )
             let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
+            let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
             let filteredIDs = ReaderPreferences.shared.showSkippedCollection
                 ? result.calibreIDs
                 : result.calibreIDs.filter { !currentSkipped.contains($0) }
+            let visibleFilteredIDs = filteredIDs.filter { !currentSeriesOrMerged.contains($0) }
             toolbarState.activeFilterResult = FilterResult(
-                calibreIDs: filteredIDs,
-                totalCount: filteredIDs.count
+                calibreIDs: visibleFilteredIDs,
+                totalCount: visibleFilteredIDs.count
             )
             likedIDs = currentLikedIDs
             skippedIDs = currentSkipped
+            seriesOrMergedIDs = currentSeriesOrMerged
             loadPage(reset: true)
         }
     }
@@ -426,11 +437,18 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func visibleIDs(_ ids: [Int]) -> [Int] {
-        ReaderPreferences.shared.showSkippedCollection ? ids : ids.filter { !skippedIDs.contains($0) }
+        ids.filter { id in
+            (ReaderPreferences.shared.showSkippedCollection || !skippedIDs.contains(id)) &&
+            !seriesOrMergedIDs.contains(id)
+        }
     }
 
     private func visibleBooks(_ raw: [CalibreBook]) -> [CalibreBook] {
-        ReaderPreferences.shared.showSkippedCollection ? raw : raw.filter { !skippedIDs.contains($0.id) }
+        raw.filter { book in
+            (ReaderPreferences.shared.showSkippedCollection || !skippedIDs.contains(book.id)) &&
+            !seriesOrMergedIDs.contains(book.id) &&
+            !book.isDescriptionAnthology
+        }
     }
 
     private func loadNextPageIfAvailable() {
@@ -528,12 +546,14 @@ final class EmailLibraryViewController: NSViewController {
         let collections = (try? await session.collectionStore?.collections()) ?? []
         let membershipByID = (try? await session.collectionStore?.membershipByCollectionID()) ?? [:]
         let currentSkipped = membershipByID[SystemCollectionID.skipped] ?? []
+        let currentSeriesOrMerged = membershipByID[SystemCollectionID.seriesOrMerged] ?? []
         collectionMembership = Dictionary(uniqueKeysWithValues: collections.map { collection in
             return (collection.name, membershipByID[collection.id] ?? [])
         })
         likedIDs = (try? await session.collectionStore?.likedIDs()) ?? []
-        let shouldReloadPage = skippedIDs != currentSkipped
+        let shouldReloadPage = skippedIDs != currentSkipped || seriesOrMergedIDs != currentSeriesOrMerged
         skippedIDs = currentSkipped
+        seriesOrMergedIDs = currentSeriesOrMerged
         sidebarVC?.collectionMembership = collectionMembership
         sidebarVC?.likedIDs = likedIDs
         if shouldReloadPage {

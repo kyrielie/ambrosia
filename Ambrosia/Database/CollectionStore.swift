@@ -99,6 +99,11 @@ actor CollectionStore {
         }
     }
 
+    func replaceMembers(of collectionID: String, with calibreIDs: Set<Int>) async throws {
+        try await db.run("DELETE FROM collection_members WHERE collection_id = ?", [collectionID])
+        try await bulkAdd(calibreIDs: Array(calibreIDs).sorted(), to: collectionID)
+    }
+
     func syncAutomatedCollection(collectionID: String, calibreID: Int, shouldBeMember: Bool) async throws {
         if shouldBeMember {
             try await db.run(
