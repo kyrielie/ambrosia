@@ -126,6 +126,17 @@ private struct ReaderTab: View {
                     Label("Reading Mode", systemImage: "book.pages").font(.headline)
                 }
 
+                // ── Reader cleanup and interaction ───────────────────────────
+                Section {
+                    Toggle("Allow link clicks", isOn: $prefs.allowReaderLinkClicks)
+                    Toggle("Remove paragraph indents", isOn: $prefs.removeParagraphIndents)
+                } header: {
+                    Label("Reader Content", systemImage: "doc.text.magnifyingglass").font(.headline)
+                } footer: {
+                    Text("Links open in your browser. Paragraph indent cleanup overrides publisher first-line indentation without changing EPUB files.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
                 // ── Preferences update behaviour ──────────────────────────────
                 Section {
                     HStack(spacing: 6) {

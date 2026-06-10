@@ -487,7 +487,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     // MARK: - Other toolbar actions
 
     @objc private func toggleFilter()        { toolbarState?.showFilterDrawer   = true }
-    @objc private func triggerSidebarToggle(){ toolbarState?.toggleEmailSidebar = true }
+    @objc private func triggerSidebarToggle(){ toolbarState?.toggleEmailSidebar.toggle() }
     @objc private func showCollections()     { toolbarState?.showCollections    = true }
     @objc private func showReadingGoal()     { toolbarState?.showReadingGoal    = true }
     @objc private func triggerExport()       { toolbarState?.triggerExport      = true }

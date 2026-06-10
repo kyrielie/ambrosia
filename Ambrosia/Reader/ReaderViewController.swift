@@ -85,6 +85,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     // MARK: - Private: persistence
 
     private var saveTimer: Timer?
+    private var readingHistorySessionID: Int64?
     private var _saveContext: ModelContext?
     private var saveContext: ModelContext {
         if let c = _saveContext { return c }
@@ -176,6 +177,11 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
     }
 
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        startReadingHistoryIfNeeded()
+    }
+
     override func viewDidLayout() {
         super.viewDidLayout()
         repositionFindBar()
@@ -193,7 +199,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         annotationPopover?.close()
         notePopover?.close()
         hideFindBar()
-        flushPosition()
+        flushPosition(final: true)
     }
 
     // MARK: - EPUB loading
@@ -394,6 +400,34 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         print("[ReaderVC] Navigation failed: \(error.localizedDescription)")
     }
 
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        guard navigationAction.navigationType == .linkActivated else {
+            decisionHandler(.allow)
+            return
+        }
+
+        guard ReaderPreferences.shared.allowReaderLinkClicks,
+              let url = navigationAction.request.url else {
+            decisionHandler(.cancel)
+            return
+        }
+
+        if url.scheme == "about" || url.scheme == "file" {
+            decisionHandler(.allow)
+            return
+        }
+
+        if ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") {
+            NSWorkspace.shared.open(url)
+            decisionHandler(.cancel)
+            return
+        }
+
+        decisionHandler(.cancel)
+    }
+
     // MARK: - Scroll mode: position save/restore
 
     private func restoreScrollPosition() {
@@ -570,10 +604,68 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
     }
 
-    private func flushPosition() {
+    private func flushPosition(final: Bool = false) {
         guard bookState != nil else { return }
         try? saveContext.save()
+        updateReadingHistory(final: final)
         onReadingProgressChanged?()
+    }
+
+    private func startReadingHistoryIfNeeded() {
+        guard readingHistorySessionID == nil else { return }
+        let calibreID = book.id
+        let percentStart = bookState.map { min(max($0.totalReadPercent, 0), 1) }
+        Task {
+            do {
+                guard let metaDB = await MainActor.run(body: { AppDelegate.shared?.session.metaDB }) else { return }
+                try await metaDB.closeZombieReadingSessions(calibreID: calibreID)
+                let id = try await metaDB.startReadingSession(calibreID: calibreID, percentStart: percentStart)
+                await MainActor.run {
+                    self.readingHistorySessionID = id
+                }
+            } catch {
+                print("[ReadingHistory] Start failed: \(error)")
+            }
+        }
+    }
+
+    private func updateReadingHistory(final: Bool = false) {
+        guard let sessionID = readingHistorySessionID,
+              let state = bookState else { return }
+        let calibreID = state.calibreID
+        let percent = min(max(state.totalReadPercent, 0), 1)
+        Task {
+            do {
+                let dependencies = await MainActor.run {
+                    (
+                        metaDB: AppDelegate.shared?.session.metaDB,
+                        collectionStore: AppDelegate.shared?.session.collectionStore
+                    )
+                }
+                guard let metaDB = dependencies.metaDB else { return }
+                try await metaDB.updateReadingSession(id: sessionID, calibreID: calibreID, percentEnd: percent)
+                if percent >= 1.0 {
+                    try await dependencies.collectionStore?.syncAutomatedCollection(
+                        collectionID: SystemCollectionID.finished,
+                        calibreID: calibreID,
+                        shouldBeMember: true
+                    )
+                    try await dependencies.collectionStore?.syncAutomatedCollection(
+                        collectionID: SystemCollectionID.inProgress,
+                        calibreID: calibreID,
+                        shouldBeMember: false
+                    )
+                } else if percent > 0 {
+                    try await dependencies.collectionStore?.syncAutomatedCollection(
+                        collectionID: SystemCollectionID.inProgress,
+                        calibreID: calibreID,
+                        shouldBeMember: true
+                    )
+                }
+            } catch {
+                print("[ReadingHistory] \(final ? "Final update" : "Update") failed: \(error)")
+            }
+        }
     }
 
     // MARK: - WKScriptMessageHandler

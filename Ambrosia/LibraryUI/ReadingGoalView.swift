@@ -7,13 +7,14 @@ import SwiftData
 ///
 /// Progress is counted by looking at `BookState` records where
 /// `lastOpenedDate` falls within [periodStart, periodEnd] and
-/// `totalReadPercent >= 0.8` (≥ 80% read counts as "finished").
+/// `totalReadPercent >= 0.98` (>= 98% read counts as "finished").
 ///
 /// Session time tracking: `ReaderWindowController` stores
 /// `sessionStartDate` at window load and diffs on `windowWillClose`.
 struct ReadingGoalView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Environment(LibrarySession.self) private var session
 
     @Query private var goals: [ReadingGoal]
 
@@ -27,6 +28,7 @@ struct ReadingGoalView: View {
         return cal.date(byAdding: DateComponents(month: 1, day: -1), to: start)!
     }()
     @State private var isEditing = false
+    @State private var historyReadCount: Int?
 
     var activeGoal: ReadingGoal? { goals.first }
 
@@ -48,7 +50,13 @@ struct ReadingGoalView: View {
             footer
         }
         .frame(minWidth: 360, minHeight: 300)
-        .onAppear { prepopulateEditor() }
+        .onAppear {
+            prepopulateEditor()
+            refreshHistoryProgress()
+        }
+        .onChange(of: goals.map(\.persistentModelID)) {
+            refreshHistoryProgress()
+        }
     }
 
     // MARK: - Sections
@@ -64,7 +72,7 @@ struct ReadingGoalView: View {
     }
 
     private func progressSection(goal: ReadingGoal) -> some View {
-        let booksRead = booksReadCount(for: goal)
+        let booksRead = historyReadCount ?? booksReadCountFallback(for: goal)
         let progress = goal.targetBooksCount > 0
             ? min(1.0, Double(booksRead) / Double(goal.targetBooksCount)) : 0.0
         let pct = Int(progress * 100)
@@ -174,7 +182,7 @@ struct ReadingGoalView: View {
     private var footer: some View {
         HStack {
             Image(systemName: "info.circle").foregroundStyle(.secondary).font(.caption)
-            Text("A book counts as read when ≥ 80% of it has been opened during the goal period.")
+            Text("A book counts as read when at least 98% has been read during the goal period.")
                 .font(.caption).foregroundStyle(.secondary)
             Spacer()
         }
@@ -184,8 +192,8 @@ struct ReadingGoalView: View {
     // MARK: - Logic
 
     /// Count BookState records where lastOpenedDate is within the goal period
-    /// and totalReadPercent >= 0.8.
-    private func booksReadCount(for goal: ReadingGoal) -> Int {
+    /// and totalReadPercent >= 0.98.
+    private func booksReadCountFallback(for goal: ReadingGoal) -> Int {
         let start = goal.periodStart
         let end   = goal.periodEnd
         let desc  = FetchDescriptor<BookState>()
@@ -193,7 +201,7 @@ struct ReadingGoalView: View {
         return all.filter { state in
             state.lastOpenedDate >= start
                 && state.lastOpenedDate <= end
-                && state.totalReadPercent >= 0.8
+                && state.totalReadPercent >= 0.98
         }.count
     }
 
@@ -212,6 +220,7 @@ struct ReadingGoalView: View {
         }
         try? modelContext.save()
         isEditing = false
+        refreshHistoryProgress()
     }
 
     private func prepopulateEditor() {
@@ -219,6 +228,32 @@ struct ReadingGoalView: View {
             targetInput = goal.targetBooksCount
             periodStart = goal.periodStart
             periodEnd   = goal.periodEnd
+        }
+    }
+
+    private func refreshHistoryProgress() {
+        guard let goal = activeGoal else {
+            historyReadCount = nil
+            return
+        }
+        let start = goal.periodStart
+        let end = Calendar.current.date(
+            bySettingHour: 23,
+            minute: 59,
+            second: 59,
+            of: goal.periodEnd
+        ) ?? goal.periodEnd
+        Task {
+            do {
+                guard let metaDB = await MainActor.run(body: { session.metaDB }) else {
+                    await MainActor.run { historyReadCount = nil }
+                    return
+                }
+                let count = try await metaDB.completedBooksCount(start: start, end: end)
+                await MainActor.run { historyReadCount = count }
+            } catch {
+                await MainActor.run { historyReadCount = nil }
+            }
         }
     }
 }

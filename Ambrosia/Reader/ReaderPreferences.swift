@@ -80,6 +80,12 @@ final class ReaderPreferences: ObservableObject {
     @Published var paddingV: Int {
         didSet { UserDefaults.standard.set(paddingV, forKey: Keys.paddingV) }
     }
+    @Published var allowReaderLinkClicks: Bool {
+        didSet { UserDefaults.standard.set(allowReaderLinkClicks, forKey: Keys.allowReaderLinkClicks) }
+    }
+    @Published var removeParagraphIndents: Bool {
+        didSet { UserDefaults.standard.set(removeParagraphIndents, forKey: Keys.removeParagraphIndents) }
+    }
 
     // MARK: - Library appearance — colour mode
 
@@ -194,6 +200,8 @@ final class ReaderPreferences: ObservableObject {
         static let readerTextColor             = "#1A1A1A"
         static let paddingH                    = 24
         static let paddingV                    = 32
+        static let allowReaderLinkClicks       = false
+        static let removeParagraphIndents      = false
         static let libraryColorMode            = LibraryColorMode.systemDefault
         static let libraryAppearanceMode       = LibraryAppearanceMode.system
         static let libraryLightBackgroundColor = "#FFFFFF"
@@ -218,6 +226,8 @@ final class ReaderPreferences: ObservableObject {
         static let readerTextColor             = "rp.readerTextColor"
         static let paddingH                    = "rp.paddingH"
         static let paddingV                    = "rp.paddingV"
+        static let allowReaderLinkClicks       = "rp.allowReaderLinkClicks"
+        static let removeParagraphIndents      = "rp.removeParagraphIndents"
         static let libraryColorMode            = "rp.libraryColorMode"
         static let libraryAppearanceMode       = "rp.libraryAppearanceMode"
         static let libraryLightBG              = "rp.libraryLightBG"
@@ -241,6 +251,12 @@ final class ReaderPreferences: ObservableObject {
         maxWidth     = ud.integer(forKey: Keys.maxWidth).nonZero   ?? Defaults.maxWidth
         paddingH     = ud.integer(forKey: Keys.paddingH).nonZero   ?? Defaults.paddingH
         paddingV     = ud.integer(forKey: Keys.paddingV).nonZero   ?? Defaults.paddingV
+        allowReaderLinkClicks = ud.object(forKey: Keys.allowReaderLinkClicks) != nil
+            ? ud.bool(forKey: Keys.allowReaderLinkClicks)
+            : Defaults.allowReaderLinkClicks
+        removeParagraphIndents = ud.object(forKey: Keys.removeParagraphIndents) != nil
+            ? ud.bool(forKey: Keys.removeParagraphIndents)
+            : Defaults.removeParagraphIndents
 
         // Migrate old "rp.backgroundColor" key if present
         let legacyBG = ud.string(forKey: "rp.backgroundColor")
@@ -297,7 +313,18 @@ final class ReaderPreferences: ObservableObject {
     // MARK: - CSS (reader only)
 
     var css: String {
+        let linkPointerEvents = allowReaderLinkClicks ? "auto" : "none"
+        let paragraphIndentCSS = removeParagraphIndents
+            ? """
+        p, div, li {
+            text-indent: 0 !important;
+        }
+        p::first-line, div::first-line, li::first-line {
+            text-indent: 0 !important;
+        }
         """
+            : ""
+        return """
         /* === Ambrosia user preferences === */
         html, body {
             background-color: \(readerBackgroundColor);
@@ -315,7 +342,7 @@ final class ReaderPreferences: ObservableObject {
         }
         img  { max-width: 100%; height: auto; display: block; margin: 1em auto; }
         p    { margin-bottom: 0.8em; }
-        a    { color: inherit; text-decoration: underline; pointer-events: none; }
+        a    { color: inherit; text-decoration: underline; pointer-events: \(linkPointerEvents); cursor: pointer; }
         em, i { font-style: italic; }
         strong, b { font-weight: bold; }
         h1, h2, h3, h4, h5, h6 { font-weight: bold; margin: 1em 0 0.5em; line-height: 1.2; }
@@ -327,6 +354,7 @@ final class ReaderPreferences: ObservableObject {
         pre { overflow-x: auto; padding: 1em; background: rgba(128,128,128,0.1); border-radius: 4px; }
         div, section, article { float: none !important; position: static !important; }
         nav[epub\\:type="toc"], nav[epub\\:type="landmarks"] { display: none; }
+        \(paragraphIndentCSS)
         """
     }
 
@@ -374,6 +402,8 @@ final class ReaderPreferences: ObservableObject {
         readerTextColor       = Defaults.readerTextColor
         paddingH              = Defaults.paddingH
         paddingV              = Defaults.paddingV
+        allowReaderLinkClicks = Defaults.allowReaderLinkClicks
+        removeParagraphIndents = Defaults.removeParagraphIndents
         defaultReadingMode    = Defaults.defaultReadingMode
     }
 

@@ -28,6 +28,7 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Sidebar state
 
     private var isSidebarHidden = false
+    private var lastSidebarThickness: CGFloat = 280
 
     // MARK: - Pagination
 
@@ -52,6 +53,7 @@ final class EmailLibraryViewController: NSViewController {
     private var lastSort:      SortField = .title
     private var lastAscending: Bool      = true
     private var lastFilterIDs: [Int]?    = nil
+    private var lastSidebarToggle: Bool  = false
 
     private let debouncer = DebounceTimer(delay: 0.4)
 
@@ -236,6 +238,9 @@ final class EmailLibraryViewController: NSViewController {
             splitVC.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             splitVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
+        DispatchQueue.main.async { [weak self] in
+            self?.rememberSidebarThickness()
+        }
     }
 
     // MARK: - Filter sheet host
@@ -286,11 +291,12 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Sidebar toggle
 
     @objc func performSidebarToggle() {
-        isSidebarHidden.toggle()
         guard let item = splitVC.splitViewItems.first else { return }
+        isSidebarHidden = !item.isCollapsed
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.2
-            item.animator().isCollapsed = isSidebarHidden
+            item.isCollapsed = isSidebarHidden
+            splitVC.splitView.layoutSubtreeIfNeeded()
         }
     }
 
@@ -314,8 +320,8 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func toolbarStateDidChange() {
-        if toolbarState.toggleEmailSidebar {
-            toolbarState.toggleEmailSidebar = false
+        if toolbarState.toggleEmailSidebar != lastSidebarToggle {
+            lastSidebarToggle = toolbarState.toggleEmailSidebar
             performSidebarToggle()
         }
 
@@ -726,6 +732,7 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func replaceRightPane(with vc: NSViewController) {
+        let sidebarThickness = currentSidebarThickness()
         if splitVC.splitViewItems.count > 1 {
             let last  = splitVC.splitViewItems.last!
             let oldVC = last.viewController
@@ -737,6 +744,35 @@ final class EmailLibraryViewController: NSViewController {
         let item = NSSplitViewItem(viewController: vc)
         item.minimumThickness = 420
         splitVC.addSplitViewItem(item)
+        restoreSidebarThickness(sidebarThickness)
+    }
+
+    private func currentSidebarThickness() -> CGFloat {
+        guard let sidebarView = splitVC?.splitViewItems.first?.viewController.view,
+              !sidebarView.isHidden,
+              sidebarView.frame.width > 0 else {
+            return lastSidebarThickness
+        }
+        lastSidebarThickness = sidebarView.frame.width
+        return sidebarView.frame.width
+    }
+
+    private func rememberSidebarThickness() {
+        _ = currentSidebarThickness()
+    }
+
+    private func restoreSidebarThickness(_ thickness: CGFloat) {
+        guard splitVC.splitViewItems.count > 1,
+              !splitVC.splitViewItems[0].isCollapsed else { return }
+        let clamped = min(max(thickness, splitVC.splitViewItems[0].minimumThickness), splitVC.splitViewItems[0].maximumThickness)
+        lastSidebarThickness = clamped
+        splitVC.splitView.setPosition(clamped, ofDividerAt: 0)
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.splitVC.splitViewItems.count > 1,
+                  !self.splitVC.splitViewItems[0].isCollapsed else { return }
+            self.splitVC.splitView.setPosition(clamped, ofDividerAt: 0)
+        }
     }
 }
 
