@@ -36,6 +36,7 @@ final class EmailLibraryViewController: NSViewController {
     private var likedIDs: Set<Int> = []
     private var skippedIDs: Set<Int> = []
     private var collectionMembership: [String: Set<Int>] = [:]
+    private var pendingCollectionSeedIDs: [Int] = []
     private var currentPage = 0
     private var hasNextPage = false
     private let pageSize    = 25
@@ -50,7 +51,7 @@ final class EmailLibraryViewController: NSViewController {
 
     private let debouncer = DebounceTimer(delay: 0.4)
 
-    private var selectedBook: CalibreBook? { didSet { updateReaderPane() } }
+    private var selectedBook: CalibreBook?
 
     // MARK: - Init
 
@@ -119,7 +120,7 @@ final class EmailLibraryViewController: NSViewController {
     private func buildSplitView() {
         sidebarVC = EmailSidebarViewController()
         sidebarVC.toolbarState = toolbarState
-        sidebarVC.onSelect     = { [weak self] book in self?.selectedBook = book }
+        sidebarVC.onSelect     = { [weak self] book in self?.setSelectedBook(book) }
         sidebarVC.onOpen       = { [weak self] book in
             guard let self else { return }
             let ctx = ModelContext(modelContainer)
@@ -135,41 +136,56 @@ final class EmailLibraryViewController: NSViewController {
             toolbarState.activeFilterResult = nil
             loadPage(reset: true)
         }
-        sidebarVC.onContextMenuOpen = { [weak self] book in
+        sidebarVC.onContextMenuOpen = { [weak self] books in
             guard let self else { return }
             let ctx = ModelContext(modelContainer)
-            AppDelegate.shared?.openReaderWindow(book: book, modelContext: ctx)
+            for book in books {
+                AppDelegate.shared?.openReaderWindow(book: book, modelContext: ctx)
+            }
         }
-        sidebarVC.onContextMenuLike = { [weak self] book in
+        sidebarVC.onContextMenuSetLiked = { [weak self] books, liked in
             guard let self else { return }
             Task {
-                try? await self.session.collectionStore?.toggleLiked(calibreID: book.id)
+                try? await self.session.collectionStore?.setLiked(calibreIDs: books.map(\.id), liked: liked)
                 await self.refreshCollectionSnapshots()
             }
         }
-        sidebarVC.onContextMenuSkip = { [weak self] book in
+        sidebarVC.onContextMenuSkip = { [weak self] books in
             guard let self else { return }
             Task {
-                try? await self.session.collectionStore?.skipBook(calibreID: book.id)
+                for book in books {
+                    try? await self.session.collectionStore?.skipBook(calibreID: book.id)
+                }
                 await self.refreshCollectionSnapshots()
                 self.applyFilterRules()
             }
         }
-        sidebarVC.onContextMenuMarkRead = { [weak self] book in
-            self?.markRead(book)
+        sidebarVC.onContextMenuMarkRead = { [weak self] books in
+            self?.markRead(books)
         }
-        sidebarVC.onContextMenuToggleCollection = { [weak self] book, collectionName in
+        sidebarVC.onContextMenuResetProgress = { [weak self] books in
+            self?.resetProgress(books)
+        }
+        sidebarVC.onContextMenuToggleCollection = { [weak self] books, collectionName in
             guard let self else { return }
             Task {
                 let collections = (try? await self.session.collectionStore?.collections()) ?? []
                 if let collection = collections.first(where: { $0.name == collectionName }) {
-                    try? await self.session.collectionStore?.toggle(calibreID: book.id, in: collection.id)
+                    let ids = books.map(\.id)
+                    let membership = (try? await self.session.collectionStore?.membershipByCollectionID()) ?? [:]
+                    let members = membership[collection.id] ?? []
+                    if Set(ids).isSubset(of: members) {
+                        try? await self.session.collectionStore?.bulkRemove(calibreIDs: ids, from: collection.id)
+                    } else {
+                        try? await self.session.collectionStore?.bulkAdd(calibreIDs: ids, to: collection.id)
+                    }
                 }
                 await self.refreshCollectionSnapshots()
             }
         }
-        sidebarVC.onContextMenuNewCollection = { [weak self] _ in
+        sidebarVC.onContextMenuNewCollection = { [weak self] books in
             guard let self else { return }
+            self.pendingCollectionSeedIDs = books.map(\.id)
             toolbarState.showCollections = true
         }
 
@@ -367,9 +383,12 @@ final class EmailLibraryViewController: NSViewController {
 
     func loadPage(reset: Bool) {
         guard let library = session.library else {
-            books = []; sidebarVC?.books = []; return
+            books = []
+            setSelectedBook(nil)
+            sidebarVC?.books = []
+            return
         }
-        if reset { currentPage = 0; books = []; selectedBook = nil }
+        if reset { currentPage = 0; books = [] }
 
         // Parse search text into a structured query — same path as list view
         let rawQuery = toolbarState.searchText.isEmpty
@@ -432,34 +451,76 @@ final class EmailLibraryViewController: NSViewController {
         Task { await refreshCollectionSnapshots() }
     }
 
-    private func markRead(_ book: CalibreBook) {
-        let calibreID = book.id
+    func consumePendingCollectionSeedIDs() -> [Int] {
+        let ids = pendingCollectionSeedIDs
+        pendingCollectionSeedIDs = []
+        return ids
+    }
+
+    private func markRead(_ books: [CalibreBook]) {
+        let ids = books.map(\.id)
         let container = modelContainer
         Task {
             let ctx = ModelContext(container)
-            var desc = FetchDescriptor<BookState>(
-                predicate: #Predicate { $0.calibreID == calibreID }
-            )
-            desc.fetchLimit = 1
-            let state = (try? ctx.fetch(desc).first) ?? BookState(calibreID: calibreID)
-            if state.modelContext == nil {
-                ctx.insert(state)
+            for calibreID in ids {
+                let state = self.stateForMutation(calibreID, in: ctx)
+                state.markRead()
             }
-            state.totalReadPercent = 100
             try? ctx.save()
-            try? await session.collectionStore?.syncAutomatedCollection(
-                collectionID: SystemCollectionID.finished,
-                calibreID: calibreID,
-                shouldBeMember: true
-            )
-            try? await session.collectionStore?.syncAutomatedCollection(
-                collectionID: SystemCollectionID.inProgress,
-                calibreID: calibreID,
-                shouldBeMember: false
-            )
+            for calibreID in ids {
+                try? await session.collectionStore?.syncAutomatedCollection(
+                    collectionID: SystemCollectionID.finished,
+                    calibreID: calibreID,
+                    shouldBeMember: true
+                )
+                try? await session.collectionStore?.syncAutomatedCollection(
+                    collectionID: SystemCollectionID.inProgress,
+                    calibreID: calibreID,
+                    shouldBeMember: false
+                )
+            }
             refreshBookStates()
             loadPage(reset: true)
         }
+    }
+
+    private func resetProgress(_ books: [CalibreBook]) {
+        let ids = books.map(\.id)
+        let container = modelContainer
+        Task {
+            let ctx = ModelContext(container)
+            for calibreID in ids {
+                let state = self.stateForMutation(calibreID, in: ctx)
+                state.resetReadingProgress()
+            }
+            try? ctx.save()
+            for calibreID in ids {
+                try? await session.collectionStore?.syncAutomatedCollection(
+                    collectionID: SystemCollectionID.finished,
+                    calibreID: calibreID,
+                    shouldBeMember: false
+                )
+                try? await session.collectionStore?.syncAutomatedCollection(
+                    collectionID: SystemCollectionID.inProgress,
+                    calibreID: calibreID,
+                    shouldBeMember: false
+                )
+            }
+            refreshBookStates()
+            loadPage(reset: true)
+        }
+    }
+
+    private func stateForMutation(_ calibreID: Int, in ctx: ModelContext) -> BookState {
+        var desc = FetchDescriptor<BookState>(
+            predicate: #Predicate { $0.calibreID == calibreID }
+        )
+        desc.fetchLimit = 1
+        let state = (try? ctx.fetch(desc).first) ?? BookState(calibreID: calibreID)
+        if state.modelContext == nil {
+            ctx.insert(state)
+        }
+        return state
     }
 
     @MainActor
@@ -482,6 +543,12 @@ final class EmailLibraryViewController: NSViewController {
 
     // MARK: - Inline reader pane
 
+    private func setSelectedBook(_ book: CalibreBook?) {
+        guard selectedBook?.id != book?.id else { return }
+        selectedBook = book
+        updateReaderPane()
+    }
+
     private func updateReaderPane() {
         replaceRightPane(with: makeRightVC())
     }
@@ -490,6 +557,11 @@ final class EmailLibraryViewController: NSViewController {
         guard let book = selectedBook else { return makePlaceholderVC() }
         let rvc = ReaderViewController(book: book, modelContainer: modelContainer)
         rvc.view.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
+        rvc.onReadingProgressChanged = { [weak self] in
+            DispatchQueue.main.async {
+                self?.refreshBookStates()
+            }
+        }
         let cid = book.id
         Task.detached { [mc = modelContainer] in
             let ctx = ModelContext(mc)
@@ -557,7 +629,8 @@ struct FilterSheetCarrier: View {
                 get: { toolbarState.showCollections },
                 set: { toolbarState.showCollections = $0 }
             )) {
-                CollectionsView(onSelectCollection: { collection in
+                let seedIDs = emailVC?.consumePendingCollectionSeedIDs() ?? []
+                CollectionsView(calibreIDsToAdd: seedIDs, onSelectCollection: { collection in
                     let rule = FilterRule(field: .collection, op: .equals, value: collection.name)
                     var expr = toolbarState.filterExpression
                     if expr.groups.isEmpty {

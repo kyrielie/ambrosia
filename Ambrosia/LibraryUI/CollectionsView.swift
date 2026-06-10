@@ -6,6 +6,7 @@ struct CollectionsView: View {
     @ObservedObject private var prefs = ReaderPreferences.shared
 
     var bookToAdd: CalibreBook? = nil
+    var calibreIDsToAdd: [Int] = []
     var onSelectCollection: ((CollectionRow) -> Void)? = nil
 
     @State private var collections: [CollectionRow] = []
@@ -14,6 +15,11 @@ struct CollectionsView: View {
     @State private var isCreating = false
     @State private var renamingID: String?
     @State private var renameText = ""
+
+    private var selectedCalibreIDs: [Int] {
+        if !calibreIDsToAdd.isEmpty { return calibreIDsToAdd }
+        return bookToAdd.map { [$0.id] } ?? []
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,7 +36,7 @@ struct CollectionsView: View {
                     if isCreating {
                         newCollectionRow
                     }
-                    if bookToAdd != nil && !isCreating {
+                    if !selectedCalibreIDs.isEmpty && !isCreating {
                         Button {
                             isCreating = true
                             newName = ""
@@ -56,13 +62,13 @@ struct CollectionsView: View {
             if collection.id == SystemCollectionID.skipped {
                 return prefs.showSkippedCollection
             }
-            return !collection.isSystem || bookToAdd == nil
+            return !collection.isSystem || selectedCalibreIDs.isEmpty
         }
     }
 
     private var header: some View {
         HStack {
-            Text(bookToAdd == nil ? "Collections" : "Add to Collection")
+            Text(selectedCalibreIDs.isEmpty ? "Collections" : "Add to Collection")
                 .font(.headline)
             Spacer()
             Button("Done") { dismiss() }
@@ -76,7 +82,8 @@ struct CollectionsView: View {
     private func collectionRow(_ collection: CollectionRow) -> some View {
         let isRenaming = renamingID == collection.id
         let count = membership[collection.id]?.count ?? 0
-        let isMember = bookToAdd.map { membership[collection.id]?.contains($0.id) == true } ?? false
+        let selected = Set(selectedCalibreIDs)
+        let isMember = !selected.isEmpty && selected.isSubset(of: membership[collection.id] ?? [])
 
         HStack {
             if isRenaming {
@@ -88,9 +95,9 @@ struct CollectionsView: View {
                 Button("Cancel") { renamingID = nil }
                     .buttonStyle(.borderless).controlSize(.small)
             } else {
-                if let book = bookToAdd {
+                if !selectedCalibreIDs.isEmpty {
                     Button {
-                        toggleMembership(book: book, collection: collection)
+                        toggleMembership(collection: collection)
                     } label: {
                         Image(systemName: isMember ? "checkmark.circle.fill" : "circle")
                             .foregroundStyle(isMember ? Color.accentColor : .secondary)
@@ -105,7 +112,7 @@ struct CollectionsView: View {
                 }
                 Spacer()
 
-                if bookToAdd == nil {
+                if selectedCalibreIDs.isEmpty {
                     Image(systemName: "chevron.right")
                         .font(.caption).foregroundStyle(.tertiary)
                 }
@@ -114,8 +121,8 @@ struct CollectionsView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             guard !isRenaming else { return }
-            if let book = bookToAdd {
-                toggleMembership(book: book, collection: collection)
+            if !selectedCalibreIDs.isEmpty {
+                toggleMembership(collection: collection)
             } else {
                 onSelectCollection?(collection)
                 dismiss()
@@ -166,7 +173,7 @@ struct CollectionsView: View {
 
     @ViewBuilder
     private var footer: some View {
-        if bookToAdd == nil {
+        if selectedCalibreIDs.isEmpty {
             HStack {
                 Button {
                     isCreating = true
@@ -193,7 +200,7 @@ struct CollectionsView: View {
     private func commitCreate() {
         let trimmed = newName.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
-        let ids = bookToAdd.map { [$0.id] } ?? []
+        let ids = selectedCalibreIDs
         Task {
             _ = try? await session.collectionStore?.createCollection(name: trimmed, calibreIDs: ids)
             await reload()
@@ -212,29 +219,48 @@ struct CollectionsView: View {
         }
     }
 
-    private func toggleMembership(book: CalibreBook, collection: CollectionRow) {
+    private func toggleMembership(collection: CollectionRow) {
         Task {
-            try? await session.collectionStore?.toggle(calibreID: book.id, in: collection.id)
+            let selected = Set(selectedCalibreIDs)
+            let members = membership[collection.id] ?? []
+            if selected.isSubset(of: members) {
+                try? await session.collectionStore?.bulkRemove(calibreIDs: selectedCalibreIDs, from: collection.id)
+            } else {
+                try? await session.collectionStore?.bulkAdd(calibreIDs: selectedCalibreIDs, to: collection.id)
+            }
             await reload()
         }
     }
 }
 
 struct AddToCollectionMenu: View {
-    let book: CalibreBook
+    let calibreIDs: [Int]
     @Environment(LibrarySession.self) private var session
     @ObservedObject private var prefs = ReaderPreferences.shared
     @State private var collections: [CollectionRow] = []
     @State private var membership: [String: Set<Int>] = [:]
     @State private var showCreateSheet = false
 
+    init(book: CalibreBook) {
+        self.calibreIDs = [book.id]
+    }
+
+    init(calibreIDs: [Int]) {
+        self.calibreIDs = calibreIDs
+    }
+
     var body: some View {
         Menu("Add to Collection") {
             ForEach(visibleCollections) { collection in
-                let isMember = membership[collection.id]?.contains(book.id) == true
+                let selected = Set(calibreIDs)
+                let isMember = !selected.isEmpty && selected.isSubset(of: membership[collection.id] ?? [])
                 Button {
                     Task {
-                        try? await session.collectionStore?.toggle(calibreID: book.id, in: collection.id)
+                        if isMember {
+                            try? await session.collectionStore?.bulkRemove(calibreIDs: calibreIDs, from: collection.id)
+                        } else {
+                            try? await session.collectionStore?.bulkAdd(calibreIDs: calibreIDs, to: collection.id)
+                        }
                         await reload()
                     }
                 } label: {
@@ -256,7 +282,7 @@ struct AddToCollectionMenu: View {
         }
         .task { await reload() }
         .sheet(isPresented: $showCreateSheet) {
-            CollectionsView(bookToAdd: book)
+            CollectionsView(calibreIDsToAdd: calibreIDs)
         }
     }
 

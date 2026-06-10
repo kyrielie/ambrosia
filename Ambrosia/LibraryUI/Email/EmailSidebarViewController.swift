@@ -25,12 +25,13 @@ final class EmailSidebarViewController: NSViewController,
     var onLoadMore:    (() -> Void)?
     var onEditFilter:  (() -> Void)?
     var onClearFilter: (() -> Void)?
-    var onContextMenuLike:             ((CalibreBook) -> Void)?
-    var onContextMenuSkip:             ((CalibreBook) -> Void)?
-    var onContextMenuMarkRead:         ((CalibreBook) -> Void)?
-    var onContextMenuOpen:             ((CalibreBook) -> Void)?
-    var onContextMenuToggleCollection: ((CalibreBook, String) -> Void)?
-    var onContextMenuNewCollection:    ((CalibreBook) -> Void)?
+    var onContextMenuSetLiked:         (([CalibreBook], Bool) -> Void)?
+    var onContextMenuSkip:             (([CalibreBook]) -> Void)?
+    var onContextMenuMarkRead:         (([CalibreBook]) -> Void)?
+    var onContextMenuResetProgress:    (([CalibreBook]) -> Void)?
+    var onContextMenuOpen:             (([CalibreBook]) -> Void)?
+    var onContextMenuToggleCollection: (([CalibreBook], String) -> Void)?
+    var onContextMenuNewCollection:    (([CalibreBook]) -> Void)?
 
     // MARK: - Dependencies
 
@@ -38,9 +39,9 @@ final class EmailSidebarViewController: NSViewController,
 
     // MARK: - Data (set externally; didSet triggers reload)
 
-    var books:      [CalibreBook]    = [] { didSet { tableView?.reloadData() } }
-    var bookStates: [Int: BookState] = [:] { didSet { tableView?.reloadData() } }
-    var likedIDs: Set<Int> = [] { didSet { tableView?.reloadData() } }
+    var books:      [CalibreBook]    = [] { didSet { reloadBooksPreservingSingleSelection(from: oldValue) } }
+    var bookStates: [Int: BookState] = [:] { didSet { reloadVisibleRows() } }
+    var likedIDs: Set<Int> = []
     /// Collection snapshot for building context menu submenus. Key = name, value = member calibreIDs.
     var collectionMembership: [String: Set<Int>] = [:]
 
@@ -49,6 +50,7 @@ final class EmailSidebarViewController: NSViewController,
     private var tableView:  NSTableView!
     private var scrollView: NSScrollView!
     private var hasTriggeredLoadMore = false
+    private var isRestoringSelection = false
 
     // MARK: - Lifecycle
 
@@ -61,6 +63,7 @@ final class EmailSidebarViewController: NSViewController,
         tableView.dataSource = self
         tableView.delegate   = self
         tableView.headerView = nil
+        tableView.allowsMultipleSelection = true
         tableView.selectionHighlightStyle = .regular
         tableView.rowHeight  = 64
         tableView.intercellSpacing = NSSize(width: 0, height: 0)
@@ -135,8 +138,8 @@ final class EmailSidebarViewController: NSViewController,
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { 64 }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
-        let row = tableView.selectedRow
-        onSelect?(row >= 0 ? books[row] : nil)
+        guard !isRestoringSelection else { return }
+        onSelect?(singleSelectedBook())
     }
 
     @objc private func handleDoubleClick() {
@@ -165,32 +168,51 @@ final class EmailSidebarViewController: NSViewController,
     func contextMenu(for row: Int) -> NSMenu? {
         guard row >= 0, row < books.count else { return nil }
         let book = books[row]
+        let selectedBooks = contextBooks(fallbackRow: row)
+        let selectedIDs = Set(selectedBooks.map(\.id))
+        let isBulk = selectedBooks.count > 1
 
         let menu = NSMenu()
 
         // Open
-        let openItem = NSMenuItem(title: "Open", action: #selector(contextOpen(_:)), keyEquivalent: "")
+        let openItem = NSMenuItem(title: isBulk ? "Open Selected" : "Open", action: #selector(contextOpen(_:)), keyEquivalent: "")
         openItem.target = self
-        openItem.representedObject = book
+        openItem.representedObject = selectedBooks
         menu.addItem(openItem)
 
         menu.addItem(.separator())
 
         // Like / Unlike
-        let likeTitle = likedIDs.contains(book.id) ? "Unlike" : "Like"
-        let likeItem  = NSMenuItem(title: likeTitle, action: #selector(contextLike(_:)), keyEquivalent: "")
-        likeItem.target = self
-        likeItem.representedObject = book
-        menu.addItem(likeItem)
+        if isBulk {
+            let likeItem = NSMenuItem(title: "Like Selected", action: #selector(contextLike(_:)), keyEquivalent: "")
+            likeItem.target = self
+            likeItem.representedObject = ["books": selectedBooks, "liked": true] as [String: Any]
+            menu.addItem(likeItem)
+            let unlikeItem = NSMenuItem(title: "Unlike Selected", action: #selector(contextLike(_:)), keyEquivalent: "")
+            unlikeItem.target = self
+            unlikeItem.representedObject = ["books": selectedBooks, "liked": false] as [String: Any]
+            menu.addItem(unlikeItem)
+        } else {
+            let likeTitle = likedIDs.contains(book.id) ? "Unlike" : "Like"
+            let likeItem  = NSMenuItem(title: likeTitle, action: #selector(contextLike(_:)), keyEquivalent: "")
+            likeItem.target = self
+            likeItem.representedObject = ["books": selectedBooks, "liked": !likedIDs.contains(book.id)] as [String: Any]
+            menu.addItem(likeItem)
+        }
 
-        let markReadItem = NSMenuItem(title: "Mark as Read", action: #selector(contextMarkRead(_:)), keyEquivalent: "")
+        let markReadItem = NSMenuItem(title: isBulk ? "Mark Selected as Read" : "Mark as Read", action: #selector(contextMarkRead(_:)), keyEquivalent: "")
         markReadItem.target = self
-        markReadItem.representedObject = book
+        markReadItem.representedObject = selectedBooks
         menu.addItem(markReadItem)
 
-        let skipItem = NSMenuItem(title: "Skip", action: #selector(contextSkip(_:)), keyEquivalent: "")
+        let resetItem = NSMenuItem(title: "Reset Reading Progress", action: #selector(contextResetProgress(_:)), keyEquivalent: "")
+        resetItem.target = self
+        resetItem.representedObject = selectedBooks
+        menu.addItem(resetItem)
+
+        let skipItem = NSMenuItem(title: isBulk ? "Skip Selected" : "Skip", action: #selector(contextSkip(_:)), keyEquivalent: "")
         skipItem.target = self
-        skipItem.representedObject = book
+        skipItem.representedObject = selectedBooks
         menu.addItem(skipItem)
 
         menu.addItem(.separator())
@@ -201,14 +223,14 @@ final class EmailSidebarViewController: NSViewController,
             .filter { $0 != "Skipped" || ReaderPreferences.shared.showSkippedCollection }
             .sorted()
         for name in sortedNames {
-            let isMember = collectionMembership[name]?.contains(book.id) == true
+            let isMember = selectedIDs.isSubset(of: collectionMembership[name] ?? [])
             let item = NSMenuItem(
                 title: isMember ? "✓ \(name)" : name,
                 action: #selector(contextToggleCollection(_:)),
                 keyEquivalent: ""
             )
             item.target = self
-            item.representedObject = ["book": book, "collection": name] as [String: Any]
+            item.representedObject = ["books": selectedBooks, "collection": name] as [String: Any]
             collectionSubmenu.addItem(item)
         }
         if !sortedNames.isEmpty {
@@ -216,7 +238,7 @@ final class EmailSidebarViewController: NSViewController,
         }
         let newItem = NSMenuItem(title: "New Collection…", action: #selector(contextNewCollection(_:)), keyEquivalent: "")
         newItem.target = self
-        newItem.representedObject = book
+        newItem.representedObject = selectedBooks
         collectionSubmenu.addItem(newItem)
 
         let collectionMenuItem = NSMenuItem(title: "Add to Collection", action: nil, keyEquivalent: "")
@@ -227,35 +249,104 @@ final class EmailSidebarViewController: NSViewController,
     }
 
     @objc private func contextOpen(_ sender: NSMenuItem) {
-        guard let book = sender.representedObject as? CalibreBook else { return }
-        onContextMenuOpen?(book)
+        guard let books = sender.representedObject as? [CalibreBook] else { return }
+        onContextMenuOpen?(books)
     }
 
     @objc private func contextLike(_ sender: NSMenuItem) {
-        guard let book = sender.representedObject as? CalibreBook else { return }
-        onContextMenuLike?(book)
+        guard let dict = sender.representedObject as? [String: Any],
+              let books = dict["books"] as? [CalibreBook],
+              let liked = dict["liked"] as? Bool else { return }
+        onContextMenuSetLiked?(books, liked)
     }
 
     @objc private func contextSkip(_ sender: NSMenuItem) {
-        guard let book = sender.representedObject as? CalibreBook else { return }
-        onContextMenuSkip?(book)
+        guard let books = sender.representedObject as? [CalibreBook] else { return }
+        onContextMenuSkip?(books)
     }
 
     @objc private func contextMarkRead(_ sender: NSMenuItem) {
-        guard let book = sender.representedObject as? CalibreBook else { return }
-        onContextMenuMarkRead?(book)
+        guard let books = sender.representedObject as? [CalibreBook] else { return }
+        onContextMenuMarkRead?(books)
+    }
+
+    @objc private func contextResetProgress(_ sender: NSMenuItem) {
+        guard let books = sender.representedObject as? [CalibreBook] else { return }
+        onContextMenuResetProgress?(books)
     }
 
     @objc private func contextToggleCollection(_ sender: NSMenuItem) {
         guard let dict = sender.representedObject as? [String: Any],
-              let book = dict["book"] as? CalibreBook,
+              let books = dict["books"] as? [CalibreBook],
               let name = dict["collection"] as? String else { return }
-        onContextMenuToggleCollection?(book, name)
+        onContextMenuToggleCollection?(books, name)
     }
 
     @objc private func contextNewCollection(_ sender: NSMenuItem) {
-        guard let book = sender.representedObject as? CalibreBook else { return }
-        onContextMenuNewCollection?(book)
+        guard let books = sender.representedObject as? [CalibreBook] else { return }
+        onContextMenuNewCollection?(books)
+    }
+
+    func updateSelectionForContextClick(row: Int, event: NSEvent) {
+        guard row >= 0, row < books.count else { return }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if modifiers.contains(.command) {
+            if tableView.selectedRowIndexes.contains(row) {
+                tableView.deselectRow(row)
+            } else {
+                tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: true)
+            }
+        } else if modifiers.contains(.shift), tableView.selectedRow >= 0 {
+            let lower = min(tableView.selectedRow, row)
+            let upper = max(tableView.selectedRow, row)
+            tableView.selectRowIndexes(IndexSet(integersIn: lower...upper), byExtendingSelection: false)
+        } else if !tableView.selectedRowIndexes.contains(row) {
+            tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+    }
+
+    private func contextBooks(fallbackRow row: Int) -> [CalibreBook] {
+        let selected = tableView.selectedRowIndexes.compactMap { idx in
+            idx >= 0 && idx < books.count ? books[idx] : nil
+        }
+        return selected.isEmpty ? [books[row]] : selected
+    }
+
+    private func reloadBooksPreservingSingleSelection(from oldBooks: [CalibreBook]) {
+        guard let tableView else { return }
+        let selectedIndexes = tableView.selectedRowIndexes
+        let selectedID = selectedIndexes.count == 1
+            ? selectedIndexes.compactMap { idx in idx >= 0 && idx < oldBooks.count ? oldBooks[idx].id : nil }.first
+            : nil
+
+        isRestoringSelection = true
+        tableView.reloadData()
+        tableView.deselectAll(nil)
+
+        if let selectedID, let restoredIndex = books.firstIndex(where: { $0.id == selectedID }) {
+            tableView.selectRowIndexes(IndexSet(integer: restoredIndex), byExtendingSelection: false)
+        }
+        isRestoringSelection = false
+
+        onSelect?(singleSelectedBook())
+    }
+
+    private func reloadVisibleRows() {
+        guard let tableView else { return }
+        let visibleRows = tableView.rows(in: tableView.visibleRect)
+        guard visibleRows.location != NSNotFound, visibleRows.length > 0 else { return }
+        tableView.reloadData(
+            forRowIndexes: IndexSet(integersIn: visibleRows.location..<visibleRows.location + visibleRows.length),
+            columnIndexes: IndexSet(integersIn: 0..<tableView.numberOfColumns)
+        )
+    }
+
+    private func singleSelectedBook() -> CalibreBook? {
+        let indexes = tableView.selectedRowIndexes
+        guard indexes.count == 1, let row = indexes.first, row >= 0, row < books.count else {
+            return nil
+        }
+        return books[row]
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
@@ -263,13 +354,14 @@ final class EmailSidebarViewController: NSViewController,
 
 // MARK: - EmailBookCellView
 
-/// Fixed 64pt table cell: title / author / progress text + 2px progress bar.
+/// Fixed 64pt table cell: title / author / inline progress row.
 final class EmailBookCellView: NSTableCellView {
 
     private let titleLabel    = NSTextField(labelWithString: "")
     private let authorLabel   = NSTextField(labelWithString: "")
     private let progressLabel = NSTextField(labelWithString: "")
-    private let progressBar   = NSView()
+    private let progressTrack = NSView()
+    private let progressFill  = NSView()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -300,10 +392,17 @@ final class EmailBookCellView: NSTableCellView {
         progressLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(progressLabel)
 
-        progressBar.wantsLayer = true
-        progressBar.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
-        progressBar.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(progressBar)
+        progressTrack.wantsLayer = true
+        progressTrack.layer?.backgroundColor = NSColor.separatorColor.withAlphaComponent(0.45).cgColor
+        progressTrack.layer?.cornerRadius = 2
+        progressTrack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(progressTrack)
+
+        progressFill.wantsLayer = true
+        progressFill.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        progressFill.layer?.cornerRadius = 2
+        progressFill.translatesAutoresizingMaskIntoConstraints = false
+        progressTrack.addSubview(progressFill)
 
         NSLayoutConstraint.activate([
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
@@ -315,12 +414,18 @@ final class EmailBookCellView: NSTableCellView {
             authorLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
 
             progressLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            progressLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
             progressLabel.topAnchor.constraint(equalTo: authorLabel.bottomAnchor, constant: 3),
+            progressLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 42),
 
-            progressBar.leadingAnchor.constraint(equalTo: leadingAnchor),
-            progressBar.bottomAnchor.constraint(equalTo: bottomAnchor),
-            progressBar.heightAnchor.constraint(equalToConstant: 2),
+            progressTrack.leadingAnchor.constraint(equalTo: progressLabel.trailingAnchor, constant: 8),
+            progressTrack.trailingAnchor.constraint(lessThanOrEqualTo: titleLabel.trailingAnchor),
+            progressTrack.centerYAnchor.constraint(equalTo: progressLabel.centerYAnchor),
+            progressTrack.widthAnchor.constraint(greaterThanOrEqualToConstant: 56),
+            progressTrack.heightAnchor.constraint(equalToConstant: 4),
+
+            progressFill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
+            progressFill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
+            progressFill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
         ])
     }
 
@@ -331,7 +436,7 @@ final class EmailBookCellView: NSTableCellView {
         authorLabel.stringValue = book.displayAuthors
 
         if readPercent > 0.01 {
-            let pct = Int((readPercent * 100).rounded())
+            let pct = Int((min(readPercent, 1.0) * 100).rounded())
             progressLabel.stringValue = "\(pct)% read"
             progressLabel.textColor   = .controlAccentColor
         } else {
@@ -341,17 +446,17 @@ final class EmailBookCellView: NSTableCellView {
 
         progressWidthConstraint?.isActive = false
         if readPercent > 0.01 {
-            progressBar.isHidden = false
+            progressFill.isHidden = false
             let prop = NSLayoutConstraint(
-                item: progressBar, attribute: .width,
+                item: progressFill, attribute: .width,
                 relatedBy: .equal,
-                toItem: self, attribute: .width,
+                toItem: progressTrack, attribute: .width,
                 multiplier: CGFloat(min(readPercent, 1.0)), constant: 0
             )
             prop.isActive = true
             progressWidthConstraint = prop
         } else {
-            progressBar.isHidden = true
+            progressFill.isHidden = true
         }
     }
 }
@@ -366,6 +471,7 @@ final class SidebarTableView: NSTableView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
         let row   = self.row(at: point)
+        sidebarVC?.updateSelectionForContextClick(row: row, event: event)
         return sidebarVC?.contextMenu(for: row) ?? super.menu(for: event)
     }
 }

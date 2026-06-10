@@ -31,6 +31,19 @@ final class BookState {
     init(calibreID: Int) {
         self.calibreID = calibreID
     }
+
+    func markRead() {
+        totalReadPercent = 1.0
+    }
+
+    func resetReadingProgress() {
+        totalReadPercent = 0
+        lastSpineIndex = 0
+        lastCharacterOffset = 0
+        lastScrollOffset = 0
+        lastOpenedDate = Date(timeIntervalSince1970: 0)
+        totalReadingTimeSeconds = 0
+    }
 }
 
 // MARK: - Annotation (unified bookmark + highlight)

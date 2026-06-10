@@ -20,6 +20,9 @@ final class LibraryToolbarState {
     var sortField:    SortField       = .title
     var ascending:    Bool            = true
     var viewMode:     LibraryViewMode = .list
+    var groupBySeries: Bool {
+        didSet { UserDefaults.standard.set(groupBySeries, forKey: "groupBySeries") }
+    }
 
     var showFilterDrawer:   Bool = false
     var showCollections:    Bool = false
@@ -45,6 +48,10 @@ final class LibraryToolbarState {
     /// Registered by the active content view. Called on the main thread.
     var filterCommitHandler: ((FilterRule) -> Void)?
 
+    init() {
+        groupBySeries = UserDefaults.standard.bool(forKey: "groupBySeries")
+    }
+
     func registerFilterCommitHandler(_ handler: @escaping (FilterRule) -> Void) {
         filterCommitHandler = handler
     }
@@ -53,4 +60,3 @@ final class LibraryToolbarState {
 
     var hasActiveFilter: Bool { activeFilterResult != nil }
 }
-

@@ -42,6 +42,7 @@ struct LibraryRootView: View {
     }
 
     @State private var books: [CalibreBook] = []
+    @State private var items: [LibraryItem] = []
     @State private var hasNextPage  = false
     @State private var currentPage  = 0
     @State private var filteredCount: Int? = nil
@@ -50,6 +51,7 @@ struct LibraryRootView: View {
     @State private var ao3Metadata: [Int: AO3MetadataRecord] = [:]
     @State private var likedIDs: Set<Int> = []
     @State private var skippedIDs: Set<Int> = []
+    @State private var selectedIDs: Set<Int> = []
 
     private let pageSize = 25
     private var pageFetchLimit: Int { (pageSize * 3) + 1 }
@@ -64,14 +66,20 @@ struct LibraryRootView: View {
     }
 
     var body: some View {
-        rootContent
+        attachSheets(to: attachLifecycleHandlers(to: rootContent
             .background(libraryBGColor)
             .foregroundStyle(libraryTextColor)
-            .preferredColorScheme(prefs.resolvedLibraryColorScheme)
+            .preferredColorScheme(prefs.resolvedLibraryColorScheme)))
+    }
+
+    private func attachLifecycleHandlers<V: View>(to view: V) -> some View {
+        view
             .onChange(of: currentPage)                { loadPage() }
-            .onChange(of: toolbarState.sortField)     { currentPage = 0; loadPage() }
-            .onChange(of: toolbarState.ascending)     { currentPage = 0; loadPage() }
+            .onChange(of: toolbarState.sortField)     { selectedIDs.removeAll(); currentPage = 0; loadPage() }
+            .onChange(of: toolbarState.ascending)     { selectedIDs.removeAll(); currentPage = 0; loadPage() }
+            .onChange(of: toolbarState.groupBySeries) { selectedIDs.removeAll(); currentPage = 0; loadPage() }
             .onChange(of: toolbarState.searchText) {
+                selectedIDs.removeAll()
                 currentPage = 0
                 debouncer.schedule {
                     loadPage()
@@ -85,6 +93,7 @@ struct LibraryRootView: View {
                 }
             }
             .onChange(of: toolbarState.activeFilterResult?.calibreIDs) {
+                selectedIDs.removeAll()
                 currentPage = 0; loadPage()
             }
             .onChange(of: extractionRefreshToken) {
@@ -100,6 +109,7 @@ struct LibraryRootView: View {
             }
             .onChange(of: session.isOpen) {
                 if session.isOpen {
+                    selectedIDs.removeAll()
                     currentPage = 0
                     toolbarState.searchText = ""
                     toolbarState.activeFilterResult = nil
@@ -110,7 +120,7 @@ struct LibraryRootView: View {
                     loadPage()
                     refreshBookStates()
                 } else {
-                    books = []; bookStates = [:]
+                    books = []; bookStates = [:]; selectedIDs.removeAll()
                 }
             }
             .onAppear {
@@ -124,6 +134,10 @@ struct LibraryRootView: View {
                 // Deregister when this view leaves the hierarchy (view mode switch)
                 toolbarState.filterCommitHandler = nil
             }
+    }
+
+    private func attachSheets<V: View>(to view: V) -> some View {
+        view
             .sheet(isPresented: Binding(
                 get: { toolbarState.showFilterDrawer },
                 set: { toolbarState.showFilterDrawer = $0 }
@@ -177,7 +191,7 @@ struct LibraryRootView: View {
             } else if books.isEmpty && toolbarState.searchText.isEmpty && !toolbarState.hasActiveFilter {
                 loadingState
             } else {
-                bookList
+                itemList
             }
             Divider()
             footer
@@ -204,7 +218,7 @@ struct LibraryRootView: View {
             hasNextPage = raw.count > pageSize
             books = Array(raw.prefix(pageSize))
         } else if toolbarState.activeFilterResult != nil {
-            books = []; hasNextPage = false
+            books = []; items = []; hasNextPage = false
         } else {
             let raw = library.books(
                 offset: currentPage * pageSize, limit: pageFetchLimit,
@@ -215,7 +229,82 @@ struct LibraryRootView: View {
             hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
             books = Array(visible.prefix(pageSize))
         }
+        rebuildItems()
         loadAO3MetadataForCurrentPage()
+        pruneSelection()
+    }
+
+    private func rebuildItems() {
+        guard toolbarState.groupBySeries, let metaDB = session.metaDB, let library = session.library else {
+            items = books.map { .book($0) }
+            return
+        }
+        let pageBooks = books
+        Task {
+            let entries = (try? await metaDB.seriesEntries(for: pageBooks.map(\.id))) ?? []
+            let groupedEntries = Dictionary(grouping: entries.filter { !$0.isAnthology }, by: \.seriesName)
+            let seriesNames = groupedEntries.keys.sorted()
+            let allEntries = (try? await metaDB.seriesEntries(named: seriesNames)) ?? []
+            let allIDs = Array(Set(allEntries.map(\.calibreID)))
+            let allBooks = library.booksForIDs(allIDs)
+            let allMetadata = (try? await metaDB.ao3Metadata(for: allIDs)) ?? [:]
+            let placeholders = (try? await metaDB.placeholders(for: seriesNames)) ?? [:]
+            let byID = Dictionary(uniqueKeysWithValues: allBooks.map { ($0.id, $0) })
+            let entriesBySeries = Dictionary(grouping: allEntries.filter { !$0.isAnthology }, by: \.seriesName)
+            let pageSeriesNames = Set(seriesNames)
+            var collapsedIDs = Set<Int>()
+            var seriesByName: [String: SeriesGroup] = [:]
+
+            for (name, entries) in entriesBySeries {
+                let sortedEntries = entries.sorted { $0.seriesIndex < $1.seriesIndex }
+                let works = sortedEntries.compactMap { byID[$0.calibreID] }
+                guard works.count > 1 || pageSeriesNames.contains(name) else { continue }
+                guard works.allSatisfy({ !isAnthology($0) }) else { continue }
+                collapsedIDs.formUnion(works.map(\.id))
+                let metadata = works.compactMap { allMetadata[$0.id] }
+                let indices = sortedEntries.map(\.seriesIndex)
+                let missing = missingIndices(in: indices)
+                let tags = Array(Set(works.flatMap(\.tags) + metadata.flatMap(\.additionalTags))).sorted()
+                let fandoms = Array(Set(metadata.flatMap(\.fandoms))).sorted()
+                let authors = Array(Set(works.flatMap(\.authors))).sorted()
+                let descriptions = works.compactMap(\.displayComment)
+                seriesByName[name] = SeriesGroup(
+                    id: name,
+                    seriesName: name,
+                    works: works.sorted { left, right in
+                        (sortedEntries.first { $0.calibreID == left.id }?.seriesIndex ?? 0) <
+                        (sortedEntries.first { $0.calibreID == right.id }?.seriesIndex ?? 0)
+                    },
+                    allFandoms: fandoms,
+                    allTags: tags,
+                    allAuthors: authors,
+                    allDescriptions: descriptions,
+                    totalWordCount: metadata.compactMap(\.wordCount).reduce(0, +),
+                    earliestPublished: metadata.compactMap { parseISODate($0.publishedDate) }.min(),
+                    latestUpdated: metadata.compactMap { parseISODate($0.updatedDate) }.max(),
+                    missingIndices: missing,
+                    placeholders: placeholders[name] ?? [],
+                    isComplete: !metadata.isEmpty && metadata.allSatisfy(\.isComplete)
+                )
+            }
+
+            var nextItems: [LibraryItem] = []
+            var emittedSeries = Set<String>()
+            for book in pageBooks {
+                if let entry = entries.first(where: { $0.calibreID == book.id && !$0.isAnthology }),
+                   let group = seriesByName[entry.seriesName],
+                   !emittedSeries.contains(entry.seriesName) {
+                    nextItems.append(.series(group))
+                    emittedSeries.insert(entry.seriesName)
+                } else if !collapsedIDs.contains(book.id) {
+                    nextItems.append(.book(book))
+                }
+            }
+            await MainActor.run {
+                items = nextItems
+                ao3Metadata = allMetadata.filter { pageBooks.map(\.id).contains($0.key) }
+            }
+        }
     }
 
     private func loadAO3MetadataForCurrentPage() {
@@ -247,10 +336,11 @@ struct LibraryRootView: View {
             let currentLiked = (try? await session.collectionStore?.likedIDs()) ?? []
             let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
             await MainActor.run {
-                likedIDs = currentLiked
-                skippedIDs = currentSkipped
-                currentPage = 0
-                loadPage()
+            likedIDs = currentLiked
+            skippedIDs = currentSkipped
+            pruneSelection()
+            currentPage = 0
+            loadPage()
             }
         }
     }
@@ -281,6 +371,7 @@ struct LibraryRootView: View {
             )
             likedIDs = currentLikedIDs
             skippedIDs = currentSkipped
+            selectedIDs.removeAll()
             currentPage = 0; loadPage()
         }
     }
@@ -358,29 +449,71 @@ struct LibraryRootView: View {
         .background(Color(NSColor.controlBackgroundColor))
     }
 
-    private var bookList: some View {
-        List(books) { book in
-            BookListRow(
-                book: book,
-                bookState: bookStates[book.id],
-                ao3Metadata: ao3Metadata[book.id],
-                isLiked: likedIDs.contains(book.id),
-                modelContext: modelContext,
-                onTagTap: { tag, field in
-                    addOrReplaceRule(FilterRule(field: field, op: .equals, value: tag))
-                },
-                onAuthorTap: { author in
-                    addOrReplaceRule(FilterRule(field: .authorName, op: .equals, value: author))
-                },
-                onLikeToggle: { toggleLike(for: book) },
-                onSkip: { skip(book) },
-                onMarkRead: { markRead(book) }
-            )
-            .equatable()
-            .listRowSeparator(.visible)
-            .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+    private var itemList: some View {
+        List(items) { item in
+            itemRow(item)
         }
         .listStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func itemRow(_ item: LibraryItem) -> some View {
+        switch item {
+        case .book(let book):
+            bookRow(book)
+        case .series(let series):
+            seriesRow(series)
+        }
+    }
+
+    private func bookRow(_ book: CalibreBook) -> some View {
+        BookListRow(
+            book: book,
+            bookState: bookStates[book.id],
+            ao3Metadata: ao3Metadata[book.id],
+            isLiked: likedIDs.contains(book.id),
+            modelContext: modelContext,
+            onTagTap: { tag, field in
+                addOrReplaceRule(FilterRule(field: field, op: .equals, value: tag))
+            },
+            onAuthorTap: { author in
+                addOrReplaceRule(FilterRule(field: .authorName, op: .equals, value: author))
+            },
+            onOpenSelected: { open(selectedBooks(fallback: book)) },
+            onLikeToggle: { toggleLike(for: book) },
+            onLikeSelected: { setLiked(selectedBooks(fallback: book), liked: true) },
+            onUnlikeSelected: { setLiked(selectedBooks(fallback: book), liked: false) },
+            onSkip: { skip(selectedBooks(fallback: book)) },
+            onMarkRead: { markRead(selectedBooks(fallback: book)) },
+            onResetProgress: { resetProgress(selectedBooks(fallback: book)) },
+            selectedCount: selectedBooks(fallback: book).count,
+            selectedIDs: selectedBookIDs(fallback: book)
+        )
+        .equatable()
+        .listRowSeparator(.visible)
+        .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+    }
+
+    private func seriesRow(_ series: SeriesGroup) -> some View {
+        SeriesListRow(
+            series: series,
+            onOpen: { AppDelegate.shared?.openReaderWindow(target: .series(series), modelContext: modelContext) },
+            onShowWorks: { selectedIDs = Set(series.works.map(\.id)) },
+            onToggleAnthology: {
+                Task {
+                    try? await session.metaDB?.setAnthology(seriesName: series.seriesName, isAnthology: true)
+                    await MainActor.run { loadPage() }
+                }
+            },
+            onSavePlaceholder: { index, note in
+                Task {
+                    try? await session.metaDB?.upsertPlaceholder(seriesName: series.seriesName, partIndex: index, note: note)
+                    await MainActor.run { loadPage() }
+                }
+            }
+        )
+        .listRowSeparator(.visible)
+        .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
     }
 
     private func toggleLike(for book: CalibreBook) {
@@ -390,16 +523,94 @@ struct LibraryRootView: View {
         }
     }
 
-    private func skip(_ book: CalibreBook) {
+    private func open(_ books: [CalibreBook]) {
+        for book in books {
+            AppDelegate.shared?.openReaderWindow(book: book, modelContext: modelContext)
+        }
+    }
+
+    private func selectedBooks(fallback book: CalibreBook) -> [CalibreBook] {
+        let selected = books.filter { selectedIDs.contains($0.id) }
+        return selected.isEmpty ? [book] : selected
+    }
+
+    private func selectedBookIDs(fallback book: CalibreBook) -> [Int] {
+        let ids = selectedBooks(fallback: book).map(\.id)
+        return ids.isEmpty ? [book.id] : ids
+    }
+
+    private func pruneSelection() {
+        let visible = Set(books.map(\.id))
+        selectedIDs.formIntersection(visible)
+    }
+
+    private func setLiked(_ books: [CalibreBook], liked: Bool) {
+        let ids = books.map(\.id)
         Task {
-            try? await session.collectionStore?.skipBook(calibreID: book.id)
-            skippedIDs.insert(book.id)
+            try? await session.collectionStore?.setLiked(calibreIDs: ids, liked: liked)
+            likedIDs = (try? await session.collectionStore?.likedIDs()) ?? []
+        }
+    }
+
+    private func skip(_ books: [CalibreBook]) {
+        Task {
+            for book in books {
+                try? await session.collectionStore?.skipBook(calibreID: book.id)
+                skippedIDs.insert(book.id)
+            }
             applyFilterRules()
         }
     }
 
-    private func markRead(_ book: CalibreBook) {
-        let calibreID = book.id
+    private func markRead(_ books: [CalibreBook]) {
+        let ids = books.map(\.id)
+        for calibreID in ids {
+            let state = stateForMutation(calibreID)
+            state.markRead()
+            bookStates[calibreID] = state
+        }
+        try? modelContext.save()
+        Task {
+            for calibreID in ids {
+                try? await session.collectionStore?.syncAutomatedCollection(
+                    collectionID: SystemCollectionID.finished,
+                    calibreID: calibreID,
+                    shouldBeMember: true
+                )
+                try? await session.collectionStore?.syncAutomatedCollection(
+                    collectionID: SystemCollectionID.inProgress,
+                    calibreID: calibreID,
+                    shouldBeMember: false
+                )
+            }
+        }
+    }
+
+    private func resetProgress(_ books: [CalibreBook]) {
+        let ids = books.map(\.id)
+        for calibreID in ids {
+            let state = stateForMutation(calibreID)
+            state.resetReadingProgress()
+            bookStates[calibreID] = state
+        }
+        try? modelContext.save()
+        Task {
+            for calibreID in ids {
+                try? await session.collectionStore?.syncAutomatedCollection(
+                    collectionID: SystemCollectionID.finished,
+                    calibreID: calibreID,
+                    shouldBeMember: false
+                )
+                try? await session.collectionStore?.syncAutomatedCollection(
+                    collectionID: SystemCollectionID.inProgress,
+                    calibreID: calibreID,
+                    shouldBeMember: false
+                )
+            }
+        }
+    }
+
+    private func stateForMutation(_ calibreID: Int) -> BookState {
         var desc = FetchDescriptor<BookState>(
             predicate: #Predicate { $0.calibreID == calibreID }
         )
@@ -408,21 +619,7 @@ struct LibraryRootView: View {
         if state.modelContext == nil {
             modelContext.insert(state)
         }
-        state.totalReadPercent = 100
-        try? modelContext.save()
-        bookStates[calibreID] = state
-        Task {
-            try? await session.collectionStore?.syncAutomatedCollection(
-                collectionID: SystemCollectionID.finished,
-                calibreID: calibreID,
-                shouldBeMember: true
-            )
-            try? await session.collectionStore?.syncAutomatedCollection(
-                collectionID: SystemCollectionID.inProgress,
-                calibreID: calibreID,
-                shouldBeMember: false
-            )
-        }
+        return state
     }
 
     private var footer: some View {
@@ -468,9 +665,15 @@ struct BookListRow: View, Equatable {
     let modelContext: ModelContext
     let onTagTap: (String, FilterField) -> Void
     let onAuthorTap: (String) -> Void
+    let onOpenSelected: () -> Void
     let onLikeToggle: () -> Void
+    let onLikeSelected: () -> Void
+    let onUnlikeSelected: () -> Void
     let onSkip: () -> Void
     let onMarkRead: () -> Void
+    let onResetProgress: () -> Void
+    let selectedCount: Int
+    let selectedIDs: [Int]
 
     static func == (lhs: BookListRow, rhs: BookListRow) -> Bool {
         lhs.book.id                       == rhs.book.id
@@ -486,6 +689,7 @@ struct BookListRow: View, Equatable {
             && lhs.bookState?.calibreID        == rhs.bookState?.calibreID
             && lhs.isLiked                     == rhs.isLiked
             && lhs.bookState?.totalReadPercent == rhs.bookState?.totalReadPercent
+            && lhs.selectedCount               == rhs.selectedCount
     }
 
     private let buckets: AO3TagBuckets
@@ -493,9 +697,15 @@ struct BookListRow: View, Equatable {
     init(book: CalibreBook, bookState: BookState?, ao3Metadata: AO3MetadataRecord?, isLiked: Bool, modelContext: ModelContext,
          onTagTap: @escaping (String, FilterField) -> Void,
          onAuthorTap: @escaping (String) -> Void,
+         onOpenSelected: @escaping () -> Void,
          onLikeToggle: @escaping () -> Void,
+         onLikeSelected: @escaping () -> Void,
+         onUnlikeSelected: @escaping () -> Void,
          onSkip: @escaping () -> Void,
-         onMarkRead: @escaping () -> Void) {
+         onMarkRead: @escaping () -> Void,
+         onResetProgress: @escaping () -> Void,
+         selectedCount: Int,
+         selectedIDs: [Int]) {
         self.book         = book
         self.bookState    = bookState
         self.ao3Metadata  = ao3Metadata
@@ -503,9 +713,15 @@ struct BookListRow: View, Equatable {
         self.modelContext = modelContext
         self.onTagTap     = onTagTap
         self.onAuthorTap  = onAuthorTap
+        self.onOpenSelected = onOpenSelected
         self.onLikeToggle = onLikeToggle
+        self.onLikeSelected = onLikeSelected
+        self.onUnlikeSelected = onUnlikeSelected
         self.onSkip       = onSkip
         self.onMarkRead   = onMarkRead
+        self.onResetProgress = onResetProgress
+        self.selectedCount = selectedCount
+        self.selectedIDs = selectedIDs
         self.buckets      = AO3TagBuckets.from(tags: book.tags)
     }
 
@@ -523,15 +739,21 @@ struct BookListRow: View, Equatable {
             AppDelegate.shared?.openReaderWindow(book: book, modelContext: modelContext)
         }
         .contextMenu {
-            Button("Open") {
-                AppDelegate.shared?.openReaderWindow(book: book, modelContext: modelContext)
+            Button(selectedCount == 1 ? "Open" : "Open Selected") {
+                onOpenSelected()
             }
             Divider()
-            Button(isLiked ? "Unlike" : "Like") { onLikeToggle() }
-            Button("Mark as Read") { onMarkRead() }
-            Button("Skip") { onSkip() }
+            if selectedCount == 1 {
+                Button(isLiked ? "Unlike" : "Like") { onLikeToggle() }
+            } else {
+                Button("Like Selected") { onLikeSelected() }
+                Button("Unlike Selected") { onUnlikeSelected() }
+            }
+            Button(selectedCount == 1 ? "Mark as Read" : "Mark Selected as Read") { onMarkRead() }
+            Button("Reset Reading Progress") { onResetProgress() }
+            Button(selectedCount == 1 ? "Skip" : "Skip Selected") { onSkip() }
             Divider()
-            AddToCollectionMenu(book: book)
+            AddToCollectionMenu(calibreIDs: selectedIDs)
         }
     }
 
@@ -624,7 +846,7 @@ struct BookListRow: View, Equatable {
                 if !k.isEmpty  { statChip(k,  icon: "heart") }
                 if let ao3Kudos { statChip(Self.formatKudos(ao3Kudos), icon: "heart") }
                 if let p = pct, p > 0 {
-                    statChip(String(format: "%.0f%% read", p * 100), icon: "book.pages")
+                    statChip(String(format: "%.0f%% read", min(p, 1.0) * 100), icon: "book.pages")
                 }
                 Spacer()
             }
@@ -768,5 +990,133 @@ struct FlowLayout: Layout {
         rows.append((startIndex: rowStart, y: y, height: rowH))
         cache.rows = rows
         cache.totalHeight = y + rowH
+    }
+}
+
+private func isAnthology(_ book: CalibreBook) -> Bool {
+    guard let comment = book.displayComment else { return false }
+    let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.range(of: "Anthology", options: [.caseInsensitive, .anchored]) != nil
+}
+
+private func missingIndices(in indices: [Int]) -> [Int] {
+    let unique = Array(Set(indices)).sorted()
+    guard let first = unique.first, let last = unique.last, last > first else { return [] }
+    let present = Set(unique)
+    return (first...last).filter { !present.contains($0) }
+}
+
+private func parseISODate(_ value: String?) -> Date? {
+    guard let value, !value.isEmpty else { return nil }
+    let iso = ISO8601DateFormatter()
+    if let date = iso.date(from: value) { return date }
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd"
+    return formatter.date(from: value)
+}
+
+private struct SeriesListRow: View {
+    let series: SeriesGroup
+    let onOpen: () -> Void
+    let onShowWorks: () -> Void
+    let onToggleAnthology: () -> Void
+    let onSavePlaceholder: (Int, String?) -> Void
+
+    @State private var showIndex = false
+    @State private var placeholderIndex = ""
+    @State private var placeholderNote = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(series.seriesName)
+                    .font(.headline.weight(.semibold))
+                    .lineLimit(2)
+                Text("\(series.works.count) works")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if !series.displayWordCount.isEmpty {
+                    Text(series.displayWordCount)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if !series.dateRangeText.isEmpty {
+                    Text(series.dateRangeText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    showIndex.toggle()
+                } label: {
+                    Image(systemName: series.missingIndices.isEmpty ? "list.number" : "exclamationmark.triangle.fill")
+                }
+                .buttonStyle(.borderless)
+                .help(series.missingIndices.isEmpty ? "Show series index" : "Missing works")
+                .popover(isPresented: $showIndex) { indexPopover }
+            }
+            Text(series.displayAuthors)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            if !series.allFandoms.isEmpty || !series.allTags.isEmpty {
+                FlowLayout(spacing: 4) {
+                    ForEach(Array((series.allFandoms + series.allTags).prefix(10)), id: \.self) { tag in
+                        Text(tag)
+                            .font(.caption2)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.accentColor.opacity(0.10))
+                            .clipShape(Capsule())
+                    }
+                }
+            }
+            if !series.allDescriptions.isEmpty {
+                Text(series.allDescriptions.joined(separator: "\n\n"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(4)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2, perform: onOpen)
+        .contextMenu {
+            Button("Open Series", action: onOpen)
+            Button("Show Individual Works", action: onShowWorks)
+            Button("Mark as Anthology", action: onToggleAnthology)
+        }
+    }
+
+    private var indexPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(series.seriesName).font(.headline)
+            ForEach(Array(series.works.enumerated()), id: \.element.id) { offset, work in
+                HStack {
+                    Text("\(offset + 1).")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, alignment: .trailing)
+                    Text(work.displayTitle).lineLimit(1)
+                }
+            }
+            if !series.missingIndices.isEmpty {
+                Divider()
+                Text("Missing: \(series.missingIndices.map(String.init).joined(separator: ", "))")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                HStack {
+                    TextField("Part", text: $placeholderIndex)
+                        .frame(width: 48)
+                    TextField("Note", text: $placeholderNote)
+                    Button("Save") {
+                        guard let index = Int(placeholderIndex) else { return }
+                        onSavePlaceholder(index, placeholderNote.isEmpty ? nil : placeholderNote)
+                        placeholderIndex = ""
+                        placeholderNote = ""
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: 340)
     }
 }

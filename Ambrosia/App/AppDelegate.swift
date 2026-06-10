@@ -76,6 +76,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ReaderWindowController.open(book: book, modelContainer: modelContext.container)
     }
 
+    func openReaderWindow(target: ReadingTarget, modelContext: ModelContext) {
+        switch target {
+        case .singleBook(let book):
+            openReaderWindow(book: book, modelContext: modelContext)
+        case .series(let series):
+            guard let pathStr = LibraryRegistry.shared.activePath else {
+                showOpenError("No library open.")
+                return
+            }
+            let libraryRoot = URL(fileURLWithPath: pathStr)
+            for book in series.works {
+                guard let epubURL = book.epubURL(libraryRoot: libraryRoot),
+                      FileManager.default.fileExists(atPath: epubURL.path) else {
+                    showOpenError("EPUB file not found: \(book.displayTitle)")
+                    return
+                }
+            }
+            ReaderWindowController.open(target: target, modelContainer: modelContext.container)
+        }
+    }
+
     private func showOpenError(_ message: String) {
         let alert = NSAlert()
         alert.messageText = "Could Not Open Book"

@@ -37,6 +37,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     // MARK: - Dependencies
 
+    let target: ReadingTarget
     let book: CalibreBook
     let modelContainer: ModelContainer
 
@@ -64,7 +65,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     // Pending annotation captured at mouseup
     private var pendingAnnotation: Annotation?
     private var pendingCursorX: CGFloat = 0
-    private var pendingCursorPageY: CGFloat = 0
+    private var pendingCursorY: CGFloat = 0
+    private var pendingMenuAnchorPoint: CGPoint?
 
     // Active popovers
     private var annotationPopover: NSPopover?
@@ -93,11 +95,20 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     }
     private var bookState: BookState?
     private var annotations: [Annotation] = []
+    var onReadingProgressChanged: (() -> Void)?
 
     // MARK: - Init
 
     init(book: CalibreBook, modelContainer: ModelContainer) {
+        self.target         = .singleBook(book)
         self.book           = book
+        self.modelContainer = modelContainer
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    init(target: ReadingTarget, modelContainer: ModelContainer) {
+        self.target         = target
+        self.book           = target.primaryBook
         self.modelContainer = modelContainer
         super.init(nibName: nil, bundle: nil)
     }
@@ -185,27 +196,66 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             await MainActor.run { self.showError("No library open.") }; return
         }
         let libraryRoot = URL(fileURLWithPath: pathStr)
-        guard let epubURL = book.epubURL(libraryRoot: libraryRoot),
-              FileManager.default.fileExists(atPath: epubURL.path) else {
-            await MainActor.run { self.showError("EPUB file not found: \(self.book.displayTitle)") }; return
-        }
-
         do {
-            var p = EPUBParser(epubURL: epubURL)
-            try p.parse()
-            let imgBase = try EPUBParser.extractImages(from: epubURL, calibreID: book.id)
-            let html    = try p.mergedHTML(userCSS: ReaderPreferences.shared.css)
+            let loaded = try loadHTML(for: target, libraryRoot: libraryRoot)
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                self.parser       = p
-                self.imageBaseURL = imgBase
-                self.currentHTML  = html
+                self.parser       = loaded.parser
+                self.imageBaseURL = loaded.imageBaseURL
+                self.currentHTML  = loaded.html
                 self.loadCurrentHTML()
             }
         } catch {
             await MainActor.run { self.showError(error.localizedDescription) }
         }
+    }
+
+    private func loadHTML(for target: ReadingTarget, libraryRoot: URL) throws -> (parser: EPUBParser?, imageBaseURL: URL?, html: String) {
+        switch target {
+        case .singleBook(let book):
+            guard let epubURL = book.epubURL(libraryRoot: libraryRoot),
+                  FileManager.default.fileExists(atPath: epubURL.path) else {
+                throw NSError(domain: "Ambrosia.Reader", code: 1, userInfo: [NSLocalizedDescriptionKey: "EPUB file not found: \(book.displayTitle)"])
+            }
+            var p = EPUBParser(epubURL: epubURL)
+            try p.parse()
+            let imgBase = try EPUBParser.extractImages(from: epubURL, calibreID: book.id)
+            let html = try p.mergedHTML(userCSS: ReaderPreferences.shared.css)
+            return (p, imgBase, html)
+
+        case .series(let series):
+            var firstParser: EPUBParser?
+            var firstImageBaseURL: URL?
+            var parts: [String] = []
+            for (offset, work) in series.works.enumerated() {
+                guard let epubURL = work.epubURL(libraryRoot: libraryRoot),
+                      FileManager.default.fileExists(atPath: epubURL.path) else {
+                    throw NSError(domain: "Ambrosia.Reader", code: 2, userInfo: [NSLocalizedDescriptionKey: "EPUB file not found: \(work.displayTitle)"])
+                }
+                var parser = EPUBParser(epubURL: epubURL)
+                try parser.parse()
+                let imageBase = try EPUBParser.extractImages(from: epubURL, calibreID: work.id)
+                if offset == 0 {
+                    firstParser = parser
+                    firstImageBaseURL = imageBase
+                }
+                let breakHTML = """
+                <div class="ambrosia-series-break"><h2>Work \(offset + 1): \(Self.escapeHTML(work.displayTitle))</h2></div>
+                """
+                let workHTML = try parser.mergedHTML(userCSS: ReaderPreferences.shared.css)
+                parts.append(breakHTML + workHTML)
+            }
+            return (firstParser, firstImageBaseURL, parts.joined(separator: "\n"))
+        }
+    }
+
+    private static func escapeHTML(_ string: String) -> String {
+        string
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
     // MARK: - HTML reload
@@ -390,11 +440,18 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private func injectScrollTracker() {
         let js = """
         (function() {
-            window.addEventListener('scroll', function() {
+            function sendPosition() {
+                var doc = document.documentElement;
+                var maxScroll = Math.max(1, doc.scrollHeight - window.innerHeight);
+                var percent = Math.max(0, Math.min(1, window.scrollY / maxScroll));
                 window.webkit.messageHandlers.positionUpdate.postMessage(
-                    JSON.stringify({ scrollY: window.scrollY })
+                    JSON.stringify({ scrollY: window.scrollY, percent: percent })
                 );
+            }
+            window.addEventListener('scroll', function() {
+                sendPosition();
             }, { passive: true });
+            sendPosition();
         })();
         """
         webView.evaluateJavaScript(js, completionHandler: nil)
@@ -606,6 +663,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private func flushPosition() {
         guard bookState != nil else { return }
         try? saveContext.save()
+        onReadingProgressChanged?()
     }
 
     // MARK: - WKScriptMessageHandler
@@ -626,6 +684,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                   let y    = json["scrollY"] as? Double
             else { return }
             bookState?.lastScrollOffset = y
+            if let percent = Self.double(from: json["percent"]) {
+                bookState?.totalReadPercent = min(max(percent, 0), 1)
+            }
 
         case "pageAction":
             guard let body = message.body as? String else { return }
@@ -639,21 +700,21 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                    let data = body.data(using: .utf8),
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                     let cursorX    = Self.cgFloat(from: json["cursorX"])
-                    let cursorPageY = Self.cgFloat(from: json["cursorPageY"])
+                    let cursorY = Self.cgFloat(from: json["cursorY"])
                     pendingCursorX    = cursorX > 0 ? cursorX : webView.bounds.midX
-                    pendingCursorPageY = cursorPageY > 0 ? cursorPageY : webView.bounds.midY
+                    pendingCursorY = cursorY > 0 ? cursorY : webView.bounds.midY
                 }
             }
 
         case "highlightTapped":
-            guard let (idStr, clientX, pageY) = HighlightBridge.decodeTap(from: message) else { return }
+            guard let (idStr, clientX, clientY) = HighlightBridge.decodeTap(from: message) else { return }
             let idWithDashes = idStr.inserting(dashes: true)
             guard let uuid = UUID(uuidString: idWithDashes),
                   let annotation = annotations.first(where: { $0.id == uuid }),
                   let note = annotation.note, !note.isEmpty
             else { return }
             DispatchQueue.main.async { [weak self] in
-                self?.presentNotePopover(note: note, clientX: clientX, pageY: pageY)
+                self?.presentNotePopover(note: note, clientX: clientX, clientY: clientY)
             }
 
         default:
@@ -832,42 +893,47 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         popover.contentSize = NSSize(width: 320, height: 300)
         annotationPopover = popover
 
-        let cx  = pendingCursorX
-        let cpy = pendingCursorPageY
-        // In paginated mode scrollLeft is non-zero; in scroll mode scrollY is non-zero.
-        // The JS here reads whichever dimension is relevant to convert pageY to clientY.
-        webView.evaluateJavaScript("({ scrollY: window.scrollY, scrollX: document.documentElement.scrollLeft })") { [weak self] result, _ in
-            guard let self else { return }
-            let dict   = result as? [String: Any] ?? [:]
-            let scrollY = Self.cgFloat(from: dict["scrollY"])
-            let clientY = cpy - scrollY
-            let viewX   = cx
-            let viewY   = self.webView.bounds.height - clientY
-            let anchor  = CGRect(x: viewX, y: viewY, width: 1, height: 1)
-            popover.show(relativeTo: anchor, of: self.webView, preferredEdge: .maxY)
-        }
+        let anchor = pendingMenuAnchorPoint.map(webViewAnchorRect(point:))
+            ?? webViewAnchorRect(clientX: pendingCursorX, clientY: pendingCursorY)
+        pendingMenuAnchorPoint = nil
+        popover.show(relativeTo: anchor, of: webView, preferredEdge: .minY)
     }
 
     // MARK: - Note popup
 
-    private func presentNotePopover(note: String, clientX: CGFloat, pageY: CGFloat) {
+    private func presentNotePopover(note: String, clientX: CGFloat, clientY: CGFloat) {
         notePopover?.close()
-        let noteView = NotePopoverView(note: note)
+        let noteView = NotePopoverView(
+            note: note
+        )
         let popover = NSPopover()
         popover.contentViewController = NSHostingController(rootView: noteView)
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 240, height: 80)
+        popover.contentSize = NSSize(width: 260, height: 150)
         notePopover = popover
 
-        webView.evaluateJavaScript("window.scrollY") { [weak self] result, _ in
-            guard let self else { return }
-            let scrollY = Self.cgFloat(from: result)
-            let clientY = pageY - scrollY
-            let viewX   = clientX
-            let viewY   = self.webView.bounds.height - clientY
-            let anchor  = CGRect(x: viewX, y: viewY, width: 1, height: 1)
-            popover.show(relativeTo: anchor, of: self.webView, preferredEdge: .maxY)
-        }
+        let anchor = webViewAnchorRect(point: webViewPoint(clientX: clientX, clientY: clientY))
+        popover.show(relativeTo: anchor, of: webView, preferredEdge: .minY)
+    }
+
+    private func webViewAnchorRect(clientX: CGFloat, clientY: CGFloat) -> CGRect {
+        webViewAnchorRect(point: webViewPoint(clientX: clientX, clientY: clientY))
+    }
+
+    fileprivate func setPendingMenuAnchorPoint(_ point: CGPoint) {
+        pendingMenuAnchorPoint = point
+    }
+
+    private func webViewAnchorRect(point: CGPoint) -> CGRect {
+        let maxX = max(0, webView.bounds.width - 1)
+        let maxY = max(0, webView.bounds.height - 1)
+        let x = min(max(point.x, 0), maxX)
+        let y = min(max(point.y, 0), maxY)
+        return CGRect(x: x, y: y, width: 1, height: 1)
+    }
+
+    private func webViewPoint(clientX: CGFloat, clientY: CGFloat) -> CGPoint {
+        CGPoint(x: clientX, y: clientY)
     }
 
     // MARK: - Restore annotations
@@ -1089,15 +1155,18 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             annotations: annotations,
             onJump: { [weak self] annotation in self?.jumpToAnnotation(annotation) },
             onDelete: { [weak self] id in
-                guard let self else { return }
-                annotations = annotations.filter { $0.id != id }
-                Task { try? await AppDelegate.shared?.session.metaDB?.deleteAnnotation(
-                    id: id, calibreID: self.book.id) }
-                self.flushPosition()
-                self.refreshSidebarIfVisible()
-                HighlightBridge.removeHighlight(id: id, from: self.webView)
+                self?.deleteAnnotation(id: id)
             }
         )
+    }
+
+    private func deleteAnnotation(id: UUID) {
+        annotations = annotations.filter { $0.id != id }
+        Task { try? await AppDelegate.shared?.session.metaDB?.deleteAnnotation(
+            id: id, calibreID: book.id) }
+        flushPosition()
+        refreshSidebarIfVisible()
+        HighlightBridge.removeHighlight(id: id, from: webView)
     }
 
     private func refreshSidebarIfVisible() {
@@ -1114,6 +1183,13 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         if let v = value as? Int      { return CGFloat(v) }
         if let v = value as? NSNumber { return CGFloat(truncating: v) }
         return 0
+    }
+
+    private static func double(from value: Any?) -> Double? {
+        if let v = value as? Double { return v }
+        if let v = value as? Int { return Double(v) }
+        if let v = value as? NSNumber { return v.doubleValue }
+        return nil
     }
 
     private static func nsColor(hex: String) -> NSColor? {
@@ -1225,6 +1301,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
 private struct NotePopoverView: View {
     let note: String
+
     var body: some View {
         ScrollView {
             Text(note)
@@ -1233,7 +1310,7 @@ private struct NotePopoverView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
         }
-        .frame(width: 240)
+        .frame(width: 260)
         .frame(maxHeight: 160)
     }
 }
@@ -1303,6 +1380,8 @@ private class ReaderMenuWebView: WKWebView {
         }
 
         guard let vc = viewController else { super.willOpenMenu(menu, with: event); return }
+        let menuPoint = convert(event.locationInWindow, from: nil)
+        vc.setPendingMenuAnchorPoint(menuPoint)
 
         let prefs = ReaderPreferences.shared.contextMenu
         var idx = 0

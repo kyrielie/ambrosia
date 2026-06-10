@@ -201,7 +201,7 @@ private struct BookDetailContent: View {
     private func progressRow(_ pct: Double) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(String(format: "%.0f%% read", pct * 100))
+                Text(String(format: "%.0f%% read", min(pct, 1.0) * 100))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()

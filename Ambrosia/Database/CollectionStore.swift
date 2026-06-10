@@ -63,6 +63,12 @@ actor CollectionStore {
         )
     }
 
+    func bulkRemove(calibreIDs: [Int], from collectionID: String) async throws {
+        for id in calibreIDs {
+            try await remove(calibreID: id, from: collectionID)
+        }
+    }
+
     func toggle(calibreID: Int, in collectionID: String) async throws {
         if try await isMember(calibreID: calibreID, of: collectionID) {
             try await remove(calibreID: calibreID, from: collectionID)
@@ -73,6 +79,14 @@ actor CollectionStore {
 
     func toggleLiked(calibreID: Int) async throws {
         try await toggle(calibreID: calibreID, in: SystemCollectionID.liked)
+    }
+
+    func setLiked(calibreIDs: [Int], liked: Bool) async throws {
+        if liked {
+            try await bulkAdd(calibreIDs: calibreIDs, to: SystemCollectionID.liked)
+        } else {
+            try await bulkRemove(calibreIDs: calibreIDs, from: SystemCollectionID.liked)
+        }
     }
 
     func bulkAdd(calibreIDs: [Int], to collectionID: String) async throws {

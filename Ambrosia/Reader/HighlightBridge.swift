@@ -35,10 +35,8 @@ enum HighlightBridge {
             var spineIndex = window.currentSpineIndex || 0;
 
             // Cursor position at mouseup: clientX/Y is viewport-relative.
-            // Pass pageY (= clientY + scrollY) so Swift can convert correctly
-            // regardless of scroll position at the time the menu item fires.
             var cursorX = e.clientX;
-            var cursorPageY = e.clientY + window.scrollY;
+            var cursorY = e.clientY;
 
             window.__ambrosiaPendingAnnotation = {
                 startChar: startChar, endChar: endChar,
@@ -48,7 +46,7 @@ enum HighlightBridge {
             window.webkit.messageHandlers.highlightAdded.postMessage(JSON.stringify({
                 startChar: startChar, endChar: endChar,
                 selectedText: sel.toString(), spineIndex: spineIndex,
-                cursorX: cursorX, cursorPageY: cursorPageY
+                cursorX: cursorX, cursorY: cursorY
             }));
         });
     })();
@@ -182,8 +180,7 @@ enum HighlightBridge {
                             window.webkit.messageHandlers.highlightTapped.postMessage(JSON.stringify({
                                 id: baseHid,
                                 x: e.clientX,
-                                // pageY is document-relative; Swift subtracts scrollY to get clientY
-                                pageY: e.pageY
+                                y: e.clientY
                             }));
                         };
                     }(hid));
@@ -263,15 +260,15 @@ enum HighlightBridge {
         )
     }
 
-    static func decodeTap(from message: WKScriptMessage) -> (id: String, x: CGFloat, pageY: CGFloat)? {
+    static func decodeTap(from message: WKScriptMessage) -> (id: String, x: CGFloat, y: CGFloat)? {
         guard message.name == "highlightTapped",
               let body  = message.body as? String,
               let data  = body.data(using: .utf8),
               let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let id    = json["id"]    as? String,
               let x     = json["x"]    as? CGFloat,
-              let pageY = json["pageY"] as? CGFloat
+              let y     = json["y"] as? CGFloat
         else { return nil }
-        return (id, x, pageY)
+        return (id, x, y)
     }
 }

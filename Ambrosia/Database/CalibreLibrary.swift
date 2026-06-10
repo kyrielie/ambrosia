@@ -59,6 +59,37 @@ final class CalibreLibrary {
         }
     }
 
+    func allCalibreSeriesEntries() -> [SeriesCacheEntry] {
+        let sql = """
+        SELECT b.id, s.name, b.series_index
+        FROM books b
+        JOIN books_series_link bsl ON bsl.book = b.id
+        JOIN series s ON s.id = bsl.series
+        WHERE s.name IS NOT NULL AND TRIM(s.name) != ''
+        ORDER BY s.name, b.series_index
+        """
+        let rows = (try? db.prepare(sql).map { $0 }) ?? []
+        return rows.compactMap { row in
+            guard let idBind = row[0] as? Int64,
+                  let name = row[1] as? String else { return nil }
+            let index: Int
+            if let raw = row[2] as? Double {
+                index = Int(raw.rounded())
+            } else if let raw = row[2] as? Int64 {
+                index = Int(raw)
+            } else {
+                index = 1
+            }
+            return SeriesCacheEntry(
+                calibreID: Int(idBind),
+                seriesName: name,
+                seriesIndex: index,
+                ao3SeriesID: nil,
+                isAnthology: false
+            )
+        }
+    }
+
     // MARK: - Book list (pageSize + 1 rows — caller checks for next page)
 
     /// Fetch `limit` rows starting at `offset` using a structured SearchQuery.
@@ -118,6 +149,34 @@ final class CalibreLibrary {
             }
         } catch {
             print("[CalibreLibrary] books(ids:query:) error: \(error)")
+            return []
+        }
+    }
+
+    func booksForIDs(_ ids: [Int]) -> [CalibreBook] {
+        guard !ids.isEmpty else { return [] }
+        do {
+            let rows = try _fetchBooksQueryIDs(
+                ids: ids,
+                offset: 0,
+                limit: max(ids.count, 1),
+                sort: .title,
+                ascending: true,
+                query: SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+            )
+            let fetchedIDs = rows.map(\.id)
+            let authorsMap = try _authors(for: fetchedIDs)
+            let tagsMap = try _tags(for: fetchedIDs)
+            let commentsMap = try _comments(for: fetchedIDs)
+            return rows.map { book in
+                var b = book
+                b.authors = authorsMap[book.id] ?? []
+                b.tags = tagsMap[book.id] ?? []
+                b.comment = commentsMap[book.id]
+                return b
+            }
+        } catch {
+            print("[CalibreLibrary] booksForIDs error: \(error)")
             return []
         }
     }

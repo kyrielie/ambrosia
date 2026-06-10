@@ -134,6 +134,13 @@ actor AmbrosiaMetaDB {
 
         CREATE INDEX IF NOT EXISTS idx_series_cache_name ON series_cache(series_name);
         CREATE INDEX IF NOT EXISTS idx_series_cache_calibre ON series_cache(calibre_id);
+
+        CREATE TABLE IF NOT EXISTS series_placeholders (
+            series_name TEXT NOT NULL,
+            part_index INTEGER NOT NULL,
+            note TEXT,
+            PRIMARY KEY (series_name, part_index)
+        );
         """)
     }
 
@@ -349,6 +356,111 @@ actor AmbrosiaMetaDB {
         try transaction {
             try run("DELETE FROM ao3_metadata")
             try run("DELETE FROM series_cache")
+        }
+    }
+
+    func seriesEntries(for calibreIDs: [Int]) throws -> [SeriesCacheEntry] {
+        guard !calibreIDs.isEmpty else { return [] }
+        let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")
+        let sql = """
+        SELECT calibre_id, series_name, series_index, ao3_series_id, is_anthology
+        FROM series_cache
+        WHERE calibre_id IN (\(placeholders))
+        ORDER BY series_name, series_index
+        """
+        return try prepare(sql, calibreIDs.map { $0 as Binding? }).compactMap { row in
+            guard let calibreID = row.int(at: 0),
+                  let seriesName = row[safe: 1] as? String,
+                  let seriesIndex = row.int(at: 2) else { return nil }
+            return SeriesCacheEntry(
+                calibreID: calibreID,
+                seriesName: seriesName,
+                seriesIndex: seriesIndex,
+                ao3SeriesID: row[safe: 3] as? String,
+                isAnthology: (row.int(at: 4) ?? 0) != 0
+            )
+        }
+    }
+
+    func seriesEntries(named names: [String]) throws -> [SeriesCacheEntry] {
+        guard !names.isEmpty else { return [] }
+        let placeholders = names.map { _ in "?" }.joined(separator: ",")
+        let sql = """
+        SELECT calibre_id, series_name, series_index, ao3_series_id, is_anthology
+        FROM series_cache
+        WHERE series_name IN (\(placeholders))
+        ORDER BY series_name, series_index
+        """
+        return try prepare(sql, names.map { $0 as Binding? }).compactMap { row in
+            guard let calibreID = row.int(at: 0),
+                  let seriesName = row[safe: 1] as? String,
+                  let seriesIndex = row.int(at: 2) else { return nil }
+            return SeriesCacheEntry(
+                calibreID: calibreID,
+                seriesName: seriesName,
+                seriesIndex: seriesIndex,
+                ao3SeriesID: row[safe: 3] as? String,
+                isAnthology: (row.int(at: 4) ?? 0) != 0
+            )
+        }
+    }
+
+    func placeholders(for seriesNames: [String]) throws -> [String: [SeriesPlaceholder]] {
+        guard !seriesNames.isEmpty else { return [:] }
+        let placeholders = seriesNames.map { _ in "?" }.joined(separator: ",")
+        let sql = """
+        SELECT series_name, part_index, note
+        FROM series_placeholders
+        WHERE series_name IN (\(placeholders))
+        ORDER BY series_name, part_index
+        """
+        var result: [String: [SeriesPlaceholder]] = [:]
+        for row in try prepare(sql, seriesNames.map { $0 as Binding? }) {
+            guard let seriesName = row[safe: 0] as? String,
+                  let partIndex = row.int(at: 1) else { continue }
+            result[seriesName, default: []].append(
+                SeriesPlaceholder(seriesName: seriesName, partIndex: partIndex, note: row[safe: 2] as? String)
+            )
+        }
+        return result
+    }
+
+    func upsertPlaceholder(seriesName: String, partIndex: Int, note: String?) throws {
+        try run(
+            """
+            INSERT OR REPLACE INTO series_placeholders (series_name, part_index, note)
+            VALUES (?, ?, ?)
+            """,
+            [seriesName, partIndex, note]
+        )
+    }
+
+    func setAnthology(seriesName: String, isAnthology: Bool) throws {
+        try run(
+            "UPDATE series_cache SET is_anthology = ? WHERE series_name = ?",
+            [isAnthology ? 1 : 0, seriesName]
+        )
+    }
+
+    func insertCalibreSeriesFallback(_ entries: [SeriesCacheEntry]) throws {
+        guard !entries.isEmpty else { return }
+        try transaction {
+            for entry in entries {
+                try run(
+                    """
+                    INSERT OR IGNORE INTO series_cache
+                    (calibre_id, series_name, series_index, ao3_series_id, is_anthology)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    [
+                        entry.calibreID,
+                        entry.seriesName,
+                        entry.seriesIndex,
+                        entry.ao3SeriesID,
+                        entry.isAnthology ? 1 : 0,
+                    ]
+                )
+            }
         }
     }
 }

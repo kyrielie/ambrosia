@@ -77,3 +77,95 @@ struct CalibreBook: Identifiable, Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
     static func == (lhs: CalibreBook, rhs: CalibreBook) -> Bool { lhs.id == rhs.id }
 }
+
+struct SeriesCacheEntry: Hashable, Sendable {
+    let calibreID: Int
+    let seriesName: String
+    let seriesIndex: Int
+    let ao3SeriesID: String?
+    let isAnthology: Bool
+}
+
+struct SeriesPlaceholder: Hashable, Sendable {
+    let seriesName: String
+    let partIndex: Int
+    let note: String?
+}
+
+struct SeriesGroup: Identifiable, Hashable {
+    let id: String
+    let seriesName: String
+    let works: [CalibreBook]
+    let allFandoms: [String]
+    let allTags: [String]
+    let allAuthors: [String]
+    let allDescriptions: [String]
+    let totalWordCount: Int
+    let earliestPublished: Date?
+    let latestUpdated: Date?
+    let missingIndices: [Int]
+    let placeholders: [SeriesPlaceholder]
+    let isComplete: Bool
+
+    var displayAuthors: String {
+        allAuthors.isEmpty ? "Unknown Author" : allAuthors.joined(separator: ", ")
+    }
+
+    var displayWordCount: String {
+        guard totalWordCount > 0 else { return "" }
+        switch totalWordCount {
+        case 0..<1_000: return "\(totalWordCount) words"
+        case 0..<1_000_000: return String(format: "%.1fk words", Double(totalWordCount) / 1_000)
+        default: return String(format: "%.2fM words", Double(totalWordCount) / 1_000_000)
+        }
+    }
+
+    var dateRangeText: String {
+        let calendar = Calendar.current
+        let years = [earliestPublished, latestUpdated].compactMap { $0 }.map {
+            calendar.component(.year, from: $0)
+        }
+        guard let first = years.min(), let last = years.max() else { return "" }
+        return first == last ? "\(first)" : "\(first)-\(last)"
+    }
+
+    var coverBook: CalibreBook? { works.first }
+}
+
+enum LibraryItem: Identifiable, Hashable {
+    case book(CalibreBook)
+    case series(SeriesGroup)
+
+    var id: String {
+        switch self {
+        case .book(let book): return "book-\(book.id)"
+        case .series(let series): return "series-\(series.id)"
+        }
+    }
+}
+
+enum ReadingTarget: Hashable {
+    case singleBook(CalibreBook)
+    case series(SeriesGroup)
+
+    var primaryBook: CalibreBook {
+        switch self {
+        case .singleBook(let book): return book
+        case .series(let series): return series.works.first!
+        }
+    }
+
+    var windowKey: String {
+        switch self {
+        case .singleBook(let book): return "book-\(book.id)"
+        case .series(let series): return "series-\(series.id)"
+        }
+    }
+
+    var displayTitle: String {
+        switch self {
+        case .singleBook(let book): return book.displayTitle
+        case .series(let series): return series.seriesName
+        }
+    }
+}

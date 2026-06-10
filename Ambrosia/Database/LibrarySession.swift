@@ -56,6 +56,7 @@ final class LibrarySession {
             LibraryRegistry.shared.register(url)
             LibraryIndexManager.shared.record(url: url)
             startAO3Extraction()
+            seedCalibreSeriesCache()
             print("[LibrarySession] Opened \(url.lastPathComponent) — \(totalCount) books")
         } catch {
             lastError = "Could not open library: \(error.localizedDescription)"
@@ -190,6 +191,18 @@ final class LibrarySession {
 
             DispatchQueue.main.async { [weak self] in
                 self?.extractionProgress.isRunning = false
+            }
+        }
+    }
+
+    private func seedCalibreSeriesCache() {
+        guard let library, let metaDB else { return }
+        Task.detached(priority: .background) { [library, metaDB] in
+            let entries = library.allCalibreSeriesEntries()
+            do {
+                try await metaDB.insertCalibreSeriesFallback(entries)
+            } catch {
+                print("[LibrarySession] Calibre series cache seed failed: \(error)")
             }
         }
     }

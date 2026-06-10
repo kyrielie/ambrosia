@@ -3,13 +3,14 @@ import SwiftData
 
 class ReaderWindowController: NSWindowController, NSWindowDelegate {
 
+    private let target: ReadingTarget
     private let book: CalibreBook
     private let modelContainer: ModelContainer
     /// Recorded when the window loads; diffed on close to accumulate reading time.
     private var sessionStartDate: Date = Date()
     private var didApplyInitialWindowSize = false
 
-    private static var openWindows: [Int: ReaderWindowController] = [:]
+    private static var openWindows: [String: ReaderWindowController] = [:]
 
     @MainActor
     static func saveFrontWindowSizeAsDefault() -> NSSize? {
@@ -27,19 +28,25 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
 
     @MainActor
     static func open(book: CalibreBook, modelContainer: ModelContainer) {
-        if let existing = openWindows[book.id] {
+        open(target: .singleBook(book), modelContainer: modelContainer)
+    }
+
+    @MainActor
+    static func open(target: ReadingTarget, modelContainer: ModelContainer) {
+        if let existing = openWindows[target.windowKey] {
             existing.showWindow(nil)
             existing.window?.makeKeyAndOrderFront(nil)
             return
         }
-        let wc = ReaderWindowController(book: book, modelContainer: modelContainer)
-        openWindows[book.id] = wc
+        let wc = ReaderWindowController(target: target, modelContainer: modelContainer)
+        openWindows[target.windowKey] = wc
         wc.applyDefaultWindowSizeIfNeeded()
         wc.showWindow(nil)
     }
 
-    private init(book: CalibreBook, modelContainer: ModelContainer) {
-        self.book           = book
+    private init(target: ReadingTarget, modelContainer: ModelContainer) {
+        self.target         = target
+        self.book           = target.primaryBook
         self.modelContainer = modelContainer
 
         // Create window with a placeholder size; actual size set in windowDidLoad
@@ -50,12 +57,12 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
             backing:     .buffered,
             defer:       false
         )
-        window.title   = book.displayTitle
+        window.title   = target.displayTitle
         window.minSize = NSSize(width: 600, height: 500)
         super.init(window: window)
         window.delegate = self
 
-        let vc = ReaderViewController(book: book, modelContainer: modelContainer)
+        let vc = ReaderViewController(target: target, modelContainer: modelContainer)
         window.contentViewController = vc
 
         // Update lastOpenedDate in BookState
@@ -118,7 +125,7 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
 
     @MainActor
     func windowWillClose(_ notification: Notification) {
-        Self.openWindows.removeValue(forKey: book.id)
+        Self.openWindows.removeValue(forKey: target.windowKey)
 
         // Accumulate reading session time into BookState.totalReadingTimeSeconds
         let elapsed   = Date().timeIntervalSince(sessionStartDate)
