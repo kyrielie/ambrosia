@@ -39,6 +39,7 @@ actor AmbrosiaMetaDB {
         try createCollections(db: db)
         try createAnnotations(db: db)
         try createAO3Metadata(db: db)
+        try createAO3TagSynonyms(db: db)
         try bootstrapSystemCollections(db: db)
     }
 
@@ -181,6 +182,133 @@ actor AmbrosiaMetaDB {
 
         CREATE INDEX IF NOT EXISTS idx_series_placeholders_key ON series_placeholders(series_key);
         """)
+    }
+
+    private static func createAO3TagSynonyms(db: Connection) throws {
+        try db.execute("""
+        CREATE TABLE IF NOT EXISTS canonical_tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            tag_type TEXT NOT NULL,
+            last_fetched TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS tag_synonyms (
+            synonym TEXT NOT NULL,
+            canonical_id INTEGER NOT NULL REFERENCES canonical_tags(id) ON DELETE CASCADE,
+            PRIMARY KEY (synonym)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_tag_synonyms_canonical
+            ON tag_synonyms(canonical_id);
+
+        CREATE TABLE IF NOT EXISTS tag_parent_links (
+            child_id INTEGER NOT NULL REFERENCES canonical_tags(id),
+            parent_id INTEGER NOT NULL REFERENCES canonical_tags(id),
+            PRIMARY KEY (child_id, parent_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_tag_parent_links_child
+            ON tag_parent_links(child_id);
+
+        CREATE INDEX IF NOT EXISTS idx_tag_parent_links_parent
+            ON tag_parent_links(parent_id);
+
+        CREATE TABLE IF NOT EXISTS tag_subtag_sections (
+            child_id INTEGER NOT NULL REFERENCES canonical_tags(id),
+            parent_id INTEGER NOT NULL REFERENCES canonical_tags(id),
+            section TEXT,
+            PRIMARY KEY (child_id, parent_id)
+        );
+        """)
+    }
+
+    private var tagSeedLoadedKey: String {
+        "tagSeedLoaded_\(libraryHash)"
+    }
+
+    func importConfiguredAO3TagSeedsIfNeeded() throws {
+        guard let seedURL = AO3TagSeedDatabaseConfig.shared.validDatabaseURLIfEnabled() else { return }
+        let sourceIdentity = try AO3TagSeedDatabaseConfig.identity(for: seedURL)
+        let previousIdentity = UserDefaults.standard.string(forKey: tagSeedLoadedKey)
+        guard previousIdentity != sourceIdentity else { return }
+        if let previousIdentity, previousIdentity != sourceIdentity {
+            try clearAO3TagSynonymCache()
+        }
+        try AO3TagSeedDatabaseConfig.validate(url: seedURL)
+
+        var seedComponents = URLComponents(url: seedURL, resolvingAgainstBaseURL: false)
+        seedComponents?.queryItems = [
+            URLQueryItem(name: "mode", value: "ro"),
+            URLQueryItem(name: "immutable", value: "1")
+        ]
+        let seedURI = seedComponents?.url?.absoluteString ?? seedURL.absoluteString
+        let escapedURI = seedURI.replacingOccurrences(of: "'", with: "''")
+        try db.transaction(.deferred) {
+            try db.execute("ATTACH DATABASE '\(escapedURI)' AS ao3_seed")
+            defer { try? db.execute("DETACH DATABASE ao3_seed") }
+
+            try db.execute("""
+            INSERT OR IGNORE INTO canonical_tags(name, tag_type, last_fetched)
+            SELECT name, tag_type, NULL
+            FROM ao3_seed.canonical_tags;
+
+            INSERT OR IGNORE INTO tag_synonyms(synonym, canonical_id)
+            SELECT s.synonym, c.id
+            FROM ao3_seed.tag_synonyms s
+            JOIN ao3_seed.canonical_tags sc ON sc.id = s.canonical_id
+            JOIN canonical_tags c ON c.name = sc.name;
+
+            INSERT OR IGNORE INTO tag_parent_links(child_id, parent_id)
+            SELECT child.id, parent.id
+            FROM ao3_seed.tag_parent_links l
+            JOIN ao3_seed.canonical_tags seed_child ON seed_child.id = l.child_id
+            JOIN ao3_seed.canonical_tags seed_parent ON seed_parent.id = l.parent_id
+            JOIN canonical_tags child ON child.name = seed_child.name
+            JOIN canonical_tags parent ON parent.name = seed_parent.name;
+
+            INSERT OR IGNORE INTO tag_subtag_sections(child_id, parent_id, section)
+            SELECT child.id, parent.id, s.section
+            FROM ao3_seed.tag_subtag_sections s
+            JOIN ao3_seed.canonical_tags seed_child ON seed_child.id = s.child_id
+            JOIN ao3_seed.canonical_tags seed_parent ON seed_parent.id = s.parent_id
+            JOIN canonical_tags child ON child.name = seed_child.name
+            JOIN canonical_tags parent ON parent.name = seed_parent.name;
+            """)
+        }
+        UserDefaults.standard.set(sourceIdentity, forKey: tagSeedLoadedKey)
+    }
+
+    func clearAO3TagSynonymCache() throws {
+        try db.transaction(.deferred) {
+            try db.execute("""
+            DELETE FROM tag_subtag_sections;
+            DELETE FROM tag_parent_links;
+            DELETE FROM tag_synonyms;
+            DELETE FROM canonical_tags;
+            """)
+        }
+        UserDefaults.standard.removeObject(forKey: tagSeedLoadedKey)
+    }
+
+    func clearAO3TagSynonymCacheAndReloadSeeds() throws {
+        try clearAO3TagSynonymCache()
+        try importConfiguredAO3TagSeedsIfNeeded()
+    }
+
+    func ao3TagSeedCounts() throws -> AO3TagSeedDatabaseConfig.Counts {
+        func count(_ table: String) throws -> Int {
+            let value = try db.scalar("SELECT COUNT(*) FROM \(table)")
+            if let int64 = value as? Int64 { return Int(int64) }
+            if let int = value as? Int { return int }
+            return 0
+        }
+        return AO3TagSeedDatabaseConfig.Counts(
+            canonicalTags: try count("canonical_tags"),
+            synonyms: try count("tag_synonyms"),
+            hierarchyEdges: try count("tag_parent_links"),
+            subtagSections: try count("tag_subtag_sections")
+        )
     }
 
     func run(_ sql: String, _ bindings: [Binding?] = []) throws {

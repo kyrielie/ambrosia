@@ -59,6 +59,7 @@ final class LibrarySession {
             ftsLibrary = CalibreFTSLibrary(libraryURL: url)
             LibraryRegistry.shared.register(url)
             LibraryIndexManager.shared.record(url: url)
+            importAO3TagSeeds()
             startAO3Extraction()
             seedCalibreSeriesCache()
             print("[LibrarySession] Opened \(url.lastPathComponent) — \(totalCount) books")
@@ -220,6 +221,20 @@ final class LibrarySession {
                 self?.extractionProgress.isRunning = false
             }
             await self?.syncSeriesOrMergedCollection()
+        }
+    }
+
+    private func importAO3TagSeeds() {
+        guard let metaDB else { return }
+        Task.detached(priority: .background) {
+            do {
+                try await metaDB.importConfiguredAO3TagSeedsIfNeeded()
+                guard AO3TagSeedDatabaseConfig.shared.isEnabled else { return }
+                let counts = try await metaDB.ao3TagSeedCounts()
+                print("[LibrarySession] AO3 tag seeds ready: \(counts.canonicalTags) canonical tags, \(counts.synonyms) synonyms, \(counts.hierarchyEdges) hierarchy edges")
+            } catch {
+                print("[LibrarySession] AO3 tag seed import failed: \(error)")
+            }
         }
     }
 

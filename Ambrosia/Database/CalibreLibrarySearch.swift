@@ -26,14 +26,27 @@ extension CalibreLibrary {
         }
 
         for term in query.tagTerms {
-            clauses.append("""
+            let expandedTerms = expandedAO3TagTerms(for: term)
+            if expandedTerms.count <= 1 {
+                clauses.append("""
                 EXISTS (
                     SELECT 1 FROM books_tags_link btl2
                     JOIN tags t2 ON t2.id = btl2.tag
                     WHERE btl2.book = b.id AND LOWER(t2.name) LIKE ?
                 )
                 """)
-            args.append("%\(term.lowercased())%" as Binding?)
+                args.append("%\(term.lowercased())%" as Binding?)
+            } else {
+                let conditions = expandedTerms.map { _ in "LOWER(t2.name) LIKE ?" }.joined(separator: " OR ")
+                clauses.append("""
+                EXISTS (
+                    SELECT 1 FROM books_tags_link btl2
+                    JOIN tags t2 ON t2.id = btl2.tag
+                    WHERE btl2.book = b.id AND (\(conditions))
+                )
+                """)
+                args.append(contentsOf: expandedTerms.map { "%\($0.lowercased())%" as Binding? })
+            }
         }
 
         for term in query.authorTerms {
@@ -139,5 +152,53 @@ extension CalibreLibrary {
         let rows = (try? db.prepare(sql, ["%\(prefix.lowercased())%" as Binding?,
                                            limit as Binding?]).map { $0 }) ?? []
         return rows.compactMap { $0[0] as? String }
+    }
+
+    private func expandedAO3TagTerms(for term: String) -> [String] {
+        guard AO3TagSeedDatabaseConfig.shared.isEnabled,
+              AO3TagSeedDatabaseConfig.shared.validDatabaseURLIfEnabled() != nil,
+              let libraryURL = LibraryRegistry.shared.activeURL else { return [term] }
+        do {
+            let hash = Ambrosia.libraryHash(for: libraryURL)
+            let metaURL = try AmbrosiaMetaDB.librariesBaseDirectory()
+                .appendingPathComponent(hash)
+                .appendingPathComponent("ambrosia_meta.db")
+            guard FileManager.default.fileExists(atPath: metaURL.path) else { return [term] }
+            let meta = try Connection(metaURL.path, readonly: true)
+            let sql = """
+            WITH RECURSIVE
+            roots(id) AS (
+                SELECT id FROM canonical_tags WHERE LOWER(name) = LOWER(?)
+                UNION
+                SELECT canonical_id FROM tag_synonyms WHERE LOWER(synonym) = LOWER(?)
+            ),
+            descendants(id) AS (
+                SELECT id FROM roots
+                UNION
+                SELECT l.child_id
+                FROM tag_parent_links l
+                JOIN descendants d ON d.id = l.parent_id
+            )
+            SELECT name FROM canonical_tags WHERE id IN (SELECT id FROM descendants)
+            UNION
+            SELECT synonym
+            FROM tag_synonyms
+            WHERE canonical_id IN (SELECT id FROM descendants)
+            """
+            let rows = try meta.prepare(sql, [term as Binding?, term as Binding?]).map { $0 }
+            var seen = Set<String>()
+            var terms = [term]
+            seen.insert(term.lowercased())
+            for row in rows {
+                guard let value = row[0] as? String else { continue }
+                let key = value.lowercased()
+                if seen.insert(key).inserted {
+                    terms.append(value)
+                }
+            }
+            return terms
+        } catch {
+            return [term]
+        }
     }
 }

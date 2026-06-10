@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - PreferencesWindowController
 
@@ -263,6 +264,7 @@ private struct ReaderTab: View {
 
 private struct LibraryTab: View {
     @ObservedObject private var prefs = ReaderPreferences.shared
+    @ObservedObject private var tagSeedConfig = AO3TagSeedDatabaseConfig.shared
     @Environment(\.colorScheme) private var systemScheme
 
     // Local colour state for the custom pickers
@@ -271,6 +273,7 @@ private struct LibraryTab: View {
     @State private var darkBG:    Color = Color(hex: ReaderPreferences.shared.libraryDarkBackgroundColor)  ?? Color(nsColor: .windowBackgroundColor)
     @State private var darkText:  Color = Color(hex: ReaderPreferences.shared.libraryDarkTextColor)        ?? Color(nsColor: .labelColor)
     @State private var knownLibraries: [LibraryIndexEntry] = []
+    @State private var tagSynonymCacheMessage: String?
 
     private var effectiveIsDark: Bool {
         switch prefs.libraryAppearanceMode {
@@ -314,6 +317,47 @@ private struct LibraryTab: View {
                     Label("Series", systemImage: "link").font(.headline)
                 } footer: {
                     Text("Collapses multi-work series into one library row and hides member books already represented by the series.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Toggle("Use AO3 tag synonyms", isOn: $tagSeedConfig.isEnabled)
+
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(tagSeedConfig.databasePath?.isEmpty == false ? URL(fileURLWithPath: tagSeedConfig.databasePath!).lastPathComponent : "No database selected")
+                                .font(.callout)
+                            if let path = tagSeedConfig.databasePath, !path.isEmpty {
+                                Text(path)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                        }
+                        Spacer()
+                        Button("Choose Database...") {
+                            chooseTagSeedDatabase()
+                        }
+                        .controlSize(.small)
+                    }
+
+                    tagSeedStatusView
+
+                    Button("Clear imported synonym cache") {
+                        clearTagSynonymCache()
+                    }
+                    .disabled(AppDelegate.shared?.session?.metaDB == nil)
+
+                    if let tagSynonymCacheMessage {
+                        Text(tagSynonymCacheMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Label("Tag Synonyms", systemImage: "tag").font(.headline)
+                } footer: {
+                    Text("Uses an external ao3_tag_seeds.db. When off or invalid, tag search uses the Calibre tags already in the library.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
@@ -390,6 +434,28 @@ private struct LibraryTab: View {
         .onAppear {
             syncLocalState()
             reloadKnownLibraries()
+            tagSeedConfig.refreshValidation()
+        }
+    }
+
+    @ViewBuilder
+    private var tagSeedStatusView: some View {
+        switch tagSeedConfig.validationStatus {
+        case .disabled:
+            Label("Synonym matching is off.", systemImage: "pause.circle")
+                .foregroundStyle(.secondary)
+        case .notConfigured:
+            Label("Choose an ao3_tag_seeds.db file to enable synonym matching.", systemImage: "exclamationmark.circle")
+                .foregroundStyle(.secondary)
+        case .valid(let counts):
+            Label(
+                "\(counts.canonicalTags) canonical tags, \(counts.synonyms) synonyms, \(counts.hierarchyEdges) hierarchy edges",
+                systemImage: "checkmark.circle"
+            )
+            .foregroundStyle(.green)
+        case .invalid(let message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
         }
     }
 
@@ -441,6 +507,30 @@ private struct LibraryTab: View {
             alert.informativeText = error.localizedDescription
             alert.alertStyle = .warning
             alert.runModal()
+        }
+    }
+
+    private func chooseTagSeedDatabase() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [UTType(filenameExtension: "db") ?? .data]
+        panel.message = "Choose ao3_tag_seeds.db"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        tagSeedConfig.chooseDatabase(url: url)
+    }
+
+    private func clearTagSynonymCache() {
+        tagSynonymCacheMessage = nil
+        guard let metaDB = AppDelegate.shared?.session?.metaDB else { return }
+        Task {
+            do {
+                try await metaDB.clearAO3TagSynonymCacheAndReloadSeeds()
+                tagSynonymCacheMessage = "Imported synonym cache cleared."
+            } catch {
+                tagSynonymCacheMessage = error.localizedDescription
+            }
         }
     }
 
