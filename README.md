@@ -17,9 +17,16 @@ The app is currently aimed at local development and testing. There are no packag
 - Includes CSV export and reader/library preferences.
 - Can import an external AO3 tag seed database for canonical tag and synonym expansion.
 
+## Installation
+
+Download Ambrosia.dmg.
+
+Either use command to bypass Gatekeeper or right-click, open, allow. 
+`sudo xattr -rd com.apple.quarantine /path/to/Ambrosia.app`
+
 ## Screenshots
 
-Screenshots are not committed yet. Add current library, reader, preferences, and email-mode screenshots here before using this README for public release materials.
+
 
 ## Requirements
 
