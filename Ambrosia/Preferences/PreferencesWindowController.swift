@@ -57,12 +57,16 @@ private struct PreferencesRootView: View {
             ColumnsTab()
                 .tabItem { Label("Columns", systemImage: "tablecells") }
                 .tag(PrefTab.columns)
+
+            DataTab()
+                .tabItem { Label("Data", systemImage: "externaldrive.badge.gearshape") }
+                .tag(PrefTab.data)
         }
         .frame(width: 580)
     }
 }
 
-private enum PrefTab { case reader, library, window, columns }
+private enum PrefTab { case reader, library, window, columns, data }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MARK: - Reader Tab
@@ -702,6 +706,44 @@ private struct ColumnsTab: View {
         availableColumns = library.customColumns().map(\.label).sorted()
         wordCountLabel   = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
         kudosLabel       = CustomColumnConfig.shared.kudosLabel     ?? "(none)"
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Data Tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+private struct DataTab: View {
+    var body: some View {
+        ScrollView {
+            Form {
+                Section {
+                    Button("Re-extract AO3 metadata") {
+                        confirmReextract()
+                    }
+                    .disabled(AppDelegate.shared?.session?.isOpen != true)
+                    .frame(maxWidth: .infinity)
+                } header: {
+                    Label("AO3 Metadata", systemImage: "text.magnifyingglass").font(.headline)
+                } footer: {
+                    Text("Clears extracted AO3 metadata and series cache for the active library, then scans EPUB header pages again in the background.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+            .padding(.bottom, 8)
+        }
+    }
+
+    private func confirmReextract() {
+        let alert = NSAlert()
+        alert.messageText = "Re-extract AO3 Metadata?"
+        alert.informativeText = "Existing extracted AO3 metadata and series cache rows for the active library will be deleted and rebuilt."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Re-extract")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        AppDelegate.shared?.session?.reextractAO3Metadata()
     }
 }
 

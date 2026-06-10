@@ -275,6 +275,10 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
     private func updateCountLabel() {
         guard let ts = toolbarState, let sess = session else { return }
+        if let status = sess.extractionProgress.statusText {
+            ficCountLabel?.stringValue = status
+            return
+        }
         let count = ts.activeFilterResult?.totalCount ?? sess.totalCount
         let fmt   = NumberFormatter()
         fmt.numberStyle = .decimal
@@ -287,6 +291,9 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         withObservationTracking {
             _ = toolbarState?.activeFilterResult?.totalCount
             _ = session?.totalCount
+            _ = session?.extractionProgress.completed
+            _ = session?.extractionProgress.total
+            _ = session?.extractionProgress.isRunning
         } onChange: { [weak self] in
             DispatchQueue.main.async { self?.updateCountLabel(); self?.scheduleCounting() }
         }

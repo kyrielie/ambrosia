@@ -7,6 +7,7 @@ import Observation
 ///
 /// Injected into the SwiftUI environment so all views share one instance.
 @Observable
+@MainActor
 final class LibrarySession {
 
     /// The open library connection. Nil until the user picks a folder.
@@ -17,6 +18,8 @@ final class LibrarySession {
 
     /// Per-library app-owned SQLite database for collections and annotations.
     private(set) var metaDB: AmbrosiaMetaDB?
+
+    let extractionProgress = ExtractionProgress()
 
     /// Typed collection operations for the active library.
     private(set) var collectionStore: CollectionStore?
@@ -34,6 +37,8 @@ final class LibrarySession {
     /// Error from the last open attempt, shown in the UI if non-nil.
     private(set) var lastError: String?
 
+    private var extractionTask: Task<Void, Never>?
+
     // MARK: - Opening / closing
 
     /// Open a Calibre library at the given URL.
@@ -50,6 +55,7 @@ final class LibrarySession {
             ftsLibrary = CalibreFTSLibrary(libraryURL: url)
             LibraryRegistry.shared.register(url)
             LibraryIndexManager.shared.record(url: url)
+            startAO3Extraction()
             print("[LibrarySession] Opened \(url.lastPathComponent) — \(totalCount) books")
         } catch {
             lastError = "Could not open library: \(error.localizedDescription)"
@@ -58,6 +64,11 @@ final class LibrarySession {
     }
 
     func close() {
+        extractionTask?.cancel()
+        extractionTask = nil
+        extractionProgress.isRunning = false
+        extractionProgress.completed = 0
+        extractionProgress.total = 0
         library    = nil
         ftsLibrary = nil
         metaDB = nil
@@ -110,5 +121,76 @@ final class LibrarySession {
             return
         }
         open(url: url)
+    }
+
+    func reextractAO3Metadata() {
+        guard metaDB != nil else { return }
+        extractionTask?.cancel()
+        Task {
+            do {
+                try await metaDB?.clearAO3Metadata()
+                await MainActor.run { self.startAO3Extraction(forceAll: true) }
+            } catch {
+                print("[LibrarySession] AO3 metadata reset failed: \(error)")
+            }
+        }
+    }
+
+    private func startAO3Extraction(forceAll: Bool = false) {
+        extractionTask?.cancel()
+        guard let library, let metaDB else { return }
+
+        extractionProgress.completed = 0
+        extractionProgress.total = 0
+        extractionProgress.isRunning = true
+
+        extractionTask = Task(priority: .background) { [weak self, library, metaDB] in
+            let allIDs = library.allBookIDs()
+            let existing = (try? await metaDB.existingAO3MetadataIDs()) ?? []
+            let missing = forceAll ? allIDs : allIDs.filter { !existing.contains($0) }
+
+            DispatchQueue.main.async { [weak self] in
+                self?.extractionProgress.total = missing.count
+                self?.extractionProgress.completed = 0
+                self?.extractionProgress.isRunning = !missing.isEmpty
+            }
+
+            guard !missing.isEmpty else { return }
+
+            for id in missing {
+                if Task.isCancelled { break }
+                var failureReason: String?
+                let metadata = autoreleasepool { () -> AO3MetadataRecord? in
+                    guard let epub = library.epubURL(calibreID: id) else { return nil }
+                    do {
+                        var parser = EPUBParser(epubURL: epub)
+                        try parser.parse()
+                        for item in parser.spine.prefix(5) {
+                            let html = try parser.html(for: item, userCSS: "")
+                            if let metadata = AO3MetadataExtractor.extract(from: html) {
+                                return metadata
+                            }
+                        }
+                        failureReason = "no dl.tags AO3 preface metadata in first \(min(parser.spine.count, 5)) spine items"
+                        return nil
+                    } catch {
+                        failureReason = error.localizedDescription
+                        return nil
+                    }
+                }
+                if let metadata {
+                    try? await metaDB.insert(metadata, calibreID: id)
+                } else {
+                    print("[LibrarySession] AO3 extraction skipped calibreID=\(id): \(failureReason ?? "unknown reason")")
+                }
+                DispatchQueue.main.async { [weak self] in
+                    self?.extractionProgress.completed += 1
+                }
+            }
+
+            DispatchQueue.main.async { [weak self] in
+                self?.extractionProgress.isRunning = false
+            }
+        }
     }
 }

@@ -51,6 +51,14 @@ final class CalibreLibrary {
         return (rows.first?.first as? Int64).map(Int.init) ?? 0
     }
 
+    func allBookIDs() -> [Int] {
+        let rows = (try? db.prepare("SELECT id FROM books ORDER BY id").map { $0 }) ?? []
+        return rows.compactMap { row in
+            if let value = row.first as? Int64 { return Int(value) }
+            return row.first as? Int
+        }
+    }
+
     // MARK: - Book list (pageSize + 1 rows — caller checks for next page)
 
     /// Fetch `limit` rows starting at `offset` using a structured SearchQuery.

@@ -1,5 +1,5 @@
 {
-  "originHash" : "b7b230c67865c3dcb3fc3cf1cc7fda11639e6ba86838b5c0c3ffd8e7c84b2169",
+  "originHash" : "210d69a15c3f677004bae309ed62a1365b33c46c67b0ed907f544d88062e50d1",
   "pins" : [
     {
       "identity" : "sqlite.swift",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "a95fc6df17d108bd99210db5e8a9bac90fe984b8",
         "version" : "0.15.3"
+      }
+    },
+    {
+      "identity" : "swiftsoup",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/scinfu/SwiftSoup.git",
+      "state" : {
+        "revision" : "49dcadd93161f4a44b4994d3a3e8de9f085aface",
+        "version" : "2.13.5"
       }
     },
     {

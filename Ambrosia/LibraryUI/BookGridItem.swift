@@ -47,6 +47,7 @@ struct LibraryRootView: View {
     @State private var filteredCount: Int? = nil
 
     @State private var bookStates: [Int: BookState] = [:]
+    @State private var ao3Metadata: [Int: AO3MetadataRecord] = [:]
     @State private var likedIDs: Set<Int> = []
     @State private var skippedIDs: Set<Int> = []
 
@@ -58,7 +59,114 @@ struct LibraryRootView: View {
         toolbarState.activeFilterResult?.totalCount ?? filteredCount ?? session.totalCount
     }
 
+    private var extractionRefreshToken: String {
+        "\(session.extractionProgress.completed)-\(session.extractionProgress.isRunning)"
+    }
+
     var body: some View {
+        rootContent
+            .background(libraryBGColor)
+            .foregroundStyle(libraryTextColor)
+            .preferredColorScheme(prefs.resolvedLibraryColorScheme)
+            .onChange(of: currentPage)                { loadPage() }
+            .onChange(of: toolbarState.sortField)     { currentPage = 0; loadPage() }
+            .onChange(of: toolbarState.ascending)     { currentPage = 0; loadPage() }
+            .onChange(of: toolbarState.searchText) {
+                currentPage = 0
+                debouncer.schedule {
+                    loadPage()
+                    if toolbarState.searchText.isEmpty {
+                        filteredCount = nil
+                    } else {
+                        let query = SearchQueryParser.parse(toolbarState.searchText)
+                        let resolved = session.resolvedQuery(query)
+                        filteredCount = session.library?.bookCount(query: resolved)
+                    }
+                }
+            }
+            .onChange(of: toolbarState.activeFilterResult?.calibreIDs) {
+                currentPage = 0; loadPage()
+            }
+            .onChange(of: extractionRefreshToken) {
+                loadAO3MetadataForCurrentPage()
+            }
+            .onChange(of: prefs.showSkippedCollection) {
+                currentPage = 0
+                if toolbarState.filterExpression.hasCompleteRules {
+                    applyFilterRules()
+                } else {
+                    loadPage()
+                }
+            }
+            .onChange(of: session.isOpen) {
+                if session.isOpen {
+                    currentPage = 0
+                    toolbarState.searchText = ""
+                    toolbarState.activeFilterResult = nil
+                    toolbarState.filterExpression = FilterExpression()
+                    if let lib = session.library {
+                        CustomColumnConfig.shared.autoDetect(using: lib)
+                    }
+                    loadPage()
+                    refreshBookStates()
+                } else {
+                    books = []; bookStates = [:]
+                }
+            }
+            .onAppear {
+                if session.isOpen { loadPage(); refreshBookStates() }
+                // Register so LibraryWindowController can deliver committed filter rules
+                toolbarState.registerFilterCommitHandler { [self] rule in
+                    addOrReplaceRule(rule)
+                }
+            }
+            .onDisappear {
+                // Deregister when this view leaves the hierarchy (view mode switch)
+                toolbarState.filterCommitHandler = nil
+            }
+            .sheet(isPresented: Binding(
+                get: { toolbarState.showFilterDrawer },
+                set: { toolbarState.showFilterDrawer = $0 }
+            )) {
+                FilterDrawerView(
+                    expression: Binding(
+                        get: { toolbarState.filterExpression },
+                        set: { toolbarState.filterExpression = $0 }
+                    ),
+                    onApply: { applyFilterRules() },
+                    onClear: {
+                        toolbarState.filterExpression = FilterExpression()
+                        toolbarState.activeFilterResult = nil
+                        currentPage = 0; loadPage()
+                    }
+                )
+                .preferredColorScheme(prefs.resolvedLibraryColorScheme)
+            }
+            .sheet(isPresented: Binding(
+                get: { toolbarState.showCollections },
+                set: { toolbarState.showCollections = $0 }
+            )) {
+                CollectionsView(onSelectCollection: { collection in
+                    addOrReplaceRule(FilterRule(field: .collection, op: .equals, value: collection.name))
+                })
+                .preferredColorScheme(prefs.resolvedLibraryColorScheme)
+            }
+            .sheet(isPresented: Binding(
+                get: { toolbarState.showReadingGoal },
+                set: { toolbarState.showReadingGoal = $0 }
+            )) {
+                ReadingGoalView()
+                    .preferredColorScheme(prefs.resolvedLibraryColorScheme)
+            }
+            .onChange(of: toolbarState.triggerExport) {
+                if toolbarState.triggerExport {
+                    ExportManager.presentExportPanel(books: books)
+                    toolbarState.triggerExport = false
+                }
+            }
+    }
+
+    private var rootContent: some View {
         VStack(spacing: 0) {
             Divider()
             if toolbarState.hasActiveFilter {
@@ -73,102 +181,6 @@ struct LibraryRootView: View {
             }
             Divider()
             footer
-        }
-        .background(libraryBGColor)
-        .foregroundStyle(libraryTextColor)
-        .preferredColorScheme(prefs.resolvedLibraryColorScheme)
-        .onChange(of: currentPage)                { loadPage() }
-        .onChange(of: toolbarState.sortField)     { currentPage = 0; loadPage() }
-        .onChange(of: toolbarState.ascending)     { currentPage = 0; loadPage() }
-        .onChange(of: toolbarState.searchText) {
-            currentPage = 0
-            debouncer.schedule {
-                loadPage()
-                if toolbarState.searchText.isEmpty {
-                    filteredCount = nil
-                } else {
-                    let query = SearchQueryParser.parse(toolbarState.searchText)
-                    let resolved = session.resolvedQuery(query)
-                    filteredCount = session.library?.bookCount(query: resolved)
-                }
-            }
-        }
-        .onChange(of: toolbarState.activeFilterResult?.calibreIDs) {
-            currentPage = 0; loadPage()
-        }
-        .onChange(of: prefs.showSkippedCollection) {
-            currentPage = 0
-            if toolbarState.filterExpression.hasCompleteRules {
-                applyFilterRules()
-            } else {
-                loadPage()
-            }
-        }
-        .onChange(of: session.isOpen) {
-            if session.isOpen {
-                currentPage = 0
-                toolbarState.searchText = ""
-                toolbarState.activeFilterResult = nil
-                toolbarState.filterExpression = FilterExpression()
-                if let lib = session.library {
-                    CustomColumnConfig.shared.autoDetect(using: lib)
-                }
-                loadPage()
-                refreshBookStates()
-            } else {
-                books = []; bookStates = [:]
-            }
-        }
-        .onAppear {
-            if session.isOpen { loadPage(); refreshBookStates() }
-            // Register so LibraryWindowController can deliver committed filter rules
-            toolbarState.registerFilterCommitHandler { [self] rule in
-                addOrReplaceRule(rule)
-            }
-        }
-        .onDisappear {
-            // Deregister when this view leaves the hierarchy (view mode switch)
-            toolbarState.filterCommitHandler = nil
-        }
-        .sheet(isPresented: Binding(
-            get: { toolbarState.showFilterDrawer },
-            set: { toolbarState.showFilterDrawer = $0 }
-        )) {
-            FilterDrawerView(
-                expression: Binding(
-                    get: { toolbarState.filterExpression },
-                    set: { toolbarState.filterExpression = $0 }
-                ),
-                onApply: { applyFilterRules() },
-                onClear: {
-                    toolbarState.filterExpression = FilterExpression()
-                    toolbarState.activeFilterResult = nil
-                    currentPage = 0; loadPage()
-                }
-            )
-            .preferredColorScheme(prefs.resolvedLibraryColorScheme)
-        }
-        .sheet(isPresented: Binding(
-            get: { toolbarState.showCollections },
-            set: { toolbarState.showCollections = $0 }
-        )) {
-            CollectionsView(onSelectCollection: { collection in
-                addOrReplaceRule(FilterRule(field: .collection, op: .equals, value: collection.name))
-            })
-            .preferredColorScheme(prefs.resolvedLibraryColorScheme)
-        }
-        .sheet(isPresented: Binding(
-            get: { toolbarState.showReadingGoal },
-            set: { toolbarState.showReadingGoal = $0 }
-        )) {
-            ReadingGoalView()
-                .preferredColorScheme(prefs.resolvedLibraryColorScheme)
-        }
-        .onChange(of: toolbarState.triggerExport) {
-            if toolbarState.triggerExport {
-                ExportManager.presentExportPanel(books: books)
-                toolbarState.triggerExport = false
-            }
         }
     }
 
@@ -202,6 +214,21 @@ struct LibraryRootView: View {
             let visible = visibleBooks(raw)
             hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
             books = Array(visible.prefix(pageSize))
+        }
+        loadAO3MetadataForCurrentPage()
+    }
+
+    private func loadAO3MetadataForCurrentPage() {
+        let ids = books.map(\.id)
+        guard !ids.isEmpty, let metaDB = session.metaDB else {
+            ao3Metadata = [:]
+            return
+        }
+        Task {
+            let metadata = (try? await metaDB.ao3Metadata(for: ids)) ?? [:]
+            await MainActor.run {
+                ao3Metadata = metadata
+            }
         }
     }
 
@@ -336,6 +363,7 @@ struct LibraryRootView: View {
             BookListRow(
                 book: book,
                 bookState: bookStates[book.id],
+                ao3Metadata: ao3Metadata[book.id],
                 isLiked: likedIDs.contains(book.id),
                 modelContext: modelContext,
                 onTagTap: { tag, field in
@@ -435,6 +463,7 @@ struct LibraryRootView: View {
 struct BookListRow: View, Equatable {
     let book: CalibreBook
     let bookState: BookState?
+    let ao3Metadata: AO3MetadataRecord?
     let isLiked: Bool
     let modelContext: ModelContext
     let onTagTap: (String, FilterField) -> Void
@@ -453,6 +482,7 @@ struct BookListRow: View, Equatable {
             && lhs.book.authors           == rhs.book.authors
             && lhs.book.tags              == rhs.book.tags
             && lhs.book.comment           == rhs.book.comment
+            && lhs.ao3Metadata            == rhs.ao3Metadata
             && lhs.bookState?.calibreID        == rhs.bookState?.calibreID
             && lhs.isLiked                     == rhs.isLiked
             && lhs.bookState?.totalReadPercent == rhs.bookState?.totalReadPercent
@@ -460,7 +490,7 @@ struct BookListRow: View, Equatable {
 
     private let buckets: AO3TagBuckets
 
-    init(book: CalibreBook, bookState: BookState?, isLiked: Bool, modelContext: ModelContext,
+    init(book: CalibreBook, bookState: BookState?, ao3Metadata: AO3MetadataRecord?, isLiked: Bool, modelContext: ModelContext,
          onTagTap: @escaping (String, FilterField) -> Void,
          onAuthorTap: @escaping (String) -> Void,
          onLikeToggle: @escaping () -> Void,
@@ -468,6 +498,7 @@ struct BookListRow: View, Equatable {
          onMarkRead: @escaping () -> Void) {
         self.book         = book
         self.bookState    = bookState
+        self.ao3Metadata  = ao3Metadata
         self.isLiked      = isLiked
         self.modelContext = modelContext
         self.onTagTap     = onTagTap
@@ -482,6 +513,7 @@ struct BookListRow: View, Equatable {
         VStack(alignment: .leading, spacing: 5) {
             titleRow
             authorsRow
+            ao3SummaryRow
             tagsRow
             statsRow
             descriptionRow
@@ -561,14 +593,36 @@ struct BookListRow: View, Equatable {
     }
 
     @ViewBuilder
+    private var ao3SummaryRow: some View {
+        HStack(spacing: 10) {
+            let chapterLabel = ao3Metadata.flatMap(Self.chapterText) ?? "AO3 chapters unknown"
+            statChip(chapterLabel, icon: (ao3Metadata?.isComplete == true) ? "checkmark.circle" : "clock")
+            if let meta = ao3Metadata {
+                if let language = meta.language, !language.isEmpty {
+                    statChip(language, icon: "globe")
+                }
+                if let published = meta.publishedDate, !published.isEmpty {
+                    statChip("Pub \(published)", icon: "calendar")
+                }
+                if let updated = meta.updatedDate, !updated.isEmpty, updated != meta.publishedDate {
+                    statChip("Upd \(updated)", icon: "arrow.triangle.2.circlepath")
+                }
+            }
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
     private var statsRow: some View {
-        let wc = book.displayWordCount
+        let wc = ao3Metadata?.wordCount.map(Self.formatWordCount) ?? "AO3 words unknown"
         let k  = book.displayKudos
+        let ao3Kudos = book.kudos == nil ? ao3Metadata?.kudosCount : nil
         let pct = bookState.map { $0.totalReadPercent }
-        if !wc.isEmpty || !k.isEmpty || (pct ?? 0) > 0 {
+        if !wc.isEmpty || !k.isEmpty || ao3Kudos != nil || (pct ?? 0) > 0 {
             HStack(spacing: 14) {
                 if !wc.isEmpty { statChip(wc, icon: "text.word.spacing") }
                 if !k.isEmpty  { statChip(k,  icon: "heart") }
+                if let ao3Kudos { statChip(Self.formatKudos(ao3Kudos), icon: "heart") }
                 if let p = pct, p > 0 {
                     statChip(String(format: "%.0f%% read", p * 100), icon: "book.pages")
                 }
@@ -603,6 +657,26 @@ struct BookListRow: View, Equatable {
         let f = DateFormatter()
         f.dateStyle = .short; f.timeStyle = .none
         return f.string(from: date)
+    }
+
+    private static func chapterText(_ metadata: AO3MetadataRecord) -> String? {
+        guard let current = metadata.chapterCurrent else { return nil }
+        if let total = metadata.chapterTotal {
+            return "\(current)/\(total) ch"
+        }
+        return "\(current)/? ch"
+    }
+
+    private static func formatWordCount(_ count: Int) -> String {
+        switch count {
+        case 0..<1_000: return "\(count) words"
+        case 0..<1_000_000: return String(format: "%.1fk words", Double(count) / 1_000)
+        default: return String(format: "%.2fM words", Double(count) / 1_000_000)
+        }
+    }
+
+    private static func formatKudos(_ count: Int) -> String {
+        count >= 1_000 ? String(format: "%.1fk kudos", Double(count) / 1_000) : "\(count) kudos"
     }
 
     private func tagPill(_ label: String, color: Color?) -> some View {
