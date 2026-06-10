@@ -309,7 +309,7 @@ final class ReaderPreferences: ObservableObject {
         hr { border: none; border-top: 1px solid currentColor; opacity: 0.3; margin: 1.5em 0; }
         code, pre { font-family: "SF Mono", Menlo, monospace; font-size: 0.9em; }
         pre { overflow-x: auto; padding: 1em; background: rgba(128,128,128,0.1); border-radius: 4px; }
-        div, section, article { float: none !important; position: static !important; column-count: unset !important; }
+        div, section, article { float: none !important; position: static !important; }
         nav[epub\\:type="toc"], nav[epub\\:type="landmarks"] { display: none; }
         """
     }
