@@ -1,28 +1,30 @@
-# Project Ambrosia - Architecture Overview
+# Ambrosia Architecture
 
-Concise current-state reference for AI engineers working in this repo.
+Current-state technical reference for engineers working in this repo.
 
 ## Product Shape
 
 Ambrosia is a native macOS EPUB reader for AO3-heavy Calibre libraries.
 
-- Target: macOS 15+.
+- Target: macOS 14.0+.
 - Calibre is the source of truth for book metadata and EPUB files.
 - Calibre `metadata.db` is opened read-only and never modified.
-- Publisher CSS/scripts are stripped; reader styling is fully app/user controlled.
-- Reader is custom `WKWebView` + injected JavaScript. No Readium.
-- No sandboxing, cloud sync, or OPDS.
+- App-owned state is stored outside the Calibre library.
+- Publisher CSS/scripts are stripped; reader styling is app/user controlled.
+- Reader is custom `WKWebView` plus injected JavaScript. No Readium.
+- No sandboxing, cloud sync, OPDS, or packaged release flow.
 
 ## Stack
 
-- App lifecycle/windowing: SwiftUI `App` + AppKit `NSApplicationDelegate`, `NSWindowController`, `NSViewController`.
-- UI: AppKit shell with SwiftUI content hosted via `NSHostingView`/`NSHostingController`.
+- App lifecycle/windowing: SwiftUI `App` plus AppKit `NSApplicationDelegate`, `NSWindowController`, and `NSViewController`.
+- UI: AppKit shell with SwiftUI content hosted through `NSHostingView`/`NSHostingController`.
 - Calibre DB: SQLite.swift, read-only.
-- App SwiftData store: `BookState`, `ReadingGoal` only.
-- Per-library app SQLite DB: `AmbrosiaMetaDB` actor, writable, under `~/Library/Application Support/Ambrosia/libraries/<hash>/ambrosia_meta.db`.
-- EPUB parsing: ZIPFoundation + `NSXMLParser`.
+- App SwiftData store: `BookState` and `ReadingGoal`.
+- Per-library app DB: `AmbrosiaMetaDB` actor, writable SQLite, under `~/Library/Application Support/Ambrosia/libraries/<hash>/ambrosia_meta.db`.
+- EPUB parsing: ZIPFoundation and `NSXMLParser`.
+- AO3 HTML parsing: SwiftSoup.
 - Rendering: `WKWebView`.
-- Packages: SQLite.swift, ZIPFoundation.
+- Packages: SQLite.swift, ZIPFoundation, SwiftSoup.
 
 ## Storage Ownership
 
@@ -33,31 +35,33 @@ Ambrosia is a native macOS EPUB reader for AO3-heavy Calibre libraries.
 Important schema facts:
 
 - `books` has no `series` column. Series requires `books_series_link -> series`.
-- Authors/tags/publishers are normalized via link tables.
+- Authors/tags/publishers are normalized through link tables.
 - Comments/descriptions live in `comments`.
 - Custom columns are discovered from `custom_columns`; runtime labels come from `CustomColumnConfig.shared`.
 - Every `db.prepare(sql, args)` call must use `[Binding?]`.
 
-`CalibreLibrary.books(...)` fetches `pageSize + 1` rows for next-page detection, then bulk-loads authors/tags/comments with page-level JOIN queries.
+`CalibreLibrary.books(...)` fetches `pageSize + 1` rows for next-page detection, then bulk-loads authors, tags, and comments with page-level JOIN queries.
 
 ### SwiftData
 
 `AmbrosiaApp` creates a persistent `ModelContainer("Ambrosia")` with:
 
-- `BookState`: keyed by `calibreID`, stores reading progress, reading position, and ELO fields.
+- `BookState`: keyed by `calibreID`, stores reading progress, reading position, total reading time, and ELO fields.
 - `ReadingGoal`: reading-goal state.
 
-SwiftData no longer stores collections or annotations.
+SwiftData does not store collections or annotations.
 
-On SwiftData store init failure, the app shows an alert and falls back to in-memory `AmbrosiaRecovery`; it does not delete existing support files.
+On SwiftData store init failure, the app shows an alert and falls back to in-memory recovery. It does not delete existing support files.
 
-### Per-Library App DB
+### Per-Library `ambrosia_meta.db`
 
-`AmbrosiaMetaDB` is an actor-backed writable SQLite DB scoped by hash of the Calibre library path. It stores:
+`AmbrosiaMetaDB` is an actor-backed writable SQLite DB scoped by a hash of the Calibre library path. It stores:
 
 - `collections`, `collection_members`.
 - `annotations`.
-- `ao3_metadata`, `series_cache`.
+- `ao3_metadata`, `ao3_extraction_diagnostics`.
+- `series_cache`, `series_placeholders`.
+- `canonical_tags`, `tag_synonyms`, `tag_parent_links`, `tag_subtag_sections`.
 
 `CollectionStore` wraps collection operations. Bootstrapped system collections:
 
@@ -67,12 +71,15 @@ On SwiftData store init failure, the app shows an alert and falls back to in-mem
 - Finished
 - In Progress
 - Has Annotations
+- Series or Merged
 
-Annotation inserts/deletes maintain `Has Annotations` membership.
+Annotation inserts/deletes maintain `Has Annotations` membership. Series/anthology sync maintains `Series or Merged` membership for collapsed non-leading series members and anthology-style merged works.
 
-### Registry
+### Registry And Preferences
 
-`LibraryRegistry` stores known library paths and active path in `UserDefaults`; it is available before SwiftData is initialized.
+`LibraryRegistry` stores known library paths and the active path in `UserDefaults`; it is available before SwiftData is initialized.
+
+`ReaderPreferences` is an `ObservableObject` singleton backed by `UserDefaults`. It controls reader typography, spacing, colors, default reading mode, library appearance, reader window sizing, context-menu preferences, and custom Calibre column labels.
 
 ## Session Model
 
@@ -93,7 +100,9 @@ On library open it:
 2. Opens/creates per-library `ambrosia_meta.db`.
 3. Opens optional `full-text-search.db`.
 4. Registers the library path and index record.
-5. Starts background AO3 metadata extraction from EPUB prefaces.
+5. Imports configured AO3 tag seeds into `ambrosia_meta.db`.
+6. Starts background AO3 metadata extraction from EPUB prefaces.
+7. Seeds Calibre series fallback data and syncs `Series or Merged`.
 
 ## Application Structure
 
@@ -110,13 +119,13 @@ AmbrosiaApp
     └── ReaderViewController -> WKWebView
 ```
 
-`LibraryToolbarState` is the bridge between native toolbar controls and SwiftUI/AppKit content. It carries search/sort/filter/view state plus trigger booleans for sheets/actions.
+`LibraryToolbarState` bridges native toolbar controls and SwiftUI/AppKit content. It carries search, sort, filter, view state, and trigger booleans for sheets/actions.
 
 ## Library UI
 
 Modes:
 
-- List: SwiftUI AO3-style rows with title, series, authors, tags, stats, description, pagination.
+- List: SwiftUI AO3-style rows with title, series, authors, tags, stats, description, and pagination.
 - Email: AppKit split view with table sidebar and SwiftUI detail pane.
 - Ranking: placeholder text only; `BookState` already has ELO fields.
 
@@ -132,8 +141,24 @@ Filters:
 
 - `FilterExpression` contains groups of `FilterRule`s.
 - SQL-evaluable rules run against Calibre.
-- App-owned rules (`isLiked`, `collection`) are applied in memory using `CollectionStore` membership maps.
-- AO3 rating/warning/category rules are implemented as tag-based SQL fragments.
+- App-owned rules such as collection membership are applied through `CollectionStore` data.
+- AO3 rating/warning/category rules are implemented as tag-based or metadata-backed filters.
+
+Collections:
+
+- System collections live in `ambrosia_meta.db`.
+- `Series or Merged` is system-maintained from `series_cache` and anthology detection.
+- Current series grouping uses representative grouped rows for collapsed series rather than a separate placeholder-note workflow.
+
+## AO3 Metadata And Tags
+
+`AO3MetadataExtractor` parses AO3 EPUB preface HTML with SwiftSoup and returns `AO3MetadataRecord`. `LibrarySession` checks the first few spine items for AO3 metadata, stores successful extraction in `ao3_metadata`, and stores skipped/failed attempts in `ao3_extraction_diagnostics`.
+
+Extracted fields include story URL, work ID, author username, kudos, word count, chapter counts, completion, language, dates, fandoms, relationships, characters, additional tags, categories, AO3 collections, and AO3 series.
+
+Series metadata is cached in `series_cache`; Calibre series data is inserted as fallback.
+
+Configured AO3 tag seed databases can be imported into `canonical_tags`, `tag_synonyms`, `tag_parent_links`, and `tag_subtag_sections`. Synonym expansion is present at the storage layer; UI coverage is still incomplete.
 
 ## EPUB Parser
 
@@ -163,7 +188,7 @@ Offset contract everywhere: UTF-16 code units, text-node content only, no HTML t
 
 Scroll mode loads merged HTML normally and restores scroll offset.
 
-Paginated mode uses one visible `WKWebView` with CSS multi-column layout. One column is one page; page turns set horizontal scroll. There is no hidden measurement web view and no DOM slicing. Resize repagination is debounced.
+Paginated mode uses one visible `WKWebView` with CSS multi-column layout. One column is one page; page turns set horizontal scroll. Resize repagination is debounced.
 
 Find uses `WKFindConfiguration`.
 
@@ -178,21 +203,23 @@ Annotations are persisted in `AmbrosiaMetaDB.annotations`, not SwiftData. JS sel
 
 `BookmarkManager` is a compile-retained legacy stub. Current bookmark behavior is handled by the annotation system.
 
-## Preferences
+## Implemented Utilities
 
-`ReaderPreferences` is an `ObservableObject` singleton backed by `UserDefaults`/published properties.
+- CSV export of library books through `ExportManager`.
+- Preferences window for reader defaults, library appearance, custom Calibre column labels, AO3 extraction, and tag seed configuration.
+- Optional FTS search fallback through Calibre's `full-text-search.db`.
 
-It controls:
+## Not Yet Built
 
-- Reader typography, spacing, colors, max width.
-- Default reading mode.
-- Library color/appearance mode.
-- Reader default window sizing.
-- Context-menu preferences.
-
-Reader windows subscribe via Combine and regenerate/reload full HTML on changes.
-
-Custom Calibre column labels for word count/kudos are configured via Preferences and stored in `CustomColumnConfig.shared`.
+- Ranking UI and ELO matchup workflow.
+- Reader table-of-contents popup.
+- AO3 login, kudos, and AO3 bookmark posting.
+- Saved searches.
+- Favourite authors.
+- Saved quotes.
+- Annotation export/sharing.
+- Standalone mode without Calibre.
+- Music integration.
 
 ## Key Invariants
 
@@ -208,3 +235,4 @@ Custom Calibre column labels for word count/kudos are configured via Preferences
 10. Full-pane `NSHostingView` must use `sizingOptions = []` when Auto Layout controls size.
 11. Image temp directory lifetime is the app session; clean up on app termination.
 12. Do not hand-edit `Package.resolved`; add packages through Xcode/SPM workflow.
+13. `AmbrosiaMetaDB` is per-library and accessed through `LibrarySession`, not as a singleton.

@@ -9,8 +9,8 @@ AGENTS.md
 ### Xcode ###
 DerivedData/
 *.xcuserstate
+project.xcworkspace/xcuserdata/
 xcuserdata/
-
 
 
 # General

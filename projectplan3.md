@@ -1,24 +1,29 @@
- # Ambrosia — Phase 9+ Implementation Guide
- 
- **This is the authoritative reference for all remaining work. Phases 1–8 are complete.**
+# Ambrosia — Phase 9+ Implementation Guide
+
+ **This is the detailed implementation guide and historical roadmap. Use the status labels on each phase before starting work.**
  Read this entire document before starting any phase. Read `ambrosia_architecture.md` alongside it.
- **The database migration (phases M1–M5) must be completed and merged before any other phase begins.**
+ **The database migration (phases M1–M5) is complete in the current repo: collections and annotations now live in per-library `ambrosia_meta.db`; SwiftData is limited to `BookState` and `ReadingGoal`.**
  
  ---
  
- ## Current Project State (End of Phase 8)
+ ## Current Project State
  
  ### What exists and works
- - **Data layer:** `CalibreLibrary` (read-only SQLite.swift on Calibre's `metadata.db`), `LibrarySession`, `LibraryRegistry`. Book fetches are paginated (100 + 1 per page). Custom column sort bug is fixed (Section A). Series always joined via `books_series_link + series` — no `b.series` column.
- - **Library UI:** List view (`LibraryRootView` + `BookListRow`), Email view (`NSSplitViewController` + `NSTableView` sidebar + SwiftUI detail pane), Grid view (`LazyVGrid` cover cards). Native `NSToolbar` via `LibraryToolbarState` (`@Observable`). Filter drawer with `FilterBuilder` → SQL + in-memory. NOT-chip styling on filter pills. Dock icon reopens library window.
- - **Reader:** `ReaderViewController` with `WKWebView`. Scroll mode and paginated mode (`PaginationEngine`). `EPUBParser` (ZIPFoundation + NSXMLParser). Custom context menu. Unified `Annotation` model in `BookState.annotationsData: Data?` (JSON `[Annotation]`). Annotation sidebar and popover.
- - **Preferences:** Font picker (curated + `NSFontPanel` system picker). Reload strategy (immediate / onNextOpen / manual). Reader window size (screen-fraction or explicit px). Pagination mode toggle (global, stored in `ReaderPreferences`).
- - **Search:** `SearchQueryParser` (`tag:`, `author:`, `title:` prefix syntax, AND stacking). Autocomplete overlay (`SearchSuggestionsView`). `CalibreFTSLibrary` for FTS5 (optional, transparent fallback to LIKE).
- - **Other:** Reading goal tracking. Collections with `calibreIDsRaw`. CSV export. Notarization scripts.
+- **Data layer:** `CalibreLibrary` (read-only SQLite.swift on Calibre's `metadata.db`), `LibrarySession`, `LibraryRegistry`, optional `CalibreFTSLibrary`, and per-library `AmbrosiaMetaDB`. Book fetches are paginated (100 + 1 per page). Series always joins through `books_series_link + series`; no `b.series` column.
+- **Per-library app DB:** `ambrosia_meta.db` lives under `~/Library/Application Support/Ambrosia/libraries/<hash>/` and stores collections, collection membership, annotations, AO3 metadata, AO3 extraction diagnostics, series cache/placeholders, canonical tags, tag synonyms, parent links, and subtag sections.
+- **Collections:** `CollectionStore` backs system collections: Read Later, Liked, Skipped, Finished, In Progress, Has Annotations, and Series or Merged. `Has Annotations` is synced by annotation writes. `Series or Merged` is synced from collapsed series members and anthology-style merged works.
+- **AO3 extraction:** `AO3MetadataExtractor` uses SwiftSoup. `LibrarySession` extracts from the first few EPUB spine items in the background, persists rich AO3 metadata, writes extraction diagnostics for skipped/failed books, and supports re-extraction from preferences.
+- **Series:** `series_cache` is populated from AO3 metadata and Calibre fallback data. Current UI uses representative grouped/collapsed series rows and `Series or Merged`; the original missing-work placeholder-note sheet is not part of the current UX.
+- **Tag seeds:** Configured AO3 seed databases can be imported into canonical/synonym/hierarchy tables. Storage and seed import are present; complete UI wiring for every tag-bearing surface is not finished.
+- **Library UI:** List view (`LibraryRootView` + `BookListRow`) and Email view (`NSSplitViewController` + `NSTableView` sidebar + SwiftUI detail pane). Native `NSToolbar` via `LibraryToolbarState` (`@Observable`). Filter drawer with `FilterBuilder`. Ranking mode is still a placeholder.
+- **Reader:** `ReaderViewController` with `WKWebView`, scroll mode, paginated mode via CSS multi-column layout, `EPUBParser` (ZIPFoundation + NSXMLParser), custom context menu, annotation sidebar, and annotation popover.
+- **Annotations:** Unified `Annotation` records are persisted in `AmbrosiaMetaDB.annotations`, not SwiftData. Both point annotations and ranged highlights use UTF-16 text-node offsets.
+- **Preferences:** Reader typography, spacing, colors, default reading mode, library appearance, default reader window sizing, context-menu preferences, custom Calibre column labels, AO3 extraction controls, and tag seed configuration.
+- **Search/export:** `SearchQueryParser` supports `tag:`, `author:`, `title:`, `series:` prefix syntax. `CalibreFTSLibrary` provides optional FTS5 search with fallback. CSV export is implemented.
  
  
  ### What does NOT yet exist
-AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard, annotations overhaul, ELO ranking, custom fonts, AO3 login/kudos, collections, annotation export, standalone mode, TOC popup.
+Ranking UI, TOC popup, AO3 login/kudos/bookmarks, saved searches, favourite authors, saved quotes, annotation export/sharing, standalone mode without Calibre, and music integration.
  
  ---
  
@@ -78,11 +83,13 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  
  ---
  
- ## Phase 9 — AO3 EPUB Metadata Extraction
+ ## Phase 9 — AO3 EPUB Metadata Extraction — Status: Mostly complete
  **Dependencies:** M-track complete. Track A (blocks 10, 11, 14 dashboard, 18).
  
  **Goal:** On library open, silently parse AO3 EPUB header pages and persist rich metadata
  not in Calibre's DB.
+
+ **Current repo note:** Implemented with `AO3MetadataExtractor`, `AO3MetadataRecord`, background extraction in `LibrarySession`, `ao3_metadata`, `ao3_extraction_diagnostics`, `ExtractionProgress`, and Preferences re-extraction. Remaining work is polish and any display coverage not yet wired to all planned surfaces.
  
  ### `ao3_metadata` DDL
  ```sql
@@ -168,10 +175,12 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  
  ---
  
- ## Phase 10 — Series Grouping and Cache
+ ## Phase 10 — Series Grouping and Cache — Status: Partially complete
  **Dependencies:** Phase 9. Track A.
  
  **Goal:** Collapse multi-work series into single library rows. Cache series data to avoid per-page Calibre JOINs. Anthology detection. Missing-work warnings.
+
+ **Current repo note:** `series_cache`, Calibre fallback seeding, collapsed series membership, anthology sync, and representative grouped/collapsed series rows are implemented. The original placeholder-note sheet and full concatenated series reader workflow are not current behavior.
  
  ### DDL
  ```sql
@@ -240,6 +249,8 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  Series name (bold), work count ("4 works"), combined word count, date range ("2021–2023"),
  union of all fandoms/tags, warning badge when `missingIndices` non-empty. Clicking warning
  badge → sheet to enter placeholder notes → written to `series_placeholders`.
+
+ **Deviation from current implementation:** Missing-series placeholder note UI was removed from the active UX. `Series or Merged` uses representative grouped/collapsed series rows and system collection membership rather than requiring users to maintain placeholder notes.
  
  ### Series context menu
  - "Open Series" — opens concatenated reader session
@@ -266,12 +277,14 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  
  ---
  
- ## Phase 11 — AO3 Tag Synonyms and Tag Classification
+ ## Phase 11 — AO3 Tag Synonyms and Tag Classification — Status: Partially complete
  **Dependencies:** Phase 9. Track A.
  
  **Goal:** Resolve tag queries to canonical AO3 forms using a pre-built seed database. Wire
  every tag-bearing surface through `TagSynonymResolver`. Treat AO3's structured tag categories
  as first-class distinct fields.
+
+ **Current repo note:** The per-library tag tables exist and configured seed database import/cache clearing is implemented through `AmbrosiaMetaDB` and preferences. Complete query/display wiring across every tag-bearing surface remains incomplete.
  
  ### Background: what the scraper produced
  
@@ -426,7 +439,7 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  
  ---
  
- ## Phase 12 — Reader: Table of Contents Popup
+ ## Phase 12 — Reader: Table of Contents Popup — Status: Not started
  **Dependencies:** None. Track B.
  
  **Goal:** Floating panel showing OPF/NCX TOC beside the reader.
@@ -458,7 +471,7 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  
  ---
  
- ## Phase 13 — Hidden Books, Authors, Tags, and Collections
+ ## Phase 13 — Hidden Books, Authors, Tags, and Collections — Status: Not started
  **Dependencies:** M-track complete. Track C.
  
  **Goal:** Hide books by multiple axes. Hidden state invisible everywhere except
@@ -520,7 +533,7 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  
  ---
  
- ## Phase 14 — Reading Stats, Goals Dashboard, and Read Tracking
+ ## Phase 14 — Reading Stats, Goals Dashboard, and Read Tracking — Status: Partially complete
  **Dependencies:** M-track complete. Phase 9 for accurate `words_read`. Track D.
  
  ### `reading_history` DDL
@@ -614,8 +627,10 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  
  ---
  
- ## Phase 15 — Bookmarks and Annotations Overhaul
+ ## Phase 15 — Bookmarks and Annotations Overhaul — Status: Mostly complete
  **Dependencies:** M-track complete (annotations now in SQLite). Track B.
+
+ **Current repo note:** `Annotation` persistence moved to `AmbrosiaMetaDB.annotations`; reader highlight capture/restore, point annotations, sidebar, popover, and `Has Annotations` membership sync are implemented. Remaining work is export/sharing and any UX refinements called out in later phases.
  
  **Read existing `HighlightBridge`, `mouseup` JS listener, and annotation restore path in full
  before touching anything. Annotations are now read from and written to `AmbrosiaMetaDB` via
@@ -664,7 +679,7 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  
  ---
  
- ## Phase 16 — ELO Ranking System
+ ## Phase 16 — ELO Ranking System — Status: Not started
  **Dependencies:** M-track complete (`eloScore` and `eloMatchCount` added in M4). Track C.
  
  ### `BookState` fields
@@ -709,7 +724,7 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  
  ---
  
- ## Phase 17 — Custom Fonts in Reader
+ ## Phase 17 — Custom Fonts in Reader — Status: Partially complete
  **Dependencies:** None. Track B.
  
  ### Font selection UI (Preferences → Reader)
@@ -742,7 +757,7 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  
  ---
  
- ## Phase 18 — AO3 Login, Kudos, and Bookmarks
+ ## Phase 18 — AO3 Login, Kudos, and Bookmarks — Status: Not started
  **Dependencies:** Phase 9. Track G.
  
  ### `AO3RateLimiter` — implement this first
@@ -800,12 +815,14 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  
  ---
  
- ## Phase 19 — Collections UX, Saved Searches, Favourite Authors, and Saved Quotes
+ ## Phase 19 — Collections UX, Saved Searches, Favourite Authors, and Saved Quotes — Status: Partially complete
  **Dependencies:** M-track complete. Track E.
  
  **The `Collection @Model` and all SwiftData collection code is already removed by the M-track.
  Collections now live in `ambrosia_meta.db` via `CollectionStore`. Read the M-track implementation
  before starting this phase.**
+
+ **Current repo note:** Collection storage, system collection bootstrap, membership APIs, annotation membership sync, and `Series or Merged` sync are implemented. Saved searches, favourite authors, saved quotes, and full user-facing collection UX from this phase remain incomplete.
  
  ### Collections UX
  
@@ -890,7 +907,7 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  
  ---
  
- ## Phase 20 — Annotation Export and Sharing
+ ## Phase 20 — Annotation Export and Sharing — Status: Not started
  **Dependencies:** Phase 15. Track F.
  
  ### `AnnotationExporter`
@@ -933,7 +950,7 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  
  ---
  
- ## Phase 21 — Standalone Mode (No Calibre Required)
+ ## Phase 21 — Standalone Mode (No Calibre Required) — Status: Not started
  **Dependencies:** M-track complete. Track H.
  
  **Goal:** Point Ambrosia at a folder of AO3 EPUBs. Ambrosia generates a Calibre-compatible
@@ -985,7 +1002,7 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  
  ---
  
- ## Phase 23 — macOS Music Player Integration (Stub)
+ ## Phase 23 — macOS Music Player Integration (Stub) — Status: Blocked
  **Dependencies:** Phase 15 merged. **Track I — DO NOT START. Blocked on product owner decisions.**
  
  ### What is blocked
@@ -1005,7 +1022,7 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  
  ---
  
- ## Phase 24 — Music Playlist System
+ ## Phase 24 — Music Playlist System — Status: Blocked
  **Dependencies:** Phase 23 product owner decisions resolved. **Track I — DO NOT START.**
  
  ### DDL
@@ -1208,4 +1225,3 @@ AO3 metadata extraction, series grouping, tag synonyms, reading stats dashboard,
  - [ ] Hierarchy expansion only for fandom/character/relationship types.
  - [ ] All `archiveofourown.org` requests through `AO3RateLimiter`.
  - [ ] `MusicTriggerEngine` reads use read-only `Connection`.
- 
