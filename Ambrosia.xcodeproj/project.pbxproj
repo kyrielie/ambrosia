@@ -22,6 +22,7 @@
 		5037BC30F5C947B49D7196AEF /* LibraryWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5037BC30F5C947B49D7196AE /* LibraryWindowController.swift */; };
 		56289C63BFA2118454C7D2C7F /* ReadingGoalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49EB97076C4987CADEC037C /* ReadingGoalView.swift */; };
 		5CE859818988473590FC2997 /* CalibreLibraryPhase2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C767EA792624845BFBF18EC /* CalibreLibraryPhase2.swift */; };
+		62BD17022FDA2B7000BBB857 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 62BD17012FDA2B7000BBB857 /* Assets.xcassets */; };
 		73D871CF8BD14E60B94CB491F /* ReadingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73D871CF8BD14E60B94CB491 /* ReadingState.swift */; };
 		7E96791E70E24692B2282A1EF /* FilterRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E96791E70E24692B2282A1E /* FilterRule.swift */; };
 		80EBF1ABC2834516B4FD8D2DF /* FilterBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80EBF1ABC2834516B4FD8D2D /* FilterBuilder.swift */; };
@@ -86,6 +87,7 @@
 		3EF30D6D00BA40B691EA8110 /* EPUBParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBParser.swift; sourceTree = "<group>"; };
 		4D1E361C90E1497DA1CD75E2 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		5037BC30F5C947B49D7196AE /* LibraryWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryWindowController.swift; sourceTree = "<group>"; };
+		62BD17012FDA2B7000BBB857 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		73D871CF8BD14E60B94CB491 /* ReadingState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingState.swift; sourceTree = "<group>"; };
 		7E96791E70E24692B2282A1E /* FilterRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterRule.swift; sourceTree = "<group>"; };
 		80EBF1ABC2834516B4FD8D2D /* FilterBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterBuilder.swift; sourceTree = "<group>"; };
@@ -174,6 +176,7 @@
 		1CA363F1AB59489BA9407C58 /* Ambrosia */ = {
 			isa = PBXGroup;
 			children = (
+				62BD17012FDA2B7000BBB857 /* Assets.xcassets */,
 				705BB594EE414BA1A2183507 /* App */,
 				0FB79E6B7F772FC94DF372BD /* Preferences */,
 				B6064A1F96704D96963D3167 /* Database */,
@@ -379,6 +382,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				62BD17022FDA2B7000BBB857 /* Assets.xcassets in Resources */,
 				BB364F9ED5F842B9A84A141CF /* BaseStyles.css in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -528,6 +532,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
 				CODE_SIGN_ENTITLEMENTS = Ambrosia/Ambrosia.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
@@ -617,6 +622,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION = YES;
 				CODE_SIGN_ENTITLEMENTS = Ambrosia/Ambrosia.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";

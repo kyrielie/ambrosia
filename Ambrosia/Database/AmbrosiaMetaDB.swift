@@ -2,6 +2,18 @@ import CryptoKit
 import Foundation
 import SQLite
 
+struct ReadingHistoryEntry: Identifiable, Hashable, Sendable {
+    let id: Int64
+    let calibreID: Int
+    let sessionStart: Date
+    let sessionEnd: Date
+    let wordsRead: Int?
+    let percentStart: Double?
+    let percentEnd: Double?
+    let fandoms: [String]
+    let categories: [String]
+}
+
 func libraryHash(for libraryURL: URL) -> String {
     let resolved = libraryURL.resolvingSymlinksInPath().path
     let digest = SHA256.hash(data: Data(resolved.utf8))
@@ -38,6 +50,7 @@ actor AmbrosiaMetaDB {
         try db.execute("PRAGMA foreign_keys = ON")
         try createCollections(db: db)
         try createAnnotations(db: db)
+        try createReadingHistory(db: db)
         try createAO3Metadata(db: db)
         try createAO3TagSynonyms(db: db)
         try bootstrapSystemCollections(db: db)
@@ -85,6 +98,38 @@ actor AmbrosiaMetaDB {
 
         CREATE INDEX IF NOT EXISTS idx_annotations_position
             ON annotations(calibre_id, spine_index, start_char);
+        """)
+    }
+
+    private static func createReadingHistory(db: Connection) throws {
+        try db.execute("""
+        CREATE TABLE IF NOT EXISTS reading_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            calibre_id INTEGER NOT NULL,
+            session_start TEXT NOT NULL,
+            session_end TEXT NOT NULL,
+            words_read INTEGER,
+            percent_start REAL,
+            percent_end REAL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_reading_history_calibre
+            ON reading_history(calibre_id);
+
+        CREATE INDEX IF NOT EXISTS idx_reading_history_start
+            ON reading_history(session_start);
+
+        CREATE TABLE IF NOT EXISTS book_opens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            calibre_id INTEGER NOT NULL,
+            opened_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_book_opens_calibre
+            ON book_opens(calibre_id);
+
+        CREATE INDEX IF NOT EXISTS idx_book_opens_time
+            ON book_opens(opened_at);
         """)
     }
 
@@ -403,6 +448,126 @@ actor AmbrosiaMetaDB {
             try run(
                 "DELETE FROM collection_members WHERE collection_id = ? AND calibre_id = ?",
                 [SystemCollectionID.hasAnnotations, calibreID]
+            )
+        }
+    }
+
+    func closeZombieReadingSessions(calibreID: Int, endedAt: Date = Date()) throws {
+        let end = ISO8601DateFormatter().string(from: endedAt)
+        try run(
+            """
+            UPDATE reading_history
+            SET session_end = ?
+            WHERE calibre_id = ? AND session_end = session_start
+            """,
+            [end, calibreID]
+        )
+    }
+
+    func startReadingSession(calibreID: Int, percentStart: Double?, startedAt: Date = Date()) throws -> Int64 {
+        let now = ISO8601DateFormatter().string(from: startedAt)
+        try transaction {
+            try run("INSERT INTO book_opens (calibre_id, opened_at) VALUES (?, ?)", [calibreID, now])
+            try run(
+                """
+                INSERT INTO reading_history
+                (calibre_id, session_start, session_end, words_read, percent_start, percent_end)
+                VALUES (?, ?, ?, NULL, ?, ?)
+                """,
+                [calibreID, now, now, percentStart, percentStart]
+            )
+        }
+        let value = try scalar("SELECT last_insert_rowid()")
+        if let int64 = value as? Int64 { return int64 }
+        if let int = value as? Int { return Int64(int) }
+        return 0
+    }
+
+    func updateReadingSession(id: Int64, calibreID: Int, percentEnd: Double?, endedAt: Date = Date()) throws {
+        let end = ISO8601DateFormatter().string(from: endedAt)
+        var wordsRead: Int?
+        if let percentEnd {
+            let row = try prepare(
+                """
+                SELECT rh.percent_start, am.word_count
+                FROM reading_history rh
+                LEFT JOIN ao3_metadata am ON am.calibre_id = rh.calibre_id
+                WHERE rh.id = ? AND rh.calibre_id = ?
+                """,
+                [id, calibreID]
+            ).first
+            let percentStart = row?.double(at: 0) ?? percentEnd
+            if let wordCount = row?.int(at: 1), wordCount > 0 {
+                wordsRead = max(0, Int((percentEnd - percentStart) * Double(wordCount)))
+            }
+        }
+
+        try run(
+            """
+            UPDATE reading_history
+            SET session_end = ?, percent_end = ?, words_read = ?
+            WHERE id = ? AND calibre_id = ?
+            """,
+            [end, percentEnd, wordsRead, id, calibreID]
+        )
+    }
+
+    func completedBooksCount(start: Date, end: Date, threshold: Double = 0.98) throws -> Int {
+        let iso = ISO8601DateFormatter()
+        let startString = iso.string(from: start)
+        let endString = iso.string(from: end)
+        let count = try scalar(
+            """
+            SELECT COUNT(DISTINCT calibre_id)
+            FROM reading_history
+            WHERE session_end >= ?
+              AND session_end <= ?
+              AND percent_end >= ?
+            """,
+            [startString, endString, threshold]
+        )
+        if let value = count as? Int64 { return Int(value) }
+        if let value = count as? Int { return value }
+        return 0
+    }
+
+    func recentReadingHistory(limit: Int = 200) throws -> [ReadingHistoryEntry] {
+        let rows = try prepare(
+            """
+            SELECT rh.id, rh.calibre_id, rh.session_start, rh.session_end,
+                   rh.words_read, rh.percent_start, rh.percent_end,
+                   am.fandoms_json, am.category_json
+            FROM reading_history rh
+            LEFT JOIN ao3_metadata am ON am.calibre_id = rh.calibre_id
+            ORDER BY rh.session_start DESC, rh.id DESC
+            LIMIT ?
+            """,
+            [limit]
+        )
+        let iso = ISO8601DateFormatter()
+        let decoder = JSONDecoder()
+        func decodeStrings(_ value: Binding?) -> [String] {
+            guard let string = value as? String,
+                  let data = string.data(using: .utf8) else { return [] }
+            return (try? decoder.decode([String].self, from: data)) ?? []
+        }
+        return rows.compactMap { row in
+            guard let id = row.int64(at: 0),
+                  let calibreID = row.int(at: 1),
+                  let startString = row[safe: 2] as? String,
+                  let endString = row[safe: 3] as? String,
+                  let start = iso.date(from: startString),
+                  let end = iso.date(from: endString) else { return nil }
+            return ReadingHistoryEntry(
+                id: id,
+                calibreID: calibreID,
+                sessionStart: start,
+                sessionEnd: end,
+                wordsRead: row.int(at: 4),
+                percentStart: row.double(at: 5),
+                percentEnd: row.double(at: 6),
+                fandoms: decodeStrings(row.binding(at: 7)),
+                categories: decodeStrings(row.binding(at: 8))
             )
         }
     }
@@ -795,6 +960,19 @@ private extension Array where Element == Binding? {
     func int(at index: Int) -> Int? {
         if let value = self[safe: index] as? Int64 { return Int(value) }
         return self[safe: index] as? Int
+    }
+
+    func int64(at index: Int) -> Int64? {
+        if let value = self[safe: index] as? Int64 { return value }
+        if let value = self[safe: index] as? Int { return Int64(value) }
+        return nil
+    }
+
+    func double(at index: Int) -> Double? {
+        if let value = self[safe: index] as? Double { return value }
+        if let value = self[safe: index] as? Int64 { return Double(value) }
+        if let value = self[safe: index] as? Int { return Double(value) }
+        return nil
     }
 
     func binding(at index: Int) -> Binding? {

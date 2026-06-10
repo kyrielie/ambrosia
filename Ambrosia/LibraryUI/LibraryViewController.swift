@@ -116,10 +116,8 @@ class LibraryViewController: NSViewController {
 
         case .ranking:
             let placeholder = AnyView(
-                Text("Ranking view coming in D3")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
+                ReadingHistoryView(session: session, modelContainer: modelContainer)
+                    .environment(session)
             )
             let childVC = NSHostingController(rootView: placeholder)
             addChild(childVC)
@@ -151,5 +149,205 @@ class LibraryViewController: NSViewController {
                 self.scheduleViewModeObservation()
             }
         }
+    }
+}
+
+private struct ReadingHistoryView: View {
+    let session: LibrarySession
+    let modelContainer: ModelContainer
+
+    @State private var rows: [ReadingHistoryDisplayRow] = []
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            if isLoading && rows.isEmpty {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let errorMessage {
+                ContentUnavailableView("Reading History Unavailable", systemImage: "clock.badge.exclamationmark", description: Text(errorMessage))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if rows.isEmpty {
+                ContentUnavailableView("No Reading History", systemImage: "clock", description: Text("Open a work in the reader to start logging sessions."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(rows) { row in
+                            ReadingHistoryRow(row: row) {
+                                ReaderWindowController.open(book: row.book, modelContainer: modelContainer)
+                            }
+                            Divider()
+                        }
+                    }
+                }
+            }
+        }
+        .task { await loadRows() }
+    }
+
+    private var header: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Reading History")
+                    .font(.title3.weight(.semibold))
+                Text("Recent reader sessions")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                Task { await loadRows() }
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+    }
+
+    @MainActor
+    private func loadRows() async {
+        guard let metaDB = session.metaDB, let library = session.library else {
+            rows = []
+            errorMessage = "Open a Calibre library first."
+            return
+        }
+        isLoading = true
+        errorMessage = nil
+        do {
+            let entries = try await metaDB.recentReadingHistory(limit: 250)
+            let ids = Array(Set(entries.map(\.calibreID)))
+            let bookMap = Dictionary(uniqueKeysWithValues: library.booksForIDs(ids).map { ($0.id, $0) })
+            rows = entries.compactMap { entry in
+                guard let book = bookMap[entry.calibreID] else { return nil }
+                return ReadingHistoryDisplayRow(entry: entry, book: book)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+            rows = []
+        }
+        isLoading = false
+    }
+}
+
+private struct ReadingHistoryDisplayRow: Identifiable, Hashable {
+    let entry: ReadingHistoryEntry
+    let book: CalibreBook
+
+    var id: Int64 { entry.id }
+}
+
+private struct ReadingHistoryRow: View {
+    let row: ReadingHistoryDisplayRow
+    let open: () -> Void
+
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(row.book.displayTitle)
+                            .font(.headline)
+                            .lineLimit(1)
+                        Text(row.book.displayAuthors)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("Opened \(Self.timestampFormatter.string(from: row.entry.sessionStart))")
+                        Text("Closed \(Self.timestampFormatter.string(from: row.entry.sessionEnd))")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+                if let description = conciseDescription {
+                    Text(description)
+                        .font(.callout)
+                        .foregroundStyle(.primary)
+                        .lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                tagLine
+
+                ProgressView(value: progress)
+                    .tint(progress >= 1 ? .green : .accentColor)
+                HStack {
+                    Text(progressText)
+                    if let wordsRead = row.entry.wordsRead, wordsRead > 0 {
+                        Text("\(wordsRead.formatted()) words")
+                    }
+                    Spacer()
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var tagLine: some View {
+        let fandoms = Array(row.entry.fandoms.prefix(4))
+        let categories = Array(row.entry.categories.prefix(4))
+        if !fandoms.isEmpty || !categories.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(fandoms, id: \.self) { tag in
+                    HistoryPill(text: tag, systemImage: "sparkles")
+                }
+                ForEach(categories, id: \.self) { tag in
+                    HistoryPill(text: tag, systemImage: "person.2")
+                }
+                Spacer()
+            }
+        }
+    }
+
+    private var conciseDescription: String? {
+        guard let description = row.book.displayComment?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !description.isEmpty else { return nil }
+        if description.count <= 300 { return description }
+        let end = description.index(description.startIndex, offsetBy: 300)
+        return String(description[..<end]).trimmingCharacters(in: .whitespacesAndNewlines) + "..."
+    }
+
+    private var progress: Double {
+        min(max(row.entry.percentEnd ?? 0, 0), 1)
+    }
+
+    private var progressText: String {
+        "\(Int((progress * 100).rounded()))%"
+    }
+}
+
+private struct HistoryPill: View {
+    let text: String
+    let systemImage: String
+
+    var body: some View {
+        Label(text, systemImage: systemImage)
+            .font(.caption)
+            .lineLimit(1)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Color.accentColor.opacity(0.10))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 }
