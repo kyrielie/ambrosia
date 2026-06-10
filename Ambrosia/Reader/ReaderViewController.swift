@@ -247,8 +247,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                     firstParser = parser
                     firstImageBaseURL = imageBase
                 }
+                let displayIndex = series.displayIndex(for: work) ?? offset + 1
                 let breakHTML = """
-                <div class="ambrosia-series-break"><h2>Work \(offset + 1): \(Self.escapeHTML(work.displayTitle))</h2></div>
+                <div class="ambrosia-series-break"><h2>Work \(displayIndex): \(Self.escapeHTML(work.displayTitle))</h2></div>
                 """
                 let workHTML = try parser.mergedHTML(userCSS: ReaderPreferences.shared.css)
                 parts.append(breakHTML + workHTML)

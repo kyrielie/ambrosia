@@ -1,4 +1,6 @@
 enum SystemCollectionID {
+    static let seriesOrMergedName = "Series or Merged"
+
     static let readLater = "00000000-0000-0000-0000-000000000001"
     static let liked = "00000000-0000-0000-0000-000000000002"
     static let skipped = "00000000-0000-0000-0000-000000000003"
@@ -14,6 +16,6 @@ enum SystemCollectionID {
         (finished, "Finished", "automated", 3),
         (inProgress, "In Progress", "automated", 4),
         (hasAnnotations, "Has Annotations", "automated", 5),
-        (seriesOrMerged, "Series or Merged", "automated", 6),
+        (seriesOrMerged, seriesOrMergedName, "automated", 6),
     ]
 }

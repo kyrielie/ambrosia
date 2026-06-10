@@ -177,6 +177,12 @@ struct SeriesGroup: Identifiable, Hashable {
 
     var coverBook: CalibreBook? { works.first }
 
+    func displayIndex(for work: CalibreBook) -> Int? {
+        guard let offset = works.firstIndex(where: { $0.id == work.id }),
+              offset < workIndices.count else { return nil }
+        return workIndices[offset]
+    }
+
     var indexRangeText: String {
         let unique = Array(Set(workIndices)).sorted()
         guard !unique.isEmpty else { return "" }

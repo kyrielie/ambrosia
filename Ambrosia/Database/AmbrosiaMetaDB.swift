@@ -758,6 +758,31 @@ actor AmbrosiaMetaDB {
         let rows = try prepare(sql)
         return Set(rows.compactMap { $0.int(at: 0) })
     }
+
+    func collapsedSeriesRepresentativeIDs() throws -> Set<Int> {
+        let sql = """
+        WITH ordered AS (
+            SELECT calibre_id,
+                   COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name) AS series_key,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
+                       ORDER BY series_index ASC, calibre_id ASC
+                   ) AS rn,
+                   COUNT(*) OVER (
+                       PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
+                   ) AS series_count,
+                   MAX(is_anthology) OVER (
+                       PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
+                   ) AS anthology
+            FROM series_cache
+        )
+        SELECT calibre_id
+        FROM ordered
+        WHERE series_count > 1 AND anthology = 0 AND rn = 1
+        """
+        let rows = try prepare(sql)
+        return Set(rows.compactMap { $0.int(at: 0) })
+    }
 }
 
 private extension Array {

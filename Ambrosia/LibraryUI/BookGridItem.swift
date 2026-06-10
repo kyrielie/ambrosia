@@ -250,7 +250,7 @@ struct LibraryRootView: View {
     }
 
     private func rebuildItems() {
-        guard toolbarState.groupBySeries, let metaDB = session.metaDB, let library = session.library else {
+        guard shouldGroupSeriesRows, let metaDB = session.metaDB, let library = session.library else {
             items = books.map { .book($0) }
             return
         }
@@ -362,6 +362,10 @@ struct LibraryRootView: View {
         }
     }
 
+    private var shouldGroupSeriesRows: Bool {
+        toolbarState.groupBySeries || toolbarState.filterExpression.hasSeriesOrMergedEqualsRule
+    }
+
     private func visibleIDs(_ ids: [Int]) -> [Int] {
         ids.filter { id in
             (prefs.showSkippedCollection || !skippedIDs.contains(id)) &&
@@ -404,7 +408,7 @@ struct LibraryRootView: View {
             let needsLiked = toolbarState.filterExpression.groups.flatMap(\.rules).contains { $0.field == .isLiked }
             let currentLikedIDs = needsLiked ? ((try? await session.collectionStore?.likedIDs()) ?? []) : []
             let needsCollection = toolbarState.filterExpression.groups.flatMap(\.rules).contains { $0.field == .collection }
-            let collectionMap = needsCollection ? ((try? await session.collectionStore?.membershipMap()) ?? [:]) : [:]
+            var collectionMap = needsCollection ? ((try? await session.collectionStore?.membershipMap()) ?? [:]) : [:]
             let statusValues = Set(toolbarState.filterExpression.groups
                 .flatMap(\.rules)
                 .filter { $0.field == .status }
@@ -413,6 +417,9 @@ struct LibraryRootView: View {
             if let metaDB = session.metaDB {
                 for status in statusValues {
                     statusMap[status] = (try? await metaDB.ao3CompletionStatusIDs(status)) ?? []
+                }
+                if needsCollection && toolbarState.filterExpression.referencesSeriesOrMergedCollection {
+                    collectionMap[SystemCollectionID.seriesOrMergedName] = (try? await metaDB.collapsedSeriesRepresentativeIDs()) ?? []
                 }
             }
             let builder = FilterBuilder(library: library)
@@ -575,14 +582,7 @@ struct LibraryRootView: View {
             onTagTap: { tag, field in
                 addTagPillRule(tag: tag, field: field)
             },
-            onOpen: { AppDelegate.shared?.openReaderWindow(target: .series(series), modelContext: modelContext) },
-            onShowWorks: {},
-            onSavePlaceholder: { index, note in
-                Task {
-                    try? await session.metaDB?.upsertPlaceholder(seriesKey: series.seriesKey, seriesName: series.seriesName, partIndex: index, note: note)
-                    await MainActor.run { loadPage() }
-                }
-            }
+            onOpen: { AppDelegate.shared?.openReaderWindow(target: .series(series), modelContext: modelContext) }
         )
         .listRowSeparator(.visible)
         .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
@@ -1303,12 +1303,8 @@ private struct SeriesListRow: View {
     let hideFanworksTagPill: Bool
     let onTagTap: (String, FilterField) -> Void
     let onOpen: () -> Void
-    let onShowWorks: () -> Void
-    let onSavePlaceholder: (Int, String?) -> Void
 
     @State private var showIndex = false
-    @State private var placeholderIndex = ""
-    @State private var placeholderNote = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1353,7 +1349,6 @@ private struct SeriesListRow: View {
             Button("Open Series", action: onOpen)
             Button("Show Individual Works") {
                 showIndex = true
-                onShowWorks()
             }
         }
     }
@@ -1411,34 +1406,31 @@ private struct SeriesListRow: View {
     private var indexPopover: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(series.seriesName).font(.headline)
-            ForEach(Array(series.works.enumerated()), id: \.element.id) { offset, work in
-                HStack {
-                    Text("\(offset + 1).")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, alignment: .trailing)
-                    Text(work.displayTitle).lineLimit(1)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    ForEach(series.works, id: \.id) { work in
+                        HStack {
+                            Text("\(series.displayIndex(for: work) ?? 0).")
+                                .foregroundStyle(.secondary)
+                                .frame(width: 28, alignment: .trailing)
+                            Text(work.displayTitle).lineLimit(1)
+                        }
+                    }
                 }
             }
+            .frame(maxHeight: 360)
+
             if !series.missingIndices.isEmpty {
                 Divider()
                 Text("Missing: \(series.missingIndices.map(String.init).joined(separator: ", "))")
                     .font(.caption)
                     .foregroundStyle(.orange)
-                HStack {
-                    TextField("Part", text: $placeholderIndex)
-                        .frame(width: 48)
-                    TextField("Note", text: $placeholderNote)
-                    Button("Save") {
-                        guard let index = Int(placeholderIndex) else { return }
-                        onSavePlaceholder(index, placeholderNote.isEmpty ? nil : placeholderNote)
-                        placeholderIndex = ""
-                        placeholderNote = ""
-                    }
-                }
             }
         }
         .padding(14)
         .frame(width: 340)
+        .frame(maxHeight: 460)
     }
 }
 

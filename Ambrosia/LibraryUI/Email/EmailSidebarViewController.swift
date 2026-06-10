@@ -21,7 +21,7 @@ final class EmailSidebarViewController: NSViewController,
     // MARK: - Callbacks (set by parent before viewDidLoad)
 
     var onSelect:      ((CalibreBook?) -> Void)?
-    var onOpen:        ((CalibreBook) -> Void)?
+    var onOpen:        ((ReadingTarget) -> Void)?
     var onLoadMore:    (() -> Void)?
     var onEditFilter:  (() -> Void)?
     var onClearFilter: (() -> Void)?
@@ -40,7 +40,8 @@ final class EmailSidebarViewController: NSViewController,
 
     // MARK: - Data (set externally; didSet triggers reload)
 
-    var books:      [CalibreBook]    = [] { didSet { reloadBooksPreservingSingleSelection(from: oldValue) } }
+    var books:      [CalibreBook]    = [] { didSet { items = books.map { .book($0) } } }
+    var items:      [LibraryItem]    = [] { didSet { reloadItemsPreservingSingleSelection(from: oldValue) } }
     var bookStates: [Int: BookState] = [:] { didSet { reloadVisibleRows() } }
     var ao3Metadata: [Int: AO3MetadataRecord] = [:] { didSet { reloadVisibleRows() } }
     var likedIDs: Set<Int> = []
@@ -117,7 +118,7 @@ final class EmailSidebarViewController: NSViewController,
 
     // MARK: - NSTableViewDataSource
 
-    func numberOfRows(in tableView: NSTableView) -> Int { books.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { items.count }
 
     // MARK: - NSTableViewDelegate
 
@@ -132,11 +133,10 @@ final class EmailSidebarViewController: NSViewController,
             cell = EmailBookCellView()
             cell.identifier = id
         }
-        let book = books[row]
         cell.configure(
-            book: book,
-            readPercent: bookStates[book.id]?.totalReadPercent ?? 0,
-            ao3Metadata: ao3Metadata[book.id]
+            item: items[row],
+            readPercent: bookStates[items[row].primaryBook.id]?.totalReadPercent ?? 0,
+            ao3Metadata: ao3Metadata[items[row].primaryBook.id]
         )
         return cell
     }
@@ -150,8 +150,8 @@ final class EmailSidebarViewController: NSViewController,
 
     @objc private func handleDoubleClick() {
         let row = tableView.clickedRow
-        guard row >= 0, row < books.count else { return }
-        onOpen?(books[row])
+        guard row >= 0, row < items.count else { return }
+        onOpen?(items[row].readingTarget)
     }
 
     // MARK: - Scroll pagination
@@ -172,8 +172,8 @@ final class EmailSidebarViewController: NSViewController,
     // MARK: - Context menu (called by SidebarTableView on right-click)
 
     func contextMenu(for row: Int) -> NSMenu? {
-        guard row >= 0, row < books.count else { return nil }
-        let book = books[row]
+        guard row >= 0, row < items.count else { return nil }
+        let book = items[row].primaryBook
         let selectedBooks = contextBooks(fallbackRow: row)
         let selectedIDs = Set(selectedBooks.map(\.id))
         let isBulk = selectedBooks.count > 1
@@ -304,7 +304,7 @@ final class EmailSidebarViewController: NSViewController,
     }
 
     func updateSelectionForContextClick(row: Int, event: NSEvent) {
-        guard row >= 0, row < books.count else { return }
+        guard row >= 0, row < items.count else { return }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if modifiers.contains(.command) {
             if tableView.selectedRowIndexes.contains(row) {
@@ -323,28 +323,40 @@ final class EmailSidebarViewController: NSViewController,
 
     private func contextBooks(fallbackRow row: Int) -> [CalibreBook] {
         let selected = tableView.selectedRowIndexes.compactMap { idx in
-            idx >= 0 && idx < books.count ? books[idx] : nil
-        }
-        return selected.isEmpty ? [books[row]] : selected
+            idx >= 0 && idx < items.count ? items[idx].contextBooks : nil
+        }.flatMap { $0 }
+        return selected.isEmpty ? items[row].contextBooks : selected
     }
 
-    private func reloadBooksPreservingSingleSelection(from oldBooks: [CalibreBook]) {
+    private func reloadItemsPreservingSingleSelection(from oldItems: [LibraryItem]) {
         guard let tableView else { return }
         let selectedIndexes = tableView.selectedRowIndexes
         let selectedID = selectedIndexes.count == 1
-            ? selectedIndexes.compactMap { idx in idx >= 0 && idx < oldBooks.count ? oldBooks[idx].id : nil }.first
+            ? selectedIndexes.compactMap { idx in idx >= 0 && idx < oldItems.count ? oldItems[idx].primaryBook.id : nil }.first
             : nil
 
         isRestoringSelection = true
         tableView.reloadData()
         tableView.deselectAll(nil)
 
-        if let selectedID, let restoredIndex = books.firstIndex(where: { $0.id == selectedID }) {
+        if let selectedID, let restoredIndex = items.firstIndex(where: { $0.primaryBook.id == selectedID }) {
             tableView.selectRowIndexes(IndexSet(integer: restoredIndex), byExtendingSelection: false)
         }
         isRestoringSelection = false
 
         onSelect?(singleSelectedBook())
+    }
+
+    private func reloadBooksPreservingSingleSelection(from oldBooks: [CalibreBook]) {
+        reloadItemsPreservingSingleSelection(from: oldBooks.map { .book($0) })
+    }
+
+    private func singleSelectedBook() -> CalibreBook? {
+        let indexes = tableView.selectedRowIndexes
+        guard indexes.count == 1, let row = indexes.first, row >= 0, row < items.count else {
+            return nil
+        }
+        return items[row].primaryBook
     }
 
     private func reloadVisibleRows() {
@@ -357,15 +369,34 @@ final class EmailSidebarViewController: NSViewController,
         )
     }
 
-    private func singleSelectedBook() -> CalibreBook? {
-        let indexes = tableView.selectedRowIndexes
-        guard indexes.count == 1, let row = indexes.first, row >= 0, row < books.count else {
-            return nil
+    deinit { NotificationCenter.default.removeObserver(self) }
+}
+
+private extension LibraryItem {
+    var primaryBook: CalibreBook {
+        switch self {
+        case .book(let book): return book
+        case .series(let series): return series.primaryBook
         }
-        return books[row]
     }
 
-    deinit { NotificationCenter.default.removeObserver(self) }
+    var contextBooks: [CalibreBook] {
+        switch self {
+        case .book(let book): return [book]
+        case .series(let series): return series.works
+        }
+    }
+
+    var readingTarget: ReadingTarget {
+        switch self {
+        case .book(let book): return .singleBook(book)
+        case .series(let series): return .series(series)
+        }
+    }
+}
+
+private extension SeriesGroup {
+    var primaryBook: CalibreBook { works.first! }
 }
 
 // MARK: - EmailBookCellView
@@ -470,10 +501,17 @@ final class EmailBookCellView: NSTableCellView {
 
     private var progressWidthConstraint: NSLayoutConstraint?
 
-    func configure(book: CalibreBook, readPercent: Double, ao3Metadata: AO3MetadataRecord?) {
-        titleLabel.stringValue  = book.displayTitle
-        authorLabel.attributedStringValue = Self.authorLine(for: book, ao3Metadata: ao3Metadata)
-        configureMetadataPills(ao3Metadata)
+    func configure(item: LibraryItem, readPercent: Double, ao3Metadata: AO3MetadataRecord?) {
+        switch item {
+        case .book(let book):
+            titleLabel.stringValue = book.displayTitle
+            authorLabel.attributedStringValue = Self.authorLine(for: book, ao3Metadata: ao3Metadata)
+            configureMetadataPills(ao3Metadata)
+        case .series(let series):
+            titleLabel.stringValue = series.seriesName
+            authorLabel.attributedStringValue = Self.seriesLine(for: series)
+            configureSeriesPills(series)
+        }
 
         if readPercent > 0.01 {
             let pct = Int((min(readPercent, 1.0) * 100).rounded())
@@ -497,6 +535,24 @@ final class EmailBookCellView: NSTableCellView {
             progressWidthConstraint = prop
         } else {
             progressFill.isHidden = true
+        }
+    }
+
+    private func configureSeriesPills(_ series: SeriesGroup) {
+        metadataStack.arrangedSubviews.forEach { view in
+            metadataStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        var seen = Set<String>()
+        let pills = series.allFandoms.prefix(3).compactMap { value -> (String, NSColor)? in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return nil }
+            return (trimmed, NSColor.systemPurple)
+        }
+        metadataClip.isHidden = pills.isEmpty
+        for (label, color) in pills {
+            metadataStack.addArrangedSubview(Self.metadataPill(label: label, color: color))
         }
     }
 
@@ -552,6 +608,31 @@ final class EmailBookCellView: NSTableCellView {
                 .foregroundColor: NSColor.tertiaryLabelColor,
             ]
         ))
+        return result
+    }
+
+    private static func seriesLine(for series: SeriesGroup) -> NSAttributedString {
+        let result = NSMutableAttributedString(
+            string: series.displayAuthors,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+        )
+        let details = [
+            "\(series.works.count) works",
+            series.displayWordCount.isEmpty ? nil : series.displayWordCount,
+            series.displayChapterCount.isEmpty ? nil : series.displayChapterCount,
+        ].compactMap { $0 }
+        if !details.isEmpty {
+            result.append(NSAttributedString(
+                string: "  \(details.joined(separator: "  "))",
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 10),
+                    .foregroundColor: NSColor.tertiaryLabelColor,
+                ]
+            ))
+        }
         return result
     }
 

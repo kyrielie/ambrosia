@@ -32,6 +32,7 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Pagination
 
     private var books:      [CalibreBook]    = []
+    private var items:      [LibraryItem]    = []
     var currentBooks: [CalibreBook] { books }
     var bookStates: [Int: BookState] = [:]
     private var ao3Metadata: [Int: AO3MetadataRecord] = [:]
@@ -134,10 +135,10 @@ final class EmailLibraryViewController: NSViewController {
         sidebarVC = EmailSidebarViewController()
         sidebarVC.toolbarState = toolbarState
         sidebarVC.onSelect     = { [weak self] book in self?.setSelectedBook(book) }
-        sidebarVC.onOpen       = { [weak self] book in
+        sidebarVC.onOpen       = { [weak self] target in
             guard let self else { return }
             let ctx = ModelContext(modelContainer)
-            AppDelegate.shared?.openReaderWindow(book: book, modelContext: ctx)
+            AppDelegate.shared?.openReaderWindow(target: target, modelContext: ctx)
         }
         sidebarVC.onLoadMore   = { [weak self] in self?.loadNextPageIfAvailable() }
         sidebarVC.onEditFilter = { [weak self] in
@@ -377,7 +378,7 @@ final class EmailLibraryViewController: NSViewController {
             let currentLikedIDs = needsLiked ? ((try? await session.collectionStore?.likedIDs()) ?? []) : []
             let needsCollection = toolbarState.filterExpression.groups
                 .flatMap(\.rules).contains { $0.field == .collection }
-            let collectionMap = needsCollection ? ((try? await session.collectionStore?.membershipMap()) ?? [:]) : [:]
+            var collectionMap = needsCollection ? ((try? await session.collectionStore?.membershipMap()) ?? [:]) : [:]
             let statusValues = Set(toolbarState.filterExpression.groups
                 .flatMap(\.rules)
                 .filter { $0.field == .status }
@@ -386,6 +387,9 @@ final class EmailLibraryViewController: NSViewController {
             if let metaDB = session.metaDB {
                 for status in statusValues {
                     statusMap[status] = (try? await metaDB.ao3CompletionStatusIDs(status)) ?? []
+                }
+                if needsCollection && toolbarState.filterExpression.referencesSeriesOrMergedCollection {
+                    collectionMap[SystemCollectionID.seriesOrMergedName] = (try? await metaDB.collapsedSeriesRepresentativeIDs()) ?? []
                 }
             }
 
@@ -418,9 +422,11 @@ final class EmailLibraryViewController: NSViewController {
     func loadPage(reset: Bool) {
         guard let library = session.library else {
             books = []
+            items = []
             ao3Metadata = [:]
             setSelectedBook(nil)
             sidebarVC?.books = []
+            sidebarVC?.items = []
             sidebarVC?.ao3Metadata = [:]
             return
         }
@@ -456,11 +462,86 @@ final class EmailLibraryViewController: NSViewController {
         let page    = Array(visible.prefix(pageSize))
         if reset { books = page } else { books.append(contentsOf: page) }
 
+        rebuildSidebarItems()
         sidebarVC?.books      = books
         sidebarVC?.bookStates = bookStates
         sidebarVC?.ao3Metadata = ao3Metadata
         sidebarVC?.likedIDs = likedIDs
         loadAO3MetadataForSidebarBooks()
+    }
+
+    private func rebuildSidebarItems() {
+        guard toolbarState.filterExpression.hasSeriesOrMergedEqualsRule,
+              let metaDB = session.metaDB,
+              let library = session.library else {
+            items = books.map { .book($0) }
+            sidebarVC?.items = items
+            return
+        }
+
+        let pageBooks = books
+        Task {
+            let pageIDs = pageBooks.map(\.id)
+            let entries = (try? await metaDB.seriesEntries(for: pageIDs)) ?? []
+            let groupedEntries = Dictionary(grouping: entries.filter { !$0.isAnthology }, by: \.seriesKey)
+            let seriesKeys = groupedEntries.keys.sorted()
+            let allEntries = (try? await metaDB.seriesEntries(keys: seriesKeys)) ?? []
+            let allIDs = Array(Set(allEntries.map(\.calibreID)))
+            let allBooks = library.booksForIDs(allIDs)
+            let metadata = (try? await metaDB.ao3Metadata(for: allIDs)) ?? [:]
+            let placeholders = (try? await metaDB.placeholders(for: seriesKeys)) ?? [:]
+            let byID = Dictionary(uniqueKeysWithValues: allBooks.map { ($0.id, $0) })
+            let entriesBySeries = Dictionary(grouping: allEntries.filter { !$0.isAnthology }, by: \.seriesKey)
+            var groups: [String: SeriesGroup] = [:]
+
+            for (seriesKey, entries) in entriesBySeries {
+                let sortedEntries = entries.sorted { $0.seriesIndex < $1.seriesIndex }
+                let works = sortedEntries.compactMap { byID[$0.calibreID] }
+                guard works.count > 1, works.allSatisfy({ !($0.isDescriptionAnthology) }) else { continue }
+                let seriesMetadata = works.compactMap { metadata[$0.id] }
+                let chapterRecords = seriesMetadata.filter { $0.chapterCurrent != nil }
+                let chapterTotalKnownForAll = !chapterRecords.isEmpty && chapterRecords.count == works.count && chapterRecords.allSatisfy { $0.chapterTotal != nil }
+                let indices = sortedEntries.map(\.seriesIndex)
+                groups[seriesKey] = SeriesGroup(
+                    id: seriesKey,
+                    seriesKey: seriesKey,
+                    seriesName: sortedEntries.first?.seriesName ?? seriesKey,
+                    works: works.sorted { left, right in
+                        (sortedEntries.first { $0.calibreID == left.id }?.seriesIndex ?? 0) <
+                        (sortedEntries.first { $0.calibreID == right.id }?.seriesIndex ?? 0)
+                    },
+                    allFandoms: Array(Set(seriesMetadata.flatMap(\.fandoms))).sorted(),
+                    allTags: Array(Set(works.flatMap(\.tags) + seriesMetadata.flatMap(\.additionalTags))).sorted(),
+                    allAuthors: Array(Set(works.flatMap(\.authors))).sorted(),
+                    allDescriptions: works.compactMap(\.displayComment),
+                    totalWordCount: works.reduce(0) { $0 + (metadata[$1.id]?.wordCount ?? $1.wordCount ?? 0) },
+                    chapterCurrentTotal: chapterRecords.isEmpty ? nil : chapterRecords.reduce(0) { $0 + ($1.chapterCurrent ?? 0) },
+                    chapterTotalTotal: chapterTotalKnownForAll ? chapterRecords.reduce(0) { $0 + ($1.chapterTotal ?? 0) } : nil,
+                    hasUnknownChapterTotal: !chapterRecords.isEmpty && !chapterTotalKnownForAll,
+                    earliestPublished: seriesMetadata.compactMap { parseISODate($0.publishedDate) }.min(),
+                    latestUpdated: seriesMetadata.compactMap { parseISODate($0.updatedDate) }.max(),
+                    workIndices: indices,
+                    missingIndices: missingIndices(in: indices),
+                    placeholders: placeholders[seriesKey] ?? [],
+                    isComplete: !seriesMetadata.isEmpty && seriesMetadata.allSatisfy(\.isComplete)
+                )
+            }
+
+            var nextItems: [LibraryItem] = []
+            for book in pageBooks {
+                if let entry = entries.first(where: { $0.calibreID == book.id && !$0.isAnthology }),
+                   let group = groups[entry.seriesKey] {
+                    nextItems.append(.series(group))
+                } else {
+                    nextItems.append(.book(book))
+                }
+            }
+            await MainActor.run {
+                guard self.books.map(\.id) == pageBooks.map(\.id) else { return }
+                self.items = nextItems
+                self.sidebarVC?.items = nextItems
+            }
+        }
     }
 
     private func loadAO3MetadataForSidebarBooks() {
@@ -730,4 +811,20 @@ struct FilterSheetCarrier: View {
                 }
             }
     }
+}
+
+private func missingIndices(in indices: [Int]) -> [Int] {
+    let unique = Array(Set(indices)).sorted()
+    guard let last = unique.last, last > 1 else { return [] }
+    let present = Set(unique)
+    return (1...last).filter { !present.contains($0) }
+}
+
+private func parseISODate(_ value: String?) -> Date? {
+    guard let value, !value.isEmpty else { return nil }
+    let iso = ISO8601DateFormatter()
+    if let date = iso.date(from: value) { return date }
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd"
+    return formatter.date(from: value)
 }

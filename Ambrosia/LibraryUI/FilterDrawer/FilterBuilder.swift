@@ -9,6 +9,23 @@ struct FilterResult {
     let totalCount: Int
 }
 
+extension FilterExpression {
+    var hasSeriesOrMergedEqualsRule: Bool {
+        groups.flatMap(\.rules).contains {
+            $0.field == .collection &&
+            $0.op == .equals &&
+            $0.value == SystemCollectionID.seriesOrMergedName
+        }
+    }
+
+    var referencesSeriesOrMergedCollection: Bool {
+        groups.flatMap(\.rules).contains {
+            $0.field == .collection &&
+            $0.value == SystemCollectionID.seriesOrMergedName
+        }
+    }
+}
+
 // MARK: - FilterBuilder
 
 struct FilterBuilder {
