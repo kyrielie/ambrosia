@@ -494,10 +494,16 @@ struct LibraryRootView: View {
         let all = (try? modelContext.fetch(FetchDescriptor<BookState>())) ?? []
         bookStates = all.reduce(into: [:]) { $0[$1.calibreID] = $1 }
         Task {
-            let currentLiked = (try? await session.collectionStore?.likedIDs()) ?? []
-            let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
-            let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
-            let currentAO3PublisherIDs = session.library?.ao3PublisherBookIDs() ?? []
+            async let fetchedLiked = session.collectionStore?.likedIDs()
+            async let fetchedSkipped = session.collectionStore?.members(of: SystemCollectionID.skipped)
+            async let fetchedSeriesOrMerged = session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)
+            async let fetchedPublisherIDs: Set<Int> = Task.detached(priority: .userInitiated) {
+                session.library?.ao3PublisherBookIDs() ?? []
+            }.value
+            let currentLiked = (try? await fetchedLiked) ?? []
+            let currentSkipped = Set((try? await fetchedSkipped) ?? [])
+            let currentSeriesOrMerged = Set((try? await fetchedSeriesOrMerged) ?? [])
+            let currentAO3PublisherIDs = await fetchedPublisherIDs
             await MainActor.run {
             likedIDs = currentLiked
             skippedIDs = currentSkipped
@@ -619,21 +625,31 @@ struct LibraryRootView: View {
                     .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
                 return (key, Set(session.cachedFulltextIDs(for: rule.value) ?? []))
             })
+            // Run matchingIDs and all post-filter data fetches concurrently and
+            // off the main actor. matchingIDs uses Task.detached internally;
+            // the three membership fetches are actor-isolated but independent.
             let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary)
-            let result = builder.matchingIDs(
+            async let asyncResult = builder.matchingIDs(
                 expression: expression,
                 likedIDs: currentLikedIDs,
                 collectionMap: collectionMap,
                 statusMap: statusMap,
                 fulltextMap: fulltextMap
             )
-            let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
-            let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
+            async let fetchedSkipped = session.collectionStore?.members(of: SystemCollectionID.skipped)
+            async let fetchedSeriesOrMerged = session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)
+            async let fetchedPublisherIDs: Set<Int> = Task.detached(priority: .userInitiated) {
+                session.library?.ao3PublisherBookIDs() ?? []
+            }.value
+            let result = await asyncResult
+            let currentSkipped = Set((try? await fetchedSkipped) ?? [])
+            let currentSeriesOrMerged = Set((try? await fetchedSeriesOrMerged) ?? [])
+            let publisherIDs = await fetchedPublisherIDs
             let filteredIDs = prefs.showSkippedCollection
                 ? result.calibreIDs
                 : result.calibreIDs.filter { !currentSkipped.contains($0) }
             let visibleFilteredIDs = filteredIDs.filter { !currentSeriesOrMerged.contains($0) }
-                .filter { !prefs.hideNonAO3PublisherBooks || (session.library?.ao3PublisherBookIDs() ?? []).contains($0) }
+                .filter { !prefs.hideNonAO3PublisherBooks || publisherIDs.contains($0) }
             guard toolbarState.libraryFilterApplicationToken == token else { return }
             defer { toolbarState.finishLibraryFilterApplication(token: token) }
             toolbarState.activeFilterResult = FilterResult(

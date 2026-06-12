@@ -531,7 +531,7 @@ final class EmailLibraryViewController: NSViewController {
             })
 
             let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary)
-            let result = builder.matchingIDs(
+            let result = await builder.matchingIDs(
                 expression: expression,
                 likedIDs:      currentLikedIDs,
                 collectionMap: collectionMap,

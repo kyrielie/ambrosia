@@ -23,13 +23,24 @@ func libraryHash(for libraryURL: URL) -> String {
 actor AmbrosiaMetaDB {
     let libraryHash: String
     let databaseURL: URL
+    /// Write connection — holds the WAL writer lock during transactions.
     private let db: Connection
+    /// Read-only connection — under WAL mode SQLite allows concurrent reads
+    /// even while a write transaction is in progress, so collection/filter
+    /// queries are never queued behind AO3 extraction inserts.
+    private let readDB: Connection
 
     init(libraryURL: URL) throws {
         self.libraryHash = Ambrosia.libraryHash(for: libraryURL)
         let dir = try Self.databaseDirectory(for: libraryHash)
         self.databaseURL = dir.appendingPathComponent("ambrosia_meta.db")
-        self.db = try Connection(databaseURL.path)
+        let writePath = databaseURL.path
+        self.db = try Connection(writePath)
+        self.readDB = try Connection(writePath, readonly: true)
+        // WAL mode: readers never block writers and writers never block readers.
+        // Must be set on the write connection before migrations run.
+        try db.execute("PRAGMA journal_mode = WAL")
+        try db.execute("PRAGMA synchronous = NORMAL")
         try Self.runMigrations(db: db)
     }
 
@@ -361,15 +372,22 @@ actor AmbrosiaMetaDB {
     }
 
     func prepare(_ sql: String, _ bindings: [Binding?] = []) throws -> [[Binding?]] {
-        try db.prepare(sql, bindings).map { $0 }
+        try readDB.prepare(sql, bindings).map { $0 }
     }
 
     func scalar(_ sql: String, _ bindings: [Binding?] = []) throws -> Binding? {
-        try db.scalar(sql, bindings)
+        try readDB.scalar(sql, bindings)
     }
 
     func transaction(_ block: () throws -> Void) throws {
         try db.transaction(.deferred, block: block)
+    }
+
+    /// Variant that passes `self` into the block so callers (e.g. CollectionStore)
+    /// can issue writes inside a transaction without extra actor hops.
+    /// The closure is isolated to `self` so it may call actor-isolated methods directly.
+    func transaction(_ block: (isolated AmbrosiaMetaDB) throws -> Void) throws {
+        try db.transaction(.deferred) { try block(self) }
     }
 
     func annotations(for calibreID: Int, spineIndex: Int? = nil) throws -> [Annotation] {
@@ -752,6 +770,23 @@ actor AmbrosiaMetaDB {
                 diagnostic.attemptedAt,
             ]
         )
+    }
+
+    /// Flush a batch of extraction results in a single transaction.
+    ///
+    /// Called from the AO3 extraction loop every N books. Grouping writes into one
+    /// transaction means the actor is only acquired once per batch rather than once
+    /// per book, so read queries (e.g. collection membership for filter results) can
+    /// cut in between batches instead of waiting for thousands of individual inserts.
+    func insertBatch(_ records: [(AO3MetadataRecord, Int)], diagnostics: [AO3ExtractionDiagnostic]) throws {
+        try transaction {
+            for (metadata, calibreID) in records {
+                try insert(metadata, calibreID: calibreID)
+            }
+            for diagnostic in diagnostics {
+                try insert(diagnostic)
+            }
+        }
     }
 
     func clearAO3Metadata() throws {

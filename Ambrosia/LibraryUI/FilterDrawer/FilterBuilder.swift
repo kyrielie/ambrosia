@@ -120,6 +120,33 @@ struct FilterBuilder {
         self.ftsLibrary = ftsLibrary
     }
 
+    /// Async variant — dispatches all CPU-bound set intersection and sorting work to a
+    /// background priority detached task so the main actor is never blocked.
+    ///
+    /// Call sites inside `Task {}` (which inherits @MainActor) must use this overload;
+    /// the synchronous overload below is retained for call sites that already run off-actor.
+    func matchingIDs(
+        expression: FilterExpression,
+        likedIDs: Set<Int>,
+        collectionMap: [String: Set<Int>] = [:],
+        statusMap: [AO3CompletionStatus: Set<Int>] = [:],
+        fulltextMap: [String: Set<Int>] = [:]
+    ) async -> FilterResult {
+        // Capture value types so the detached task needs no references to actor-isolated state.
+        let lib   = library
+        let ftLib = ftsLibrary
+        return await Task.detached(priority: .userInitiated) {
+            let builder = FilterBuilder(library: lib, ftsLibrary: ftLib)
+            return builder.matchingIDs(
+                expression:    expression,
+                likedIDs:      likedIDs,
+                collectionMap: collectionMap,
+                statusMap:     statusMap,
+                fulltextMap:   fulltextMap
+            )
+        }.value
+    }
+
     /// Evaluate a full FilterExpression (multiple groups joined by groupConjunction).
     ///
     /// - Parameter collectionMap: name → Set<calibreID> for all known Collections.
@@ -146,7 +173,13 @@ struct FilterBuilder {
             return result
         }
 
-        let fulltextRules = completeGroups.flatMap(\.completeRules).filter { $0.field == .fulltext }
+        // Separate fulltext rules from non-fulltext rules, preserving group structure
+        // for both so that AND/OR conjunctions are respected correctly.
+        let fulltextGroups: [(rules: [FilterRule], conjunction: FilterConjunction)] = completeGroups.compactMap { group in
+            let rules = group.completeRules.filter { $0.field == .fulltext }
+            guard !rules.isEmpty else { return nil }
+            return (rules, group.conjunction)
+        }
         let nonFulltextGroups = completeGroups.compactMap { group -> FilterGroup? in
             let rules = group.completeRules.filter { $0.field != .fulltext }
             guard !rules.isEmpty else { return nil }
@@ -171,9 +204,10 @@ struct FilterBuilder {
             }
         }
 
-        if !fulltextRules.isEmpty {
-            finalIDSet = applyFulltextRulesAsGlobalRefinement(
-                fulltextRules,
+        if !fulltextGroups.isEmpty {
+            finalIDSet = applyFulltextGroupsAsGlobalRefinement(
+                fulltextGroups,
+                groupConjunction: expression.groupConjunction,
                 to: finalIDSet,
                 fulltextMap: fulltextMap
             )
@@ -276,12 +310,20 @@ struct FilterBuilder {
         return ids
     }
 
-    private func applyFulltextRulesAsGlobalRefinement(
-        _ rules: [FilterRule],
+    /// Apply fulltext filter groups to `candidateIDs`, respecting both the within-group
+    /// conjunction (AND/OR between rules in the same group) and the top-level
+    /// `groupConjunction` (AND/OR between groups).
+    ///
+    /// Example — two groups, groupConjunction = OR:
+    ///   Group 1 (AND): [contains "hockey", notContains "nhl"]  → intersection
+    ///   Group 2 (AND): [contains "poker"]                      → intersection
+    ///   Result: union of Group 1 result and Group 2 result (OR at the top level)
+    private func applyFulltextGroupsAsGlobalRefinement(
+        _ groups: [(rules: [FilterRule], conjunction: FilterConjunction)],
+        groupConjunction: FilterConjunction,
         to candidateIDs: Set<Int>,
         fulltextMap: [String: Set<Int>]
     ) -> Set<Int> {
-        var idSet = candidateIDs
         var fulltextCache: [String: Set<Int>] = [:]
 
         func cachedFulltextIDs(for rule: FilterRule) -> Set<Int> {
@@ -293,32 +335,55 @@ struct FilterBuilder {
             return result
         }
 
-        LibraryFilterDebug.log("fulltext.globalRefinement.start", [
-            "candidateIDs": idSet.count,
-            "rules": rules.map { "\($0.op.rawValue)=\($0.value)" }.joined(separator: ",")
-        ])
-
-        for rule in rules {
-            let before = idSet.count
+        // Apply a single rule to an ID set.
+        func apply(_ rule: FilterRule, to ids: Set<Int>) -> Set<Int> {
             let memberIDs = cachedFulltextIDs(for: rule)
+            let before = ids.count
+            let result: Set<Int>
             switch rule.op {
-            case .contains:
-                idSet = idSet.intersection(memberIDs)
-            case .notContains:
-                idSet = idSet.subtracting(memberIDs)
-            default:
-                break
+            case .contains:    result = ids.intersection(memberIDs)
+            case .notContains: result = ids.subtracting(memberIDs)
+            default:           result = ids
             }
             LibraryFilterDebug.log("fulltext.globalRefinement.rule", [
                 "op": rule.op.rawValue,
                 "value": rule.value,
                 "before": before,
                 "fulltextIDs": memberIDs.count,
-                "after": idSet.count
+                "after": result.count
             ])
+            return result
         }
 
-        return idSet
+        // Evaluate each group: rules within the group are combined by group.conjunction.
+        func evaluateGroup(_ group: (rules: [FilterRule], conjunction: FilterConjunction)) -> Set<Int> {
+            switch group.conjunction {
+            case .and:
+                // AND: each rule narrows the candidate set.
+                return group.rules.reduce(candidateIDs) { apply($1, to: $0) }
+            case .or:
+                // OR: union the result of applying each rule independently to candidateIDs.
+                return group.rules.reduce(Set<Int>()) { union, rule in
+                    union.union(apply(rule, to: candidateIDs))
+                }
+            }
+        }
+
+        LibraryFilterDebug.log("fulltext.globalRefinement.start", [
+            "candidateIDs": candidateIDs.count,
+            "rules": groups.flatMap(\.rules).map { "\($0.op.rawValue)=\($0.value)" }.joined(separator: ",")
+        ])
+
+        let groupResults = groups.map { evaluateGroup($0) }
+
+        // Combine group results with groupConjunction.
+        switch groupConjunction {
+        case .or:
+            return groupResults.reduce(Set<Int>()) { $0.union($1) }
+        case .and:
+            guard let first = groupResults.first else { return candidateIDs }
+            return groupResults.dropFirst().reduce(first) { $0.intersection($1) }
+        }
     }
 
     private func fulltextIDs(for rule: FilterRule) -> Set<Int> {
