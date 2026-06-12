@@ -56,6 +56,8 @@ struct LibraryRootView: View {
     @State private var seriesOrMergedIDs: Set<Int> = []
     @State private var ao3PublisherIDs: Set<Int> = []
     @State private var selectedIDs: Set<Int> = []
+    @State private var fullTextTask: Task<Void, Never>? = nil
+    @State private var filterCountTask: Task<Void, Never>? = nil
 
     private let pageSize = 25
     private var pageFetchLimit: Int { (pageSize * 3) + 1 }
@@ -85,18 +87,38 @@ struct LibraryRootView: View {
             .onChange(of: toolbarState.searchText) {
                 selectedIDs.removeAll()
                 currentPage = 0
+                if toolbarState.consumeSearchTextReloadSuppression() {
+                    LibraryFilterDebug.log("searchText.suppressed", [
+                        "surface": "list",
+                        "searchText": toolbarState.searchText
+                    ])
+                    filteredCount = nil
+                    return
+                }
                 debouncer.schedule {
+                    LibraryFilterDebug.log("searchText.debounced", [
+                        "surface": "list",
+                        "searchText": toolbarState.searchText
+                    ])
+                    if toolbarState.activeFilterResult?.isSQLBacked == true,
+                       toolbarState.activeFilterResult?.totalCount != nil {
+                        toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
+                    }
+                    if startPendingSearchTextFullTextIfNeeded() {
+                        return
+                    }
+                    let token = toolbarState.beginLibraryFilterApplication()
                     loadPage()
                     if toolbarState.searchText.isEmpty {
                         filteredCount = nil
                     } else {
                         let query = SearchQueryParser.parse(toolbarState.searchText)
-                        let resolved = session.resolvedQuery(query)
-                        filteredCount = session.library?.bookCount(query: resolved)
+                        filteredCount = session.library?.bookCount(query: query)
                     }
+                    toolbarState.finishLibraryFilterApplication(token: token)
                 }
             }
-            .onChange(of: toolbarState.activeFilterResult?.calibreIDs) {
+            .onChange(of: toolbarState.activeFilterResult?.reloadToken) {
                 selectedIDs.removeAll()
                 currentPage = 0; loadPage()
             }
@@ -132,6 +154,7 @@ struct LibraryRootView: View {
                     currentPage = 0
                     toolbarState.searchText = ""
                     toolbarState.activeFilterResult = nil
+                    toolbarState.cancelLibraryFilterApplication()
                     toolbarState.filterExpression = FilterExpression()
                     if let lib = session.library {
                         CustomColumnConfig.shared.autoDetect(using: lib)
@@ -172,6 +195,7 @@ struct LibraryRootView: View {
                     onClear: {
                         toolbarState.filterExpression = FilterExpression()
                         toolbarState.activeFilterResult = nil
+                        toolbarState.cancelLibraryFilterApplication()
                         currentPage = 0; loadPage()
                     }
                 )
@@ -205,12 +229,14 @@ struct LibraryRootView: View {
         VStack(spacing: 0) {
             Divider()
             if toolbarState.hasActiveFilter || activeFullTextPhrase != nil {
-                activeFilterChip(count: toolbarState.activeFilterResult?.totalCount ?? books.count)
+                activeFilterChip(count: toolbarState.activeFilterResult?.totalCount)
             }
             if !session.isOpen {
                 emptyLibraryState
             } else if books.isEmpty && toolbarState.searchText.isEmpty && !toolbarState.hasActiveFilter {
                 loadingState
+            } else if books.isEmpty && (toolbarState.hasActiveFilter || !toolbarState.searchText.isEmpty) {
+                noResultsState
             } else {
                 itemList
             }
@@ -222,13 +248,43 @@ struct LibraryRootView: View {
     // MARK: - Data loading
 
     private func loadPage() {
+        let loadStart = LibraryFilterDebug.now()
         guard let library = session.library else { books = []; return }
         let rawQuery = toolbarState.searchText.isEmpty
             ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
             : SearchQueryParser.parse(toolbarState.searchText)
-        let query = session.resolvedQuery(rawQuery)
+        let query = queryWithCachedFullText(rawQuery)
+        if rawQuery.fulltextPhrase?.isEmpty == false && query.ftsMatchedIDs == nil {
+            _ = startPendingSearchTextFullTextIfNeeded()
+            return
+        }
 
-        if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
+        if let result = toolbarState.activeFilterResult, result.isSQLBacked {
+            LibraryFilterDebug.log("loadPage.start", [
+                "surface": "list",
+                "mode": "sqlPagedDeferredCount",
+                "page": currentPage,
+                "query": LibraryFilterDebug.summary(query: query),
+                "filter": LibraryFilterDebug.summary(expression: toolbarState.filterExpression)
+            ])
+            let raw = library.books(
+                offset: currentPage * pageSize, limit: pageFetchLimit,
+                sort: toolbarState.sortField, ascending: toolbarState.ascending,
+                query: query,
+                filter: toolbarState.filterExpression
+            )
+            let visible = visibleBooks(raw)
+            hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
+            books = Array(visible.prefix(pageSize))
+            scheduleDeferredSQLFilterCount(query: query)
+        } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
+            LibraryFilterDebug.log("loadPage.start", [
+                "surface": "list",
+                "mode": "explicitIDs",
+                "page": currentPage,
+                "candidateIDs": result.calibreIDs.count,
+                "query": LibraryFilterDebug.summary(query: query)
+            ])
             let ids = visibleIDs(intersect(result.calibreIDs, with: query.ftsMatchedIDs))
             let raw = library.books(
                 ids: ids,
@@ -239,8 +295,19 @@ struct LibraryRootView: View {
             hasNextPage = raw.count > pageSize
             books = Array(raw.prefix(pageSize))
         } else if toolbarState.activeFilterResult != nil {
+            LibraryFilterDebug.log("loadPage.start", [
+                "surface": "list",
+                "mode": "emptyExplicitIDs",
+                "page": currentPage
+            ])
             books = []; items = []; hasNextPage = false
         } else {
+            LibraryFilterDebug.log("loadPage.start", [
+                "surface": "list",
+                "mode": "unfiltered",
+                "page": currentPage,
+                "query": LibraryFilterDebug.summary(query: query)
+            ])
             let raw = library.books(
                 offset: currentPage * pageSize, limit: pageFetchLimit,
                 sort: toolbarState.sortField, ascending: toolbarState.ascending,
@@ -253,6 +320,12 @@ struct LibraryRootView: View {
         rebuildItems()
         loadAO3MetadataForCurrentPage()
         pruneSelection()
+        LibraryFilterDebug.log("loadPage.end", [
+            "surface": "list",
+            "rows": books.count,
+            "hasNext": hasNextPage,
+            "elapsedMS": LibraryFilterDebug.elapsedMS(since: loadStart)
+        ])
     }
 
     private func rebuildItems() {
@@ -437,17 +510,98 @@ struct LibraryRootView: View {
         }
     }
 
+    private func scheduleDeferredSQLFilterCount(query: SearchQuery) {
+        guard let library = session.library,
+              let result = toolbarState.activeFilterResult,
+              result.isSQLBacked,
+              result.totalCount == nil else { return }
+        let expression = toolbarState.filterExpression
+        let filterSignature = LibraryFilterDebug.summary(expression: expression)
+        let querySignature = LibraryFilterDebug.summary(query: query)
+        filterCountTask?.cancel()
+        LibraryFilterDebug.log("deferredCount.schedule", [
+            "surface": "list",
+            "mode": "sqlPagedDeferredCount",
+            "query": querySignature,
+            "filter": filterSignature
+        ])
+        filterCountTask = Task {
+            let count = library.bookCount(query: query, filter: expression)
+            await MainActor.run {
+                guard !Task.isCancelled,
+                      toolbarState.activeFilterResult?.isSQLBacked == true,
+                      toolbarState.activeFilterResult?.totalCount == nil,
+                      LibraryFilterDebug.summary(expression: toolbarState.filterExpression) == filterSignature,
+                      LibraryFilterDebug.summary(query: queryWithCachedFullText(toolbarState.searchText.isEmpty
+                          ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+                          : SearchQueryParser.parse(toolbarState.searchText))) == querySignature else {
+                    LibraryFilterDebug.log("deferredCount.discard", [
+                        "surface": "list",
+                        "mode": "sqlPagedDeferredCount"
+                    ])
+                    return
+                }
+                toolbarState.activeFilterResult = FilterResult(
+                    calibreIDs: [],
+                    totalCount: count,
+                    isSQLBacked: true
+                )
+                LibraryFilterDebug.log("deferredCount.apply", [
+                    "surface": "list",
+                    "mode": "sqlPagedDeferredCount",
+                    "count": count
+                ])
+            }
+        }
+    }
+
     private func applyFilterRules() {
-        guard let library = session.library else { return }
+        let applyStart = LibraryFilterDebug.now()
+        fullTextTask?.cancel()
+        fullTextTask = nil
+        filterCountTask?.cancel()
+        guard let library = session.library else {
+            toolbarState.cancelLibraryFilterApplication()
+            return
+        }
         guard toolbarState.filterExpression.hasCompleteRules else {
-            toolbarState.activeFilterResult = nil; currentPage = 0; loadPage(); return
+            toolbarState.activeFilterResult = nil
+            toolbarState.cancelLibraryFilterApplication()
+            currentPage = 0; loadPage(); return
+        }
+        let expression = toolbarState.filterExpression
+        LibraryFilterDebug.log("applyFilter.start", [
+            "surface": "list",
+            "rules": LibraryFilterDebug.summary(expression: expression),
+            "sqlPageable": expression.isSQLPageable
+        ])
+        if expression.isSQLPageable {
+            toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
+            toolbarState.clearPendingFullTextSearch()
+            toolbarState.cancelLibraryFilterApplication()
+            selectedIDs.removeAll()
+            currentPage = 0
+            loadPage()
+            LibraryFilterDebug.log("applyFilter.end", [
+                "surface": "list",
+                "mode": "sqlPagedDeferredCount",
+                "elapsedMS": LibraryFilterDebug.elapsedMS(since: applyStart)
+            ])
+            return
+        }
+        let token = toolbarState.beginLibraryFilterApplication()
+        let fulltextRules = expression.groups.flatMap(\.rules)
+            .filter { $0.field == .fulltext && $0.isComplete }
+        if let firstPendingRule = fulltextRules.first(where: { session.cachedFulltextIDs(for: $0.value) == nil }) {
+            startPendingFilterFullText(rule: firstPendingRule, token: token)
+            return
         }
         Task {
-            let needsLiked = toolbarState.filterExpression.groups.flatMap(\.rules).contains { $0.field == .isLiked }
+            let needsLiked = expression.groups.flatMap(\.rules).contains { $0.field == .isLiked }
             let currentLikedIDs = needsLiked ? ((try? await session.collectionStore?.likedIDs()) ?? []) : []
-            let needsCollection = toolbarState.filterExpression.groups.flatMap(\.rules).contains { $0.field == .collection }
+            let needsCollection = expression.groups.flatMap(\.rules).contains { $0.field == .collection }
             var collectionMap = needsCollection ? ((try? await session.collectionStore?.membershipMap()) ?? [:]) : [:]
-            let statusValues = Set(toolbarState.filterExpression.groups
+            let statusValues = Set(expression.groups
                 .flatMap(\.rules)
                 .filter { $0.field == .status }
                 .compactMap { AO3CompletionStatus(userValue: $0.value) })
@@ -456,16 +610,22 @@ struct LibraryRootView: View {
                 for status in statusValues {
                     statusMap[status] = (try? await metaDB.ao3CompletionStatusIDs(status)) ?? []
                 }
-                if needsCollection && toolbarState.filterExpression.referencesSeriesOrMergedCollection {
+                if needsCollection && expression.referencesSeriesOrMergedCollection {
                     collectionMap[SystemCollectionID.seriesOrMergedName] = (try? await metaDB.collapsedSeriesRepresentativeIDs()) ?? []
                 }
             }
+            let fulltextMap = Dictionary(uniqueKeysWithValues: fulltextRules.map { rule in
+                let key = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+                return (key, Set(session.cachedFulltextIDs(for: rule.value) ?? []))
+            })
             let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary)
             let result = builder.matchingIDs(
-                expression: toolbarState.filterExpression,
+                expression: expression,
                 likedIDs: currentLikedIDs,
                 collectionMap: collectionMap,
-                statusMap: statusMap
+                statusMap: statusMap,
+                fulltextMap: fulltextMap
             )
             let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
             let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
@@ -474,15 +634,24 @@ struct LibraryRootView: View {
                 : result.calibreIDs.filter { !currentSkipped.contains($0) }
             let visibleFilteredIDs = filteredIDs.filter { !currentSeriesOrMerged.contains($0) }
                 .filter { !prefs.hideNonAO3PublisherBooks || (session.library?.ao3PublisherBookIDs() ?? []).contains($0) }
+            guard toolbarState.libraryFilterApplicationToken == token else { return }
+            defer { toolbarState.finishLibraryFilterApplication(token: token) }
             toolbarState.activeFilterResult = FilterResult(
                 calibreIDs: visibleFilteredIDs,
                 totalCount: visibleFilteredIDs.count
             )
+            toolbarState.clearPendingFullTextSearch()
             likedIDs = currentLikedIDs
             skippedIDs = currentSkipped
             seriesOrMergedIDs = currentSeriesOrMerged
             selectedIDs.removeAll()
             currentPage = 0; loadPage()
+            LibraryFilterDebug.log("applyFilter.end", [
+                "surface": "list",
+                "mode": "explicitIDs",
+                "ids": visibleFilteredIDs.count,
+                "elapsedMS": LibraryFilterDebug.elapsedMS(since: applyStart)
+            ])
         }
     }
 
@@ -505,9 +674,83 @@ struct LibraryRootView: View {
         applyFilterRules()
     }
 
+    private func startPendingSearchTextFullTextIfNeeded() -> Bool {
+        guard let phrase = activeFullTextPhrase else {
+            toolbarState.clearPendingFullTextSearch()
+            return false
+        }
+        if let cached = session.cachedFulltextIDs(for: phrase) {
+            applyResolvedSearchTextFullText(phrase: phrase, ids: cached)
+            return false
+        }
+        let token = UUID()
+        let applicationToken = toolbarState.beginLibraryFilterApplication()
+        toolbarState.pendingFullTextSearch = PendingFullTextSearch(token: token, phrase: phrase, source: .searchText)
+        fullTextTask?.cancel()
+        fullTextTask = Task {
+            let ids = await session.resolveFulltextIDs(for: phrase)
+            await MainActor.run {
+                guard toolbarState.pendingFullTextSearch?.token == token,
+                      toolbarState.libraryFilterApplicationToken == applicationToken,
+                      activeFullTextPhrase == phrase else { return }
+                defer { toolbarState.finishLibraryFilterApplication(token: applicationToken) }
+                applyResolvedSearchTextFullText(phrase: phrase, ids: ids)
+            }
+        }
+        return true
+    }
+
+    private func startPendingFilterFullText(rule: FilterRule, token applicationToken: UUID) {
+        let phrase = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !phrase.isEmpty else {
+            toolbarState.finishLibraryFilterApplication(token: applicationToken)
+            return
+        }
+        let token = UUID()
+        toolbarState.pendingFullTextSearch = PendingFullTextSearch(token: token, phrase: phrase, source: .filterExpression)
+        fullTextTask?.cancel()
+        fullTextTask = Task {
+            _ = await session.resolveFulltextIDs(for: phrase)
+            await MainActor.run {
+                guard toolbarState.pendingFullTextSearch?.token == token,
+                      toolbarState.libraryFilterApplicationToken == applicationToken,
+                      toolbarState.filterExpression.groups.flatMap(\.rules).contains(where: {
+                          $0.field == .fulltext && $0.value == phrase && $0.isComplete
+                      }) else { return }
+                toolbarState.clearPendingFullTextSearch()
+                toolbarState.finishLibraryFilterApplication(token: applicationToken)
+                applyFilterRules()
+            }
+        }
+    }
+
+    private func applyResolvedSearchTextFullText(phrase: String, ids: [Int]) {
+        guard activeFullTextPhrase == phrase else { return }
+        toolbarState.activeFilterResult = FilterResult(calibreIDs: ids, totalCount: ids.count)
+        toolbarState.clearPendingFullTextSearch()
+        filteredCount = ids.count
+        currentPage = 0
+        loadPage()
+    }
+
+    private func queryWithCachedFullText(_ query: SearchQuery) -> SearchQuery {
+        guard let phrase = query.fulltextPhrase?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !phrase.isEmpty else { return query }
+        guard let ids = session.cachedFulltextIDs(for: phrase) else { return query }
+        return SearchQuery(
+            tagTerms: query.tagTerms,
+            authorTerms: query.authorTerms,
+            titleTerms: query.titleTerms,
+            seriesTerms: query.seriesTerms,
+            statusTerms: query.statusTerms,
+            fulltextPhrase: query.fulltextPhrase,
+            plainTerms: [],
+            ftsMatchedIDs: ids
+        )
+    }
+
     private func addTagPillRule(tag: String, field: FilterField) {
-        let value = field == .tag ? AO3TagSearchResolver.canonicalTerm(for: tag) : tag
-        addOrReplaceRule(FilterRule(field: field, op: .equals, value: value))
+        addOrReplaceRule(FilterRuleFactory.tagPillRule(label: tag, field: field))
     }
 
     // MARK: - Subviews
@@ -518,14 +761,14 @@ struct LibraryRootView: View {
         return phrase?.isEmpty == false ? phrase : nil
     }
 
-    private func activeFilterChip(count: Int) -> some View {
+    private func activeFilterChip(count: Int?) -> some View {
         let completeRules = toolbarState.filterExpression.groups.flatMap(\.rules).filter(\.isComplete)
         return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Image(systemName: "line.3.horizontal.decrease.circle.fill")
                     .foregroundStyle(Color.accentColor)
                     .font(.caption)
-                Text("\(count) result\(count == 1 ? "" : "s")")
+                Text(count.map { "\($0) result\($0 == 1 ? "" : "s")" } ?? "Filtered results")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Edit") { toolbarState.showFilterDrawer = true }
@@ -533,6 +776,7 @@ struct LibraryRootView: View {
                 Button {
                     toolbarState.filterExpression = FilterExpression()
                     toolbarState.activeFilterResult = nil
+                    toolbarState.cancelLibraryFilterApplication()
                     currentPage = 0; loadPage()
                 } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
@@ -578,6 +822,24 @@ struct LibraryRootView: View {
                     .background(Color.accentColor.opacity(0.12))
                     .clipShape(Capsule())
                     .overlay(Capsule().stroke(Color.accentColor.opacity(0.3), lineWidth: 0.5))
+                }
+                if let pending = toolbarState.pendingFullTextSearch {
+                    HStack(spacing: 3) {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .scaleEffect(0.6)
+                        Text("Searching")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(pending.phrase)
+                            .font(.caption2.bold())
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.accentColor.opacity(0.08))
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(Color.accentColor.opacity(0.25), lineWidth: 0.5))
                 }
             }
         }
@@ -627,6 +889,7 @@ struct LibraryRootView: View {
             onSkip: { skip(selectedBooks(fallback: book)) },
             onMarkRead: { markRead(selectedBooks(fallback: book)) },
             onResetProgress: { resetProgress(selectedBooks(fallback: book)) },
+            onCollectionChanged: { refreshVisibilitySnapshots() },
             selectedCount: selectedBooks(fallback: book).count,
             selectedIDs: selectedBookIDs(fallback: book)
         )
@@ -639,9 +902,11 @@ struct LibraryRootView: View {
         SeriesListRow(
             series: series,
             hideFanworksTagPill: prefs.hideFanworksTagPill,
+            isLiked: series.works.allSatisfy { likedIDs.contains($0.id) },
             onTagTap: { tag, field in
                 addTagPillRule(tag: tag, field: field)
             },
+            onLikeToggle: { toggleLike(for: series) },
             onOpen: { AppDelegate.shared?.openReaderWindow(target: .series(series), modelContext: modelContext) }
         )
         .listRowSeparator(.visible)
@@ -651,6 +916,15 @@ struct LibraryRootView: View {
     private func toggleLike(for book: CalibreBook) {
         Task {
             try? await session.collectionStore?.toggleLiked(calibreID: book.id)
+            likedIDs = (try? await session.collectionStore?.likedIDs()) ?? []
+        }
+    }
+
+    private func toggleLike(for series: SeriesGroup) {
+        let ids = series.works.map(\.id)
+        let shouldLike = !series.works.allSatisfy { likedIDs.contains($0.id) }
+        Task {
+            try? await session.collectionStore?.setLiked(calibreIDs: ids, liked: shouldLike)
             likedIDs = (try? await session.collectionStore?.likedIDs()) ?? []
         }
     }
@@ -805,6 +1079,20 @@ struct LibraryRootView: View {
             Spacer(); ProgressView(); Text("Loading…").foregroundStyle(.secondary); Spacer()
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    private var noResultsState: some View {
+        VStack(spacing: 10) {
+            Spacer()
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 36))
+                .foregroundStyle(.quaternary)
+            Text("No matching fics")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 }
 
 // MARK: - Book list row
@@ -829,8 +1117,10 @@ struct BookListRow: View, Equatable {
     let onSkip: () -> Void
     let onMarkRead: () -> Void
     let onResetProgress: () -> Void
+    let onCollectionChanged: () -> Void
     let selectedCount: Int
     let selectedIDs: [Int]
+    @State private var showCollectionPicker = false
 
     static func == (lhs: BookListRow, rhs: BookListRow) -> Bool {
         lhs.book.id                       == rhs.book.id
@@ -864,6 +1154,7 @@ struct BookListRow: View, Equatable {
          onSkip: @escaping () -> Void,
          onMarkRead: @escaping () -> Void,
          onResetProgress: @escaping () -> Void,
+         onCollectionChanged: @escaping () -> Void,
          selectedCount: Int,
          selectedIDs: [Int]) {
         self.book         = book
@@ -885,6 +1176,7 @@ struct BookListRow: View, Equatable {
         self.onSkip       = onSkip
         self.onMarkRead   = onMarkRead
         self.onResetProgress = onResetProgress
+        self.onCollectionChanged = onCollectionChanged
         self.selectedCount = selectedCount
         self.selectedIDs = selectedIDs
     }
@@ -918,7 +1210,18 @@ struct BookListRow: View, Equatable {
             Button("Reset Reading Progress") { onResetProgress() }
             Button(selectedCount == 1 ? "Skip" : "Skip Selected") { onSkip() }
             Divider()
-            AddToCollectionMenu(calibreIDs: selectedIDs)
+            Button("Add to Collection...") { showCollectionPicker = true }
+        }
+        .popover(isPresented: $showCollectionPicker, arrowEdge: .trailing) {
+            CollectionSearchPickerView(
+                calibreIDs: selectedIDs,
+                onChange: {
+                    onCollectionChanged()
+                },
+                onComplete: {
+                    showCollectionPicker = false
+                }
+            )
         }
         .onAppear {
             logMissingDisplayedMetadataIfNeeded()
@@ -935,17 +1238,13 @@ struct BookListRow: View, Equatable {
                 Text(series).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
+            singletonSeriesWarningButton
             Button(action: onLikeToggle) {
                 Image(systemName: isLiked ? "star.fill" : "star")
                     .foregroundStyle(isLiked ? Color.yellow : Color.secondary)
             }
             .buttonStyle(.borderless)
             .help(isLiked ? "Unlike" : "Like")
-            if let s = bookState, s.lastOpenedDate > Date(timeIntervalSince1970: 1) {
-                Text(Self.formatLastOpened(s.lastOpenedDate))
-                    .font(.caption).foregroundStyle(.tertiary)
-            }
-            singletonSeriesWarningButton
         }
     }
 
@@ -1022,22 +1321,6 @@ struct BookListRow: View, Equatable {
             publishedText: Self.nonEmpty(ao3Metadata?.publishedDate),
             updatedText: Self.nonEmpty(ao3Metadata?.updatedDate)
         )
-    }
-
-    private static func formatLastOpened(_ date: Date) -> String {
-        let age = Date().timeIntervalSince(date)
-        if age < 3600 { return "just now" }
-        if age < 86400 {
-            let h = Int(age / 3600)
-            return "\(h)h ago"
-        }
-        if age < 86400 * 7 {
-            let d = Int(age / 86400)
-            return "\(d)d ago"
-        }
-        let f = DateFormatter()
-        f.dateStyle = .short; f.timeStyle = .none
-        return f.string(from: date)
     }
 
     private static func nonEmpty(_ value: String?) -> String? {
@@ -1390,7 +1673,9 @@ private func logMissingVisibleWorkMetadata(
 private struct SeriesListRow: View {
     let series: SeriesGroup
     let hideFanworksTagPill: Bool
+    let isLiked: Bool
     let onTagTap: (String, FilterField) -> Void
+    let onLikeToggle: () -> Void
     let onOpen: () -> Void
 
     @State private var showIndex = false
@@ -1418,6 +1703,12 @@ private struct SeriesListRow: View {
                 .buttonStyle(.borderless)
                 .help(series.missingIndices.isEmpty ? "Show series index" : "Missing works")
                 .popover(isPresented: $showIndex) { indexPopover }
+                Button(action: onLikeToggle) {
+                    Image(systemName: isLiked ? "star.fill" : "star")
+                        .foregroundStyle(isLiked ? Color.yellow : Color.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(isLiked ? "Unlike Series" : "Like Series")
             }
             Text(series.displayAuthors)
                 .font(.subheadline)

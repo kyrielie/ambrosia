@@ -28,6 +28,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private var sortMenuToolbarItem: NSMenuToolbarItem?
     private var readerSidebarToolbarItem: NSToolbarItem?
     private var ficCountLabel: NSTextField?
+    private var ficCountProgress: NSProgressIndicator?
     private var readCountLabel: NSTextField?
     private var appearanceCancellable: AnyCancellable?
     private var windowMoveResizeObservers: [NSObjectProtocol] = []
@@ -312,7 +313,15 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         ficLabel.setContentHuggingPriority(.required, for: .vertical)
         ficLabel.setContentCompressionResistancePriority(.required, for: .vertical)
 
-        let stack = NSStackView(views: [ficLabel])
+        let progress = NSProgressIndicator()
+        progress.style = .bar
+        progress.isIndeterminate = true
+        progress.controlSize = .small
+        progress.isDisplayedWhenStopped = false
+        progress.isHidden = true
+        progress.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView(views: [ficLabel, progress])
         stack.orientation = .vertical
         stack.alignment   = .leading
         stack.spacing     = 1
@@ -321,6 +330,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         stack.frame = NSRect(x: 0, y: 0, width: 140, height: 28)
 
         ficCountLabel = ficLabel
+        ficCountProgress = progress
+        progress.widthAnchor.constraint(equalToConstant: 120).isActive = true
         updateCountLabel()
 
         let item = NSToolbarItem(itemIdentifier: identifier)
@@ -333,11 +344,28 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
     private func updateCountLabel() {
         guard let ts = toolbarState, let sess = session else { return }
+        let isApplying = ts.isApplyingLibraryFilter || ts.pendingFullTextSearch != nil
+        ficCountLabel?.isHidden = isApplying
+        ficCountProgress?.isHidden = !isApplying
+        if isApplying {
+            ficCountProgress?.startAnimation(nil)
+            return
+        }
+        ficCountProgress?.stopAnimation(nil)
         if let status = sess.extractionProgress.statusText {
             ficCountLabel?.stringValue = status
             return
         }
-        let count = ts.activeFilterResult?.totalCount ?? sess.totalCount
+        let count: Int
+        if let result = ts.activeFilterResult {
+            guard let knownCount = result.totalCount else {
+                ficCountLabel?.stringValue = "Filtered fics"
+                return
+            }
+            count = knownCount
+        } else {
+            count = sess.totalCount
+        }
         let fmt   = NumberFormatter()
         fmt.numberStyle = .decimal
         ficCountLabel?.stringValue = "\(fmt.string(from: NSNumber(value: count)) ?? "\(count)") fics"
@@ -348,6 +376,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private func scheduleCounting() {
         withObservationTracking {
             _ = toolbarState?.activeFilterResult?.totalCount
+            _ = toolbarState?.isApplyingLibraryFilter
+            _ = toolbarState?.pendingFullTextSearch
             _ = session?.totalCount
             _ = session?.extractionProgress.completed
             _ = session?.extractionProgress.total
@@ -412,8 +442,14 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
         if let rule = query.asSingleFilterRule {
             // Scoped token: add as filter rule and clear the search field
-            commitFilterRule(rule)
+            LibraryFilterDebug.log("commit.scopedSearch", [
+                "field": rule.field.rawValue,
+                "op": rule.op.rawValue,
+                "value": rule.value
+            ])
+            toolbarState?.suppressNextSearchTextReload()
             clearSearchField()
+            commitFilterRule(rule)
         }
         // Plain text and fulltext: stay in the field for the debounced list reload.
 
@@ -422,8 +458,16 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
     /// Commits a suggestion row tap: always produces a filter rule and clears the field.
     private func commitSuggestion(_ suggestion: SearchSuggestion) {
-        commitFilterRule(suggestion.asFilterRule)
+        let rule = suggestion.asFilterRule
+        LibraryFilterDebug.log("commit.suggestion", [
+            "kind": "\(suggestion.kind)",
+            "value": suggestion.value,
+            "field": rule.field.rawValue,
+            "op": rule.op.rawValue
+        ])
+        toolbarState?.suppressNextSearchTextReload()
         clearSearchField()
+        commitFilterRule(rule)
         closeSuggestionPanel()
     }
 

@@ -25,6 +25,7 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Filter sheet host
 
     private var filterSheetHost: NSHostingView<FilterSheetCarrier>?
+    private var collectionPickerPopover: NSPopover?
     private var skippedCollectionCancellable: AnyCancellable?
     private var seriesOrMergedCancellable: AnyCancellable?
     private var appearanceCancellable: AnyCancellable?
@@ -59,11 +60,14 @@ final class EmailLibraryViewController: NSViewController {
     private var lastSort:      SortField = .title
     private var lastAscending: Bool      = true
     private var lastFilterIDs: [Int]?    = nil
+    private var lastFilterToken: String? = nil
     private var lastSidebarToggle: Bool  = false
     private var lastReaderSidebarToggle: Bool = false
     private var lastReaderSidebarShow: Bool = false
 
     private let debouncer = DebounceTimer(delay: 0.4)
+    private var fullTextTask: Task<Void, Never>?
+    private var filterCountTask: Task<Void, Never>?
 
     private var selectedBook: CalibreBook?
     private weak var currentReaderVC: ReaderViewController?
@@ -183,6 +187,7 @@ final class EmailLibraryViewController: NSViewController {
             guard let self else { return }
             toolbarState.filterExpression   = FilterExpression()
             toolbarState.activeFilterResult = nil
+            toolbarState.cancelLibraryFilterApplication()
             loadPage(reset: true)
         }
         sidebarVC.onContextMenuOpen = { [weak self] books in
@@ -229,27 +234,9 @@ final class EmailLibraryViewController: NSViewController {
         sidebarVC.onContextMenuResetProgress = { [weak self] books in
             self?.resetProgress(books)
         }
-        sidebarVC.onContextMenuToggleCollection = { [weak self] books, collectionName in
+        sidebarVC.onContextMenuCollectionPicker = { [weak self] books, anchorView, anchorRect in
             guard let self else { return }
-            Task {
-                let collections = (try? await self.session.collectionStore?.collections()) ?? []
-                if let collection = collections.first(where: { $0.name == collectionName }) {
-                    let ids = books.map(\.id)
-                    let membership = (try? await self.session.collectionStore?.membershipByCollectionID()) ?? [:]
-                    let members = membership[collection.id] ?? []
-                    if Set(ids).isSubset(of: members) {
-                        try? await self.session.collectionStore?.bulkRemove(calibreIDs: ids, from: collection.id)
-                    } else {
-                        try? await self.session.collectionStore?.bulkAdd(calibreIDs: ids, to: collection.id)
-                    }
-                }
-                await self.refreshCollectionSnapshots()
-            }
-        }
-        sidebarVC.onContextMenuNewCollection = { [weak self] books in
-            guard let self else { return }
-            self.pendingCollectionSeedIDs = books.map(\.id)
-            toolbarState.showCollections = true
+            self.showCollectionPicker(for: books.map(\.id), relativeTo: anchorRect, of: anchorView)
         }
 
         splitVC = NSSplitViewController()
@@ -315,6 +302,26 @@ final class EmailLibraryViewController: NSViewController {
         filterSheetHost = hv
     }
 
+    private func showCollectionPicker(for calibreIDs: [Int], relativeTo rect: NSRect, of view: NSView) {
+        collectionPickerPopover?.close()
+        let popover = NSPopover()
+        popover.behavior = .semitransient
+        let root = CollectionSearchPickerView(
+            calibreIDs: calibreIDs,
+            onChange: { [weak self] in
+                await self?.refreshCollectionSnapshots()
+            },
+            onComplete: { [weak popover] in
+                popover?.close()
+            }
+        )
+        .environment(session)
+        .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
+        popover.contentViewController = NSHostingController(rootView: root)
+        collectionPickerPopover = popover
+        popover.show(relativeTo: rect, of: view, preferredEdge: .maxX)
+    }
+
     // MARK: - Placeholder
 
     private func makePlaceholderVC() -> NSViewController {
@@ -358,7 +365,9 @@ final class EmailLibraryViewController: NSViewController {
             _ = toolbarState.searchText
             _ = toolbarState.sortField
             _ = toolbarState.ascending
-            _ = toolbarState.activeFilterResult?.calibreIDs
+            _ = toolbarState.activeFilterResult?.reloadToken
+            _ = toolbarState.isApplyingLibraryFilter
+            _ = toolbarState.pendingFullTextSearch
             _ = toolbarState.toggleEmailSidebar
             _ = toolbarState.toggleEmailReaderSidebar
             _ = toolbarState.showEmailReaderSidebar
@@ -386,12 +395,12 @@ final class EmailLibraryViewController: NSViewController {
         let newSearch    = toolbarState.searchText
         let newSort      = toolbarState.sortField
         let newAscending = toolbarState.ascending
-        let newFilterIDs = toolbarState.activeFilterResult?.calibreIDs
+        let newFilterToken = toolbarState.activeFilterResult?.reloadToken
 
         let changed = newSearch    != lastSearch
                    || newSort      != lastSort
                    || newAscending != lastAscending
-                   || newFilterIDs != lastFilterIDs
+                   || newFilterToken != lastFilterToken
 
         guard changed else { return }
 
@@ -399,12 +408,35 @@ final class EmailLibraryViewController: NSViewController {
         lastSearch    = newSearch
         lastSort      = newSort
         lastAscending = newAscending
-        lastFilterIDs = newFilterIDs
+        lastFilterIDs = toolbarState.activeFilterResult?.calibreIDs
+        lastFilterToken = newFilterToken
 
         if searchChanged {
             applyFullTextPhraseToLocalFind()
             refreshReaderSidebar()
-            debouncer.schedule { [weak self] in self?.loadPage(reset: true) }
+            if toolbarState.consumeSearchTextReloadSuppression() {
+                LibraryFilterDebug.log("searchText.suppressed", [
+                    "surface": "email",
+                    "searchText": toolbarState.searchText
+                ])
+                return
+            }
+            debouncer.schedule { [weak self] in
+                guard let self else { return }
+                LibraryFilterDebug.log("searchText.debounced", [
+                    "surface": "email",
+                    "searchText": self.toolbarState.searchText
+                ])
+                if self.toolbarState.activeFilterResult?.isSQLBacked == true,
+                   self.toolbarState.activeFilterResult?.totalCount != nil {
+                    self.toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
+                }
+                if !self.startPendingSearchTextFullTextIfNeeded() {
+                    let token = self.toolbarState.beginLibraryFilterApplication()
+                    self.loadPage(reset: true)
+                    self.toolbarState.finishLibraryFilterApplication(token: token)
+                }
+            }
         } else {
             applyFullTextPhraseToLocalFind()
             loadPage(reset: true)
@@ -432,21 +464,54 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Filter application
 
     func applyFilterRules() {
-        guard let library = session.library else { return }
+        let applyStart = LibraryFilterDebug.now()
+        fullTextTask?.cancel()
+        fullTextTask = nil
+        filterCountTask?.cancel()
+        guard let library = session.library else {
+            toolbarState.cancelLibraryFilterApplication()
+            return
+        }
         guard toolbarState.filterExpression.hasCompleteRules else {
             toolbarState.activeFilterResult = nil
+            toolbarState.cancelLibraryFilterApplication()
             loadPage(reset: true)
+            return
+        }
+        let expression = toolbarState.filterExpression
+        LibraryFilterDebug.log("applyFilter.start", [
+            "surface": "email",
+            "rules": LibraryFilterDebug.summary(expression: expression),
+            "sqlPageable": expression.isSQLPageable
+        ])
+        if expression.isSQLPageable {
+            toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
+            toolbarState.clearPendingFullTextSearch()
+            toolbarState.cancelLibraryFilterApplication()
+            loadPage(reset: true)
+            LibraryFilterDebug.log("applyFilter.end", [
+                "surface": "email",
+                "mode": "sqlPagedDeferredCount",
+                "elapsedMS": LibraryFilterDebug.elapsedMS(since: applyStart)
+            ])
+            return
+        }
+        let token = toolbarState.beginLibraryFilterApplication()
+        let fulltextRules = expression.groups.flatMap(\.rules)
+            .filter { $0.field == .fulltext && $0.isComplete }
+        if let firstPendingRule = fulltextRules.first(where: { session.cachedFulltextIDs(for: $0.value) == nil }) {
+            startPendingFilterFullText(rule: firstPendingRule, token: token)
             return
         }
 
         Task {
-            let needsLiked = toolbarState.filterExpression.groups
+            let needsLiked = expression.groups
                 .flatMap(\.rules).contains { $0.field == .isLiked }
             let currentLikedIDs = needsLiked ? ((try? await session.collectionStore?.likedIDs()) ?? []) : []
-            let needsCollection = toolbarState.filterExpression.groups
+            let needsCollection = expression.groups
                 .flatMap(\.rules).contains { $0.field == .collection }
             var collectionMap = needsCollection ? ((try? await session.collectionStore?.membershipMap()) ?? [:]) : [:]
-            let statusValues = Set(toolbarState.filterExpression.groups
+            let statusValues = Set(expression.groups
                 .flatMap(\.rules)
                 .filter { $0.field == .status }
                 .compactMap { AO3CompletionStatus(userValue: $0.value) })
@@ -455,17 +520,23 @@ final class EmailLibraryViewController: NSViewController {
                 for status in statusValues {
                     statusMap[status] = (try? await metaDB.ao3CompletionStatusIDs(status)) ?? []
                 }
-                if needsCollection && toolbarState.filterExpression.referencesSeriesOrMergedCollection {
+                if needsCollection && expression.referencesSeriesOrMergedCollection {
                     collectionMap[SystemCollectionID.seriesOrMergedName] = (try? await metaDB.collapsedSeriesRepresentativeIDs()) ?? []
                 }
             }
+            let fulltextMap = Dictionary(uniqueKeysWithValues: fulltextRules.map { rule in
+                let key = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+                return (key, Set(session.cachedFulltextIDs(for: rule.value) ?? []))
+            })
 
             let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary)
             let result = builder.matchingIDs(
-                expression: toolbarState.filterExpression,
+                expression: expression,
                 likedIDs:      currentLikedIDs,
                 collectionMap: collectionMap,
-                statusMap: statusMap
+                statusMap: statusMap,
+                fulltextMap: fulltextMap
             )
             let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
             let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
@@ -476,21 +547,135 @@ final class EmailLibraryViewController: NSViewController {
             let visibleFilteredIDs = filteredIDs
                 .filter { !currentSeriesOrMerged.contains($0) }
                 .filter { !ReaderPreferences.shared.hideNonAO3PublisherBooks || currentAO3PublisherIDs.contains($0) }
+            guard toolbarState.libraryFilterApplicationToken == token else { return }
+            defer { toolbarState.finishLibraryFilterApplication(token: token) }
             toolbarState.activeFilterResult = FilterResult(
                 calibreIDs: visibleFilteredIDs,
                 totalCount: visibleFilteredIDs.count
             )
+            toolbarState.clearPendingFullTextSearch()
             likedIDs = currentLikedIDs
             skippedIDs = currentSkipped
             seriesOrMergedIDs = currentSeriesOrMerged
             ao3PublisherIDs = currentAO3PublisherIDs
             loadPage(reset: true)
+            LibraryFilterDebug.log("applyFilter.end", [
+                "surface": "email",
+                "mode": "explicitIDs",
+                "ids": visibleFilteredIDs.count,
+                "elapsedMS": LibraryFilterDebug.elapsedMS(since: applyStart)
+            ])
+        }
+    }
+
+    private func startPendingSearchTextFullTextIfNeeded() -> Bool {
+        guard let phrase = activeFullTextPhrase()?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !phrase.isEmpty else {
+            toolbarState.clearPendingFullTextSearch()
+            return false
+        }
+        if let cached = session.cachedFulltextIDs(for: phrase) {
+            applyResolvedSearchTextFullText(phrase: phrase, ids: cached)
+            return false
+        }
+        let token = UUID()
+        let applicationToken = toolbarState.beginLibraryFilterApplication()
+        toolbarState.pendingFullTextSearch = PendingFullTextSearch(token: token, phrase: phrase, source: .searchText)
+        fullTextTask?.cancel()
+        fullTextTask = Task {
+            let ids = await session.resolveFulltextIDs(for: phrase)
+            await MainActor.run {
+                guard self.toolbarState.pendingFullTextSearch?.token == token,
+                      self.toolbarState.libraryFilterApplicationToken == applicationToken,
+                      self.activeFullTextPhrase()?.trimmingCharacters(in: .whitespacesAndNewlines) == phrase else { return }
+                defer { self.toolbarState.finishLibraryFilterApplication(token: applicationToken) }
+                self.applyResolvedSearchTextFullText(phrase: phrase, ids: ids)
+            }
+        }
+        return true
+    }
+
+    private func startPendingFilterFullText(rule: FilterRule, token applicationToken: UUID) {
+        let phrase = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !phrase.isEmpty else {
+            toolbarState.finishLibraryFilterApplication(token: applicationToken)
+            return
+        }
+        let token = UUID()
+        toolbarState.pendingFullTextSearch = PendingFullTextSearch(token: token, phrase: phrase, source: .filterExpression)
+        fullTextTask?.cancel()
+        fullTextTask = Task {
+            _ = await session.resolveFulltextIDs(for: phrase)
+            await MainActor.run {
+                guard self.toolbarState.pendingFullTextSearch?.token == token,
+                      self.toolbarState.libraryFilterApplicationToken == applicationToken,
+                      self.toolbarState.filterExpression.groups.flatMap(\.rules).contains(where: {
+                          $0.field == .fulltext && $0.value == phrase && $0.isComplete
+                      }) else { return }
+                self.toolbarState.clearPendingFullTextSearch()
+                self.toolbarState.finishLibraryFilterApplication(token: applicationToken)
+                self.applyFilterRules()
+            }
+        }
+    }
+
+    private func applyResolvedSearchTextFullText(phrase: String, ids: [Int]) {
+        guard activeFullTextPhrase()?.trimmingCharacters(in: .whitespacesAndNewlines) == phrase else { return }
+        toolbarState.activeFilterResult = FilterResult(calibreIDs: ids, totalCount: ids.count)
+        toolbarState.clearPendingFullTextSearch()
+        loadPage(reset: true)
+    }
+
+    private func scheduleDeferredSQLFilterCount(query: SearchQuery) {
+        guard let library = session.library,
+              let result = toolbarState.activeFilterResult,
+              result.isSQLBacked,
+              result.totalCount == nil else { return }
+        let expression = toolbarState.filterExpression
+        let filterSignature = LibraryFilterDebug.summary(expression: expression)
+        let querySignature = LibraryFilterDebug.summary(query: query)
+        filterCountTask?.cancel()
+        LibraryFilterDebug.log("deferredCount.schedule", [
+            "surface": "email",
+            "mode": "sqlPagedDeferredCount",
+            "query": querySignature,
+            "filter": filterSignature
+        ])
+        filterCountTask = Task { [weak self] in
+            let count = library.bookCount(query: query, filter: expression)
+            await MainActor.run {
+                guard let self,
+                      !Task.isCancelled,
+                      self.toolbarState.activeFilterResult?.isSQLBacked == true,
+                      self.toolbarState.activeFilterResult?.totalCount == nil,
+                      LibraryFilterDebug.summary(expression: self.toolbarState.filterExpression) == filterSignature,
+                      LibraryFilterDebug.summary(query: self.queryWithCachedFullText(self.toolbarState.searchText.isEmpty
+                          ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+                          : SearchQueryParser.parse(self.toolbarState.searchText))) == querySignature else {
+                    LibraryFilterDebug.log("deferredCount.discard", [
+                        "surface": "email",
+                        "mode": "sqlPagedDeferredCount"
+                    ])
+                    return
+                }
+                self.toolbarState.activeFilterResult = FilterResult(
+                    calibreIDs: [],
+                    totalCount: count,
+                    isSQLBacked: true
+                )
+                LibraryFilterDebug.log("deferredCount.apply", [
+                    "surface": "email",
+                    "mode": "sqlPagedDeferredCount",
+                    "count": count
+                ])
+            }
         }
     }
 
     // MARK: - Data loading (uses SearchQuery path — mirrors BookGridItem exactly)
 
     func loadPage(reset: Bool) {
+        let loadStart = LibraryFilterDebug.now()
         guard let library = session.library else {
             books = []
             items = []
@@ -501,16 +686,42 @@ final class EmailLibraryViewController: NSViewController {
             sidebarVC?.ao3Metadata = [:]
             return
         }
-        if reset { currentPage = 0; books = [] }
-
         // Parse search text into a structured query — same path as list view
         let rawQuery = toolbarState.searchText.isEmpty
             ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
             : SearchQueryParser.parse(toolbarState.searchText)
-        let query = session.resolvedQuery(rawQuery)
+        let query = queryWithCachedFullText(rawQuery)
+        if rawQuery.fulltextPhrase?.isEmpty == false && query.ftsMatchedIDs == nil {
+            _ = startPendingSearchTextFullTextIfNeeded()
+            return
+        }
+
+        if reset { currentPage = 0; books = [] }
 
         let raw: [CalibreBook]
-        if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
+        if let result = toolbarState.activeFilterResult, result.isSQLBacked {
+            LibraryFilterDebug.log("loadPage.start", [
+                "surface": "email",
+                "mode": "sqlPagedDeferredCount",
+                "page": currentPage,
+                "query": LibraryFilterDebug.summary(query: query),
+                "filter": LibraryFilterDebug.summary(expression: toolbarState.filterExpression)
+            ])
+            raw = library.books(
+                offset: currentPage * pageSize, limit: pageFetchLimit,
+                sort: toolbarState.sortField, ascending: toolbarState.ascending,
+                query: query,
+                filter: toolbarState.filterExpression
+            )
+            scheduleDeferredSQLFilterCount(query: query)
+        } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
+            LibraryFilterDebug.log("loadPage.start", [
+                "surface": "email",
+                "mode": "explicitIDs",
+                "page": currentPage,
+                "candidateIDs": result.calibreIDs.count,
+                "query": LibraryFilterDebug.summary(query: query)
+            ])
             let ids = visibleIDs(intersect(result.calibreIDs, with: query.ftsMatchedIDs))
             raw = library.books(
                 ids: ids,
@@ -519,8 +730,19 @@ final class EmailLibraryViewController: NSViewController {
                 query: query
             )
         } else if toolbarState.activeFilterResult != nil {
+            LibraryFilterDebug.log("loadPage.start", [
+                "surface": "email",
+                "mode": "emptyExplicitIDs",
+                "page": currentPage
+            ])
             raw = []
         } else {
+            LibraryFilterDebug.log("loadPage.start", [
+                "surface": "email",
+                "mode": "unfiltered",
+                "page": currentPage,
+                "query": LibraryFilterDebug.summary(query: query)
+            ])
             raw = library.books(
                 offset: currentPage * pageSize, limit: pageFetchLimit,
                 sort: toolbarState.sortField, ascending: toolbarState.ascending,
@@ -539,6 +761,29 @@ final class EmailLibraryViewController: NSViewController {
         sidebarVC?.ao3Metadata = ao3Metadata
         sidebarVC?.likedIDs = likedIDs
         loadAO3MetadataForSidebarBooks()
+        LibraryFilterDebug.log("loadPage.end", [
+            "surface": "email",
+            "rows": books.count,
+            "pageRows": page.count,
+            "hasNext": hasNextPage,
+            "elapsedMS": LibraryFilterDebug.elapsedMS(since: loadStart)
+        ])
+    }
+
+    private func queryWithCachedFullText(_ query: SearchQuery) -> SearchQuery {
+        guard let phrase = query.fulltextPhrase?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !phrase.isEmpty else { return query }
+        guard let ids = session.cachedFulltextIDs(for: phrase) else { return query }
+        return SearchQuery(
+            tagTerms: query.tagTerms,
+            authorTerms: query.authorTerms,
+            titleTerms: query.titleTerms,
+            seriesTerms: query.seriesTerms,
+            statusTerms: query.statusTerms,
+            fulltextPhrase: query.fulltextPhrase,
+            plainTerms: [],
+            ftsMatchedIDs: ids
+        )
     }
 
     private func rebuildSidebarItems() {
@@ -1046,6 +1291,7 @@ struct FilterSheetCarrier: View {
                     onClear: {
                         toolbarState.filterExpression   = FilterExpression()
                         toolbarState.activeFilterResult = nil
+                        toolbarState.cancelLibraryFilterApplication()
                         emailVC?.loadPage(reset: true)
                     }
                 )

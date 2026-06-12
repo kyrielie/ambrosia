@@ -68,15 +68,20 @@ enum SuggestionKind {
     }
 }
 
-// MARK: - SearchSuggestion
+enum FilterRuleFactory {
+    static func rule(for suggestion: SearchSuggestion) -> FilterRule {
+        rule(kind: suggestion.kind, value: suggestion.value)
+    }
 
-struct SearchSuggestion: Identifiable {
-    let id    = UUID()
-    let kind:  SuggestionKind
-    let value: String
+    static func tagPillRule(label: String, field: FilterField) -> FilterRule {
+        if field == .tag {
+            return rule(kind: .tag, value: label)
+        }
+        let op: FilterOperator = field == .rating ? .ratingAtMost : .equals
+        return FilterRule(field: field, op: op, value: label)
+    }
 
-    /// The FilterRule this suggestion produces when committed.
-    var asFilterRule: FilterRule {
+    private static func rule(kind: SuggestionKind, value: String) -> FilterRule {
         let resolvedValue: String
         switch kind {
         case .tag:
@@ -86,8 +91,8 @@ struct SearchSuggestion: Identifiable {
         default:
             resolvedValue = value
         }
+
         let op = kind.filterOperator(for: resolvedValue)
-        // AO3TagKind drives the field for rating/warning/category tags
         let field: FilterField
         switch kind {
         case .tag:
@@ -95,11 +100,24 @@ struct SearchSuggestion: Identifiable {
         case .status:
             field = .status
         case .fulltext:
-            field = .title
+            field = .fulltext
         default:
             field = kind.filterField
         }
         return FilterRule(field: field, op: op, value: resolvedValue)
+    }
+}
+
+// MARK: - SearchSuggestion
+
+struct SearchSuggestion: Identifiable {
+    let id    = UUID()
+    let kind:  SuggestionKind
+    let value: String
+
+    /// The FilterRule this suggestion produces when committed.
+    var asFilterRule: FilterRule {
+        FilterRuleFactory.rule(for: self)
     }
 }
 

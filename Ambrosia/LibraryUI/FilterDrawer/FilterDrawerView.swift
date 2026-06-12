@@ -194,6 +194,9 @@ struct FilterRuleRow: View {
     @Environment(LibrarySession.self) private var session
     @ObservedObject private var prefs = ReaderPreferences.shared
     @State private var collections: [CollectionRow] = []
+    @State private var collectionSearchText = ""
+    @State private var showCollectionPicker = false
+    @FocusState private var collectionSearchFocused: Bool
 
     var body: some View {
         HStack(spacing: 8) {
@@ -208,7 +211,7 @@ struct FilterRuleRow: View {
             }
 
             if rule.field != .isLiked {
-                Picker("", selection: $rule.op) {
+                Picker("", selection: operatorBinding) {
                     ForEach(rule.availableOperators) { op in Text(op.label).tag(op) }
                 }
                 .labelsHidden().frame(width: 150)
@@ -224,6 +227,9 @@ struct FilterRuleRow: View {
         .padding(.vertical, 3).padding(.horizontal, 6)
         .background(Color(NSColor.windowBackgroundColor).opacity(0.6))
         .clipShape(RoundedRectangle(cornerRadius: 5))
+        .onAppear {
+            normalizeOperator()
+        }
         .task {
             collections = (try? await session.collectionStore?.collections()) ?? []
         }
@@ -235,12 +241,7 @@ struct FilterRuleRow: View {
         case .isLiked:
             Text("is liked").font(.callout).foregroundStyle(.secondary); Spacer()
         case .collection:
-            Picker("", selection: $rule.value) {
-                Text("— pick —").tag("")
-                ForEach(visibleCollections) { col in
-                    Text(col.name).tag(col.name)
-                }
-            }.labelsHidden().frame(maxWidth: .infinity)
+            collectionSearchField
         case .status:
             Picker("", selection: $rule.value) {
                 Text("— pick —").tag("")
@@ -291,6 +292,125 @@ struct FilterRuleRow: View {
         collections.filter { col in
             col.id != SystemCollectionID.skipped || prefs.showSkippedCollection
         }
+    }
+
+    private var filteredCollections: [CollectionRow] {
+        let query = collectionSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return visibleCollections }
+        return visibleCollections.filter {
+            $0.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+    }
+
+    private var collectionSearchField: some View {
+        Button {
+            showCollectionPicker = true
+        } label: {
+            HStack {
+                Text(rule.value.isEmpty ? "Pick collection" : rule.value)
+                    .lineLimit(1)
+                    .foregroundStyle(rule.value.isEmpty ? .secondary : .primary)
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: 22)
+            .background(Color(NSColor.controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showCollectionPicker, arrowEdge: .bottom) {
+            VStack(spacing: 0) {
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Search collections", text: $collectionSearchText)
+                        .textFieldStyle(.plain)
+                        .focused($collectionSearchFocused)
+                    if !collectionSearchText.isEmpty {
+                        Button {
+                            collectionSearchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                Divider()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        collectionChoice(title: "— pick —", isSelected: rule.value.isEmpty) {
+                            rule.value = ""
+                            closeCollectionPicker()
+                        }
+                        ForEach(filteredCollections) { col in
+                            collectionChoice(title: col.name, isSelected: rule.value == col.name) {
+                                rule.value = col.name
+                                closeCollectionPicker()
+                            }
+                        }
+                        if filteredCollections.isEmpty {
+                            Text("No collections")
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(10)
+                        }
+                    }
+                }
+                .frame(maxHeight: 220)
+            }
+            .frame(width: 260)
+            .onAppear {
+                DispatchQueue.main.async {
+                    collectionSearchFocused = true
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func collectionChoice(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                    .lineLimit(1)
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+    }
+
+    private func closeCollectionPicker() {
+        collectionSearchText = ""
+        showCollectionPicker = false
+    }
+
+    private func normalizeOperator() {
+        if !rule.availableOperators.contains(rule.op) {
+            rule.op = rule.availableOperators[0]
+        }
+    }
+
+    private var operatorBinding: Binding<FilterOperator> {
+        Binding(
+            get: {
+                rule.availableOperators.contains(rule.op) ? rule.op : rule.availableOperators[0]
+            },
+            set: { rule.op = $0 }
+        )
     }
 
     private var visibleFields: [FilterField] {

@@ -31,8 +31,7 @@ final class EmailSidebarViewController: NSViewController,
     var onContextMenuResetProgress:    (([CalibreBook]) -> Void)?
     var onContextMenuOpen:             (([CalibreBook]) -> Void)?
     var onContextMenuReadLater:        (([CalibreBook]) -> Void)?
-    var onContextMenuToggleCollection: (([CalibreBook], String) -> Void)?
-    var onContextMenuNewCollection:    (([CalibreBook]) -> Void)?
+    var onContextMenuCollectionPicker: (([CalibreBook], NSView, NSRect) -> Void)?
     var onToggleLiked:                 ((CalibreBook) -> Void)?
 
     // MARK: - Dependencies
@@ -196,7 +195,6 @@ final class EmailSidebarViewController: NSViewController,
         guard row >= 0, row < items.count else { return nil }
         let book = items[row].primaryBook
         let selectedBooks = contextBooks(fallbackRow: row)
-        let selectedIDs = Set(selectedBooks.map(\.id))
         let isBulk = selectedBooks.count > 1
 
         let menu = NSMenu()
@@ -249,33 +247,10 @@ final class EmailSidebarViewController: NSViewController,
 
         menu.addItem(.separator())
 
-        // Add to Collection submenu
-        let collectionSubmenu = NSMenu(title: "Add to Collection")
-        let sortedNames = collectionMembership.keys
-            .filter { $0 != "Skipped" || ReaderPreferences.shared.showSkippedCollection }
-            .sorted()
-        for name in sortedNames {
-            let isMember = selectedIDs.isSubset(of: collectionMembership[name] ?? [])
-            let item = NSMenuItem(
-                title: isMember ? "✓ \(name)" : name,
-                action: #selector(contextToggleCollection(_:)),
-                keyEquivalent: ""
-            )
-            item.target = self
-            item.representedObject = ["books": selectedBooks, "collection": name] as [String: Any]
-            collectionSubmenu.addItem(item)
-        }
-        if !sortedNames.isEmpty {
-            collectionSubmenu.addItem(.separator())
-        }
-        let newItem = NSMenuItem(title: "New Collection…", action: #selector(contextNewCollection(_:)), keyEquivalent: "")
-        newItem.target = self
-        newItem.representedObject = selectedBooks
-        collectionSubmenu.addItem(newItem)
-
-        let collectionMenuItem = NSMenuItem(title: "Add to Collection", action: nil, keyEquivalent: "")
-        collectionMenuItem.submenu = collectionSubmenu
-        menu.addItem(collectionMenuItem)
+        let collectionItem = NSMenuItem(title: "Add to Collection...", action: #selector(contextShowCollectionPicker(_:)), keyEquivalent: "")
+        collectionItem.target = self
+        collectionItem.representedObject = ["books": selectedBooks, "row": row] as [String: Any]
+        menu.addItem(collectionItem)
 
         return menu
     }
@@ -312,16 +287,13 @@ final class EmailSidebarViewController: NSViewController,
         onContextMenuReadLater?(books)
     }
 
-    @objc private func contextToggleCollection(_ sender: NSMenuItem) {
+    @objc private func contextShowCollectionPicker(_ sender: NSMenuItem) {
         guard let dict = sender.representedObject as? [String: Any],
               let books = dict["books"] as? [CalibreBook],
-              let name = dict["collection"] as? String else { return }
-        onContextMenuToggleCollection?(books, name)
-    }
-
-    @objc private func contextNewCollection(_ sender: NSMenuItem) {
-        guard let books = sender.representedObject as? [CalibreBook] else { return }
-        onContextMenuNewCollection?(books)
+              let row = dict["row"] as? Int,
+              row >= 0,
+              row < tableView.numberOfRows else { return }
+        onContextMenuCollectionPicker?(books, tableView, tableView.rect(ofRow: row))
     }
 
     func updateSelectionForContextClick(row: Int, event: NSEvent) {
