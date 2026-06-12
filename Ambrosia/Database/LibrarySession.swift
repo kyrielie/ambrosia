@@ -252,56 +252,80 @@ final class LibrarySession {
 
             guard !missing.isEmpty else { return }
 
-            for id in missing {
-                if Task.isCancelled { break }
-                var failureReason: String?
-                var failureStatus = "skipped"
-                var diagnosticEPUB: URL?
-                var spineItemsChecked: Int?
-                let metadata = autoreleasepool { () -> AO3MetadataRecord? in
-                    guard let epub = library.epubURL(calibreID: id) else {
-                        failureReason = "no EPUB found"
-                        return nil
-                    }
-                    diagnosticEPUB = epub
-                    do {
-                        var parser = EPUBParser(epubURL: epub)
-                        try parser.parse()
-                        let checkedItems = Array(parser.spine.prefix(5))
-                        spineItemsChecked = checkedItems.count
-                        for item in checkedItems {
-                            let html = try parser.html(for: item, userCSS: "")
-                            if let metadata = AO3MetadataExtractor.extract(from: html) {
-                                return metadata
-                            }
+        // Process in batches: parse EPUBs individually (CPU-bound, off-actor),
+        // then flush accumulated results to the DB in one transaction per batch.
+        // Yielding between batches lets higher-priority actor calls (e.g. filter
+        // queries from the UI) cut in without waiting for the full extraction run.
+        let batchSize = 50
+        var pendingSuccess: [(AO3MetadataRecord, Int)] = []
+        var pendingFailure: [AO3ExtractionDiagnostic] = []
+
+        func flushBatch() async {
+            guard !pendingSuccess.isEmpty || !pendingFailure.isEmpty else { return }
+            let toInsertSuccess = pendingSuccess
+            let toInsertFailure = pendingFailure
+            pendingSuccess.removeAll()
+            pendingFailure.removeAll()
+            try? await metaDB.insertBatch(toInsertSuccess, diagnostics: toInsertFailure)
+        }
+
+        for (batchStart, id) in missing.enumerated() {
+            if Task.isCancelled { break }
+            var failureReason: String?
+            var failureStatus = "skipped"
+            var diagnosticEPUB: URL?
+            var spineItemsChecked: Int?
+            let metadata = autoreleasepool { () -> AO3MetadataRecord? in
+                guard let epub = library.epubURL(calibreID: id) else {
+                    failureReason = "no EPUB found"
+                    return nil
+                }
+                diagnosticEPUB = epub
+                do {
+                    var parser = EPUBParser(epubURL: epub)
+                    try parser.parse()
+                    let checkedItems = Array(parser.spine.prefix(5))
+                    spineItemsChecked = checkedItems.count
+                    for item in checkedItems {
+                        let html = try parser.html(for: item, userCSS: "")
+                        if let metadata = AO3MetadataExtractor.extract(from: html) {
+                            return metadata
                         }
-                        failureReason = "no dl.tags AO3 preface metadata in first \(min(parser.spine.count, 5)) spine items"
-                        return nil
-                    } catch {
-                        failureStatus = "failed"
-                        failureReason = error.localizedDescription
-                        return nil
                     }
-                }
-                if let metadata {
-                    try? await metaDB.insert(metadata, calibreID: id)
-                } else {
-                    let diagnostic = AO3ExtractionDiagnostic(
-                        calibreID: id,
-                        status: failureStatus,
-                        reason: failureReason ?? "unknown reason",
-                        epubPath: diagnosticEPUB?.path,
-                        epubFilename: diagnosticEPUB?.lastPathComponent,
-                        spineItemsChecked: spineItemsChecked,
-                        attemptedAt: ISO8601DateFormatter().string(from: Date())
-                    )
-                    try? await metaDB.insert(diagnostic)
-                    print("[LibrarySession] AO3 extraction skipped calibreID=\(id): \(failureReason ?? "unknown reason")")
-                }
-                DispatchQueue.main.async { [weak self] in
-                    self?.extractionProgress.completed += 1
+                    failureReason = "no dl.tags AO3 preface metadata in first \(min(parser.spine.count, 5)) spine items"
+                    return nil
+                } catch {
+                    failureStatus = "failed"
+                    failureReason = error.localizedDescription
+                    return nil
                 }
             }
+            if let metadata {
+                pendingSuccess.append((metadata, id))
+            } else {
+                let diagnostic = AO3ExtractionDiagnostic(
+                    calibreID: id,
+                    status: failureStatus,
+                    reason: failureReason ?? "unknown reason",
+                    epubPath: diagnosticEPUB?.path,
+                    epubFilename: diagnosticEPUB?.lastPathComponent,
+                    spineItemsChecked: spineItemsChecked,
+                    attemptedAt: ISO8601DateFormatter().string(from: Date())
+                )
+                pendingFailure.append(diagnostic)
+                print("[LibrarySession] AO3 extraction skipped calibreID=\(id): \(failureReason ?? "unknown reason")")
+            }
+            DispatchQueue.main.async { [weak self] in
+                self?.extractionProgress.completed += 1
+            }
+            // Flush and yield every batchSize books so read queries can cut in.
+            if (batchStart + 1).isMultiple(of: batchSize) {
+                await flushBatch()
+                await Task.yield()
+            }
+        }
+        // Flush any remaining records.
+        await flushBatch()
 
             DispatchQueue.main.async { [weak self] in
                 self?.extractionProgress.isRunning = false

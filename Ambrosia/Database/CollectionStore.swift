@@ -64,8 +64,14 @@ actor CollectionStore {
     }
 
     func bulkRemove(calibreIDs: [Int], from collectionID: String) async throws {
-        for id in calibreIDs {
-            try await remove(calibreID: id, from: collectionID)
+        guard !calibreIDs.isEmpty else { return }
+        try await db.transaction { db in
+            for id in calibreIDs {
+                try db.run(
+                    "DELETE FROM collection_members WHERE collection_id = ? AND calibre_id = ?",
+                    [collectionID, id]
+                )
+            }
         }
     }
 
@@ -90,18 +96,33 @@ actor CollectionStore {
     }
 
     func bulkAdd(calibreIDs: [Int], to collectionID: String) async throws {
+        guard !calibreIDs.isEmpty else { return }
         let now = ISO8601DateFormatter().string(from: Date())
-        for id in calibreIDs {
-            try await db.run(
-                "INSERT OR IGNORE INTO collection_members VALUES (?, ?, ?)",
-                [collectionID, id, now]
-            )
+        try await db.transaction { db in
+            for id in calibreIDs {
+                try db.run(
+                    "INSERT OR IGNORE INTO collection_members VALUES (?, ?, ?)",
+                    [collectionID, id, now]
+                )
+            }
         }
     }
 
     func replaceMembers(of collectionID: String, with calibreIDs: Set<Int>) async throws {
-        try await db.run("DELETE FROM collection_members WHERE collection_id = ?", [collectionID])
-        try await bulkAdd(calibreIDs: Array(calibreIDs).sorted(), to: collectionID)
+        let sortedIDs = Array(calibreIDs).sorted()
+        let now = ISO8601DateFormatter().string(from: Date())
+        try await db.transaction { db in
+            try db.run(
+                "DELETE FROM collection_members WHERE collection_id = ?",
+                [collectionID]
+            )
+            for id in sortedIDs {
+                try db.run(
+                    "INSERT OR IGNORE INTO collection_members VALUES (?, ?, ?)",
+                    [collectionID, id, now]
+                )
+            }
+        }
     }
 
     func syncAutomatedCollection(collectionID: String, calibreID: Int, shouldBeMember: Bool) async throws {
