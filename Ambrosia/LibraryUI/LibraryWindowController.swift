@@ -15,6 +15,7 @@ extension NSToolbarItem.Identifier {
     static let libraryViewMode      = NSToolbarItem.Identifier("ambrosia.library.viewmode")
     static let libraryTitle         = NSToolbarItem.Identifier("ambrosia.library.title")
     static let librarySidebarToggle = NSToolbarItem.Identifier("ambrosia.library.sidebartoggle")
+    static let libraryReaderSidebarToggle = NSToolbarItem.Identifier("ambrosia.library.readersidebartoggle")
 }
 
 // MARK: - LibraryWindowController
@@ -25,9 +26,11 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private weak var session: LibrarySession?
     private var viewModeControl: NSSegmentedControl?
     private var sortMenuToolbarItem: NSMenuToolbarItem?
+    private var readerSidebarToolbarItem: NSToolbarItem?
     private var ficCountLabel: NSTextField?
     private var readCountLabel: NSTextField?
     private var appearanceCancellable: AnyCancellable?
+    private var windowMoveResizeObservers: [NSObjectProtocol] = []
 
     // The search toolbar item — kept strongly so we can anchor the popover.
     private var searchToolbarItem: NSSearchToolbarItem?
@@ -42,12 +45,13 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     // user can keep typing while suggestions update — the same mechanism used by
     // Xcode's completion list and Spotlight's suggestion area.
     //
-    // The panel is positioned by converting the search field's frame to screen
-    // coordinates. We hold a direct strong reference to the NSSearchField so
-    // this conversion is always reliable, regardless of toolbar item hierarchy.
+    // The panel is positioned from the visible toolbar item view when possible,
+    // falling back to the search field. The toolbar item frame is the stable
+    // anchor after customization and overflow relayouts.
 
     private var suggestionPanel: NSPanel?
     private var suggestionHostingVC: NSHostingController<SearchSuggestionsView>?
+    private var suggestionMouseMonitor: Any?
     private let suggestionDebouncer = DebounceTimer(delay: 0.2)
 
     // MARK: - Init
@@ -84,6 +88,11 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    deinit {
+        removeSuggestionMouseMonitor()
+        removeWindowMoveResizeObservers()
+    }
+
     // MARK: - Appearance
 
     private func applyLibraryAppearance() {
@@ -104,12 +113,15 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     // MARK: - Toolbar setup
 
     private func configureToolbar(window: NSWindow) {
-        let toolbar = NSToolbar(identifier: "LibraryToolbar3")
+        let toolbar = NSToolbar(identifier: "LibraryToolbar5")
         toolbar.delegate = self
         toolbar.allowsUserCustomization = true
         toolbar.autosavesConfiguration  = true
         toolbar.displayMode = .iconOnly
         window.toolbar = toolbar
+        installWindowMoveResizeObservers(for: window)
+        scheduleReaderSidebarIconObservation()
+        scheduleSearchTextObservation()
     }
 
     // MARK: - NSToolbarDelegate
@@ -117,14 +129,13 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.librarySidebarToggle, .libraryTitle, .librarySearch, .libraryFilter, .librarySort,
          .flexibleSpace,
-         .libraryCollections, .libraryReadingGoal, .libraryExport,
-         .space,
-         .libraryViewMode]
+         .libraryCollections, .libraryReadingGoal, .libraryExport, .libraryViewMode,
+         .libraryReaderSidebarToggle]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.librarySidebarToggle, .librarySearch, .libraryFilter, .librarySort,
-         .libraryCollections, .libraryReadingGoal, .libraryExport,
+         .libraryReaderSidebarToggle, .libraryCollections, .libraryReadingGoal, .libraryExport,
          .libraryViewMode, .libraryTitle,
          .space, .flexibleSpace]
     }
@@ -136,19 +147,27 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
         case .librarySearch:
             let item = NSSearchToolbarItem(itemIdentifier: identifier)
-            item.toolTip = "Search — or type tag:, author:, series:, title:, status: to add a filter"
+            item.toolTip = "Search titles — or type fulltext: for body search, or tag:, author:, series:, title:, status: to add a filter"
             item.resignsFirstResponderWithCancel = true
             item.searchField.delegate = self
-            item.searchField.placeholderString = "Search, or tag: / author: / series: / status:"
+            item.searchField.placeholderString = "Search titles, or fulltext: / tag: / author: / series: / status:"
             // Action fires on every keypress — we debounce manually in the delegate
             item.searchField.target = self
             item.searchField.action = #selector(searchFieldChanged(_:))
             searchToolbarItem = item
+            DispatchQueue.main.async { [weak self] in self?.repositionSuggestionPanelIfNeeded() }
             return item
 
         case .librarySidebarToggle:
             return makeIconItem(identifier, label: "Sidebar",
                                 image: "sidebar.left", action: #selector(triggerSidebarToggle))
+
+        case .libraryReaderSidebarToggle:
+            let item = makeIconItem(identifier, label: "Reader Sidebar",
+                                    image: readerSidebarIconName(),
+                                    action: #selector(triggerReaderSidebarToggle))
+            readerSidebarToolbarItem = item
+            return item
 
         case .libraryTitle:
             return makeTitleItem(identifier)
@@ -195,6 +214,45 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         item.target = self
         item.action = action
         return item
+    }
+
+    private func readerSidebarIconName() -> String {
+        toolbarState?.isEmailReaderSidebarVisible == true ? "chevron.right" : "chevron.left"
+    }
+
+    private func updateReaderSidebarToolbarIcon() {
+        let label = "Reader Sidebar"
+        let cfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        readerSidebarToolbarItem?.image = NSImage(
+            systemSymbolName: readerSidebarIconName(),
+            accessibilityDescription: label
+        )?.withSymbolConfiguration(cfg)
+    }
+
+    private func scheduleReaderSidebarIconObservation() {
+        withObservationTracking {
+            _ = toolbarState?.isEmailReaderSidebarVisible
+        } onChange: { [weak self] in
+            DispatchQueue.main.async {
+                self?.updateReaderSidebarToolbarIcon()
+                self?.scheduleReaderSidebarIconObservation()
+            }
+        }
+    }
+
+    private func scheduleSearchTextObservation() {
+        withObservationTracking {
+            _ = toolbarState?.searchText
+        } onChange: { [weak self] in
+            DispatchQueue.main.async {
+                guard let self, let toolbarState = self.toolbarState else { return }
+                if self.searchToolbarItem?.searchField.stringValue != toolbarState.searchText {
+                    self.searchToolbarItem?.searchField.stringValue = toolbarState.searchText
+                }
+                toolbarState.syncFullTextFieldFromSearchText()
+                self.scheduleSearchTextObservation()
+            }
+        }
     }
 
     private func makeSortItem(_ identifier: NSToolbarItem.Identifier) -> NSMenuToolbarItem {
@@ -307,6 +365,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         // Update searchText immediately for display, but page load is debounced
         // inside BookGridItem / EmailLibraryViewController (0.4 s).
         toolbarState?.searchText = text
+        toolbarState?.syncFullTextFieldFromSearchText()
 
         if text.isEmpty {
             closeSuggestionPanel()
@@ -339,11 +398,11 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         }
     }
 
-    // MARK: - Commit: search text → filter rule or plain FTS
+    // MARK: - Commit: search text → filter rule or live search
 
     /// Called when the user presses Return. If the text is a recognised scoped
-    /// prefix (tag:, author:, series:, title:) the whole value is committed as a
-    /// FilterRule and the field is cleared. Otherwise the text is kept for FTS.
+    /// filter prefix the whole value is committed as a FilterRule and the field
+    /// is cleared. Otherwise the text stays in the field for live title/fulltext search.
     private func commitCurrentSearchText() {
         guard let field = searchToolbarItem?.searchField else { return }
         let text = field.stringValue.trimmingCharacters(in: .whitespaces)
@@ -356,7 +415,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             commitFilterRule(rule)
             clearSearchField()
         }
-        // Plain text: leave in field — BookGridItem will FTS within any active filter
+        // Plain text and fulltext: stay in the field for the debounced list reload.
 
         closeSuggestionPanel()
     }
@@ -376,6 +435,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private func clearSearchField() {
         searchToolbarItem?.searchField.stringValue = ""
         toolbarState?.searchText = ""
+        toolbarState?.syncFullTextFieldFromSearchText()
     }
 
     // MARK: - Suggestion panel
@@ -407,7 +467,10 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         // Update content in-place if already visible — avoids flicker on each keystroke.
         if let panel = suggestionPanel, panel.isVisible, let vc = suggestionHostingVC {
             vc.rootView = view
-            repositionPanel(panel, relativeTo: searchField)
+            DispatchQueue.main.async { [weak self, weak panel] in
+                guard let panel else { return }
+                self?.repositionPanel(panel)
+            }
             return
         }
 
@@ -440,11 +503,12 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         suggestionHostingVC = vc
         suggestionPanel = panel
 
-        repositionPanel(panel, relativeTo: searchField)
+        repositionPanel(panel)
 
         // Attach as child so it follows the parent window and hides on miniaturise.
         parentWindow.addChildWindow(panel, ordered: .above)
         panel.orderFront(nil)
+        installSuggestionMouseMonitor()
 
         // Restore first responder. orderFront can shift the key window on first show.
         // After makeFirstResponder, NSSearchField selects-all by default — move the
@@ -457,22 +521,67 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         }
     }
 
-    /// Positions the panel flush below the search field, right-aligned.
-    private func repositionPanel(_ panel: NSPanel, relativeTo searchField: NSSearchField) {
-        guard let fieldWindow = searchField.window else { return }
-        let fieldFrameInWindow = searchField.convert(searchField.bounds, to: nil)
-        let fieldFrameOnScreen = fieldWindow.convertToScreen(fieldFrameInWindow)
+    /// Positions the panel immediately below the visible search toolbar item.
+    private func repositionPanel(_ panel: NSPanel) {
+        guard let anchor = searchPanelAnchorView(),
+              let anchorWindow = anchor.window else { return }
+        anchor.layoutSubtreeIfNeeded()
+        anchorWindow.layoutIfNeeded()
+        let anchorFrameInWindow = anchor.convert(anchor.bounds, to: nil)
+        let anchorFrameOnScreen = anchorWindow.convertToScreen(anchorFrameInWindow)
         let size: NSSize
         if let vc = suggestionHostingVC {
-            size = vc.sizeThatFits(in: NSSize(width: 360, height: 600))
+            let fitting = vc.sizeThatFits(in: NSSize(width: 360, height: 600))
+            size = NSSize(width: max(fitting.width, anchorFrameOnScreen.width), height: fitting.height)
         } else {
-            size = panel.frame.size
+            size = NSSize(width: max(panel.frame.width, anchorFrameOnScreen.width), height: panel.frame.height)
         }
+        let screenFrame = anchorWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? anchorFrameOnScreen
+        let proposedX = anchorFrameOnScreen.minX
+        let clampedX = min(max(proposedX, screenFrame.minX), max(screenFrame.minX, screenFrame.maxX - size.width))
         let origin = NSPoint(
-            x: fieldFrameOnScreen.maxX - size.width,
-            y: fieldFrameOnScreen.minY - size.height - 4
+            x: clampedX,
+            y: anchorFrameOnScreen.minY - size.height - 4
         )
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
+    }
+
+    private func searchPanelAnchorView() -> NSView? {
+        if let searchField = searchToolbarItem?.searchField,
+           let toolbarItemView = searchField.superview,
+           toolbarItemView.window != nil {
+            return toolbarItemView
+        }
+        if let searchField = searchToolbarItem?.searchField, searchField.window != nil {
+            return searchField
+        }
+        return nil
+    }
+
+    private func repositionSuggestionPanelIfNeeded() {
+        guard let panel = suggestionPanel, panel.isVisible else { return }
+        repositionPanel(panel)
+    }
+
+    private func installWindowMoveResizeObservers(for window: NSWindow) {
+        removeWindowMoveResizeObservers()
+        let center = NotificationCenter.default
+        let notifications: [Notification.Name] = [
+            NSWindow.didMoveNotification,
+            NSWindow.didResizeNotification,
+            NSWindow.didEndLiveResizeNotification,
+        ]
+        windowMoveResizeObservers = notifications.map { name in
+            center.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                self?.repositionSuggestionPanelIfNeeded()
+            }
+        }
+    }
+
+    private func removeWindowMoveResizeObservers() {
+        let center = NotificationCenter.default
+        windowMoveResizeObservers.forEach { center.removeObserver($0) }
+        windowMoveResizeObservers = []
     }
 
     private func closeSuggestionPanel() {
@@ -482,12 +591,52 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         }
         suggestionPanel = nil
         suggestionHostingVC = nil
+        removeSuggestionMouseMonitor()
+    }
+
+    private func installSuggestionMouseMonitor() {
+        guard suggestionMouseMonitor == nil else { return }
+        suggestionMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self, self.suggestionPanel != nil else { return event }
+            if self.eventHitsSearchSuggestions(event) {
+                return event
+            }
+            self.closeSuggestionPanel()
+            return event
+        }
+    }
+
+    private func removeSuggestionMouseMonitor() {
+        if let monitor = suggestionMouseMonitor {
+            NSEvent.removeMonitor(monitor)
+            suggestionMouseMonitor = nil
+        }
+    }
+
+    private func eventHitsSearchSuggestions(_ event: NSEvent) -> Bool {
+        if event.window === suggestionPanel {
+            return true
+        }
+        guard let searchField = searchToolbarItem?.searchField,
+              event.window === searchField.window else {
+            return false
+        }
+        let point = searchField.convert(event.locationInWindow, from: nil)
+        return searchField.bounds.contains(point)
     }
 
     // MARK: - Other toolbar actions
 
-    @objc private func toggleFilter()        { toolbarState?.showFilterDrawer   = true }
+    @objc private func toggleFilter() {
+        toolbarState?.syncFullTextFieldFromSearchText()
+        toolbarState?.showFilterDrawer = true
+    }
     @objc private func triggerSidebarToggle(){ toolbarState?.toggleEmailSidebar.toggle() }
+    @objc private func triggerReaderSidebarToggle(){ toolbarState?.toggleEmailReaderSidebar.toggle() }
+    @objc func showEmailAnnotationSidebar(_ sender: Any?) {
+        toolbarState?.emailReaderSidebarMode = .annotations
+        toolbarState?.showEmailReaderSidebar.toggle()
+    }
     @objc private func showCollections()     { toolbarState?.showCollections    = true }
     @objc private func showReadingGoal()     { toolbarState?.showReadingGoal    = true }
     @objc private func triggerExport()       { toolbarState?.triggerExport      = true }

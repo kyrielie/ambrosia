@@ -89,10 +89,14 @@ extension CalibreLibrary {
         var args: [Binding?]  = []
 
         // FTS-matched IDs take priority over plain terms
-        if let ftsIDs = query.ftsMatchedIDs, !ftsIDs.isEmpty {
-            let ph = ftsIDs.map { _ in "?" }.joined(separator: ",")
-            clauses.append("b.id IN (\(ph))")
-            args.append(contentsOf: ftsIDs.map { $0 as Binding? })
+        if let ftsIDs = query.ftsMatchedIDs {
+            if ftsIDs.isEmpty {
+                clauses.append("0 = 1")
+            } else {
+                let ph = ftsIDs.map { _ in "?" }.joined(separator: ",")
+                clauses.append("b.id IN (\(ph))")
+                args.append(contentsOf: ftsIDs.map { $0 as Binding? })
+            }
         } else if !query.plainTerms.isEmpty {
             let joined = query.plainTerms.joined(separator: " ")
             let (fuzzyClause, fuzzyArgs) = CalibreLibrary.fuzzyTitleCondition(for: joined)

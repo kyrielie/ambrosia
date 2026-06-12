@@ -577,6 +577,11 @@ actor AmbrosiaMetaDB {
         return Set(rows.compactMap { $0.int(at: 0) })
     }
 
+    func attemptedAO3ExtractionIDs() throws -> Set<Int> {
+        let rows = try prepare("SELECT calibre_id FROM ao3_extraction_diagnostics")
+        return Set(rows.compactMap { $0.int(at: 0) })
+    }
+
     func ao3CompletionStatusIDs(_ status: AO3CompletionStatus) throws -> Set<Int> {
         let predicate: String
         switch status {

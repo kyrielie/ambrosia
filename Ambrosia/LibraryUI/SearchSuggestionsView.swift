@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - SuggestionKind
 
 enum SuggestionKind {
-    case tag, author, title, series, status
+    case tag, author, title, series, status, fulltext
 
     var icon: String {
         switch self {
@@ -12,6 +12,7 @@ enum SuggestionKind {
         case .title:  return "book"
         case .series: return "books.vertical"
         case .status: return "checkmark.circle"
+        case .fulltext: return "doc.text.magnifyingglass"
         }
     }
 
@@ -22,6 +23,7 @@ enum SuggestionKind {
         case .title:  return "Title"
         case .series: return "Series"
         case .status: return "Status"
+        case .fulltext: return "Full Text"
         }
     }
 
@@ -32,6 +34,7 @@ enum SuggestionKind {
         case .title:  return "title:"
         case .series: return "series:"
         case .status: return "status:"
+        case .fulltext: return "fulltext:"
         }
     }
 
@@ -43,6 +46,7 @@ enum SuggestionKind {
         case .title:  return .title
         case .series: return .series
         case .status: return .status
+        case .fulltext: return .fulltext
         }
     }
 
@@ -58,7 +62,7 @@ enum SuggestionKind {
             return .equals
         case .author, .status:
             return .equals
-        case .title, .series:
+        case .title, .series, .fulltext:
             return .contains
         }
     }
@@ -90,6 +94,8 @@ struct SearchSuggestion: Identifiable {
             field = AO3TagKind.classify(resolvedValue).filterField
         case .status:
             field = .status
+        case .fulltext:
+            field = .title
         default:
             field = kind.filterField
         }
@@ -183,7 +189,7 @@ struct SearchSuggestionsView: View {
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)
             Spacer()
-            Text("adds filter")
+            Text(kind == .fulltext ? "searches body" : "adds filter")
                 .font(.caption2)
                 .foregroundStyle(.quaternary)
         }
@@ -244,6 +250,11 @@ func computeSectionedSuggestions(for searchText: String,
         return suggestions.isEmpty ? [] : [SuggestionSection(kind: .status, suggestions: suggestions)]
     }
 
+    // fulltext: prefix is accepted as-is and intentionally has no completions.
+    if text.activePrefixValue(for: "fulltext:") != nil {
+        return []
+    }
+
     // Plain text (≥ 2 chars) → multi-section: titles, authors, tags, series
     guard text.count >= 2 else { return [] }
 
@@ -256,8 +267,10 @@ func computeSectionedSuggestions(for searchText: String,
     let seriesSugs = library.seriesSuggestions(prefix: text, limit: 3)
         .map { SearchSuggestion(kind: .series, value: $0) }
     let statusSugs = statusSuggestions(prefix: text)
+    let fulltextSugs = [SearchSuggestion(kind: .fulltext, value: text)]
 
     return [
+        SuggestionSection(kind: .fulltext, suggestions: fulltextSugs),
         SuggestionSection(kind: .title,  suggestions: titleSugs),
         SuggestionSection(kind: .author, suggestions: authorSugs),
         SuggestionSection(kind: .tag,    suggestions: tagSugs),

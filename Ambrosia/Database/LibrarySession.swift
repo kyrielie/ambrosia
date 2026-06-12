@@ -96,20 +96,46 @@ final class LibrarySession {
 
     // MARK: - FTS resolution
 
-    /// Attempts FTS resolution for plain terms; falls back to LIKE if FTS unavailable or empty.
+    /// Attempts FTS resolution for explicit fulltext only.
     /// Shared between list view and email view — single source of truth.
     func resolvedQuery(_ query: SearchQuery) -> SearchQuery {
-        guard !query.plainTerms.isEmpty,
-              let fts = ftsLibrary else { return query }
-        let plainText = query.plainTerms.joined(separator: " ")
-        guard let ftsIDs = fts.search(query: plainText), !ftsIDs.isEmpty else {
+        guard let phrase = query.fulltextPhrase?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !phrase.isEmpty else {
             return query
+        }
+        guard let fts = ftsLibrary else {
+            print("[LibrarySession] fulltext search unavailable for phrase=\"\(phrase)\"")
+            return SearchQuery(
+                tagTerms: query.tagTerms,
+                authorTerms: query.authorTerms,
+                titleTerms: query.titleTerms,
+                seriesTerms: query.seriesTerms,
+                statusTerms: query.statusTerms,
+                fulltextPhrase: query.fulltextPhrase,
+                plainTerms: [],
+                ftsMatchedIDs: []
+            )
+        }
+        guard let ftsIDs = fts.search(query: phrase), !ftsIDs.isEmpty else {
+            print("[LibrarySession] fulltext search returned no matches for phrase=\"\(phrase)\"")
+            return SearchQuery(
+                tagTerms: query.tagTerms,
+                authorTerms: query.authorTerms,
+                titleTerms: query.titleTerms,
+                seriesTerms: query.seriesTerms,
+                statusTerms: query.statusTerms,
+                fulltextPhrase: query.fulltextPhrase,
+                plainTerms: [],
+                ftsMatchedIDs: []
+            )
         }
         return SearchQuery(
             tagTerms:     query.tagTerms,
             authorTerms:  query.authorTerms,
             titleTerms:   query.titleTerms,
             seriesTerms:  query.seriesTerms,
+            statusTerms:  query.statusTerms,
+            fulltextPhrase: query.fulltextPhrase,
             plainTerms:   [],
             ftsMatchedIDs: ftsIDs
         )
@@ -156,7 +182,8 @@ final class LibrarySession {
         extractionTask = Task(priority: .background) { [weak self, library, metaDB] in
             let allIDs = library.allBookIDs()
             let existing = (try? await metaDB.existingAO3MetadataIDs()) ?? []
-            let missing = forceAll ? allIDs : allIDs.filter { !existing.contains($0) }
+            let attempted = (try? await metaDB.attemptedAO3ExtractionIDs()) ?? []
+            let missing = forceAll ? allIDs : allIDs.filter { !existing.contains($0) && !attempted.contains($0) }
 
             DispatchQueue.main.async { [weak self] in
                 self?.extractionProgress.total = missing.count
