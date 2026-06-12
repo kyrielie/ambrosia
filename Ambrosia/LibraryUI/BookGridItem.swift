@@ -54,6 +54,7 @@ struct LibraryRootView: View {
     @State private var likedIDs: Set<Int> = []
     @State private var skippedIDs: Set<Int> = []
     @State private var seriesOrMergedIDs: Set<Int> = []
+    @State private var ao3PublisherIDs: Set<Int> = []
     @State private var selectedIDs: Set<Int> = []
 
     private let pageSize = 25
@@ -110,6 +111,9 @@ struct LibraryRootView: View {
                     loadPage()
                 }
             }
+            .onChange(of: prefs.hideNonAO3PublisherBooks) {
+                refreshVisibilitySnapshots()
+            }
             .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
                 let persisted = UserDefaults.standard.bool(forKey: "groupBySeries")
                 if toolbarState.groupBySeries != persisted {
@@ -162,7 +166,9 @@ struct LibraryRootView: View {
                         get: { toolbarState.filterExpression },
                         set: { toolbarState.filterExpression = $0 }
                     ),
-                    onApply: { applyFilterRules() },
+                    onApply: {
+                        applyFilterRules()
+                    },
                     onClear: {
                         toolbarState.filterExpression = FilterExpression()
                         toolbarState.activeFilterResult = nil
@@ -198,8 +204,8 @@ struct LibraryRootView: View {
     private var rootContent: some View {
         VStack(spacing: 0) {
             Divider()
-            if toolbarState.hasActiveFilter {
-                activeFilterChip(count: toolbarState.activeFilterResult!.totalCount)
+            if toolbarState.hasActiveFilter || activeFullTextPhrase != nil {
+                activeFilterChip(count: toolbarState.activeFilterResult?.totalCount ?? books.count)
             }
             if !session.isOpen {
                 emptyLibraryState
@@ -223,7 +229,7 @@ struct LibraryRootView: View {
         let query = session.resolvedQuery(rawQuery)
 
         if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
-            let ids = visibleIDs(query.ftsMatchedIDs ?? result.calibreIDs)
+            let ids = visibleIDs(intersect(result.calibreIDs, with: query.ftsMatchedIDs))
             let raw = library.books(
                 ids: ids,
                 offset: currentPage * pageSize, limit: pageSize + 1,
@@ -284,8 +290,14 @@ struct LibraryRootView: View {
                 let metadataByID = seriesMetadata
                 let indices = sortedEntries.map(\.seriesIndex)
                 let missing = missingIndices(in: indices)
-                let tags = Array(Set(works.flatMap(\.tags) + metadata.flatMap(\.additionalTags))).sorted()
+                let ratings = Array(Set(works.flatMap(\.tags).filter { if case .rating = AO3TagKind.classify($0) { return true }; return false })).sorted()
+                let warnings = Array(Set(works.flatMap(\.tags).filter { if case .warning = AO3TagKind.classify($0) { return true }; return false })).sorted()
+                let categories = Array(Set(metadata.flatMap(\.categories) + works.flatMap(\.tags).filter { if case .category = AO3TagKind.classify($0) { return true }; return false })).sorted()
                 let fandoms = Array(Set(metadata.flatMap(\.fandoms))).sorted()
+                let relationships = Array(Set(metadata.flatMap(\.relationships))).sorted()
+                let characters = Array(Set(metadata.flatMap(\.characters))).sorted()
+                let additionalTags = Array(Set(metadata.flatMap(\.additionalTags))).sorted()
+                let tags = Array(Set(works.flatMap(\.tags) + additionalTags)).sorted()
                 let authors = Array(Set(works.flatMap(\.authors))).sorted()
                 let descriptions = works.compactMap(\.displayComment)
                 let chapterRecords = works.compactMap { metadataByID[$0.id] }.filter { $0.chapterCurrent != nil }
@@ -303,6 +315,12 @@ struct LibraryRootView: View {
                         (sortedEntries.first { $0.calibreID == right.id }?.seriesIndex ?? 0)
                     },
                     allFandoms: fandoms,
+                    allRelationships: relationships,
+                    allCharacters: characters,
+                    allCategories: categories,
+                    allWarnings: warnings,
+                    allRatings: ratings,
+                    allAdditionalTags: additionalTags,
                     allTags: tags,
                     allAuthors: authors,
                     allDescriptions: descriptions,
@@ -369,15 +387,33 @@ struct LibraryRootView: View {
     private func visibleIDs(_ ids: [Int]) -> [Int] {
         ids.filter { id in
             (prefs.showSkippedCollection || !skippedIDs.contains(id)) &&
-            !seriesOrMergedIDs.contains(id)
+            !seriesOrMergedIDs.contains(id) &&
+            (!prefs.hideNonAO3PublisherBooks || ao3PublisherIDs.contains(id))
         }
+    }
+
+    private func intersect(_ ids: [Int], with optionalIDs: [Int]?) -> [Int] {
+        guard let other = optionalIDs else { return ids }
+        let allowed = Set(other)
+        return ids.filter { allowed.contains($0) }
     }
 
     private func visibleBooks(_ raw: [CalibreBook]) -> [CalibreBook] {
         raw.filter { book in
             (prefs.showSkippedCollection || !skippedIDs.contains(book.id)) &&
             !seriesOrMergedIDs.contains(book.id) &&
+            (!prefs.hideNonAO3PublisherBooks || book.isAO3PublisherBook) &&
             !isAnthology(book)
+        }
+    }
+
+    private func refreshVisibilitySnapshots() {
+        ao3PublisherIDs = session.library?.ao3PublisherBookIDs() ?? []
+        currentPage = 0
+        if toolbarState.filterExpression.hasCompleteRules {
+            applyFilterRules()
+        } else {
+            loadPage()
         }
     }
 
@@ -388,10 +424,12 @@ struct LibraryRootView: View {
             let currentLiked = (try? await session.collectionStore?.likedIDs()) ?? []
             let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
             let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
+            let currentAO3PublisherIDs = session.library?.ao3PublisherBookIDs() ?? []
             await MainActor.run {
             likedIDs = currentLiked
             skippedIDs = currentSkipped
             seriesOrMergedIDs = currentSeriesOrMerged
+            ao3PublisherIDs = currentAO3PublisherIDs
             pruneSelection()
             currentPage = 0
             loadPage()
@@ -422,7 +460,7 @@ struct LibraryRootView: View {
                     collectionMap[SystemCollectionID.seriesOrMergedName] = (try? await metaDB.collapsedSeriesRepresentativeIDs()) ?? []
                 }
             }
-            let builder = FilterBuilder(library: library)
+            let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary)
             let result = builder.matchingIDs(
                 expression: toolbarState.filterExpression,
                 likedIDs: currentLikedIDs,
@@ -435,6 +473,7 @@ struct LibraryRootView: View {
                 ? result.calibreIDs
                 : result.calibreIDs.filter { !currentSkipped.contains($0) }
             let visibleFilteredIDs = filteredIDs.filter { !currentSeriesOrMerged.contains($0) }
+                .filter { !prefs.hideNonAO3PublisherBooks || (session.library?.ao3PublisherBookIDs() ?? []).contains($0) }
             toolbarState.activeFilterResult = FilterResult(
                 calibreIDs: visibleFilteredIDs,
                 totalCount: visibleFilteredIDs.count
@@ -472,6 +511,12 @@ struct LibraryRootView: View {
     }
 
     // MARK: - Subviews
+
+    private var activeFullTextPhrase: String? {
+        let phrase = SearchQueryParser.parse(toolbarState.searchText).fulltextPhrase?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return phrase?.isEmpty == false ? phrase : nil
+    }
 
     private func activeFilterChip(count: Int) -> some View {
         let completeRules = toolbarState.filterExpression.groups.flatMap(\.rules).filter(\.isComplete)
@@ -518,6 +563,21 @@ struct LibraryRootView: View {
                     .overlay(Capsule().stroke(
                         negated ? Color.red.opacity(0.3) : Color.accentColor.opacity(0.3),
                         lineWidth: 0.5))
+                }
+                if let phrase = activeFullTextPhrase {
+                    HStack(spacing: 3) {
+                        Text("Full Text")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(phrase)
+                            .font(.caption2.bold())
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.accentColor.opacity(0.12))
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(Color.accentColor.opacity(0.3), lineWidth: 0.5))
                 }
             }
         }
@@ -875,6 +935,12 @@ struct BookListRow: View, Equatable {
                 Text(series).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
+            Button(action: onLikeToggle) {
+                Image(systemName: isLiked ? "star.fill" : "star")
+                    .foregroundStyle(isLiked ? Color.yellow : Color.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help(isLiked ? "Unlike" : "Like")
             if let s = bookState, s.lastOpenedDate > Date(timeIntervalSince1970: 1) {
                 Text(Self.formatLastOpened(s.lastOpenedDate))
                     .font(.caption).foregroundStyle(.tertiary)
@@ -1144,18 +1210,41 @@ private struct TagPillDisplay: Identifiable, Equatable {
 
     static func makeForSeries(
         fandoms: [String],
+        relationships: [String],
+        characters: [String],
+        categories: [String],
+        warnings: [String],
+        ratings: [String],
+        additionalTags: [String],
         tags: [String],
-        hideFanworks: Bool,
-        limit: Int
+        hideFanworks: Bool
     ) -> [TagPillDisplay] {
         let buckets = AO3TagBuckets.from(tags: tags)
-        var pills = make(calibreTags: tags, ao3Metadata: nil, hideFanworks: hideFanworks)
-        let fandomPills = fandoms
-            .filter { shouldShow($0, hideFanworks: hideFanworks) }
-            .map { TagPillDisplay(label: $0, field: .tag, role: .fandom) }
-        pills.insert(contentsOf: fandomPills.filter { pill in !pills.contains { $0.label == pill.label } },
-                     at: min(buckets.ratings.count, pills.count))
-        return Array(pills.prefix(limit))
+        let regularTags = buckets.regular.filter { tag in
+            !additionalTags.contains(tag) &&
+            !fandoms.contains(tag) &&
+            !relationships.contains(tag) &&
+            !characters.contains(tag)
+        }
+        var seen = Set<String>()
+        var pills: [TagPillDisplay] = []
+
+        func append(_ values: [String], role: Role, field: FilterField = .tag) {
+            for value in values where shouldShow(value, hideFanworks: hideFanworks) {
+                guard seen.insert(value).inserted else { continue }
+                pills.append(TagPillDisplay(label: value, field: field, role: role))
+            }
+        }
+
+        append(ratings + buckets.ratings, role: .rating, field: .rating)
+        append(fandoms, role: .fandom)
+        append(relationships, role: .relationship)
+        append(characters, role: .character)
+        append(categories + buckets.categories, role: .category, field: .category)
+        append(warnings + buckets.warnings, role: .warning, field: .warning)
+        append(additionalTags, role: .regular)
+        append(regularTags, role: .regular)
+        return pills
     }
 
     private static func shouldShow(_ tag: String, hideFanworks: Bool) -> Bool {
@@ -1357,9 +1446,14 @@ private struct SeriesListRow: View {
     private var tagsRow: some View {
         let pills = TagPillDisplay.makeForSeries(
             fandoms: series.allFandoms,
+            relationships: series.allRelationships,
+            characters: series.allCharacters,
+            categories: series.allCategories,
+            warnings: series.allWarnings,
+            ratings: series.allRatings,
+            additionalTags: series.allAdditionalTags,
             tags: series.allTags,
-            hideFanworks: hideFanworksTagPill,
-            limit: 10
+            hideFanworks: hideFanworksTagPill
         )
         if !pills.isEmpty {
             FlowLayout(spacing: 4) {

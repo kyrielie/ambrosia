@@ -316,10 +316,12 @@ private struct LibraryTab: View {
 
                 Section {
                     Toggle("Hide Fanworks tag pill", isOn: $prefs.hideFanworksTagPill)
+                    Toggle("Show AO3 books only", isOn: $prefs.hideNonAO3PublisherBooks)
+                    Toggle("Show collection pills in email view", isOn: $prefs.emailPillsShowCollections)
                 } header: {
                     Label("Library Rows", systemImage: "list.bullet.rectangle").font(.headline)
                 } footer: {
-                    Text("Only hides the Fanworks pill in row view. Books and filters are unchanged.")
+                    Text("AO3-only mode keeps books whose publisher is exactly Archive of Our Own. Collection pills apply to email view rows.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 

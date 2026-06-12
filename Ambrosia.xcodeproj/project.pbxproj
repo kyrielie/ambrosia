@@ -56,6 +56,7 @@
 		D100000000000002F /* EmailSidebarViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000000000002 /* EmailSidebarViewController.swift */; };
 		D100000000000003F /* EmailDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000000000003 /* EmailDetailView.swift */; };
 		D100000000000004F /* EmailLibraryViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000000000004 /* EmailLibraryViewController.swift */; };
+		D100000000000005F /* EmailReaderSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D100000000000005 /* EmailReaderSidebarView.swift */; };
 		D67DC672B21B9C67E2454465F /* CollectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE5E3EB1BF9C138C86AFF21F /* CollectionsView.swift */; };
 		DCB818E84DEF4B2BBC8A8147 /* AO3Metadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31EF9AEBF5CB4EE494463865 /* AO3Metadata.swift */; };
 		E200000000000001F /* SearchQueryParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = E200000000000001 /* SearchQueryParser.swift */; };
@@ -124,6 +125,7 @@
 		D100000000000002 /* EmailSidebarViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailSidebarViewController.swift; sourceTree = "<group>"; };
 		D100000000000003 /* EmailDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailDetailView.swift; sourceTree = "<group>"; };
 		D100000000000004 /* EmailLibraryViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailLibraryViewController.swift; sourceTree = "<group>"; };
+		D100000000000005 /* EmailReaderSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailReaderSidebarView.swift; sourceTree = "<group>"; };
 		D2F7D6C9C832E5FAE1048A46 /* TagSynonymStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagSynonymStore.swift; sourceTree = "<group>"; };
 		E200000000000001 /* SearchQueryParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchQueryParser.swift; sourceTree = "<group>"; };
 		E200000000000002 /* CalibreLibrarySearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreLibrarySearch.swift; sourceTree = "<group>"; };
@@ -310,6 +312,7 @@
 				D100000000000002 /* EmailSidebarViewController.swift */,
 				D100000000000003 /* EmailDetailView.swift */,
 				D100000000000004 /* EmailLibraryViewController.swift */,
+				D100000000000005 /* EmailReaderSidebarView.swift */,
 			);
 			path = Email;
 			sourceTree = "<group>";
@@ -450,6 +453,7 @@
 				D100000000000002F /* EmailSidebarViewController.swift in Sources */,
 				D100000000000003F /* EmailDetailView.swift in Sources */,
 				D100000000000004F /* EmailLibraryViewController.swift in Sources */,
+				D100000000000005F /* EmailReaderSidebarView.swift in Sources */,
 				E200000000000001F /* SearchQueryParser.swift in Sources */,
 				E200000000000002F /* CalibreLibrarySearch.swift in Sources */,
 				E200000000000003F /* CalibreFTSLibrary.swift in Sources */,

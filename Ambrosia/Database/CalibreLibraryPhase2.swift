@@ -99,12 +99,14 @@ extension CalibreLibrary {
         let where_ = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
 
         let sql = """
-            SELECT DISTINCT b.id, b.title, b.path, b.pubdate, s.name, b.series_index
+            SELECT DISTINCT b.id, b.title, b.path, b.pubdate, s.name, b.series_index, p.name
             FROM books b
             LEFT JOIN books_authors_link bal ON bal.book = b.id
             LEFT JOIN authors a ON a.id = bal.author
             LEFT JOIN books_series_link bsl ON bsl.book = b.id
             LEFT JOIN series s ON s.id = bsl.series
+            LEFT JOIN books_publishers_link bpl ON bpl.book = b.id
+            LEFT JOIN publishers p ON p.id = bpl.publisher
             \(wcJoin)
             \(kJoin)
             \(where_)
@@ -127,6 +129,7 @@ extension CalibreLibrary {
                 wordCount:     nil,
                 kudos:         nil,
                 publishedDate: (row[3] as? String).flatMap(parseDate),
+                publisher:     row[6] as? String,
                 relativePath:  pathBind
             )
         }
@@ -172,4 +175,3 @@ extension CalibreLibrary {
     }
 
 }
-

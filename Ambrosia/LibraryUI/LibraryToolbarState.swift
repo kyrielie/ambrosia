@@ -29,6 +29,10 @@ final class LibraryToolbarState {
     var showReadingGoal:    Bool = false
     var triggerExport:      Bool = false
     var toggleEmailSidebar: Bool = false
+    var toggleEmailReaderSidebar: Bool = false
+    var showEmailReaderSidebar: Bool = false
+    var isEmailReaderSidebarVisible: Bool = false
+    var emailReaderSidebarMode: EmailReaderSidebarMode = .annotations
 
     // MARK: - Filter state
 
@@ -59,4 +63,7 @@ final class LibraryToolbarState {
     // MARK: - Convenience
 
     var hasActiveFilter: Bool { activeFilterResult != nil }
+
+    func syncFullTextFieldFromSearchText() {}
+    func applyFullTextFieldToSearchText() {}
 }

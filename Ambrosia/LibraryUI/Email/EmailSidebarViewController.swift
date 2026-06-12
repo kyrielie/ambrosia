@@ -33,6 +33,7 @@ final class EmailSidebarViewController: NSViewController,
     var onContextMenuReadLater:        (([CalibreBook]) -> Void)?
     var onContextMenuToggleCollection: (([CalibreBook], String) -> Void)?
     var onContextMenuNewCollection:    (([CalibreBook]) -> Void)?
+    var onToggleLiked:                 ((CalibreBook) -> Void)?
 
     // MARK: - Dependencies
 
@@ -44,9 +45,9 @@ final class EmailSidebarViewController: NSViewController,
     var items:      [LibraryItem]    = [] { didSet { reloadItemsPreservingSingleSelection(from: oldValue) } }
     var bookStates: [Int: BookState] = [:] { didSet { reloadVisibleRows() } }
     var ao3Metadata: [Int: AO3MetadataRecord] = [:] { didSet { reloadVisibleRows() } }
-    var likedIDs: Set<Int> = []
+    var likedIDs: Set<Int> = [] { didSet { reloadVisibleRows() } }
     /// Collection snapshot for building context menu submenus. Key = name, value = member calibreIDs.
-    var collectionMembership: [String: Set<Int>] = [:]
+    var collectionMembership: [String: Set<Int>] = [:] { didSet { reloadVisibleRows() } }
 
     // MARK: - Private
 
@@ -136,10 +137,30 @@ final class EmailSidebarViewController: NSViewController,
         cell.configure(
             item: items[row],
             readPercent: bookStates[items[row].primaryBook.id]?.totalReadPercent ?? 0,
-            ao3Metadata: ao3Metadata[items[row].primaryBook.id]
+            ao3Metadata: ao3Metadata[items[row].primaryBook.id],
+            isLiked: likedIDs.contains(items[row].primaryBook.id),
+            collectionPills: manualCollectionPills(for: items[row]),
+            showCollectionPills: ReaderPreferences.shared.emailPillsShowCollections,
+            onToggleLiked: { [weak self] book in
+                self?.onToggleLiked?(book)
+            }
         )
         return cell
     }
+
+    private func manualCollectionPills(for item: LibraryItem) -> [String] {
+        let ids = Set(item.contextBooks.map(\.id))
+        return collectionMembership.compactMap { name, members in
+            guard !Self.systemCollectionNames.contains(name),
+                  !ids.isDisjoint(with: members) else { return nil }
+            return name
+        }.sorted()
+    }
+
+    private static let systemCollectionNames: Set<String> = [
+        "Liked", "Read Later", "Skipped", "Finished", "In Progress", "Has Annotations",
+        SystemCollectionID.seriesOrMergedName
+    ]
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { 90 }
 
@@ -362,9 +383,15 @@ final class EmailSidebarViewController: NSViewController,
     private func reloadVisibleRows() {
         guard let tableView else { return }
         let visibleRows = tableView.rows(in: tableView.visibleRect)
-        guard visibleRows.location != NSNotFound, visibleRows.length > 0 else { return }
+        guard visibleRows.location != NSNotFound,
+              visibleRows.length > 0,
+              visibleRows.location >= 0,
+              visibleRows.location < tableView.numberOfRows,
+              tableView.numberOfColumns > 0 else { return }
+        let upperBound = min(visibleRows.location + visibleRows.length, tableView.numberOfRows)
+        guard upperBound > visibleRows.location else { return }
         tableView.reloadData(
-            forRowIndexes: IndexSet(integersIn: visibleRows.location..<visibleRows.location + visibleRows.length),
+            forRowIndexes: IndexSet(integersIn: visibleRows.location..<upperBound),
             columnIndexes: IndexSet(integersIn: 0..<tableView.numberOfColumns)
         )
     }
@@ -411,6 +438,9 @@ final class EmailBookCellView: NSTableCellView {
     private let progressLabel = NSTextField(labelWithString: "")
     private let progressTrack = NSView()
     private let progressFill  = NSView()
+    private let likeButton = NSButton()
+    private var representedBook: CalibreBook?
+    private var onToggleLiked: ((CalibreBook) -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -426,6 +456,14 @@ final class EmailBookCellView: NSTableCellView {
         titleLabel.maximumNumberOfLines = 1
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(titleLabel)
+
+        likeButton.isBordered = false
+        likeButton.bezelStyle = .regularSquare
+        likeButton.imagePosition = .imageOnly
+        likeButton.target = self
+        likeButton.action = #selector(toggleLiked)
+        likeButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(likeButton)
 
         authorLabel.font = NSFont.systemFont(ofSize: 11)
         authorLabel.textColor = .secondaryLabelColor
@@ -467,8 +505,13 @@ final class EmailBookCellView: NSTableCellView {
 
         NSLayoutConstraint.activate([
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            titleLabel.trailingAnchor.constraint(equalTo: likeButton.leadingAnchor, constant: -6),
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 9),
+
+            likeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            likeButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            likeButton.widthAnchor.constraint(equalToConstant: 18),
+            likeButton.heightAnchor.constraint(equalToConstant: 18),
 
             authorLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             authorLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
@@ -501,16 +544,28 @@ final class EmailBookCellView: NSTableCellView {
 
     private var progressWidthConstraint: NSLayoutConstraint?
 
-    func configure(item: LibraryItem, readPercent: Double, ao3Metadata: AO3MetadataRecord?) {
+    func configure(
+        item: LibraryItem,
+        readPercent: Double,
+        ao3Metadata: AO3MetadataRecord?,
+        isLiked: Bool,
+        collectionPills: [String],
+        showCollectionPills: Bool,
+        onToggleLiked: @escaping (CalibreBook) -> Void
+    ) {
+        representedBook = item.primaryBook
+        self.onToggleLiked = onToggleLiked
+        likeButton.image = NSImage(systemSymbolName: isLiked ? "star.fill" : "star", accessibilityDescription: isLiked ? "Unlike" : "Like")
+        likeButton.contentTintColor = isLiked ? .systemYellow : .secondaryLabelColor
         switch item {
         case .book(let book):
             titleLabel.stringValue = book.displayTitle
             authorLabel.attributedStringValue = Self.authorLine(for: book, ao3Metadata: ao3Metadata)
-            configureMetadataPills(ao3Metadata)
+            showCollectionPills ? configureCollectionPills(collectionPills) : configureMetadataPills(ao3Metadata)
         case .series(let series):
             titleLabel.stringValue = series.seriesName
             authorLabel.attributedStringValue = Self.seriesLine(for: series)
-            configureSeriesPills(series)
+            showCollectionPills ? configureCollectionPills(collectionPills) : configureSeriesPills(series)
         }
 
         if readPercent > 0.01 {
@@ -538,6 +593,22 @@ final class EmailBookCellView: NSTableCellView {
         }
     }
 
+    @objc private func toggleLiked() {
+        guard let representedBook else { return }
+        onToggleLiked?(representedBook)
+    }
+
+    private func configureCollectionPills(_ names: [String]) {
+        metadataStack.arrangedSubviews.forEach { view in
+            metadataStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        metadataClip.isHidden = names.isEmpty
+        for name in names {
+            metadataStack.addArrangedSubview(Self.metadataPill(label: name, color: .controlAccentColor))
+        }
+    }
+
     private func configureSeriesPills(_ series: SeriesGroup) {
         metadataStack.arrangedSubviews.forEach { view in
             metadataStack.removeArrangedSubview(view)
@@ -545,10 +616,21 @@ final class EmailBookCellView: NSTableCellView {
         }
 
         var seen = Set<String>()
-        let pills = series.allFandoms.prefix(3).compactMap { value -> (String, NSColor)? in
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return nil }
-            return (trimmed, NSColor.systemPurple)
+        let pills = [
+            (series.allRatings, NSColor.systemOrange),
+            (series.allFandoms, NSColor.systemPurple),
+            (series.allRelationships, NSColor.systemPink),
+            (series.allCharacters, NSColor.systemTeal),
+            (series.allCategories, NSColor.systemBlue),
+            (series.allWarnings, NSColor.systemRed),
+            (series.allAdditionalTags, NSColor.secondaryLabelColor),
+            (series.allTags, NSColor.secondaryLabelColor),
+        ].flatMap { values, color in
+            values.compactMap { value -> (String, NSColor)? in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return nil }
+                return (trimmed, color)
+            }
         }
         metadataClip.isHidden = pills.isEmpty
         for (label, color) in pills {

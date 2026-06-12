@@ -18,6 +18,7 @@ enum FilterField: String, CaseIterable, Identifiable, Codable {
     case isLiked
     case collection
     case status
+    case fulltext
 
     var id: String { rawValue }
 
@@ -38,12 +39,13 @@ enum FilterField: String, CaseIterable, Identifiable, Codable {
         case .isLiked:     return "Is liked"
         case .collection:  return "Collection"
         case .status:      return "Status"
+        case .fulltext:    return "Full text"
         }
     }
 
     var expectsText: Bool {
         switch self {
-        case .title, .authorName, .tag, .rating, .warning, .category, .series, .comment, .collection, .status:
+        case .title, .authorName, .tag, .rating, .warning, .category, .series, .comment, .collection, .status, .fulltext:
             return true
         case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT, .isLiked:
             return false
@@ -158,6 +160,8 @@ struct FilterRule: Identifiable, Codable {
             return FilterOperator.ratingOperators
         case .warning, .category, .collection, .status:
             return FilterOperator.exactOperators
+        case .fulltext:
+            return [.contains, .notContains]
         case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT:
             return FilterOperator.numericOperators
         default:

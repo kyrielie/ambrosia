@@ -75,8 +75,13 @@ struct AmbrosiaApp: App {
                 .keyboardShortcut("d", modifiers: [.command])
 
                 Button("Show Annotations") {
-                    NSApp.sendAction(#selector(ReaderViewController.showAnnotationSidebar(_:)),
-                                     to: nil, from: nil)
+                    if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
+                       libraryWindowController.window?.isKeyWindow == true {
+                        libraryWindowController.showEmailAnnotationSidebar(nil)
+                    } else {
+                        NSApp.sendAction(#selector(ReaderViewController.showAnnotationSidebar(_:)),
+                                         to: nil, from: nil)
+                    }
                 }
                 .keyboardShortcut("b", modifiers: [.command])
             }

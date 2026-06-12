@@ -17,6 +17,10 @@ final class EmailLibraryViewController: NSViewController {
 
     private var splitVC:   NSSplitViewController!
     private var sidebarVC: EmailSidebarViewController!
+    private var readerSidebarHostingVC: NSHostingController<EmailReaderSidebarView>!
+    private var librarySidebarItem: NSSplitViewItem!
+    private var readerPaneItem: NSSplitViewItem!
+    private var annotationsSidebarItem: NSSplitViewItem!
 
     // MARK: - Filter sheet host
 
@@ -24,6 +28,7 @@ final class EmailLibraryViewController: NSViewController {
     private var skippedCollectionCancellable: AnyCancellable?
     private var seriesOrMergedCancellable: AnyCancellable?
     private var appearanceCancellable: AnyCancellable?
+    private var preferenceCancellables: Set<AnyCancellable> = []
 
     // MARK: - Sidebar state
 
@@ -40,6 +45,7 @@ final class EmailLibraryViewController: NSViewController {
     private var likedIDs: Set<Int> = []
     private var skippedIDs: Set<Int> = []
     private var seriesOrMergedIDs: Set<Int> = []
+    private var ao3PublisherIDs: Set<Int> = []
     private var collectionMembership: [String: Set<Int>] = [:]
     private var pendingCollectionSeedIDs: [Int] = []
     private var currentPage = 0
@@ -54,10 +60,18 @@ final class EmailLibraryViewController: NSViewController {
     private var lastAscending: Bool      = true
     private var lastFilterIDs: [Int]?    = nil
     private var lastSidebarToggle: Bool  = false
+    private var lastReaderSidebarToggle: Bool = false
+    private var lastReaderSidebarShow: Bool = false
 
     private let debouncer = DebounceTimer(delay: 0.4)
 
     private var selectedBook: CalibreBook?
+    private weak var currentReaderVC: ReaderViewController?
+    private var readerLocalFindState = LocalReaderFindState()
+    private var lastAppliedFullTextPhrase = ""
+    private weak var lastAppliedFullTextReader: ReaderViewController?
+    private var pendingFullTextPhrase = ""
+    private var readerAnnotations: [Annotation] = []
 
     // MARK: - Init
 
@@ -79,6 +93,7 @@ final class EmailLibraryViewController: NSViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        toolbarState.isEmailReaderSidebarVisible = false
         buildSplitView()
         addFilterSheetHost()
         refreshBookStates()
@@ -94,6 +109,10 @@ final class EmailLibraryViewController: NSViewController {
         toolbarState.registerFilterCommitHandler { [weak self] rule in
             self?.addOrReplaceRule(rule)
         }
+    }
+
+    deinit {
+        toolbarState.isEmailReaderSidebarVisible = false
     }
 
     private func startObservingPreferences() {
@@ -120,6 +139,20 @@ final class EmailLibraryViewController: NSViewController {
             .sink { [weak self] _ in
                 self?.refreshCollections()
             }
+        ReaderPreferences.shared.$hideNonAO3PublisherBooks
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.refreshCollections()
+            }
+            .store(in: &preferenceCancellables)
+        ReaderPreferences.shared.$emailPillsShowCollections
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.sidebarVC?.reloadAppearance()
+            }
+            .store(in: &preferenceCancellables)
     }
 
     private func applyLibraryAppearance() {
@@ -163,6 +196,13 @@ final class EmailLibraryViewController: NSViewController {
             guard let self else { return }
             Task {
                 try? await self.session.collectionStore?.setLiked(calibreIDs: books.map(\.id), liked: liked)
+                await self.refreshCollectionSnapshots()
+            }
+        }
+        sidebarVC.onToggleLiked = { [weak self] book in
+            guard let self else { return }
+            Task {
+                try? await self.session.collectionStore?.toggleLiked(calibreID: book.id)
                 await self.refreshCollectionSnapshots()
             }
         }
@@ -217,17 +257,26 @@ final class EmailLibraryViewController: NSViewController {
         splitVC.splitView.autosaveName = "AmbrosiaEmailSplitView"
         applyLibraryAppearance()
 
-        let sidebarItem = NSSplitViewItem(viewController: sidebarVC)
-        sidebarItem.minimumThickness           = 200
-        sidebarItem.maximumThickness           = 380
-        sidebarItem.preferredThicknessFraction = 0.26
-        sidebarItem.canCollapse                = true
+        librarySidebarItem = NSSplitViewItem(viewController: sidebarVC)
+        librarySidebarItem.minimumThickness           = 200
+        librarySidebarItem.maximumThickness           = 380
+        librarySidebarItem.preferredThicknessFraction = 0.26
+        librarySidebarItem.canCollapse                = true
 
-        let readerItem = NSSplitViewItem(viewController: makePlaceholderVC())
-        readerItem.minimumThickness = 420
+        readerPaneItem = NSSplitViewItem(viewController: makePlaceholderVC())
+        readerPaneItem.minimumThickness = 420
+        readerPaneItem.canCollapse = false
 
-        splitVC.addSplitViewItem(sidebarItem)
-        splitVC.addSplitViewItem(readerItem)
+        annotationsSidebarItem = NSSplitViewItem(viewController: makeReaderSidebarVC())
+        annotationsSidebarItem.minimumThickness = 240
+        annotationsSidebarItem.maximumThickness = 360
+        annotationsSidebarItem.preferredThicknessFraction = 0.24
+        annotationsSidebarItem.canCollapse = true
+        annotationsSidebarItem.isCollapsed = true
+
+        splitVC.addSplitViewItem(librarySidebarItem)
+        splitVC.addSplitViewItem(readerPaneItem)
+        splitVC.addSplitViewItem(annotationsSidebarItem)
 
         addChild(splitVC)
         splitVC.view.translatesAutoresizingMaskIntoConstraints = false
@@ -291,7 +340,7 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Sidebar toggle
 
     @objc func performSidebarToggle() {
-        guard let item = splitVC.splitViewItems.first else { return }
+        guard let item = librarySidebarItem else { return }
         isSidebarHidden = !item.isCollapsed
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.2
@@ -311,6 +360,8 @@ final class EmailLibraryViewController: NSViewController {
             _ = toolbarState.ascending
             _ = toolbarState.activeFilterResult?.calibreIDs
             _ = toolbarState.toggleEmailSidebar
+            _ = toolbarState.toggleEmailReaderSidebar
+            _ = toolbarState.showEmailReaderSidebar
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 self?.toolbarStateDidChange()
@@ -324,7 +375,14 @@ final class EmailLibraryViewController: NSViewController {
             lastSidebarToggle = toolbarState.toggleEmailSidebar
             performSidebarToggle()
         }
-
+        if toolbarState.toggleEmailReaderSidebar != lastReaderSidebarToggle {
+            lastReaderSidebarToggle = toolbarState.toggleEmailReaderSidebar
+            performReaderSidebarToggle()
+        }
+        if toolbarState.showEmailReaderSidebar != lastReaderSidebarShow {
+            lastReaderSidebarShow = toolbarState.showEmailReaderSidebar
+            showReaderSidebar()
+        }
         let newSearch    = toolbarState.searchText
         let newSort      = toolbarState.sortField
         let newAscending = toolbarState.ascending
@@ -344,8 +402,11 @@ final class EmailLibraryViewController: NSViewController {
         lastFilterIDs = newFilterIDs
 
         if searchChanged {
+            applyFullTextPhraseToLocalFind()
+            refreshReaderSidebar()
             debouncer.schedule { [weak self] in self?.loadPage(reset: true) }
         } else {
+            applyFullTextPhraseToLocalFind()
             loadPage(reset: true)
         }
     }
@@ -399,7 +460,7 @@ final class EmailLibraryViewController: NSViewController {
                 }
             }
 
-            let builder = FilterBuilder(library: library)
+            let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary)
             let result = builder.matchingIDs(
                 expression: toolbarState.filterExpression,
                 likedIDs:      currentLikedIDs,
@@ -408,10 +469,13 @@ final class EmailLibraryViewController: NSViewController {
             )
             let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
             let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
+            let currentAO3PublisherIDs = library.ao3PublisherBookIDs()
             let filteredIDs = ReaderPreferences.shared.showSkippedCollection
                 ? result.calibreIDs
                 : result.calibreIDs.filter { !currentSkipped.contains($0) }
-            let visibleFilteredIDs = filteredIDs.filter { !currentSeriesOrMerged.contains($0) }
+            let visibleFilteredIDs = filteredIDs
+                .filter { !currentSeriesOrMerged.contains($0) }
+                .filter { !ReaderPreferences.shared.hideNonAO3PublisherBooks || currentAO3PublisherIDs.contains($0) }
             toolbarState.activeFilterResult = FilterResult(
                 calibreIDs: visibleFilteredIDs,
                 totalCount: visibleFilteredIDs.count
@@ -419,6 +483,7 @@ final class EmailLibraryViewController: NSViewController {
             likedIDs = currentLikedIDs
             skippedIDs = currentSkipped
             seriesOrMergedIDs = currentSeriesOrMerged
+            ao3PublisherIDs = currentAO3PublisherIDs
             loadPage(reset: true)
         }
     }
@@ -446,7 +511,7 @@ final class EmailLibraryViewController: NSViewController {
 
         let raw: [CalibreBook]
         if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
-            let ids = visibleIDs(query.ftsMatchedIDs ?? result.calibreIDs)
+            let ids = visibleIDs(intersect(result.calibreIDs, with: query.ftsMatchedIDs))
             raw = library.books(
                 ids: ids,
                 offset: currentPage * pageSize, limit: pageSize + 1,
@@ -508,6 +573,13 @@ final class EmailLibraryViewController: NSViewController {
                 let chapterRecords = seriesMetadata.filter { $0.chapterCurrent != nil }
                 let chapterTotalKnownForAll = !chapterRecords.isEmpty && chapterRecords.count == works.count && chapterRecords.allSatisfy { $0.chapterTotal != nil }
                 let indices = sortedEntries.map(\.seriesIndex)
+                let ratings = Array(Set(works.flatMap(\.tags).filter { if case .rating = AO3TagKind.classify($0) { return true }; return false })).sorted()
+                let warnings = Array(Set(works.flatMap(\.tags).filter { if case .warning = AO3TagKind.classify($0) { return true }; return false })).sorted()
+                let categories = Array(Set(seriesMetadata.flatMap(\.categories) + works.flatMap(\.tags).filter { if case .category = AO3TagKind.classify($0) { return true }; return false })).sorted()
+                let fandoms = Array(Set(seriesMetadata.flatMap(\.fandoms))).sorted()
+                let relationships = Array(Set(seriesMetadata.flatMap(\.relationships))).sorted()
+                let characters = Array(Set(seriesMetadata.flatMap(\.characters))).sorted()
+                let additionalTags = Array(Set(seriesMetadata.flatMap(\.additionalTags))).sorted()
                 groups[seriesKey] = SeriesGroup(
                     id: seriesKey,
                     seriesKey: seriesKey,
@@ -516,8 +588,14 @@ final class EmailLibraryViewController: NSViewController {
                         (sortedEntries.first { $0.calibreID == left.id }?.seriesIndex ?? 0) <
                         (sortedEntries.first { $0.calibreID == right.id }?.seriesIndex ?? 0)
                     },
-                    allFandoms: Array(Set(seriesMetadata.flatMap(\.fandoms))).sorted(),
-                    allTags: Array(Set(works.flatMap(\.tags) + seriesMetadata.flatMap(\.additionalTags))).sorted(),
+                    allFandoms: fandoms,
+                    allRelationships: relationships,
+                    allCharacters: characters,
+                    allCategories: categories,
+                    allWarnings: warnings,
+                    allRatings: ratings,
+                    allAdditionalTags: additionalTags,
+                    allTags: Array(Set(works.flatMap(\.tags) + additionalTags)).sorted(),
                     allAuthors: Array(Set(works.flatMap(\.authors))).sorted(),
                     allDescriptions: works.compactMap(\.displayComment),
                     totalWordCount: works.reduce(0) { $0 + (metadata[$1.id]?.wordCount ?? $1.wordCount ?? 0) },
@@ -572,14 +650,22 @@ final class EmailLibraryViewController: NSViewController {
     private func visibleIDs(_ ids: [Int]) -> [Int] {
         ids.filter { id in
             (ReaderPreferences.shared.showSkippedCollection || !skippedIDs.contains(id)) &&
-            !seriesOrMergedIDs.contains(id)
+            !seriesOrMergedIDs.contains(id) &&
+            (!ReaderPreferences.shared.hideNonAO3PublisherBooks || ao3PublisherIDs.contains(id))
         }
+    }
+
+    private func intersect(_ ids: [Int], with optionalIDs: [Int]?) -> [Int] {
+        guard let other = optionalIDs else { return ids }
+        let allowed = Set(other)
+        return ids.filter { allowed.contains($0) }
     }
 
     private func visibleBooks(_ raw: [CalibreBook]) -> [CalibreBook] {
         raw.filter { book in
             (ReaderPreferences.shared.showSkippedCollection || !skippedIDs.contains(book.id)) &&
             !seriesOrMergedIDs.contains(book.id) &&
+            (!ReaderPreferences.shared.hideNonAO3PublisherBooks || book.isAO3PublisherBook) &&
             !book.isDescriptionAnthology
         }
     }
@@ -680,13 +766,15 @@ final class EmailLibraryViewController: NSViewController {
         let membershipByID = (try? await session.collectionStore?.membershipByCollectionID()) ?? [:]
         let currentSkipped = membershipByID[SystemCollectionID.skipped] ?? []
         let currentSeriesOrMerged = membershipByID[SystemCollectionID.seriesOrMerged] ?? []
+        let currentAO3PublisherIDs = session.library?.ao3PublisherBookIDs() ?? []
         collectionMembership = Dictionary(uniqueKeysWithValues: collections.map { collection in
             return (collection.name, membershipByID[collection.id] ?? [])
         })
         likedIDs = (try? await session.collectionStore?.likedIDs()) ?? []
-        let shouldReloadPage = skippedIDs != currentSkipped || seriesOrMergedIDs != currentSeriesOrMerged
+        let shouldReloadPage = skippedIDs != currentSkipped || seriesOrMergedIDs != currentSeriesOrMerged || ao3PublisherIDs != currentAO3PublisherIDs
         skippedIDs = currentSkipped
         seriesOrMergedIDs = currentSeriesOrMerged
+        ao3PublisherIDs = currentAO3PublisherIDs
         sidebarVC?.collectionMembership = collectionMembership
         sidebarVC?.likedIDs = likedIDs
         if shouldReloadPage {
@@ -697,24 +785,64 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Inline reader pane
 
     private func setSelectedBook(_ book: CalibreBook?) {
-        guard selectedBook?.id != book?.id else { return }
+        if selectedBook == nil, book == nil {
+            return
+        }
+        if let selectedBook, let book,
+           selectedBook.id == book.id,
+           let currentReaderVC,
+           currentReaderVC.book.id == book.id {
+            return
+        }
         selectedBook = book
         updateReaderPane()
     }
 
     private func updateReaderPane() {
+        readerLocalFindState = LocalReaderFindState()
+        lastAppliedFullTextPhrase = ""
+        lastAppliedFullTextReader = nil
+        pendingFullTextPhrase = activeFullTextPhrase()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        readerAnnotations = []
+        currentReaderVC = nil
         replaceRightPane(with: makeRightVC())
+        refreshReaderSidebar()
     }
 
     private func makeRightVC() -> NSViewController {
         guard let book = selectedBook else { return makePlaceholderVC() }
         let rvc = ReaderViewController(book: book, modelContainer: modelContainer)
+        currentReaderVC = rvc
         rvc.view.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
         rvc.onReadingProgressChanged = { [weak self] in
             DispatchQueue.main.async {
                 self?.refreshBookStates()
             }
         }
+        rvc.onAnnotationsChanged = { [weak self] annotations in
+            DispatchQueue.main.async {
+                self?.readerAnnotations = annotations
+                self?.refreshReaderSidebar()
+            }
+        }
+        rvc.onLocalFindStateChanged = { [weak self] state in
+            DispatchQueue.main.async {
+                self?.readerLocalFindState = state
+                self?.refreshReaderSidebar()
+            }
+        }
+        rvc.onOpenSearchSidebar = { [weak self] in
+            DispatchQueue.main.async {
+                self?.refreshReaderSidebar()
+            }
+        }
+        rvc.onReaderContentReady = { [weak self, weak rvc] in
+            DispatchQueue.main.async {
+                guard let self, let rvc, self.currentReaderVC === rvc else { return }
+                self.applyFullTextPhraseToLocalFind(reader: rvc, allowDeferred: false)
+            }
+        }
+        readerLocalFindState = rvc.currentLocalFindState()
         let cid = book.id
         Task.detached { [mc = modelContainer] in
             let ctx = ModelContext(mc)
@@ -733,22 +861,115 @@ final class EmailLibraryViewController: NSViewController {
 
     private func replaceRightPane(with vc: NSViewController) {
         let sidebarThickness = currentSidebarThickness()
-        if splitVC.splitViewItems.count > 1 {
-            let last  = splitVC.splitViewItems.last!
-            let oldVC = last.viewController
-            splitVC.removeSplitViewItem(last)
-            oldVC.removeFromParent()
+        let oldItem = readerPaneItem
+        let oldVC = oldItem?.viewController
+        if let oldItem, splitVC.splitViewItems.contains(oldItem) {
+            splitVC.removeSplitViewItem(oldItem)
         }
         splitVC.addChild(vc)
         vc.view.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
         let item = NSSplitViewItem(viewController: vc)
         item.minimumThickness = 420
-        splitVC.addSplitViewItem(item)
+        item.canCollapse = false
+        readerPaneItem = item
+        splitVC.insertSplitViewItem(item, at: min(1, splitVC.splitViewItems.count))
+        oldVC?.removeFromParent()
         restoreSidebarThickness(sidebarThickness)
+        repairReaderSplitItems()
+    }
+
+    private func makeReaderSidebarVC() -> NSViewController {
+        let vc = NSHostingController(rootView: makeReaderSidebarView())
+        readerSidebarHostingVC = vc
+        return vc
+    }
+
+    private func makeReaderSidebarView() -> EmailReaderSidebarView {
+        EmailReaderSidebarView(
+            annotations: readerAnnotations,
+            onJumpToAnnotation: { [weak self] annotation in
+                self?.currentReaderVC?.jumpToAnnotation(annotation)
+            },
+            onDeleteAnnotation: { [weak self] id in
+                self?.currentReaderVC?.deleteAnnotationFromSidebar(id: id)
+            }
+        )
+    }
+
+    private func refreshReaderSidebar() {
+        readerSidebarHostingVC?.rootView = makeReaderSidebarView()
+    }
+
+    private func activeFullTextPhrase() -> String? {
+        if let phrase = SearchQueryParser.parse(toolbarState.searchText).fulltextPhrase,
+           !phrase.isEmpty {
+            return phrase
+        }
+        return toolbarState.filterExpression.groups
+            .flatMap(\.rules)
+            .first { $0.field == .fulltext && $0.op == .contains && $0.isComplete }?
+            .value
+    }
+
+    private func applyFullTextPhraseToLocalFind(reader: ReaderViewController? = nil, allowDeferred: Bool = true) {
+        let phrase = activeFullTextPhrase() ?? ""
+        let targetReader = reader ?? currentReaderVC
+        guard let targetReader else { return }
+        pendingFullTextPhrase = phrase
+        guard targetReader.isReaderContentReady else {
+            if !phrase.isEmpty && allowDeferred { return }
+            if phrase.isEmpty,
+               lastAppliedFullTextReader === targetReader,
+               !lastAppliedFullTextPhrase.isEmpty {
+                targetReader.setLocalFindText("")
+                lastAppliedFullTextPhrase = ""
+                lastAppliedFullTextReader = nil
+            }
+            return
+        }
+        if phrase.isEmpty {
+            if lastAppliedFullTextReader === targetReader, !lastAppliedFullTextPhrase.isEmpty {
+                targetReader.setLocalFindText("")
+            }
+        } else {
+            targetReader.showLocalFind()
+            targetReader.setLocalFindText(phrase)
+        }
+        lastAppliedFullTextPhrase = phrase
+        lastAppliedFullTextReader = phrase.isEmpty ? nil : targetReader
+        pendingFullTextPhrase = ""
+        readerLocalFindState = targetReader.currentLocalFindState()
+    }
+
+    @objc func performReaderSidebarToggle() {
+        guard let item = annotationsSidebarItem else { return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.2
+            item.isCollapsed.toggle()
+            splitVC.splitView.layoutSubtreeIfNeeded()
+        }
+        repairReaderSplitItems()
+        toolbarState.isEmailReaderSidebarVisible = !item.isCollapsed
+    }
+
+    private func showReaderSidebar() {
+        guard let item = annotationsSidebarItem else { return }
+        guard item.isCollapsed else {
+            toolbarState.isEmailReaderSidebarVisible = true
+            repairReaderSplitItems()
+            return
+        }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.2
+            item.isCollapsed = false
+            splitVC.splitView.layoutSubtreeIfNeeded()
+        }
+        repairReaderSplitItems()
+        toolbarState.isEmailReaderSidebarVisible = true
     }
 
     private func currentSidebarThickness() -> CGFloat {
-        guard let sidebarView = splitVC?.splitViewItems.first?.viewController.view,
+        guard let sidebarView = librarySidebarItem?.viewController.view,
               !sidebarView.isHidden,
               sidebarView.frame.width > 0 else {
             return lastSidebarThickness
@@ -762,17 +983,40 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func restoreSidebarThickness(_ thickness: CGFloat) {
-        guard splitVC.splitViewItems.count > 1,
-              !splitVC.splitViewItems[0].isCollapsed else { return }
-        let clamped = min(max(thickness, splitVC.splitViewItems[0].minimumThickness), splitVC.splitViewItems[0].maximumThickness)
+        guard let librarySidebarItem,
+              !librarySidebarItem.isCollapsed else { return }
+        let clamped = min(max(thickness, librarySidebarItem.minimumThickness), librarySidebarItem.maximumThickness)
         lastSidebarThickness = clamped
         splitVC.splitView.setPosition(clamped, ofDividerAt: 0)
         DispatchQueue.main.async { [weak self] in
             guard let self,
-                  self.splitVC.splitViewItems.count > 1,
-                  !self.splitVC.splitViewItems[0].isCollapsed else { return }
+                  !self.librarySidebarItem.isCollapsed else { return }
             self.splitVC.splitView.setPosition(clamped, ofDividerAt: 0)
+            self.repairReaderSplitItems()
         }
+    }
+
+    private func repairReaderSplitItems() {
+        guard let readerPaneItem, let annotationsSidebarItem else { return }
+        readerPaneItem.isCollapsed = false
+        readerPaneItem.canCollapse = false
+        readerPaneItem.minimumThickness = 420
+
+        annotationsSidebarItem.minimumThickness = 240
+        annotationsSidebarItem.maximumThickness = 360
+        annotationsSidebarItem.preferredThicknessFraction = 0.24
+
+        guard splitVC.view.window != nil,
+              splitVC.splitView.bounds.width > 0,
+              !annotationsSidebarItem.isCollapsed,
+              let sidebarIndex = splitVC.splitViewItems.firstIndex(of: annotationsSidebarItem),
+              sidebarIndex > 0 else { return }
+        let dividerIndex = sidebarIndex - 1
+        let splitWidth = splitVC.splitView.bounds.width
+        guard splitWidth > 0 else { return }
+        let desiredWidth: CGFloat = 300
+        let width = min(max(desiredWidth, annotationsSidebarItem.minimumThickness), annotationsSidebarItem.maximumThickness)
+        splitVC.splitView.setPosition(max(0, splitWidth - width), ofDividerAt: dividerIndex)
     }
 }
 
@@ -796,7 +1040,9 @@ struct FilterSheetCarrier: View {
                         get: { toolbarState.filterExpression },
                         set: { toolbarState.filterExpression = $0 }
                     ),
-                    onApply: { emailVC?.applyFilterRules() },
+                    onApply: {
+                        emailVC?.applyFilterRules()
+                    },
                     onClear: {
                         toolbarState.filterExpression   = FilterExpression()
                         toolbarState.activeFilterResult = nil

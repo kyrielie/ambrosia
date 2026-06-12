@@ -31,6 +31,12 @@ extension FilterExpression {
 struct FilterBuilder {
 
     let library: CalibreLibrary
+    let ftsLibrary: CalibreFTSLibrary?
+
+    init(library: CalibreLibrary, ftsLibrary: CalibreFTSLibrary? = nil) {
+        self.library = library
+        self.ftsLibrary = ftsLibrary
+    }
 
     /// Evaluate a full FilterExpression (multiple groups joined by groupConjunction).
     ///
@@ -71,11 +77,12 @@ struct FilterBuilder {
         let complete = group.completeRules
         guard !complete.isEmpty else { return library.allCalibreIDs() }
 
-        // Partition: SQL-evaluated vs app-evaluated (isLiked, collection, AO3 status)
-        let sqlRules        = complete.filter { $0.field != .isLiked && $0.field != .collection && $0.field != .status }
+        // Partition: SQL-evaluated vs app-evaluated (isLiked, collection, AO3 status, fulltext)
+        let sqlRules        = complete.filter { $0.field != .isLiked && $0.field != .collection && $0.field != .status && $0.field != .fulltext }
         let likedRules      = complete.filter { $0.field == .isLiked }
         let collectionRules = complete.filter { $0.field == .collection }
         let statusRules     = complete.filter { $0.field == .status }
+        let fulltextRules   = complete.filter { $0.field == .fulltext }
 
         var ids: [Int]
         if sqlRules.isEmpty {
@@ -87,6 +94,32 @@ struct FilterBuilder {
         // Apply isLiked in-memory
         if !likedRules.isEmpty {
             ids = ids.filter { likedIDs.contains($0) }
+        }
+
+        if !fulltextRules.isEmpty {
+            var idSet = Set(ids)
+            if group.conjunction == .and {
+                for rule in fulltextRules {
+                    let memberIDs = fulltextIDs(for: rule)
+                    switch rule.op {
+                    case .contains:    idSet = idSet.intersection(memberIDs)
+                    case .notContains: idSet = idSet.subtracting(memberIDs)
+                    default:           break
+                    }
+                }
+            } else {
+                var unionIDs = Set<Int>()
+                for rule in fulltextRules {
+                    let memberIDs = fulltextIDs(for: rule)
+                    switch rule.op {
+                    case .contains:    unionIDs.formUnion(idSet.intersection(memberIDs))
+                    case .notContains: unionIDs.formUnion(idSet.subtracting(memberIDs))
+                    default:           break
+                    }
+                }
+                idSet = unionIDs
+            }
+            ids = Array(idSet).sorted()
         }
 
         // Apply collection rules in-memory
@@ -148,6 +181,12 @@ struct FilterBuilder {
         }
 
         return ids
+    }
+
+    private func fulltextIDs(for rule: FilterRule) -> Set<Int> {
+        let phrase = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !phrase.isEmpty, let ftsLibrary else { return [] }
+        return Set(ftsLibrary.search(query: phrase, limit: Int.max) ?? [])
     }
 
     // Legacy single-group entry point — used by quick tag/author taps
@@ -278,7 +317,7 @@ extension CalibreLibrary {
         case .isLiked:
             return nil
 
-        case .collection, .status:
+        case .collection, .status, .fulltext:
             // Collection membership is evaluated in-memory against SwiftData.
             // SQL layer never sees this field.
             return nil

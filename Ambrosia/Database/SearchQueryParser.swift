@@ -10,7 +10,8 @@ import Foundation
 ///   title:<value>    → filter by title
 ///   series:<value>   → filter by series
 ///   status:<value>   → filter by AO3 completion status
-///   <plain text>     → full-text / fuzzy search
+///   fulltext:<value> → search EPUB body text
+///   <plain text>     → fuzzy title search
 ///
 /// Only ONE prefix token is expected per search string. When the user commits
 /// a token (Return or suggestion tap), it is immediately translated into a
@@ -22,6 +23,7 @@ struct SearchQuery {
     let titleTerms:  [String]
     let seriesTerms: [String]
     let statusTerms: [String]
+    let fulltextPhrase: String?
     let plainTerms:  [String]
 
     /// IDs matched by full-text search. When non-nil, plainTerms are replaced
@@ -32,6 +34,7 @@ struct SearchQuery {
         tagTerms.isEmpty && authorTerms.isEmpty &&
         titleTerms.isEmpty && seriesTerms.isEmpty &&
         statusTerms.isEmpty &&
+        (fulltextPhrase == nil || fulltextPhrase!.isEmpty) &&
         plainTerms.isEmpty &&
         (ftsMatchedIDs == nil || ftsMatchedIDs!.isEmpty)
     }
@@ -74,6 +77,10 @@ struct SearchQuery {
            let status = AO3CompletionStatus(userValue: statusTerms[0]) {
             return FilterRule(field: .status, op: .equals, value: status.rawValue)
         }
+        if let fulltextPhrase, !fulltextPhrase.isEmpty, tagTerms.isEmpty && authorTerms.isEmpty
+            && titleTerms.isEmpty && seriesTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty {
+            return FilterRule(field: .fulltext, op: .contains, value: fulltextPhrase)
+        }
         return nil
     }
 
@@ -85,6 +92,7 @@ struct SearchQuery {
         self.titleTerms    = titleTerms
         self.seriesTerms   = []
         self.statusTerms   = []
+        self.fulltextPhrase = nil
         self.plainTerms    = plainTerms
         self.ftsMatchedIDs = ftsMatchedIDs
     }
@@ -96,17 +104,20 @@ struct SearchQuery {
         self.titleTerms    = titleTerms
         self.seriesTerms   = seriesTerms
         self.statusTerms   = []
+        self.fulltextPhrase = nil
         self.plainTerms    = plainTerms
         self.ftsMatchedIDs = ftsMatchedIDs
     }
 
     init(tagTerms: [String], authorTerms: [String], titleTerms: [String],
-         seriesTerms: [String], statusTerms: [String], plainTerms: [String], ftsMatchedIDs: [Int]? = nil) {
+         seriesTerms: [String], statusTerms: [String], fulltextPhrase: String? = nil,
+         plainTerms: [String], ftsMatchedIDs: [Int]? = nil) {
         self.tagTerms      = tagTerms
         self.authorTerms   = authorTerms
         self.titleTerms    = titleTerms
         self.seriesTerms   = seriesTerms
         self.statusTerms   = statusTerms
+        self.fulltextPhrase = fulltextPhrase
         self.plainTerms    = plainTerms
         self.ftsMatchedIDs = ftsMatchedIDs
     }
@@ -131,6 +142,7 @@ struct SearchQueryParser {
             ("author:", { v in SearchQuery(tagTerms: [], authorTerms: [v], titleTerms: [], seriesTerms: [], plainTerms: []) }),
             ("series:", { v in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [v], plainTerms: []) }),
             ("status:", { v in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [], statusTerms: [v], plainTerms: []) }),
+            ("fulltext:", { v in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [], statusTerms: [], fulltextPhrase: v, plainTerms: []) }),
             ("title:",  { v in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [v], seriesTerms: [], plainTerms: []) }),
             ("tag:",    { v in SearchQuery(tagTerms: [v], authorTerms: [], titleTerms: [], seriesTerms: [], plainTerms: []) }),
         ]

@@ -104,6 +104,20 @@ final class CalibreLibrary {
         })
     }
 
+    func ao3PublisherBookIDs() -> Set<Int> {
+        let sql = """
+        SELECT bpl.book
+        FROM books_publishers_link bpl
+        JOIN publishers p ON p.id = bpl.publisher
+        WHERE TRIM(p.name) = 'Archive of Our Own'
+        """
+        let rows = (try? db.prepare(sql).map { $0 }) ?? []
+        return Set(rows.compactMap { row in
+            if let value = row[0] as? Int64 { return Int(value) }
+            return row[0] as? Int
+        })
+    }
+
     // MARK: - Book list (pageSize + 1 rows — caller checks for next page)
 
     /// Fetch `limit` rows starting at `offset` using a structured SearchQuery.
@@ -211,12 +225,14 @@ final class CalibreLibrary {
         let where_ = qClause.isEmpty ? "" : "WHERE \(qClause)"
 
         let sql = """
-            SELECT DISTINCT b.id, b.title, b.path, b.pubdate, s.name, b.series_index
+            SELECT DISTINCT b.id, b.title, b.path, b.pubdate, s.name, b.series_index, p.name
             FROM books b
             LEFT JOIN books_authors_link bal ON bal.book = b.id
             LEFT JOIN authors a ON a.id = bal.author
             LEFT JOIN books_series_link bsl ON bsl.book = b.id
             LEFT JOIN series s ON s.id = bsl.series
+            LEFT JOIN books_publishers_link bpl ON bpl.book = b.id
+            LEFT JOIN publishers p ON p.id = bpl.publisher
             \(where_)
             GROUP BY b.id
             ORDER BY \(orderBy)
@@ -256,12 +272,14 @@ final class CalibreLibrary {
         let where_ = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
 
         let sql = """
-            SELECT DISTINCT b.id, b.title, b.path, b.pubdate, s.name, b.series_index
+            SELECT DISTINCT b.id, b.title, b.path, b.pubdate, s.name, b.series_index, p.name
             FROM books b
             LEFT JOIN books_authors_link bal ON bal.book = b.id
             LEFT JOIN authors a ON a.id = bal.author
             LEFT JOIN books_series_link bsl ON bsl.book = b.id
             LEFT JOIN series s ON s.id = bsl.series
+            LEFT JOIN books_publishers_link bpl ON bpl.book = b.id
+            LEFT JOIN publishers p ON p.id = bpl.publisher
             \(where_)
             GROUP BY b.id
             ORDER BY \(orderBy)
@@ -296,6 +314,7 @@ final class CalibreLibrary {
                 wordCount:     nil,
                 kudos:         nil,
                 publishedDate: (row[3] as? String).flatMap(parseDate),
+                publisher:     row[6] as? String,
                 relativePath:  pathBind
             )
         }

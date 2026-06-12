@@ -303,6 +303,7 @@ struct FilterRuleRow: View {
         case .authorName: return "Author name…"
         case .series:     return "Series name…"
         case .comment:    return "Text in description…"
+        case .fulltext:   return "Text in book…"
         default:          return "Value…"
         }
     }

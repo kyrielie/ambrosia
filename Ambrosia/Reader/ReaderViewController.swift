@@ -4,6 +4,13 @@ import SwiftData
 import SwiftUI
 import Combine
 
+struct LocalReaderFindState: Equatable {
+    var query: String = ""
+    var matchCurrent: Int = 0
+    var matchTotal: Int = 0
+    var isVisible: Bool = false
+}
+
 // MARK: - ReaderViewController
 //
 // Hosts the main visible WKWebView for reading.
@@ -40,6 +47,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     let target: ReadingTarget
     let book: CalibreBook
     let modelContainer: ModelContainer
+    var onReaderContentReady: (() -> Void)?
+    private(set) var isReaderContentReady = false
 
     // MARK: - Private: reader state
 
@@ -76,11 +85,10 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     // Find bar
     private var findBarHostingView: NSHostingView<FindBarView>?
-    private var findSearchText: String = "" {
-        didSet { performFind(findSearchText) }
-    }
+    private var findSearchText: String = ""
     private var findMatchCurrent: Int = 0
     private var findMatchTotal: Int = 0
+    private var findCountToken: Int = 0
 
     // MARK: - Private: persistence
 
@@ -96,6 +104,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private var bookState: BookState?
     private var annotations: [Annotation] = []
     var onReadingProgressChanged: (() -> Void)?
+    var onAnnotationsChanged: (([Annotation]) -> Void)?
+    var onLocalFindStateChanged: ((LocalReaderFindState) -> Void)?
+    var onOpenSearchSidebar: (() -> Void)?
 
     // MARK: - Init
 
@@ -287,6 +298,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     /// Loads `currentHTML` into the webView, prepending column CSS if in paginated mode.
     private func loadCurrentHTML() {
+        isReaderContentReady = false
         if currentMode == .paginated {
             loadPaginatedHTML()
         } else {
@@ -325,6 +337,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         let item = parser.spine[index]
         do {
             let html = try parser.html(for: item, userCSS: ReaderPreferences.shared.css)
+            isReaderContentReady = false
             paginationEngine?.loadSpine(html: html, baseURL: imageBaseURL, restoreFraction: restorePage.map(Double.init) ?? bookState?.lastScrollOffset)
         } catch {
             showError(error.localizedDescription)
@@ -393,6 +406,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
 
         startAutoSave()
+        isReaderContentReady = true
+        onReaderContentReady?()
     }
 
     func webView(_ webView: WKWebView,
@@ -840,6 +855,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             }) {
                 existing.append(annotation)
                 self.annotations = existing
+                self.onAnnotationsChanged?(existing)
                 Task { try? await AppDelegate.shared?.session.metaDB?.insertAnnotation(
                     annotation, calibreID: self.book.id) }
             }
@@ -882,6 +898,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 var existing = self.annotations
                 existing.append(final)
                 self.annotations = existing
+                self.onAnnotationsChanged?(existing)
                 Task { try? await AppDelegate.shared?.session.metaDB?.insertAnnotation(
                     final, calibreID: self.book.id) }
                 self.flushPosition()
@@ -959,6 +976,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             let loaded = (try? await AppDelegate.shared?.session.metaDB?.annotations(for: book.id)) ?? []
             await MainActor.run {
                 annotations = loaded
+                onAnnotationsChanged?(loaded)
                 let ranged = loaded.filter {
                     !$0.isPointAnnotation && (currentMode != .paginated || $0.spineIndex == currentSpineIndex)
                 }
@@ -966,6 +984,10 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 refreshSidebarIfVisible()
             }
         }
+    }
+
+    func currentAnnotationsForSidebar() -> [Annotation] {
+        annotations
     }
 
     // MARK: - Jump to annotation
@@ -1036,10 +1058,45 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         if findBarHostingView != nil { hideFindBar() } else { showFindBar() }
     }
 
-    private func showFindBar() {
+    func showLocalFind() {
         guard findBarHostingView == nil else { return }
+        showFindBar()
+    }
+
+    func setLocalFindText(_ text: String) {
+        guard findSearchText != text else { return }
+        findSearchText = text
+        performFind(findSearchText)
+        publishLocalFindState()
+    }
+
+    func localFindNext() {
+        findNext()
+    }
+
+    func localFindPrevious() {
+        findPrevious()
+    }
+
+    func currentLocalFindState() -> LocalReaderFindState {
+        LocalReaderFindState(
+            query: findSearchText,
+            matchCurrent: findMatchCurrent,
+            matchTotal: findMatchTotal,
+            isVisible: findBarHostingView != nil
+        )
+    }
+
+    private func showFindBar(openSidebar: Bool = false) {
+        if openSidebar {
+            onOpenSearchSidebar?()
+        }
+        guard findBarHostingView == nil else {
+            publishLocalFindState()
+            return
+        }
         let barView = FindBarView(
-            searchText:   Binding(get: { self.findSearchText }, set: { self.findSearchText = $0 }),
+            searchText:   Binding(get: { self.findSearchText }, set: { self.setLocalFindText($0) }),
             matchCurrent: findMatchCurrent,
             matchTotal:   findMatchTotal,
             onNext:       { [weak self] in self?.findNext() },
@@ -1056,6 +1113,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             hosting.heightAnchor.constraint(equalToConstant: 44),
         ])
         findBarHostingView = hosting
+        publishLocalFindState()
     }
 
     private func hideFindBar() {
@@ -1067,6 +1125,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         if #available(macOS 13.0, *) {
             webView.find("", configuration: WKFindConfiguration()) { _ in }
         }
+        updateFindBar()
+        publishLocalFindState()
     }
 
     private func repositionFindBar() { /* Auto Layout handles it */ }
@@ -1076,15 +1136,27 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         guard !query.isEmpty else {
             findMatchCurrent = 0; findMatchTotal = 0
             webView.find("", configuration: WKFindConfiguration()) { _ in }
-            updateFindBar(); return
+            updateFindBar(); publishLocalFindState(); return
         }
         let config = WKFindConfiguration()
         config.caseSensitive = false; config.wraps = true; config.backwards = false
+        updateLiteralMatchCount(for: query) { [weak self] total in
+            guard let self else { return }
+            self.findMatchTotal = total
+            self.findMatchCurrent = total > 0 ? 1 : 0
+            self.updateFindBar()
+            self.publishLocalFindState()
+        }
         webView.find(query, configuration: config) { [weak self] result in
             guard let self else { return }
-            self.findMatchTotal   = result.matchFound ? 1 : 0
-            self.findMatchCurrent = result.matchFound ? 1 : 0
+            if !result.matchFound {
+                self.findMatchCurrent = 0
+            } else if self.findMatchTotal == 0 {
+                self.findMatchTotal = 1
+                self.findMatchCurrent = 1
+            }
             self.updateFindBar()
+            self.publishLocalFindState()
         }
     }
 
@@ -1098,6 +1170,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 self.findMatchCurrent = (self.findMatchCurrent % max(1, self.findMatchTotal)) + 1
             }
             self.updateFindBar()
+            self.publishLocalFindState()
         }
     }
 
@@ -1112,6 +1185,41 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                     ? self.findMatchCurrent - 1 : self.findMatchTotal
             }
             self.updateFindBar()
+            self.publishLocalFindState()
+        }
+    }
+
+    private func updateLiteralMatchCount(for query: String, completion: @escaping (Int) -> Void) {
+        findCountToken += 1
+        let token = findCountToken
+        guard let data = try? JSONSerialization.data(withJSONObject: [query]),
+              let json = String(data: data, encoding: .utf8) else {
+            completion(0)
+            return
+        }
+        let js = """
+        (() => {
+            const query = \(json)[0].toLocaleLowerCase();
+            if (!query) return 0;
+            const text = (document.body ? document.body.innerText : document.documentElement.innerText || '').toLocaleLowerCase();
+            let count = 0;
+            let index = 0;
+            while ((index = text.indexOf(query, index)) !== -1) {
+                count += 1;
+                index += Math.max(query.length, 1);
+            }
+            return count;
+        })();
+        """
+        webView.evaluateJavaScript(js) { [weak self] value, _ in
+            guard let self, self.findCountToken == token else { return }
+            if let number = value as? NSNumber {
+                completion(number.intValue)
+            } else if let int = value as? Int {
+                completion(int)
+            } else {
+                completion(0)
+            }
         }
     }
 
@@ -1125,13 +1233,18 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private func updateFindBar() {
         guard let hosting = findBarHostingView else { return }
         hosting.rootView = FindBarView(
-            searchText:   Binding(get: { self.findSearchText }, set: { self.findSearchText = $0 }),
+            searchText:   Binding(get: { self.findSearchText }, set: { self.setLocalFindText($0) }),
             matchCurrent: findMatchCurrent,
             matchTotal:   findMatchTotal,
             onNext:       { [weak self] in self?.findNext() },
             onPrevious:   { [weak self] in self?.findPrevious() },
             onClose:      { [weak self] in self?.hideFindBar() }
         )
+    }
+
+    private func publishLocalFindState() {
+        onLocalFindStateChanged?(currentLocalFindState())
+        refreshSidebarIfVisible()
     }
 
     // MARK: - Annotation sidebar
@@ -1173,11 +1286,16 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     private func deleteAnnotation(id: UUID) {
         annotations = annotations.filter { $0.id != id }
+        onAnnotationsChanged?(annotations)
         Task { try? await AppDelegate.shared?.session.metaDB?.deleteAnnotation(
             id: id, calibreID: book.id) }
         flushPosition()
         refreshSidebarIfVisible()
         HighlightBridge.removeHighlight(id: id, from: webView)
+    }
+
+    func deleteAnnotationFromSidebar(id: UUID) {
+        deleteAnnotation(id: id)
     }
 
     private func refreshSidebarIfVisible() {
@@ -1340,7 +1458,24 @@ private class ReaderMenuWebView: WKWebView {
     // before keyDown ever reaches the view controller. In paginated mode we want
     // those keys for page turns, so we intercept them here first.
     override func keyDown(with event: NSEvent) {
-        guard let vc = viewController, vc.currentMode == .paginated else {
+        guard let vc = viewController else {
+            super.keyDown(with: event)
+            return
+        }
+        if vc.currentMode == .scroll {
+            switch event.keyCode {
+            case 126:
+                scrollPageVertically(multiplier: -0.9)
+                return
+            case 125:
+                scrollPageVertically(multiplier: 0.9)
+                return
+            default:
+                super.keyDown(with: event)
+                return
+            }
+        }
+        guard vc.currentMode == .paginated else {
             super.keyDown(with: event)
             return
         }
@@ -1362,6 +1497,12 @@ private class ReaderMenuWebView: WKWebView {
         default:
             super.keyDown(with: event)
         }
+    }
+
+    private func scrollPageVertically(multiplier: CGFloat) {
+        let distance = max(80, bounds.height * abs(multiplier))
+        let direction = multiplier < 0 ? -distance : distance
+        evaluateJavaScript("window.scrollBy({ top: \(Int(direction)), left: 0, behavior: 'auto' });", completionHandler: nil)
     }
 
     // Block trackpad/mouse scrolling in paginated mode. Page turns must go through

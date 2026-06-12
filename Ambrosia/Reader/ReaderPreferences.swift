@@ -119,6 +119,12 @@ final class ReaderPreferences: ObservableObject {
     @Published var correctCalibreAmpEntities: Bool {
         didSet { UserDefaults.standard.set(correctCalibreAmpEntities, forKey: Keys.correctCalibreAmpEntities) }
     }
+    @Published var hideNonAO3PublisherBooks: Bool {
+        didSet { UserDefaults.standard.set(hideNonAO3PublisherBooks, forKey: Keys.hideNonAO3PublisherBooks) }
+    }
+    @Published var emailPillsShowCollections: Bool {
+        didSet { UserDefaults.standard.set(emailPillsShowCollections, forKey: Keys.emailPillsShowCollections) }
+    }
 
     // MARK: - Derived: resolved library colour for current appearance
 
@@ -211,6 +217,8 @@ final class ReaderPreferences: ObservableObject {
         static let showSkippedCollection       = false
         static let hideFanworksTagPill         = true
         static let correctCalibreAmpEntities   = true
+        static let hideNonAO3PublisherBooks    = false
+        static let emailPillsShowCollections   = false
         static let useScreenFraction           = true
         static let defaultWindowWidth          = CGFloat(960)
         static let defaultWindowHeight         = CGFloat(1080)
@@ -237,6 +245,8 @@ final class ReaderPreferences: ObservableObject {
         static let showSkippedCollection       = "rp.showSkippedCollection"
         static let hideFanworksTagPill         = "rp.hideFanworksTagPill"
         static let correctCalibreAmpEntities   = "rp.correctCalibreAmpEntities"
+        static let hideNonAO3PublisherBooks    = "rp.hideNonAO3PublisherBooks"
+        static let emailPillsShowCollections   = "rp.emailPillsShowCollections"
         static let useScreenFraction           = "pref.useScreenFraction"
         static let defaultWindowWidth          = "pref.windowWidth"
         static let defaultWindowHeight         = "pref.windowHeight"
@@ -295,6 +305,12 @@ final class ReaderPreferences: ObservableObject {
         correctCalibreAmpEntities = ud.object(forKey: Keys.correctCalibreAmpEntities) != nil
             ? ud.bool(forKey: Keys.correctCalibreAmpEntities)
             : Defaults.correctCalibreAmpEntities
+        hideNonAO3PublisherBooks = ud.object(forKey: Keys.hideNonAO3PublisherBooks) != nil
+            ? ud.bool(forKey: Keys.hideNonAO3PublisherBooks)
+            : Defaults.hideNonAO3PublisherBooks
+        emailPillsShowCollections = ud.object(forKey: Keys.emailPillsShowCollections) != nil
+            ? ud.bool(forKey: Keys.emailPillsShowCollections)
+            : Defaults.emailPillsShowCollections
 
         if ud.object(forKey: Keys.useScreenFraction) != nil {
             useScreenFraction = ud.bool(forKey: Keys.useScreenFraction)
@@ -416,6 +432,8 @@ final class ReaderPreferences: ObservableObject {
         libraryDarkTextColor        = Defaults.libraryDarkTextColor
         showSkippedCollection       = Defaults.showSkippedCollection
         hideFanworksTagPill         = Defaults.hideFanworksTagPill
+        hideNonAO3PublisherBooks    = Defaults.hideNonAO3PublisherBooks
+        emailPillsShowCollections   = Defaults.emailPillsShowCollections
     }
 }
 

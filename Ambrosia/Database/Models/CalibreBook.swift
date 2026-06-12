@@ -11,6 +11,7 @@ struct CalibreBook: Identifiable, Hashable {
     let wordCount: Int?
     let kudos: Int?
     let publishedDate: Date?
+    let publisher: String?
     let relativePath: String    // books.path — relative to library root
 
     // Populated by bulk JOIN queries after the page is fetched
@@ -63,6 +64,10 @@ struct CalibreBook: Identifiable, Hashable {
         guard let comment = displayComment else { return false }
         let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.range(of: "Anthology", options: [.caseInsensitive, .anchored]) != nil
+    }
+
+    var isAO3PublisherBook: Bool {
+        publisher?.trimmingCharacters(in: .whitespacesAndNewlines) == "Archive of Our Own"
     }
 
     /// Absolute EPUB URL — requires the library root URL from LibrarySession.
@@ -131,6 +136,12 @@ struct SeriesGroup: Identifiable, Hashable {
     let seriesName: String
     let works: [CalibreBook]
     let allFandoms: [String]
+    let allRelationships: [String]
+    let allCharacters: [String]
+    let allCategories: [String]
+    let allWarnings: [String]
+    let allRatings: [String]
+    let allAdditionalTags: [String]
     let allTags: [String]
     let allAuthors: [String]
     let allDescriptions: [String]
