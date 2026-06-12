@@ -130,21 +130,33 @@ final class CalibreLibrary {
         query: SearchQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: []),
         filter: FilterExpression? = nil
     ) -> [CalibreBook] {
+        let start = LibraryFilterDebug.now()
+        let mode = filter?.isSQLPageable == true ? "sqlPagedDeferredCount" : "unfiltered"
         do {
             let rows = try _fetchBooks(offset: offset, limit: limit,
                                        sort: sort, ascending: ascending,
-                                       query: query)
+                                       query: query, filter: filter)
             let ids = rows.map(\.id)
             let authorsMap  = try _authors(for: ids)
             let tagsMap     = try _tags(for: ids)
             let commentsMap = try _comments(for: ids)
-            return rows.map { book in
+            let books = rows.map { book in
                 var b = book
                 b.authors = authorsMap[book.id] ?? []
                 b.tags    = tagsMap[book.id] ?? []
                 b.comment = commentsMap[book.id]
                 return b
             }
+            LibraryFilterDebug.log("books.page.end", [
+                "mode": mode,
+                "offset": offset,
+                "limit": limit,
+                "rows": books.count,
+                "query": LibraryFilterDebug.summary(query: query),
+                "filter": filter.map { LibraryFilterDebug.summary(expression: $0) },
+                "elapsedMS": LibraryFilterDebug.elapsedMS(since: start)
+            ])
+            return books
         } catch {
             print("[CalibreLibrary] books error: \(error)")
             return []
@@ -160,6 +172,7 @@ final class CalibreLibrary {
         ascending: Bool,
         query: SearchQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
     ) -> [CalibreBook] {
+        let start = LibraryFilterDebug.now()
         do {
             let rows = try _fetchBooksQueryIDs(
                 ids: ids, offset: offset, limit: limit,
@@ -168,13 +181,23 @@ final class CalibreLibrary {
             let authorsMap  = try _authors(for: fetchedIDs)
             let tagsMap     = try _tags(for: fetchedIDs)
             let commentsMap = try _comments(for: fetchedIDs)
-            return rows.map { book in
+            let books = rows.map { book in
                 var b = book
                 b.authors = authorsMap[book.id] ?? []
                 b.tags    = tagsMap[book.id] ?? []
                 b.comment = commentsMap[book.id]
                 return b
             }
+            LibraryFilterDebug.log("books.page.end", [
+                "mode": ids == nil ? "unfilteredIDs" : "explicitIDs",
+                "candidateIDs": ids?.count,
+                "offset": offset,
+                "limit": limit,
+                "rows": books.count,
+                "query": LibraryFilterDebug.summary(query: query),
+                "elapsedMS": LibraryFilterDebug.elapsedMS(since: start)
+            ])
+            return books
         } catch {
             print("[CalibreLibrary] books(ids:query:) error: \(error)")
             return []
@@ -216,13 +239,26 @@ final class CalibreLibrary {
         limit: Int,
         sort: SortField,
         ascending: Bool,
-        query: SearchQuery
+        query: SearchQuery,
+        filter: FilterExpression?
     ) throws -> [CalibreBook] {
         let direction = ascending ? "ASC" : "DESC"
         let orderBy   = orderByClause(sort: sort, direction: direction)
 
+        var conditions: [String] = []
+        var args: [Binding?] = []
+
         let (qClause, qArgs) = whereClause(for: query)
-        let where_ = qClause.isEmpty ? "" : "WHERE \(qClause)"
+        if !qClause.isEmpty {
+            conditions.append(qClause)
+            args.append(contentsOf: qArgs)
+        }
+        if let filter, let (fClause, fArgs) = sqlFilterClause(for: filter) {
+            conditions.append(fClause)
+            args.append(contentsOf: fArgs)
+        }
+
+        let where_ = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
 
         let sql = """
             SELECT DISTINCT b.id, b.title, b.path, b.pubdate, s.name, b.series_index, p.name
@@ -233,12 +269,12 @@ final class CalibreLibrary {
             LEFT JOIN series s ON s.id = bsl.series
             LEFT JOIN books_publishers_link bpl ON bpl.book = b.id
             LEFT JOIN publishers p ON p.id = bpl.publisher
+            LEFT JOIN comments c ON c.book = b.id
             \(where_)
             GROUP BY b.id
             ORDER BY \(orderBy)
             LIMIT ? OFFSET ?
             """
-        var args: [Binding?] = qArgs
         args.append(contentsOf: [limit as Binding?, offset as Binding?])
         return try _mapBookRows(db.prepare(sql, args).map { $0 })
     }

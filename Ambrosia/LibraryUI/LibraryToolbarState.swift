@@ -38,6 +38,10 @@ final class LibraryToolbarState {
 
     var filterExpression:   FilterExpression = FilterExpression()
     var activeFilterResult: FilterResult?    = nil
+    var pendingFullTextSearch: PendingFullTextSearch? = nil
+    var isApplyingLibraryFilter: Bool = false
+    var libraryFilterApplicationToken: UUID? = nil
+    private var shouldSuppressNextSearchTextReload = false
 
     // MARK: - Search → filter commit
     //
@@ -62,7 +66,41 @@ final class LibraryToolbarState {
 
     // MARK: - Convenience
 
-    var hasActiveFilter: Bool { activeFilterResult != nil }
+    var hasActiveFilter: Bool { activeFilterResult != nil || pendingFullTextSearch != nil }
+
+    @discardableResult
+    func beginLibraryFilterApplication() -> UUID {
+        let token = UUID()
+        libraryFilterApplicationToken = token
+        isApplyingLibraryFilter = true
+        return token
+    }
+
+    func finishLibraryFilterApplication(token: UUID) {
+        guard libraryFilterApplicationToken == token else { return }
+        libraryFilterApplicationToken = nil
+        isApplyingLibraryFilter = false
+    }
+
+    func cancelLibraryFilterApplication() {
+        libraryFilterApplicationToken = nil
+        isApplyingLibraryFilter = false
+        pendingFullTextSearch = nil
+    }
+
+    func clearPendingFullTextSearch() {
+        pendingFullTextSearch = nil
+    }
+
+    func suppressNextSearchTextReload() {
+        shouldSuppressNextSearchTextReload = true
+    }
+
+    func consumeSearchTextReloadSuppression() -> Bool {
+        guard shouldSuppressNextSearchTextReload else { return false }
+        shouldSuppressNextSearchTextReload = false
+        return true
+    }
 
     func syncFullTextFieldFromSearchText() {}
     func applyFullTextFieldToSearchText() {}

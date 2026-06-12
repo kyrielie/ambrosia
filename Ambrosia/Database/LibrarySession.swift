@@ -42,6 +42,8 @@ final class LibrarySession {
     private(set) var lastError: String?
 
     private var extractionTask: Task<Void, Never>?
+    private var resolvedFulltextCache: [String: [Int]] = [:]
+    private let resolvedFulltextCacheLimit = 12
 
     // MARK: - Opening / closing
 
@@ -57,6 +59,7 @@ final class LibrarySession {
             activePath = url.path
             totalCount = newLibrary.bookCount()
             ftsLibrary = CalibreFTSLibrary(libraryURL: url)
+            resolvedFulltextCache.removeAll()
             LibraryRegistry.shared.register(url)
             LibraryIndexManager.shared.record(url: url)
             importAO3TagSeeds()
@@ -81,6 +84,7 @@ final class LibrarySession {
         collectionStore = nil
         totalCount = 0
         activePath = nil
+        resolvedFulltextCache.removeAll()
     }
 
     // MARK: - Count refresh
@@ -96,12 +100,53 @@ final class LibrarySession {
 
     // MARK: - FTS resolution
 
+    func cachedFulltextIDs(for phrase: String) -> [Int]? {
+        let trimmed = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return resolvedFulltextCache[fulltextCacheKey(trimmed)]
+    }
+
+    func resolveFulltextIDs(for phrase: String) async -> [Int] {
+        let trimmed = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let key = fulltextCacheKey(trimmed)
+        if let cachedIDs = resolvedFulltextCache[key] {
+            return cachedIDs
+        }
+        guard let fts = ftsLibrary else {
+            print("[LibrarySession] fulltext search unavailable for phrase=\"\(trimmed)\"")
+            return []
+        }
+        let limit = max(library?.bookCount() ?? 0, 1)
+        let ids = await Task.detached(priority: .userInitiated) {
+            fts.search(query: trimmed, limit: limit) ?? []
+        }.value
+        if ids.isEmpty {
+            print("[LibrarySession] fulltext search returned no matches for phrase=\"\(trimmed)\"")
+        }
+        rememberResolvedFulltext(ids: ids, key: key)
+        return ids
+    }
+
     /// Attempts FTS resolution for explicit fulltext only.
     /// Shared between list view and email view — single source of truth.
     func resolvedQuery(_ query: SearchQuery) -> SearchQuery {
         guard let phrase = query.fulltextPhrase?.trimmingCharacters(in: .whitespacesAndNewlines),
               !phrase.isEmpty else {
             return query
+        }
+        let cacheKey = fulltextCacheKey(phrase)
+        if let cachedIDs = resolvedFulltextCache[cacheKey] {
+            return SearchQuery(
+                tagTerms:     query.tagTerms,
+                authorTerms:  query.authorTerms,
+                titleTerms:   query.titleTerms,
+                seriesTerms:  query.seriesTerms,
+                statusTerms:  query.statusTerms,
+                fulltextPhrase: query.fulltextPhrase,
+                plainTerms:   [],
+                ftsMatchedIDs: cachedIDs
+            )
         }
         guard let fts = ftsLibrary else {
             print("[LibrarySession] fulltext search unavailable for phrase=\"\(phrase)\"")
@@ -118,6 +163,7 @@ final class LibrarySession {
         }
         guard let ftsIDs = fts.search(query: phrase), !ftsIDs.isEmpty else {
             print("[LibrarySession] fulltext search returned no matches for phrase=\"\(phrase)\"")
+            rememberResolvedFulltext(ids: [], key: cacheKey)
             return SearchQuery(
                 tagTerms: query.tagTerms,
                 authorTerms: query.authorTerms,
@@ -129,6 +175,7 @@ final class LibrarySession {
                 ftsMatchedIDs: []
             )
         }
+        rememberResolvedFulltext(ids: ftsIDs, key: cacheKey)
         return SearchQuery(
             tagTerms:     query.tagTerms,
             authorTerms:  query.authorTerms,
@@ -139,6 +186,18 @@ final class LibrarySession {
             plainTerms:   [],
             ftsMatchedIDs: ftsIDs
         )
+    }
+
+    private func rememberResolvedFulltext(ids: [Int], key: String) {
+        resolvedFulltextCache[key] = ids
+        if resolvedFulltextCache.count > resolvedFulltextCacheLimit,
+           let firstKey = resolvedFulltextCache.keys.first {
+            resolvedFulltextCache.removeValue(forKey: firstKey)
+        }
+    }
+
+    private func fulltextCacheKey(_ phrase: String) -> String {
+        phrase.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }
 
     // MARK: - Re-open saved library on launch

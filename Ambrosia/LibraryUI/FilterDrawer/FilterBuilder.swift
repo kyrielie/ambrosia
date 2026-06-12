@@ -2,14 +2,96 @@ import Foundation
 import SwiftData
 import SQLite
 
+// MARK: - Library filter debug logging
+
+enum LibraryFilterDebug {
+    static func now() -> CFAbsoluteTime { CFAbsoluteTimeGetCurrent() }
+
+    static func log(_ event: String, _ fields: [String: CustomStringConvertible?] = [:]) {
+        #if DEBUG
+        let detail = fields
+            .compactMap { key, value -> String? in
+                guard let value else { return nil }
+                return "\(key)=\(value)"
+            }
+            .joined(separator: " ")
+        if detail.isEmpty {
+            print("[LibraryFilter] \(event)")
+        } else {
+            print("[LibraryFilter] \(event) \(detail)")
+        }
+        #endif
+    }
+
+    static func elapsedMS(since start: CFAbsoluteTime) -> String {
+        String(format: "%.1f", (CFAbsoluteTimeGetCurrent() - start) * 1000)
+    }
+
+    static func summary(expression: FilterExpression) -> String {
+        expression.groups
+            .flatMap(\.completeRules)
+            .map { "\($0.field.rawValue).\($0.op.rawValue)=\($0.value)" }
+            .joined(separator: ",")
+    }
+
+    static func summary(query: SearchQuery) -> String {
+        [
+            query.tagTerms.isEmpty ? nil : "tag:\(query.tagTerms.joined(separator: "|"))",
+            query.authorTerms.isEmpty ? nil : "author:\(query.authorTerms.joined(separator: "|"))",
+            query.titleTerms.isEmpty ? nil : "title:\(query.titleTerms.joined(separator: "|"))",
+            query.seriesTerms.isEmpty ? nil : "series:\(query.seriesTerms.joined(separator: "|"))",
+            query.plainTerms.isEmpty ? nil : "plain:\(query.plainTerms.joined(separator: "|"))",
+            query.fulltextPhrase.map { "fulltext:\($0)" },
+            query.ftsMatchedIDs.map { "ftsIDs:\($0.count)" }
+        ]
+        .compactMap { $0 }
+        .joined(separator: ",")
+    }
+}
+
 // MARK: - FilterResult
 
 struct FilterResult {
     let calibreIDs: [Int]
-    let totalCount: Int
+    let totalCount: Int?
+    let isSQLBacked: Bool
+
+    init(calibreIDs: [Int], totalCount: Int? = nil, isSQLBacked: Bool = false) {
+        self.calibreIDs = calibreIDs
+        self.totalCount = totalCount
+        self.isSQLBacked = isSQLBacked
+    }
+
+    var reloadToken: String {
+        "\(isSQLBacked)-\(calibreIDs)"
+    }
+}
+
+struct PendingFullTextSearch: Equatable {
+    enum Source: Equatable {
+        case searchText
+        case filterExpression
+    }
+
+    let token: UUID
+    let phrase: String
+    let source: Source
 }
 
 extension FilterExpression {
+    var isSQLPageable: Bool {
+        let completeRules = groups.flatMap(\.completeRules)
+        guard !completeRules.isEmpty else { return false }
+        return completeRules.allSatisfy { rule in
+            switch rule.field {
+            case .collection, .isLiked, .status, .fulltext:
+                return false
+            default:
+                return true
+            }
+        }
+    }
+
     var hasSeriesOrMergedEqualsRule: Bool {
         groups.flatMap(\.rules).contains {
             $0.field == .collection &&
@@ -45,29 +127,67 @@ struct FilterBuilder {
     func matchingIDs(expression: FilterExpression,
                      likedIDs: Set<Int>,
                      collectionMap: [String: Set<Int>] = [:],
-                     statusMap: [AO3CompletionStatus: Set<Int>] = [:]) -> FilterResult {
+                     statusMap: [AO3CompletionStatus: Set<Int>] = [:],
+                     fulltextMap: [String: Set<Int>] = [:]) -> FilterResult {
+        let start = LibraryFilterDebug.now()
+        LibraryFilterDebug.log("matchingIDs.start", [
+            "mode": "explicitIDs",
+            "rules": LibraryFilterDebug.summary(expression: expression)
+        ])
         let completeGroups = expression.groups.filter(\.isComplete)
         guard !completeGroups.isEmpty else {
-            return FilterResult(calibreIDs: [], totalCount: library.bookCount())
+            let result = FilterResult(calibreIDs: [], totalCount: library.bookCount())
+            LibraryFilterDebug.log("matchingIDs.end", [
+                "mode": "explicitIDs",
+                "ids": result.calibreIDs.count,
+                "count": result.totalCount,
+                "elapsedMS": LibraryFilterDebug.elapsedMS(since: start)
+            ])
+            return result
         }
 
-        // Evaluate each group independently, then combine with groupConjunction
-        let groupResults: [Set<Int>] = completeGroups.map { group in
+        let fulltextRules = completeGroups.flatMap(\.completeRules).filter { $0.field == .fulltext }
+        let nonFulltextGroups = completeGroups.compactMap { group -> FilterGroup? in
+            let rules = group.completeRules.filter { $0.field != .fulltext }
+            guard !rules.isEmpty else { return nil }
+            return FilterGroup(rules: rules, conjunction: group.conjunction)
+        }
+
+        // Evaluate non-fulltext groups independently, then combine with groupConjunction.
+        let groupResults: [Set<Int>] = nonFulltextGroups.map { group in
             Set(matchingIDsForGroup(group, likedIDs: likedIDs, collectionMap: collectionMap, statusMap: statusMap))
         }
 
-        let finalIDs: [Int]
-        switch expression.groupConjunction {
-        case .or:
-            let union = groupResults.reduce(Set<Int>()) { $0.union($1) }
-            finalIDs = Array(union).sorted()
-        case .and:
-            guard let first = groupResults.first else { finalIDs = []; break }
-            let intersection = groupResults.dropFirst().reduce(first) { $0.intersection($1) }
-            finalIDs = Array(intersection).sorted()
+        var finalIDSet: Set<Int>
+        if groupResults.isEmpty {
+            finalIDSet = Set(library.allCalibreIDs())
+        } else {
+            switch expression.groupConjunction {
+            case .or:
+                finalIDSet = groupResults.reduce(Set<Int>()) { $0.union($1) }
+            case .and:
+                guard let first = groupResults.first else { finalIDSet = []; break }
+                finalIDSet = groupResults.dropFirst().reduce(first) { $0.intersection($1) }
+            }
         }
 
-        return FilterResult(calibreIDs: finalIDs, totalCount: finalIDs.count)
+        if !fulltextRules.isEmpty {
+            finalIDSet = applyFulltextRulesAsGlobalRefinement(
+                fulltextRules,
+                to: finalIDSet,
+                fulltextMap: fulltextMap
+            )
+        }
+
+        let finalIDs = Array(finalIDSet).sorted()
+        let result = FilterResult(calibreIDs: finalIDs, totalCount: finalIDs.count)
+        LibraryFilterDebug.log("matchingIDs.end", [
+            "mode": "explicitIDs",
+            "ids": finalIDs.count,
+            "count": result.totalCount,
+            "elapsedMS": LibraryFilterDebug.elapsedMS(since: start)
+        ])
+        return result
     }
 
     private func matchingIDsForGroup(_ group: FilterGroup,
@@ -82,7 +202,6 @@ struct FilterBuilder {
         let likedRules      = complete.filter { $0.field == .isLiked }
         let collectionRules = complete.filter { $0.field == .collection }
         let statusRules     = complete.filter { $0.field == .status }
-        let fulltextRules   = complete.filter { $0.field == .fulltext }
 
         var ids: [Int]
         if sqlRules.isEmpty {
@@ -94,32 +213,6 @@ struct FilterBuilder {
         // Apply isLiked in-memory
         if !likedRules.isEmpty {
             ids = ids.filter { likedIDs.contains($0) }
-        }
-
-        if !fulltextRules.isEmpty {
-            var idSet = Set(ids)
-            if group.conjunction == .and {
-                for rule in fulltextRules {
-                    let memberIDs = fulltextIDs(for: rule)
-                    switch rule.op {
-                    case .contains:    idSet = idSet.intersection(memberIDs)
-                    case .notContains: idSet = idSet.subtracting(memberIDs)
-                    default:           break
-                    }
-                }
-            } else {
-                var unionIDs = Set<Int>()
-                for rule in fulltextRules {
-                    let memberIDs = fulltextIDs(for: rule)
-                    switch rule.op {
-                    case .contains:    unionIDs.formUnion(idSet.intersection(memberIDs))
-                    case .notContains: unionIDs.formUnion(idSet.subtracting(memberIDs))
-                    default:           break
-                    }
-                }
-                idSet = unionIDs
-            }
-            ids = Array(idSet).sorted()
         }
 
         // Apply collection rules in-memory
@@ -183,10 +276,55 @@ struct FilterBuilder {
         return ids
     }
 
+    private func applyFulltextRulesAsGlobalRefinement(
+        _ rules: [FilterRule],
+        to candidateIDs: Set<Int>,
+        fulltextMap: [String: Set<Int>]
+    ) -> Set<Int> {
+        var idSet = candidateIDs
+        var fulltextCache: [String: Set<Int>] = [:]
+
+        func cachedFulltextIDs(for rule: FilterRule) -> Set<Int> {
+            let phrase = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = phrase.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            if let cached = fulltextCache[key] { return cached }
+            let result = fulltextMap[key] ?? fulltextIDs(for: rule)
+            fulltextCache[key] = result
+            return result
+        }
+
+        LibraryFilterDebug.log("fulltext.globalRefinement.start", [
+            "candidateIDs": idSet.count,
+            "rules": rules.map { "\($0.op.rawValue)=\($0.value)" }.joined(separator: ",")
+        ])
+
+        for rule in rules {
+            let before = idSet.count
+            let memberIDs = cachedFulltextIDs(for: rule)
+            switch rule.op {
+            case .contains:
+                idSet = idSet.intersection(memberIDs)
+            case .notContains:
+                idSet = idSet.subtracting(memberIDs)
+            default:
+                break
+            }
+            LibraryFilterDebug.log("fulltext.globalRefinement.rule", [
+                "op": rule.op.rawValue,
+                "value": rule.value,
+                "before": before,
+                "fulltextIDs": memberIDs.count,
+                "after": idSet.count
+            ])
+        }
+
+        return idSet
+    }
+
     private func fulltextIDs(for rule: FilterRule) -> Set<Int> {
         let phrase = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !phrase.isEmpty, let ftsLibrary else { return [] }
-        return Set(ftsLibrary.search(query: phrase, limit: Int.max) ?? [])
+        return Set(ftsLibrary.search(query: phrase, limit: max(library.bookCount(), 1)) ?? [])
     }
 
     // Legacy single-group entry point — used by quick tag/author taps
@@ -261,6 +399,80 @@ extension CalibreLibrary {
 
         guard let rows = try? db_prepare(sql, args) else { return [] }
         return rows.compactMap { row in (row[0] as? Int64).map(Int.init) }
+    }
+
+    func sqlFilterClause(for expression: FilterExpression) -> (String, [Binding?])? {
+        guard expression.isSQLPageable else { return nil }
+        let completeGroups = expression.groups.filter(\.isComplete)
+        var groupClauses: [String] = []
+        var args: [Binding?] = []
+
+        for group in completeGroups {
+            var clauses: [String] = []
+            for rule in group.completeRules {
+                guard let (clause, ruleArgs) = sqlFragment(for: rule) else { continue }
+                clauses.append(clause)
+                args.append(contentsOf: ruleArgs)
+            }
+            if !clauses.isEmpty {
+                let op = group.conjunction == .and ? " AND " : " OR "
+                groupClauses.append("(\(clauses.joined(separator: op)))")
+            }
+        }
+
+        guard !groupClauses.isEmpty else { return nil }
+        let op = expression.groupConjunction == .and ? " AND " : " OR "
+        return (groupClauses.joined(separator: op), args)
+    }
+
+    func bookCount(query: SearchQuery, filter: FilterExpression?) -> Int {
+        let start = LibraryFilterDebug.now()
+        LibraryFilterDebug.log("count.start", [
+            "mode": "sqlPagedDeferredCount",
+            "query": LibraryFilterDebug.summary(query: query),
+            "filter": filter.map { LibraryFilterDebug.summary(expression: $0) }
+        ])
+        do {
+            let count = try _bookCount(query: query, filter: filter)
+            LibraryFilterDebug.log("count.end", [
+                "mode": "sqlPagedDeferredCount",
+                "count": count,
+                "elapsedMS": LibraryFilterDebug.elapsedMS(since: start)
+            ])
+            return count
+        } catch {
+            print("[CalibreLibrary] bookCount(query:filter:) error: \(error)")
+            return 0
+        }
+    }
+
+    private func _bookCount(query: SearchQuery, filter: FilterExpression?) throws -> Int {
+        var conditions: [String] = []
+        var args: [Binding?] = []
+
+        let (qClause, qArgs) = whereClause(for: query)
+        if !qClause.isEmpty {
+            conditions.append(qClause)
+            args.append(contentsOf: qArgs)
+        }
+        if let filter, let (fClause, fArgs) = sqlFilterClause(for: filter) {
+            conditions.append(fClause)
+            args.append(contentsOf: fArgs)
+        }
+
+        let where_ = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
+        let sql = """
+            SELECT COUNT(DISTINCT b.id)
+            FROM books b
+            LEFT JOIN books_authors_link bal ON bal.book = b.id
+            LEFT JOIN authors a ON a.id = bal.author
+            LEFT JOIN books_series_link bsl ON bsl.book = b.id
+            LEFT JOIN series s ON s.id = bsl.series
+            LEFT JOIN comments c ON c.book = b.id
+            \(where_)
+            """
+        let rows = try db.prepare(sql, args).map { $0 }
+        return (rows.first?.first as? Int64).map(Int.init) ?? 0
     }
 
     // MARK: - SQL fragment builder

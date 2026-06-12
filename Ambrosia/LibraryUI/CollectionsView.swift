@@ -15,6 +15,7 @@ struct CollectionsView: View {
     @State private var isCreating = false
     @State private var renamingID: String?
     @State private var renameText = ""
+    @State private var searchText = ""
 
     private var selectedCalibreIDs: [Int] {
         if !calibreIDsToAdd.isEmpty { return calibreIDsToAdd }
@@ -24,6 +25,7 @@ struct CollectionsView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            searchField
             Divider()
 
             if visibleCollections.isEmpty && !isCreating {
@@ -35,6 +37,16 @@ struct CollectionsView: View {
                     }
                     if isCreating {
                         newCollectionRow
+                    }
+                    if let searchCreateName, !isCreating {
+                        Button {
+                            newName = searchCreateName
+                            commitCreate()
+                        } label: {
+                            Label("Create \"\(searchCreateName)\"", systemImage: "plus")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        .buttonStyle(.plain)
                     }
                     if !selectedCalibreIDs.isEmpty && !isCreating {
                         Button {
@@ -58,12 +70,25 @@ struct CollectionsView: View {
     }
 
     private var visibleCollections: [CollectionRow] {
-        collections.filter { collection in
+        let base = collections.filter { collection in
             if collection.id == SystemCollectionID.skipped {
                 return prefs.showSkippedCollection
             }
             return !collection.isSystem || selectedCalibreIDs.isEmpty
         }
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return base }
+        return base.filter { $0.name.localizedStandardContains(query) }
+    }
+
+    private var searchCreateName: String? {
+        guard !selectedCalibreIDs.isEmpty else { return nil }
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let hasExact = collections.contains {
+            $0.name.compare(trimmed, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }
+        return hasExact ? nil : trimmed
     }
 
     private var header: some View {
@@ -76,6 +101,30 @@ struct CollectionsView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+    }
+
+    private var searchField: some View {
+        HStack {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Search collections", text: $searchText)
+                .textFieldStyle(.plain)
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color(NSColor.controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .padding(.horizontal, 16)
+        .padding(.bottom, 10)
     }
 
     @ViewBuilder
@@ -95,10 +144,10 @@ struct CollectionsView: View {
                 Button("Cancel") { renamingID = nil }
                     .buttonStyle(.borderless).controlSize(.small)
             } else {
-                if !selectedCalibreIDs.isEmpty {
-                    Button {
-                        toggleMembership(collection: collection)
-                    } label: {
+                    if !selectedCalibreIDs.isEmpty {
+                        Button {
+                            toggleMembership(collection: collection)
+                        } label: {
                         Image(systemName: isMember ? "checkmark.circle.fill" : "circle")
                             .foregroundStyle(isMember ? Color.accentColor : .secondary)
                     }
@@ -198,7 +247,7 @@ struct CollectionsView: View {
     }
 
     private func commitCreate() {
-        let trimmed = newName.trimmingCharacters(in: .whitespaces)
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let ids = selectedCalibreIDs
         Task {
@@ -210,7 +259,7 @@ struct CollectionsView: View {
     }
 
     private func commitRename(_ collection: CollectionRow) {
-        let trimmed = renameText.trimmingCharacters(in: .whitespaces)
+        let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { renamingID = nil; return }
         Task {
             try? await session.collectionStore?.renameCollection(id: collection.id, name: trimmed)
@@ -233,70 +282,177 @@ struct CollectionsView: View {
     }
 }
 
-struct AddToCollectionMenu: View {
+struct CollectionSearchPickerView: View {
     let calibreIDs: [Int]
+    var onChange: (() async -> Void)? = nil
+    var onComplete: (() -> Void)? = nil
+
     @Environment(LibrarySession.self) private var session
-    @ObservedObject private var prefs = ReaderPreferences.shared
+    @FocusState private var searchFocused: Bool
     @State private var collections: [CollectionRow] = []
     @State private var membership: [String: Set<Int>] = [:]
-    @State private var showCreateSheet = false
-
-    init(book: CalibreBook) {
-        self.calibreIDs = [book.id]
-    }
-
-    init(calibreIDs: [Int]) {
-        self.calibreIDs = calibreIDs
-    }
+    @State private var searchText = ""
 
     var body: some View {
-        Menu("Add to Collection") {
-            ForEach(visibleCollections) { collection in
-                let selected = Set(calibreIDs)
-                let isMember = !selected.isEmpty && selected.isSubset(of: membership[collection.id] ?? [])
-                Button {
-                    Task {
-                        if isMember {
-                            try? await session.collectionStore?.bulkRemove(calibreIDs: calibreIDs, from: collection.id)
-                        } else {
-                            try? await session.collectionStore?.bulkAdd(calibreIDs: calibreIDs, to: collection.id)
-                        }
-                        await reload()
+        VStack(spacing: 0) {
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search or create collection", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
                     }
-                } label: {
-                    if isMember {
-                        Label(collection.name, systemImage: "checkmark")
-                    } else {
-                        Text(collection.name)
+                    .buttonStyle(.borderless)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(filteredCollections) { collection in
+                        collectionButton(collection)
+                    }
+
+                    if let createName {
+                        Button {
+                            createCollection(named: createName)
+                        } label: {
+                            Label("Create \"\(createName)\"", systemImage: "plus")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                    }
+
+                    if filteredCollections.isEmpty && createName == nil {
+                        Text("No collections")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
                     }
                 }
             }
-
-            if !visibleCollections.isEmpty { Divider() }
-
-            Button {
-                showCreateSheet = true
-            } label: {
-                Label("New Collection...", systemImage: "plus")
-            }
+            .frame(maxHeight: 260)
         }
+        .frame(width: 300)
         .task { await reload() }
-        .sheet(isPresented: $showCreateSheet) {
-            CollectionsView(calibreIDsToAdd: calibreIDs)
+        .onAppear {
+            DispatchQueue.main.async {
+                searchFocused = true
+            }
         }
     }
 
-    private var visibleCollections: [CollectionRow] {
-        collections.filter { collection in
-            if collection.id == SystemCollectionID.skipped {
-                return prefs.showSkippedCollection
-            }
-            return !collection.isSystem
+    private var targetCollections: [CollectionRow] {
+        collections.filter { !$0.isSystem }
+    }
+
+    private var filteredCollections: [CollectionRow] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return targetCollections }
+        return targetCollections.filter {
+            $0.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
         }
+    }
+
+    private var createName: String? {
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let hasExact = targetCollections.contains {
+            $0.name.compare(trimmed, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }
+        return hasExact ? nil : trimmed
+    }
+
+    private func collectionButton(_ collection: CollectionRow) -> some View {
+        let selected = Set(calibreIDs)
+        let isMember = !selected.isEmpty && selected.isSubset(of: membership[collection.id] ?? [])
+        return Button {
+            toggleMembership(collection)
+        } label: {
+            HStack {
+                Text(collection.name)
+                    .lineLimit(1)
+                Spacer()
+                if isMember {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
     }
 
     private func reload() async {
         collections = (try? await session.collectionStore?.collections()) ?? []
         membership = (try? await session.collectionStore?.membershipByCollectionID()) ?? [:]
+    }
+
+    private func toggleMembership(_ collection: CollectionRow) {
+        Task {
+            let selected = Set(calibreIDs)
+            let members = membership[collection.id] ?? []
+            if selected.isSubset(of: members) {
+                try? await session.collectionStore?.bulkRemove(calibreIDs: calibreIDs, from: collection.id)
+            } else {
+                try? await session.collectionStore?.bulkAdd(calibreIDs: calibreIDs, to: collection.id)
+            }
+            await reload()
+            await onChange?()
+            onComplete?()
+        }
+    }
+
+    private func createCollection(named name: String) {
+        Task {
+            _ = try? await session.collectionStore?.createCollection(name: name, calibreIDs: calibreIDs)
+            await reload()
+            await onChange?()
+            onComplete?()
+        }
+    }
+}
+
+struct AddToCollectionMenu: View {
+    let calibreIDs: [Int]
+    var onChange: (() async -> Void)? = nil
+    @State private var isPresented = false
+
+    init(book: CalibreBook, onChange: (() async -> Void)? = nil) {
+        self.calibreIDs = [book.id]
+        self.onChange = onChange
+    }
+
+    init(calibreIDs: [Int], onChange: (() async -> Void)? = nil) {
+        self.calibreIDs = calibreIDs
+        self.onChange = onChange
+    }
+
+    var body: some View {
+        Button("Add to Collection...") {
+            isPresented = true
+        }
+        .popover(isPresented: $isPresented, arrowEdge: .trailing) {
+            CollectionSearchPickerView(
+                calibreIDs: calibreIDs,
+                onChange: onChange,
+                onComplete: { isPresented = false }
+            )
+        }
     }
 }
