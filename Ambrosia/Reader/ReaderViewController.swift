@@ -69,6 +69,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     // Annotation sidebar
     private var sidebarPanel: NSPanel?
     private var sidebarHostingView: NSHostingView<AnnotationSidebarView>?
+    private var sidebarPanelObservers: [NSObjectProtocol] = []
 
     // Pending annotation captured at mouseup
     private var pendingAnnotation: Annotation?
@@ -196,6 +197,11 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     override func viewDidLayout() {
         super.viewDidLayout()
         repositionFindBar()
+        // Sync the annotation panel whenever the reader view's bounds change.
+        // Window move/resize notifications cover whole-window geometry changes,
+        // but NSSplitView divider drags change the reader pane's screen rect
+        // without firing a window resize notification, so we handle them here.
+        syncSidebarPanel()
         guard currentMode == .paginated else { return }
         resizeDebounce.schedule { [weak self] in
             self?.paginationEngine?.reapplyLayout()
@@ -206,6 +212,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         super.viewWillDisappear()
         saveTimer?.invalidate()
         saveTimer = nil
+        removeReaderWindowObservers()
         sidebarPanel?.close()
         annotationPopover?.close()
         notePopover?.close()
@@ -1255,23 +1262,98 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     }
 
     private func openAnnotationSidebar() {
-        guard let windowFrame = view.window?.frame else { return }
+        guard let screenRect = readerScreenRect(),
+              let readerWindow = view.window else { return }
+
         let sidebar = makeAnnotationSidebarView()
         let hosting = NSHostingView(rootView: sidebar)
-        hosting.frame = CGRect(x: 0, y: 0, width: 260, height: windowFrame.height)
+        // Invariant #10: sizingOptions = [] lets Auto Layout (the panel's content
+        // layout pass) own the hosting view's size. Without this NSHostingView
+        // reports its SwiftUI intrinsic size, fights the window layout, and
+        // collapses the panel — repositioning it to the left.
+        hosting.sizingOptions = []
         sidebarHostingView = hosting
 
+        // Anchor to the right edge of the *reader view's screen rect*, not the
+        // enclosing window frame. In a standalone reader window both are the same,
+        // but in the email split view the window frame's maxX is the library
+        // window's right edge — which sits somewhere to the right of the reader
+        // pane. Using the view's converted screen rect keeps the panel correctly
+        // flush to the reader pane's right edge in both configurations.
+        //
+        // NSPanel(contentRect:) takes the *content* area (below the title bar), so
+        // screenRect.height is used directly — the title bar is added on top of it.
+        let contentRect = CGRect(
+            x: screenRect.maxX,
+            y: screenRect.minY,
+            width: 260,
+            height: screenRect.height
+        )
+
         let panel = NSPanel(
-            contentRect: CGRect(x: windowFrame.maxX, y: windowFrame.minY, width: 260, height: windowFrame.height),
+            contentRect: contentRect,
             styleMask: [.titled, .closable],
-            backing: .buffered, defer: false
+            backing: .buffered,
+            defer: false
         )
         panel.title = "Annotations"
         panel.isFloatingPanel = true
         panel.level = .floating
-        panel.contentView = hosting
+        panel.contentView = hosting  // frame is managed by window layout; sizingOptions=[] keeps hosting stable
         panel.orderFront(nil)
         sidebarPanel = panel
+
+        // Observe window-level move/resize (handles whole-window drags and resizes).
+        // Split-view-internal resizes are handled in viewDidLayout via syncSidebarPanel.
+        removeReaderWindowObservers()
+        let nc = NotificationCenter.default
+        let move = nc.addObserver(forName: NSWindow.didMoveNotification, object: readerWindow, queue: .main) {
+            [weak self, weak panel] _ in self?.syncSidebarPanel(panel)
+        }
+        let resize = nc.addObserver(forName: NSWindow.didResizeNotification, object: readerWindow, queue: .main) {
+            [weak self, weak panel] _ in self?.syncSidebarPanel(panel)
+        }
+        let close = nc.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) {
+            [weak self] _ in self?.removeReaderWindowObservers()
+        }
+        sidebarPanelObservers = [move, resize, close]
+    }
+
+    /// Returns the reader view's frame in screen coordinates.
+    ///
+    /// This is the correct anchor for the annotation panel in all hosting
+    /// configurations. In a standalone reader window `view.window.frame` and
+    /// this value are identical, but in email mode `ReaderViewController` is
+    /// embedded as a child inside a split view: `view.window.frame` would return
+    /// the whole library window's frame, placing the panel at the wrong x
+    /// position whenever the split-view divider moves.
+    private func readerScreenRect() -> NSRect? {
+        guard let window = view.window else { return nil }
+        let viewRectInWindow = view.convert(view.bounds, to: nil)
+        return window.convertToScreen(viewRectInWindow)
+    }
+
+    /// Repositions and resizes the annotation panel to stay flush with the right
+    /// edge of the reader view in screen space. Called from both the window
+    /// move/resize observers and from `viewDidLayout` (which fires on split-view
+    /// divider drags that don't produce a window resize notification).
+    func syncSidebarPanel(_ panel: NSPanel? = nil) {
+        let target = panel ?? sidebarPanel
+        guard let target, target.isVisible,
+              let screenRect = readerScreenRect() else { return }
+        let contentRect = CGRect(
+            x: screenRect.maxX,
+            y: screenRect.minY,
+            width: target.frame.width,
+            height: screenRect.height
+        )
+        let newFrame = NSPanel.frameRect(forContentRect: contentRect, styleMask: target.styleMask)
+        target.setFrame(newFrame, display: true)
+    }
+
+    private func removeReaderWindowObservers() {
+        sidebarPanelObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        sidebarPanelObservers = []
     }
 
     private func makeAnnotationSidebarView() -> AnnotationSidebarView {
