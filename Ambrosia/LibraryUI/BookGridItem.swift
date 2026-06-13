@@ -51,6 +51,8 @@ struct LibraryRootView: View {
     @State private var ao3Metadata: [Int: AO3MetadataRecord] = [:]
     @State private var ao3ExtractionDiagnostics: [Int: AO3ExtractionDiagnostic] = [:]
     @State private var singletonSeriesWarnings: [Int: SingletonSeriesWarning] = [:]
+    // Seeded from LibrarySession cache so the first render on every mode
+    // switch uses correct membership data — no flash of wrong ordering.
     @State private var likedIDs: Set<Int> = []
     @State private var skippedIDs: Set<Int> = []
     @State private var seriesOrMergedIDs: Set<Int> = []
@@ -78,7 +80,14 @@ struct LibraryRootView: View {
             .preferredColorScheme(prefs.resolvedLibraryColorScheme)))
     }
 
+    // Split into two methods so the Swift type-checker doesn't time out
+    // on a single overlong modifier chain (SR-11289 / compiler perf limit).
     private func attachLifecycleHandlers<V: View>(to view: V) -> some View {
+        attachAppearanceHandlers(to: attachDataHandlers(to: view))
+    }
+
+    /// Pagination, sort, search-text, and filter-result changes.
+    private func attachDataHandlers<V: View>(to view: V) -> some View {
         view
             .onChange(of: currentPage)                { loadPage() }
             .onChange(of: toolbarState.sortField)     { selectedIDs.removeAll(); currentPage = 0; loadPage() }
@@ -122,6 +131,11 @@ struct LibraryRootView: View {
                 selectedIDs.removeAll()
                 currentPage = 0; loadPage()
             }
+    }
+
+    /// Extraction refresh, visibility prefs, session lifecycle, and appear/disappear.
+    private func attachAppearanceHandlers<V: View>(to view: V) -> some View {
+        view
             .onChange(of: extractionRefreshToken) {
                 loadAO3MetadataForCurrentPage()
             }
@@ -166,7 +180,22 @@ struct LibraryRootView: View {
                 }
             }
             .onAppear {
-                if session.isOpen { loadPage(); refreshBookStates() }
+                if session.isOpen {
+                    // Seed local state from session cache before the first
+                    // loadPage() so the initial render is correct. On the
+                    // first ever open the cache is empty and behaviour is
+                    // unchanged; on subsequent mode switches it's populated.
+                    likedIDs = session.cachedLikedIDs
+                    skippedIDs = session.cachedSkippedIDs
+                    seriesOrMergedIDs = session.cachedSeriesOrMergedIDs
+                    ao3PublisherIDs = session.cachedAO3PublisherIDs
+                    let t0 = Date()
+                    print("[FlashDiag] onAppear — calling loadPage() t=0ms")
+                    loadPage()
+                    print("[FlashDiag] onAppear — loadPage() done, calling refreshBookStates() t=\(Int(Date().timeIntervalSince(t0)*1000))ms")
+                    refreshBookStates()
+                    print("[FlashDiag] onAppear — refreshBookStates() Task enqueued t=\(Int(Date().timeIntervalSince(t0)*1000))ms")
+                }
                 // Register so LibraryWindowController can deliver committed filter rules
                 toolbarState.registerFilterCommitHandler { [self] rule in
                     addOrReplaceRule(rule)
@@ -491,27 +520,39 @@ struct LibraryRootView: View {
     }
 
     private func refreshBookStates() {
+        let rbs_t0 = Date()
         let all = (try? modelContext.fetch(FetchDescriptor<BookState>())) ?? []
         bookStates = all.reduce(into: [:]) { $0[$1.calibreID] = $1 }
+        print("[FlashDiag] refreshBookStates — SwiftData fetch done: \(all.count) BookState records t=\(Int(Date().timeIntervalSince(rbs_t0)*1000))ms")
         Task {
+            let task_t0 = Date()
             async let fetchedLiked = session.collectionStore?.likedIDs()
             async let fetchedSkipped = session.collectionStore?.members(of: SystemCollectionID.skipped)
             async let fetchedSeriesOrMerged = session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)
-            async let fetchedPublisherIDs: Set<Int> = Task.detached(priority: .userInitiated) {
+            async let fetchedPublisherIDs: Set<Int> = await Task.detached(priority: .userInitiated) {
                 session.library?.ao3PublisherBookIDs() ?? []
             }.value
             let currentLiked = (try? await fetchedLiked) ?? []
             let currentSkipped = Set((try? await fetchedSkipped) ?? [])
             let currentSeriesOrMerged = Set((try? await fetchedSeriesOrMerged) ?? [])
             let currentAO3PublisherIDs = await fetchedPublisherIDs
+            print("[FlashDiag] refreshBookStates — all async fetches resolved: liked=\(currentLiked.count) skipped=\(currentSkipped.count) seriesOrMerged=\(currentSeriesOrMerged.count) publisherIDs=\(currentAO3PublisherIDs.count) t=\(Int(Date().timeIntervalSince(task_t0)*1000))ms")
             await MainActor.run {
             likedIDs = currentLiked
             skippedIDs = currentSkipped
             seriesOrMergedIDs = currentSeriesOrMerged
             ao3PublisherIDs = currentAO3PublisherIDs
+            // Write back to session cache so the next mode switch gets
+            // correct data on its first render.
+            session.cachedLikedIDs = currentLiked
+            session.cachedSkippedIDs = currentSkipped
+            session.cachedSeriesOrMergedIDs = currentSeriesOrMerged
+            session.cachedAO3PublisherIDs = currentAO3PublisherIDs
             pruneSelection()
             currentPage = 0
+            print("[FlashDiag] refreshBookStates — calling second loadPage() t=\(Int(Date().timeIntervalSince(task_t0)*1000))ms")
             loadPage()
+            print("[FlashDiag] refreshBookStates — second loadPage() done t=\(Int(Date().timeIntervalSince(task_t0)*1000))ms")
             }
         }
     }
@@ -625,6 +666,12 @@ struct LibraryRootView: View {
                     .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
                 return (key, Set(session.cachedFulltextIDs(for: rule.value) ?? []))
             })
+            // Snapshot the var maps as immutable lets before any async let
+            // binding below. Swift 6 forbids capturing a var into a
+            // concurrently-executing closure — these two lines fix the
+            // data-race warnings on collectionMap and statusMap.
+            let collectionMapSnapshot = collectionMap
+            let statusMapSnapshot = statusMap
             // Run matchingIDs and all post-filter data fetches concurrently and
             // off the main actor. matchingIDs uses Task.detached internally;
             // the three membership fetches are actor-isolated but independent.
@@ -632,13 +679,13 @@ struct LibraryRootView: View {
             async let asyncResult = builder.matchingIDs(
                 expression: expression,
                 likedIDs: currentLikedIDs,
-                collectionMap: collectionMap,
-                statusMap: statusMap,
+                collectionMap: collectionMapSnapshot,
+                statusMap: statusMapSnapshot,
                 fulltextMap: fulltextMap
             )
             async let fetchedSkipped = session.collectionStore?.members(of: SystemCollectionID.skipped)
             async let fetchedSeriesOrMerged = session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)
-            async let fetchedPublisherIDs: Set<Int> = Task.detached(priority: .userInitiated) {
+            async let fetchedPublisherIDs: Set<Int> = await Task.detached(priority: .userInitiated) {
                 session.library?.ao3PublisherBookIDs() ?? []
             }.value
             let result = await asyncResult

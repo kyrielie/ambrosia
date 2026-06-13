@@ -26,7 +26,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private weak var session: LibrarySession?
     private var viewModeControl: NSSegmentedControl?
     private var sortMenuToolbarItem: NSMenuToolbarItem?
-    private var readerSidebarToolbarItem: NSToolbarItem?
     private var ficCountLabel: NSTextField?
     private var ficCountProgress: NSProgressIndicator?
     private var readCountLabel: NSTextField?
@@ -121,7 +120,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         toolbar.displayMode = .iconOnly
         window.toolbar = toolbar
         installWindowMoveResizeObservers(for: window)
-        scheduleReaderSidebarIconObservation()
         scheduleSearchTextObservation()
     }
 
@@ -131,12 +129,12 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         [.librarySidebarToggle, .libraryTitle, .librarySearch, .libraryFilter, .librarySort,
          .flexibleSpace,
          .libraryCollections, .libraryReadingGoal, .libraryExport, .libraryViewMode,
-         .libraryReaderSidebarToggle]
+         ]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.librarySidebarToggle, .librarySearch, .libraryFilter, .librarySort,
-         .libraryReaderSidebarToggle, .libraryCollections, .libraryReadingGoal, .libraryExport,
+         .libraryCollections, .libraryReadingGoal, .libraryExport,
          .libraryViewMode, .libraryTitle,
          .space, .flexibleSpace]
     }
@@ -162,13 +160,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         case .librarySidebarToggle:
             return makeIconItem(identifier, label: "Sidebar",
                                 image: "sidebar.left", action: #selector(triggerSidebarToggle))
-
-        case .libraryReaderSidebarToggle:
-            let item = makeIconItem(identifier, label: "Reader Sidebar",
-                                    image: readerSidebarIconName(),
-                                    action: #selector(triggerReaderSidebarToggle))
-            readerSidebarToolbarItem = item
-            return item
 
         case .libraryTitle:
             return makeTitleItem(identifier)
@@ -217,29 +208,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         return item
     }
 
-    private func readerSidebarIconName() -> String {
-        toolbarState?.isEmailReaderSidebarVisible == true ? "chevron.right" : "chevron.left"
-    }
-
-    private func updateReaderSidebarToolbarIcon() {
-        let label = "Reader Sidebar"
-        let cfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-        readerSidebarToolbarItem?.image = NSImage(
-            systemSymbolName: readerSidebarIconName(),
-            accessibilityDescription: label
-        )?.withSymbolConfiguration(cfg)
-    }
-
-    private func scheduleReaderSidebarIconObservation() {
-        withObservationTracking {
-            _ = toolbarState?.isEmailReaderSidebarVisible
-        } onChange: { [weak self] in
-            DispatchQueue.main.async {
-                self?.updateReaderSidebarToolbarIcon()
-                self?.scheduleReaderSidebarIconObservation()
-            }
-        }
-    }
 
     private func scheduleSearchTextObservation() {
         withObservationTracking {
@@ -677,9 +645,12 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     }
     @objc private func triggerSidebarToggle(){ toolbarState?.toggleEmailSidebar.toggle() }
     @objc private func triggerReaderSidebarToggle(){ toolbarState?.toggleEmailReaderSidebar.toggle() }
+
+    /// Called by the Show Annotations menu item (⌘B) when the library window is key.
+    /// Routes through the same toggleEmailReaderSidebar path as the menu toggle,
+    /// which drives performReaderSidebarToggle in EmailLibraryViewController.
     @objc func showEmailAnnotationSidebar(_ sender: Any?) {
-        toolbarState?.emailReaderSidebarMode = .annotations
-        toolbarState?.showEmailReaderSidebar.toggle()
+        triggerReaderSidebarToggle()
     }
     @objc private func showCollections()     { toolbarState?.showCollections    = true }
     @objc private func showReadingGoal()     { toolbarState?.showReadingGoal    = true }

@@ -32,6 +32,17 @@ final class LibrarySession {
     /// and on search input (debounced). Never recomputed on page turns.
     private(set) var totalCount: Int = 0
 
+    // MARK: - Collection membership cache
+    //
+    // Survives view mode switches (list ↔ email ↔ history). The library view
+    // initialises its local @State directly from these so the first render
+    // uses correct membership data and no flash occurs. Written back by the
+    // view after each async refresh. Cleared on library open/close.
+    var cachedLikedIDs: Set<Int> = []
+    var cachedSkippedIDs: Set<Int> = []
+    var cachedSeriesOrMergedIDs: Set<Int> = []
+    var cachedAO3PublisherIDs: Set<Int> = []
+
     /// The path of the currently open library.
     private(set) var activePath: String?
 
@@ -60,6 +71,10 @@ final class LibrarySession {
             totalCount = newLibrary.bookCount()
             ftsLibrary = CalibreFTSLibrary(libraryURL: url)
             resolvedFulltextCache.removeAll()
+            cachedLikedIDs = []
+            cachedSkippedIDs = []
+            cachedSeriesOrMergedIDs = []
+            cachedAO3PublisherIDs = []
             LibraryRegistry.shared.register(url)
             LibraryIndexManager.shared.record(url: url)
             importAO3TagSeeds()
@@ -85,6 +100,10 @@ final class LibrarySession {
         totalCount = 0
         activePath = nil
         resolvedFulltextCache.removeAll()
+        cachedLikedIDs = []
+        cachedSkippedIDs = []
+        cachedSeriesOrMergedIDs = []
+        cachedAO3PublisherIDs = []
     }
 
     // MARK: - Count refresh

@@ -55,25 +55,25 @@ struct AmbrosiaApp: App {
                 }
                 .keyboardShortcut(",", modifiers: [.command])
             }
-
+            
             CommandGroup(replacing: .newItem) {
                 Button("Open Calibre Library…") {
                     AppDelegate.shared?.chooseLibraryFolder()
                 }
                 .keyboardShortcut("o", modifiers: [.command])
-
+                
                 Menu("Recent Libraries") {
                     RecentLibrariesMenuContent(session: session)
                 }
             }
-
+            
             CommandMenu("Reader") {
                 Button("Add Annotation") {
                     NSApp.sendAction(#selector(ReaderViewController.addAnnotation(_:)),
                                      to: nil, from: nil)
                 }
                 .keyboardShortcut("d", modifiers: [.command])
-
+                
                 Button("Show Annotations") {
                     if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
                        libraryWindowController.window?.isKeyWindow == true {

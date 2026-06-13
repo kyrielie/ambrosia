@@ -63,7 +63,6 @@ final class EmailLibraryViewController: NSViewController {
     private var lastFilterToken: String? = nil
     private var lastSidebarToggle: Bool  = false
     private var lastReaderSidebarToggle: Bool = false
-    private var lastReaderSidebarShow: Bool = false
 
     private let debouncer = DebounceTimer(delay: 0.4)
     private var fullTextTask: Task<Void, Never>?
@@ -261,9 +260,13 @@ final class EmailLibraryViewController: NSViewController {
         annotationsSidebarItem.canCollapse = true
         annotationsSidebarItem.isCollapsed = true
 
+        // Fixed order: [library | annotations | reader].
+        // The annotations pane is structurally at index 1 so it always
+        // appears between the book list and the reading pane. Collapsing
+        // it causes the reader to expand left and fill the gap naturally.
         splitVC.addSplitViewItem(librarySidebarItem)
-        splitVC.addSplitViewItem(readerPaneItem)
         splitVC.addSplitViewItem(annotationsSidebarItem)
+        splitVC.addSplitViewItem(readerPaneItem)
 
         addChild(splitVC)
         splitVC.view.translatesAutoresizingMaskIntoConstraints = false
@@ -370,7 +373,6 @@ final class EmailLibraryViewController: NSViewController {
             _ = toolbarState.pendingFullTextSearch
             _ = toolbarState.toggleEmailSidebar
             _ = toolbarState.toggleEmailReaderSidebar
-            _ = toolbarState.showEmailReaderSidebar
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 self?.toolbarStateDidChange()
@@ -387,10 +389,6 @@ final class EmailLibraryViewController: NSViewController {
         if toolbarState.toggleEmailReaderSidebar != lastReaderSidebarToggle {
             lastReaderSidebarToggle = toolbarState.toggleEmailReaderSidebar
             performReaderSidebarToggle()
-        }
-        if toolbarState.showEmailReaderSidebar != lastReaderSidebarShow {
-            lastReaderSidebarShow = toolbarState.showEmailReaderSidebar
-            showReaderSidebar()
         }
         let newSearch    = toolbarState.searchText
         let newSort      = toolbarState.sortField
@@ -1117,10 +1115,12 @@ final class EmailLibraryViewController: NSViewController {
         item.minimumThickness = 420
         item.canCollapse = false
         readerPaneItem = item
-        splitVC.insertSplitViewItem(item, at: min(1, splitVC.splitViewItems.count))
+        // The reader pane is always at index 2: [library(0) | annotations(1) | reader(2)].
+        // annotationsSidebarItem is never removed, so after removing the old readerPaneItem
+        // the array always has exactly 2 items. Appending places it correctly at index 2.
+        splitVC.addSplitViewItem(item)
         oldVC?.removeFromParent()
         restoreSidebarThickness(sidebarThickness)
-        repairReaderSplitItems()
     }
 
     private func makeReaderSidebarVC() -> NSViewController {
@@ -1197,22 +1197,6 @@ final class EmailLibraryViewController: NSViewController {
         toolbarState.isEmailReaderSidebarVisible = !item.isCollapsed
     }
 
-    private func showReaderSidebar() {
-        guard let item = annotationsSidebarItem else { return }
-        guard item.isCollapsed else {
-            toolbarState.isEmailReaderSidebarVisible = true
-            repairReaderSplitItems()
-            return
-        }
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.2
-            item.isCollapsed = false
-            splitVC.splitView.layoutSubtreeIfNeeded()
-        }
-        repairReaderSplitItems()
-        toolbarState.isEmailReaderSidebarVisible = true
-    }
-
     private func currentSidebarThickness() -> CGFloat {
         guard let sidebarView = librarySidebarItem?.viewController.view,
               !sidebarView.isHidden,
@@ -1251,17 +1235,23 @@ final class EmailLibraryViewController: NSViewController {
         annotationsSidebarItem.maximumThickness = 360
         annotationsSidebarItem.preferredThicknessFraction = 0.24
 
+        // Split order is fixed: [library | annotations | reader].
+        // The divider between annotations and reader is always the last divider
+        // (splitViewItems.count - 2), whether or not library is collapsed.
+        // Position it so the annotations pane gets its desired width from the right.
         guard splitVC.view.window != nil,
-              splitVC.splitView.bounds.width > 0,
               !annotationsSidebarItem.isCollapsed,
-              let sidebarIndex = splitVC.splitViewItems.firstIndex(of: annotationsSidebarItem),
-              sidebarIndex > 0 else { return }
-        let dividerIndex = sidebarIndex - 1
+              splitVC.splitView.bounds.width > 0 else { return }
+
         let splitWidth = splitVC.splitView.bounds.width
-        guard splitWidth > 0 else { return }
-        let desiredWidth: CGFloat = 300
-        let width = min(max(desiredWidth, annotationsSidebarItem.minimumThickness), annotationsSidebarItem.maximumThickness)
-        splitVC.splitView.setPosition(max(0, splitWidth - width), ofDividerAt: dividerIndex)
+        let desiredAnnotationsWidth: CGFloat = 300
+        let annotationsWidth = min(
+            max(desiredAnnotationsWidth, annotationsSidebarItem.minimumThickness),
+            annotationsSidebarItem.maximumThickness
+        )
+        let dividerIndex = splitVC.splitViewItems.count - 2
+        guard dividerIndex >= 0 else { return }
+        splitVC.splitView.setPosition(splitWidth - annotationsWidth, ofDividerAt: dividerIndex)
     }
 }
 
