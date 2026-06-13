@@ -22,7 +22,9 @@ The app is currently aimed at local development and testing. There are no packag
 Download Ambrosia.dmg.
 
 Either use command to bypass Gatekeeper or right-click, open, allow. 
-`sudo xattr -rd com.apple.quarantine /path/to/Ambrosia.app`
+```zsh
+sudo xattr -rd com.apple.quarantine /path/to/Ambrosia.app
+```
 
 ## Screenshots
 
