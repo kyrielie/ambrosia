@@ -5,6 +5,15 @@ __pycache__
 finished/
 AGENTS.md
 
+Ambrosia.iconset
+Ambrosia.png
+Ambrosia.zip
+ao3_epub_html_reference.md
+ao3_tag_seeds.db-shm
+ao3_tag_seeds.db-wal
+ao3_tag_seeds.db
+logs.txt
+
 
 ### Xcode ###
 DerivedData/
