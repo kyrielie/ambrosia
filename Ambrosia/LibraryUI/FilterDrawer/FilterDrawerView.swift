@@ -172,7 +172,16 @@ private struct GroupSection: View {
             } else {
                 ForEach($group.rules) { $rule in
                     FilterRuleRow(rule: $rule) {
-                        withAnimation { group.rules.removeAll { $0.id == rule.id } }
+                        // BUGFIX: Removing an element while its TextField holds
+                        // first-responder causes a fatal Array out-of-bounds
+                        // subscript in SwiftUI's ForEach-derived Binding resolver
+                        // (EXC_BREAKPOINT in Array._checkSubscript during the next
+                        // layout pass).  Deferring one run-loop cycle lets SwiftUI
+                        // end the current edit transaction and drop the Binding
+                        // reference before the backing storage is mutated.
+                        DispatchQueue.main.async {
+                            withAnimation { group.rules.removeAll { $0.id == rule.id } }
+                        }
                     }
                     .padding(.horizontal, 14)
                 }
@@ -283,8 +292,19 @@ struct FilterRuleRow: View {
             TextField("Number", text: $rule.value)
                 .textFieldStyle(.roundedBorder).frame(maxWidth: .infinity)
         default:
-            TextField(placeholder, text: $rule.value)
-                .textFieldStyle(.roundedBorder).frame(maxWidth: .infinity)
+            // FilterValueTextField provides live autocomplete for .tag,
+            // .authorName, and .title via CalibreLibrary suggestion queries.
+            // Fields that don't support autocomplete (.series, .comment,
+            // .fulltext, …) fall through to the plain variant inside the
+            // component — zero overhead, no behaviour change.
+            FilterValueTextField(
+                placeholder: placeholder,
+                text: $rule.value,
+                field: rule.field,
+                library: session.library
+            ) { selected in
+                rule.value = selected
+            }
         }
     }
 
