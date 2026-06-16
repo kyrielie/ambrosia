@@ -766,6 +766,17 @@ final class EmailLibraryViewController: NSViewController {
             "hasNext": hasNextPage,
             "elapsedMS": LibraryFilterDebug.elapsedMS(since: loadStart)
         ])
+
+        // Log to activity feed — only on reset (new query), not pagination.
+        if reset {
+            let expr = toolbarState.filterExpression.hasCompleteRules
+                ? toolbarState.filterExpression : nil
+            SearchActivityLog.shared.append(
+                searchText: toolbarState.searchText,
+                filterExpression: expr,
+                resultCount: books.count
+            )
+        }
     }
 
     private func queryWithCachedFullText(_ query: SearchQuery) -> SearchQuery {

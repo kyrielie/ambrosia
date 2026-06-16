@@ -70,6 +70,10 @@
 		FA112233445566778899AABBF /* HTMLStripper.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA112233445566778899AABB /* HTMLStripper.swift */; };
 		FB223344556677889900BBCCF /* LibraryRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB223344556677889900BBCC /* LibraryRegistry.swift */; };
 		FC001122334455667788DDEE0 /* BookState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788DDEE /* BookState.swift */; };
+		P22000000000000000000001F /* CollectionActivityEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = P22000000000000000000001 /* CollectionActivityEntry.swift */; };
+		P22000000000000000000002F /* ActivityFeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = P22000000000000000000002 /* ActivityFeed.swift */; };
+		P22000000000000000000003F /* ActivityFeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = P22000000000000000000003 /* ActivityFeedView.swift */; };
+		P22000000000000000000005F /* SearchActivityLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = P22000000000000000000005 /* SearchActivityLog.swift */; };
 		FC001122334455667788DDEE1 /* CalibreBook.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788DDEF /* CalibreBook.swift */; };
 		FC001122334455667788DDEE2 /* CalibreLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788DDF0 /* CalibreLibrary.swift */; };
 		FC001122334455667788DDEE3 /* LibrarySession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788DDF1 /* LibrarySession.swift */; };
@@ -140,6 +144,10 @@
 		FB223344556677889900BBCC /* LibraryRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryRegistry.swift; sourceTree = "<group>"; };
 		FC001122334455667788DDEE /* BookState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookState.swift; sourceTree = "<group>"; };
 		FC001122334455667788DDEF /* CalibreBook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreBook.swift; sourceTree = "<group>"; };
+		P22000000000000000000001 /* CollectionActivityEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionActivityEntry.swift; sourceTree = "<group>"; };
+		P22000000000000000000002 /* ActivityFeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityFeed.swift; sourceTree = "<group>"; };
+		P22000000000000000000003 /* ActivityFeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityFeedView.swift; sourceTree = "<group>"; };
+		P22000000000000000000005 /* SearchActivityLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchActivityLog.swift; sourceTree = "<group>"; };
 		FC001122334455667788DDF0 /* CalibreLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreLibrary.swift; sourceTree = "<group>"; };
 		FC001122334455667788DDF1 /* LibrarySession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySession.swift; sourceTree = "<group>"; };
 		FD0FC465A08D4530A5C86C59 /* EPUBValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBValidator.swift; sourceTree = "<group>"; };
@@ -205,6 +213,7 @@
 				87229515E83E4AC59B9B2A95 /* ReadingGoal.swift */,
 				FC001122334455667788DDEE /* BookState.swift */,
 				FC001122334455667788DDEF /* CalibreBook.swift */,
+				P22000000000000000000001 /* CollectionActivityEntry.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -258,6 +267,9 @@
 				E200000000000004 /* SearchSuggestionsView.swift */,
 				A49EB97076C4987CADEC037C /* ReadingGoalView.swift */,
 				BE5E3EB1BF9C138C86AFF21F /* CollectionsView.swift */,
+				P22000000000000000000002 /* ActivityFeed.swift */,
+				P22000000000000000000003 /* ActivityFeedView.swift */,
+				P22000000000000000000005 /* SearchActivityLog.swift */,
 			);
 			path = LibraryUI;
 			sourceTree = "<group>";
@@ -462,6 +474,10 @@
 				E200000000000002F /* CalibreLibrarySearch.swift in Sources */,
 				E200000000000003F /* CalibreFTSLibrary.swift in Sources */,
 				E200000000000004F /* SearchSuggestionsView.swift in Sources */,
+				P22000000000000000000001F /* CollectionActivityEntry.swift in Sources */,
+				P22000000000000000000002F /* ActivityFeed.swift in Sources */,
+				P22000000000000000000003F /* ActivityFeedView.swift in Sources */,
+				P22000000000000000000005F /* SearchActivityLog.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
