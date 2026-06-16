@@ -170,18 +170,21 @@ private struct GroupSection: View {
                     .font(.caption).foregroundStyle(.tertiary)
                     .padding(.horizontal, 20).padding(.bottom, 6)
             } else {
-                ForEach($group.rules) { $rule in
-                    FilterRuleRow(rule: $rule) {
-                        // BUGFIX: Removing an element while its TextField holds
-                        // first-responder causes a fatal Array out-of-bounds
-                        // subscript in SwiftUI's ForEach-derived Binding resolver
-                        // (EXC_BREAKPOINT in Array._checkSubscript during the next
-                        // layout pass).  Deferring one run-loop cycle lets SwiftUI
-                        // end the current edit transaction and drop the Binding
-                        // reference before the backing storage is mutated.
-                        DispatchQueue.main.async {
-                            withAnimation { group.rules.removeAll { $0.id == rule.id } }
-                        }
+                // CRASH FIX: ForEach($group.rules) creates Binding<FilterRule>
+            // via array index subscript.  When the delete button is clicked,
+            // AppKit resigns the active NSTextField as part of mouse handling,
+            // which causes SwiftUI's PlatformTextFieldCoordinator to enqueue
+            // controlTextDidEndEditing.  That action is dispatched in the same
+            // button-action cycle after onDelete() has already removed the
+            // element — the index is stale and Swift traps.
+            //
+            // Fix: iterate over value-type snapshots (not $bindings) and
+            // construct each rule's Binding via UUID lookup instead of index
+            // subscript.  UUID lookup never goes out of bounds — if the rule
+            // has been removed, the Binding's getter/setter simply no-ops.
+            ForEach(group.rules) { rule in
+                    FilterRuleRow(rule: ruleBinding(for: rule.id)) {
+                        withAnimation { group.rules.removeAll { $0.id == rule.id } }
                     }
                     .padding(.horizontal, 14)
                 }
@@ -191,6 +194,24 @@ private struct GroupSection: View {
         .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 12).padding(.vertical, 4)
+    }
+
+    /// Returns a Binding<FilterRule> that reads and writes by UUID, never
+    /// by array index.  Safe to use across mutations — if the rule has been
+    /// removed by the time the Binding is read (e.g. from a deferred
+    /// controlTextDidEndEditing), the getter returns a default rule and
+    /// the setter is a no-op, avoiding any out-of-bounds trap.
+    private func ruleBinding(for id: UUID) -> Binding<FilterRule> {
+        Binding<FilterRule>(
+            get: {
+                group.rules.first { $0.id == id } ?? FilterRule()
+            },
+            set: { newValue in
+                if let idx = group.rules.firstIndex(where: { $0.id == id }) {
+                    group.rules[idx] = newValue
+                }
+            }
+        )
     }
 }
 
@@ -206,6 +227,10 @@ struct FilterRuleRow: View {
     @State private var collectionSearchText = ""
     @State private var showCollectionPicker = false
     @FocusState private var collectionSearchFocused: Bool
+    /// Captured by WindowAccessorView embedded in the row body.
+    /// Used by the delete closure to resign first-responder on the
+    /// correct window — NSApp.keyWindow is unreliable inside sheets.
+    @State private var rowWindow: NSWindow? = nil
 
     var body: some View {
         HStack(spacing: 8) {
@@ -236,6 +261,16 @@ struct FilterRuleRow: View {
         .padding(.vertical, 3).padding(.horizontal, 6)
         .background(Color(NSColor.windowBackgroundColor).opacity(0.6))
         .clipShape(RoundedRectangle(cornerRadius: 5))
+        // WindowAccessorView captures the NSWindow that hosts this row.
+        // This is necessary because FilterDrawerView is presented as a
+        // .sheet(), which runs in a child NSWindow separate from the main
+        // window.  NSApp.keyWindow may point to the wrong window.
+        .background(WindowAccessorView { win in
+            if rowWindow !== win {
+                print("[FilterRuleRow] window captured: \(win?.title ?? "nil") (\(String(describing: win)))")
+                rowWindow = win
+            }
+        })
         .onAppear {
             normalizeOperator()
         }
@@ -445,6 +480,33 @@ struct FilterRuleRow: View {
         case .comment:    return "Text in description…"
         case .fulltext:   return "Text in book…"
         default:          return "Value…"
+        }
+    }
+}
+
+// MARK: - WindowAccessorView
+//
+// Embeds a zero-size NSView in the SwiftUI hierarchy and calls back with the
+// NSWindow it belongs to whenever it changes.  Used to capture the exact
+// NSWindow hosting a SwiftUI view — necessary when the view lives inside a
+// .sheet(), which AppKit renders in a child window separate from the main window.
+
+private struct WindowAccessorView: NSViewRepresentable {
+
+    let onWindow: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        v.translatesAutoresizingMaskIntoConstraints = false
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        // updateNSView is called after the view is added to the window.
+        // Schedule on the next run loop to ensure nsView.window is populated.
+        DispatchQueue.main.async { [weak nsView] in
+            guard let nsView else { return }
+            onWindow(nsView.window)
         }
     }
 }
