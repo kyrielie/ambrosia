@@ -103,6 +103,7 @@ final class LibrarySession {
         cachedLikedIDs = []
         cachedSkippedIDs = []
         cachedSeriesOrMergedIDs = []
+        SearchActivityLog.shared.clear()
         cachedAO3PublisherIDs = []
     }
 

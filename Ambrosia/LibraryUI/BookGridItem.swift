@@ -355,6 +355,22 @@ struct LibraryRootView: View {
             "hasNext": hasNextPage,
             "elapsedMS": LibraryFilterDebug.elapsedMS(since: loadStart)
         ])
+
+        // Log to activity feed — only on page 0 (new query), not pagination.
+        // MainActor.assumeIsolated: loadPage() is always invoked from @MainActor
+        // SwiftUI update paths; the explicit annotation satisfies Swift 6 strict
+        // concurrency checking without introducing an async boundary.
+        if currentPage == 0 {
+            MainActor.assumeIsolated {
+                let expr = toolbarState.filterExpression.hasCompleteRules
+                    ? toolbarState.filterExpression : nil
+                SearchActivityLog.shared.append(
+                    searchText: toolbarState.searchText,
+                    filterExpression: expr,
+                    resultCount: books.count
+                )
+            }
+        }
     }
 
     private func rebuildItems() {

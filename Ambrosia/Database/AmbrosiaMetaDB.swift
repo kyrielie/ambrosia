@@ -590,6 +590,95 @@ actor AmbrosiaMetaDB {
         }
     }
 
+    // MARK: - Activity feed queries
+
+    /// Returns up to `limit` annotations across all books, newest first.
+    /// Uses readDB (read-only connection) — no contention with write actor.
+    func recentAnnotations(limit: Int = 250) throws -> [(annotation: Annotation, calibreID: Int)] {
+        let iso = ISO8601DateFormatter()
+        let rows = try prepare(
+            """
+            SELECT id, calibre_id, spine_index, start_char, end_char,
+                   selected_text, note, color_hex, created_at
+            FROM annotations
+            ORDER BY created_at DESC, rowid DESC
+            LIMIT ?
+            """,
+            [limit as Binding?]
+        )
+        return rows.compactMap { row in
+            guard let idString  = row[safe: 0] as? String,
+                  let id        = UUID(uuidString: idString),
+                  let calibreID = row.int(at: 1),
+                  let spine     = row.int(at: 2),
+                  let start     = row.int(at: 3),
+                  let end       = row.int(at: 4),
+                  let text      = row[safe: 5] as? String,
+                  let dateStr   = row[safe: 8] as? String,
+                  let created   = iso.date(from: dateStr)
+            else { return nil }
+
+            var annotation = Annotation(
+                spineIndex:   spine,
+                startChar:    start,
+                endChar:      end,
+                selectedText: text,
+                colorHex:     (row[safe: 7] as? String) ?? "#FFD60A"
+            )
+            annotation.id          = id
+            annotation.note        = row[safe: 6] as? String
+            annotation.createdDate = created
+            return (annotation, calibreID)
+        }
+    }
+
+    /// Returns up to `limit` collection membership events, newest first.
+    /// Uses the existing `added_at` column on `collection_members`.
+    /// Excludes automated collections whose membership is app-managed, not user-driven:
+    ///   • "Series or Merged"  (00000000-…-0007)
+    ///   • "In Progress"       (00000000-…-0005) — duplicates reading session data
+    func recentCollectionActivity(limit: Int = 250) throws -> [CollectionActivityEntry] {
+        let iso = ISO8601DateFormatter()
+        let rows = try prepare(
+            """
+            SELECT cm.collection_id, c.name, c.kind, c.is_system, cm.calibre_id, cm.added_at
+            FROM collection_members cm
+            JOIN collections c ON c.id = cm.collection_id
+            WHERE cm.collection_id NOT IN (
+                '00000000-0000-0000-0000-000000000007',
+                '00000000-0000-0000-0000-000000000005'
+            )
+            ORDER BY cm.added_at DESC, cm.rowid DESC
+            LIMIT ?
+            """,
+            [limit as Binding?]
+        )
+        return rows.compactMap { row in
+            guard let collectionID = row[safe: 0] as? String,
+                  let name         = row[safe: 1] as? String,
+                  let kind         = row[safe: 2] as? String,
+                  let calibreID    = row.int(at: 4),
+                  let dateStr      = row[safe: 5] as? String,
+                  let date         = iso.date(from: dateStr)
+            else { return nil }
+
+            let isSystem: Bool
+            if let v64 = row[safe: 3] as? Int64 { isSystem = v64 != 0 }
+            else if let v = row[safe: 3] as? Int { isSystem = v != 0 }
+            else { isSystem = false }
+
+            return CollectionActivityEntry(
+                id:             "\(collectionID)-\(calibreID)",
+                collectionID:   collectionID,
+                collectionName: name,
+                kind:           kind,
+                calibreID:      calibreID,
+                addedAt:        date,
+                isSystem:       isSystem
+            )
+        }
+    }
+
     func existingAO3MetadataIDs() throws -> Set<Int> {
         let rows = try prepare("SELECT calibre_id FROM ao3_metadata")
         return Set(rows.compactMap { $0.int(at: 0) })
