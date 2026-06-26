@@ -60,6 +60,9 @@ struct LibraryRootView: View {
     @State private var selectedIDs: Set<Int> = []
     @State private var fullTextTask: Task<Void, Never>? = nil
     @State private var filterCountTask: Task<Void, Never>? = nil
+    // §perf: prevents the onChange(reloadToken) handler from firing a duplicate
+    // loadPage() when applyFilterRules() has already called it synchronously.
+    @State private var suppressNextReloadToken = false
 
     private let pageSize = 25
     private var pageFetchLimit: Int { (pageSize * 3) + 1 }
@@ -128,6 +131,7 @@ struct LibraryRootView: View {
                 }
             }
             .onChange(of: toolbarState.activeFilterResult?.reloadToken) {
+                if suppressNextReloadToken { suppressNextReloadToken = false; return }
                 selectedIDs.removeAll()
                 currentPage = 0; loadPage()
             }
@@ -259,26 +263,88 @@ struct LibraryRootView: View {
             }
             .onChange(of: toolbarState.triggerEPUBExport) {
                 if toolbarState.triggerEPUBExport {
-                    if let libraryRoot = session.library?.root {
-                        Task {
-                            let rows = await ExportManager.buildExportRows(
-                                currentPageBooks: books,
-                                session: session,
-                                filterResult: toolbarState.activeFilterResult,
-                                toolbarState: toolbarState
-                            )
-                            let ao3Map = Dictionary(uniqueKeysWithValues: rows.compactMap { row in
-                                row.ao3.map { (row.book.id, $0) }
-                            })
-                            ExportManager.presentEPUBExportPanel(
-                                books: rows.map(\.book),
-                                libraryRoot: libraryRoot,
-                                ao3Map: ao3Map,
-                                groupBySeries: toolbarState.groupBySeries
-                            )
-                        }
-                    }
                     toolbarState.triggerEPUBExport = false
+                    guard let libraryRoot = session.library?.root else { return }
+                    Task { @MainActor in
+                        // 1. Build the full export rows (needed for count and ao3Map).
+                        let rows = await ExportManager.buildExportRows(
+                            currentPageBooks: books,
+                            session: session,
+                            filterResult: toolbarState.activeFilterResult,
+                            toolbarState: toolbarState
+                        )
+                        let count = rows.count
+                        guard count > 0 else {
+                            let a = NSAlert()
+                            a.messageText = "Nothing to Export"
+                            a.informativeText = "No matching EPUBs found with the current filter."
+                            a.runModal()
+                            return
+                        }
+
+                        // 2. Confirm with count warning.
+                        let confirm = NSAlert()
+                        confirm.messageText = "Export \(count) EPUB\(count == 1 ? "" : "s")?"
+                        confirm.informativeText = "This will copy \(count) EPUB file\(count == 1 ? "" : "s") to a folder you choose. Large libraries may take a minute."
+                        confirm.addButton(withTitle: "Export")
+                        confirm.addButton(withTitle: "Cancel")
+                        guard confirm.runModal() == .alertFirstButtonReturn else { return }
+
+                        // 3. Folder picker.
+                        let panel = NSOpenPanel()
+                        panel.canChooseFiles = false
+                        panel.canChooseDirectories = true
+                        panel.canCreateDirectories = true
+                        panel.prompt = "Choose Export Folder"
+                        guard panel.runModal() == .OK, let destination = panel.url else { return }
+
+                        // 4. Progress sheet on the library window.
+                        let progressAlert = NSAlert()
+                        progressAlert.messageText = "Exporting EPUBs…"
+                        progressAlert.informativeText = "Copying 0 of \(count)"
+                        progressAlert.addButton(withTitle: "")   // hidden — sheet has no buttons while running
+                        let progressBar = NSProgressIndicator()
+                        progressBar.style = .bar
+                        progressBar.isIndeterminate = false
+                        progressBar.minValue = 0
+                        progressBar.maxValue = Double(count)
+                        progressBar.doubleValue = 0
+                        progressBar.frame = NSRect(x: 0, y: 0, width: 300, height: 20)
+                        progressAlert.accessoryView = progressBar
+
+                        // Present as a sheet so the window is still visible behind it.
+                        var sheet: NSWindow?
+                        if let win = NSApp.keyWindow ?? NSApp.mainWindow {
+                            progressAlert.beginSheetModal(for: win) { _ in }
+                            sheet = win.attachedSheet
+                        }
+
+                        let ao3Map = Dictionary(uniqueKeysWithValues: rows.compactMap { row in
+                            row.ao3.map { (row.book.id, $0) }
+                        })
+                        let (copied, skipped) = await ExportManager.exportEPUBs(
+                            books: rows.map(\.book),
+                            libraryRoot: libraryRoot,
+                            destination: destination,
+                            ao3Map: ao3Map,
+                            groupBySeries: toolbarState.groupBySeries,
+                            progress: { done in
+                                Task { @MainActor in
+                                    progressBar.doubleValue = Double(done)
+                                    progressAlert.informativeText = "Copying \(done) of \(count)"
+                                }
+                            }
+                        )
+
+                        // 5. Dismiss progress sheet.
+                        if let win = sheet?.sheetParent ?? NSApp.keyWindow ?? NSApp.mainWindow,
+                           let attachedSheet = win.attachedSheet {
+                            win.endSheet(attachedSheet)
+                        }
+
+                        // 6. Summary.
+                        ExportManager.presentEPUBExportSummary(copied: copied, skipped: skipped)
+                    }
                 }
             }
     }
@@ -589,9 +655,9 @@ struct LibraryRootView: View {
         }
     }
 
-    private func refreshVisibilitySnapshots() {
+    private func refreshVisibilitySnapshots(resetPage: Bool = true) {
         ao3PublisherIDs = session.library?.ao3PublisherBookIDs() ?? []
-        currentPage = 0
+        if resetPage { currentPage = 0 }
         if toolbarState.filterExpression.hasCompleteRules {
             applyFilterRules()
         } else {
@@ -703,6 +769,7 @@ struct LibraryRootView: View {
             "sqlPageable": expression.isSQLPageable
         ])
         if expression.isSQLPageable {
+            suppressNextReloadToken = true   // §perf: we call loadPage() below; skip onChange duplicate
             toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
@@ -1072,7 +1139,10 @@ struct LibraryRootView: View {
             onSkip: { skip(selectedBooks(fallback: book)) },
             onMarkRead: { markRead(selectedBooks(fallback: book)) },
             onResetProgress: { resetProgress(selectedBooks(fallback: book)) },
-            onCollectionChanged: { refreshVisibilitySnapshots() },
+            onCollectionChanged: {
+                session.bumpMembershipVersion()
+                refreshVisibilitySnapshots(resetPage: false)
+            },
             selectedCount: selectedBooks(fallback: book).count,
             selectedIDs: selectedBookIDs(fallback: book)
         )
@@ -1099,8 +1169,18 @@ struct LibraryRootView: View {
     private func toggleLike(for book: CalibreBook) {
         Task {
             try? await session.collectionStore?.toggleLiked(calibreID: book.id)
-            session.bumpMembershipVersion()  // §7
-            likedIDs = (try? await session.collectionStore?.likedIDs()) ?? []
+            session.bumpMembershipVersion()
+            let refreshed = (try? await session.collectionStore?.likedIDs()) ?? []
+            await MainActor.run {
+                likedIDs = refreshed
+                session.cachedLikedIDs = refreshed
+                // Only re-run the filter when the active filter actually uses isLiked.
+                // For all other filters (and no filter) the star state is reflected
+                // immediately via likedIDs without touching currentPage or loadPage().
+                let filterUsesLiked = toolbarState.filterExpression.groups
+                    .flatMap(\.rules).contains { $0.field == .isLiked }
+                if filterUsesLiked { applyFilterRules() }
+            }
         }
     }
 
@@ -1109,8 +1189,15 @@ struct LibraryRootView: View {
         let shouldLike = !series.works.allSatisfy { likedIDs.contains($0.id) }
         Task {
             try? await session.collectionStore?.setLiked(calibreIDs: ids, liked: shouldLike)
-            session.bumpMembershipVersion()  // §7
-            likedIDs = (try? await session.collectionStore?.likedIDs()) ?? []
+            session.bumpMembershipVersion()
+            let refreshed = (try? await session.collectionStore?.likedIDs()) ?? []
+            await MainActor.run {
+                likedIDs = refreshed
+                session.cachedLikedIDs = refreshed
+                let filterUsesLiked = toolbarState.filterExpression.groups
+                    .flatMap(\.rules).contains { $0.field == .isLiked }
+                if filterUsesLiked { applyFilterRules() }
+            }
         }
     }
 

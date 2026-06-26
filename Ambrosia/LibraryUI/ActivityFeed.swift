@@ -54,7 +54,7 @@ enum ActivityFeedFilter: String, CaseIterable, Identifiable {
 /// `filterExpression` is non-nil when filter rules were applied.
 /// `searchText` is non-empty when a free-text query was committed.
 /// Both may be present simultaneously.
-struct SearchActivityEntry: Identifiable, Sendable {
+struct SearchActivityEntry: Identifiable, Sendable, Codable {
     let id: UUID
     let date: Date
     /// The raw search text that was committed (may be empty).

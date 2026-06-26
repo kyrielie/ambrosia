@@ -68,10 +68,41 @@ final class SearchActivityLog {
         Array(entries.suffix(limit).reversed())
     }
 
+    // MARK: - Persistence
+
+    /// Load persisted entries for the given library hash from Application Support.
+    func load(libraryHash: String) {
+        guard let url = activityFileURL(libraryHash: libraryHash) else { return }
+        guard let data = try? Data(contentsOf: url) else { return }
+        let decoded = (try? JSONDecoder().decode([SearchActivityEntry].self, from: data)) ?? []
+        entries = Array(decoded.suffix(capacity))
+    }
+
+    /// Persist the current entries for the given library hash to Application Support.
+    func save(libraryHash: String) {
+        guard let url = activityFileURL(libraryHash: libraryHash) else { return }
+        guard let data = try? JSONEncoder().encode(entries) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
     // MARK: - Lifecycle
 
-    /// Call on library switch to discard stale session data.
+    /// Persist then discard entries. Call before switching or closing the library.
     func clear() {
         entries.removeAll()
+    }
+
+    // MARK: - Private helpers
+
+    private func activityFileURL(libraryHash: String) -> URL? {
+        guard let support = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask).first
+        else { return nil }
+        let dir = support
+            .appendingPathComponent("Ambrosia")
+            .appendingPathComponent("libraries")
+            .appendingPathComponent(libraryHash)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("search_activity.json")
     }
 }

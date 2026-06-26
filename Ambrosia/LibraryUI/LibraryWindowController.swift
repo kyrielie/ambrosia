@@ -698,10 +698,36 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         guard let session else { return }
         if session.feedServer?.isRunning == true {
             session.stopFeedServer()
+            refreshExportMenu()
         } else {
             session.startFeedServer()
+            // Give the async Task a moment to bind before we read isRunning / config.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                self?.refreshExportMenu()
+                self?.showFeedServerStartedAlert()
+            }
         }
-        refreshExportMenu()
+    }
+
+    @MainActor
+    private func showFeedServerStartedAlert() {
+        guard let feedServer = session?.feedServer else { return }
+        let url = feedServer.localNetworkURLSync ?? "http://localhost:\(feedServer.port)"
+        let alert = NSAlert()
+        alert.messageText = "RSS Feed Server Started"
+        alert.informativeText = """
+            Connect from another device on your local network:
+
+            \(url)
+
+            The server runs while Ambrosia is open. Stop it via the Export menu.
+            """
+        alert.addButton(withTitle: "Copy URL")
+        alert.addButton(withTitle: "OK")
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(url, forType: .string)
+        }
     }
 
     @objc private func sortMenuItemSelected(_ sender: NSMenuItem) {

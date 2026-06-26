@@ -575,6 +575,10 @@ extension CalibreLibrary {
         }
 
         let where_ = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
+        // §perf: Only join `comments` when the filter references it.
+        let needsCommentJoin = filter?.groups.flatMap(\.completeRules)
+            .contains { $0.field == .comment } == true
+        let commentJoin = needsCommentJoin ? "LEFT JOIN comments c ON c.book = b.id" : ""
         let sql = """
             SELECT COUNT(DISTINCT b.id)
             FROM books b
@@ -582,7 +586,7 @@ extension CalibreLibrary {
             LEFT JOIN authors a ON a.id = bal.author
             LEFT JOIN books_series_link bsl ON bsl.book = b.id
             LEFT JOIN series s ON s.id = bsl.series
-            LEFT JOIN comments c ON c.book = b.id
+            \(commentJoin)
             \(where_)
             """
         let rows = try db.prepare(sql, args).map { $0 }
