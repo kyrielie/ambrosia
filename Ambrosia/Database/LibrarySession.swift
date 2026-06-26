@@ -97,6 +97,8 @@ final class LibrarySession {
             importAO3TagSeeds()
             startAO3Extraction()
             seedCalibreSeriesCache()
+            // Load persisted search history for this library.
+            SearchActivityLog.shared.load(libraryHash: Ambrosia.libraryHash(for: url))
             // §4: Restart feed server with new library if it was already running
             if let server = feedServer {
                 let cs = collectionStore!
@@ -120,6 +122,9 @@ final class LibrarySession {
         metaDB = nil
         collectionStore = nil
         totalCount = 0
+        if let path = activePath {
+            SearchActivityLog.shared.save(libraryHash: Ambrosia.libraryHash(for: URL(fileURLWithPath: path)))
+        }
         activePath = nil
         resolvedFulltextCache.removeAll()
         resolvedFulltextCacheOrder.removeAll()           // §7

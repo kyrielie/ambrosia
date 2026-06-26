@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import FlyingFox
 
 // MARK: - §9 / §4: LocalFeedServer
@@ -83,9 +84,31 @@ actor LocalFeedServer {
 
     // MARK: Stored state
 
-    private var config: Config
+    private(set) var config: Config
     private var serverTask: Task<Void, Never>?
     private var htmlCache: [HTMLCacheKey: String] = [:]
+
+    // MARK: - MainActor-readable mirrors
+    //
+    // `isRunning` and `localNetworkURLSync` are read synchronously from @MainActor
+    // code (toolbar menu, alert). Because LocalFeedServer is an actor those
+    // properties are normally actor-isolated. These nonisolated(unsafe) mirrors are
+    // written only from within actor methods (start/stop) so there is no data race
+    // in practice — the tiny lag between Task spawn and mirror update is fine for UI.
+
+    nonisolated(unsafe) private var _isRunning: Bool = false
+    nonisolated(unsafe) private var _port: UInt16 = Config().port
+
+    /// Synchronous read for @MainActor UI. May lag one run-loop behind actor state.
+    nonisolated var isRunning: Bool { _isRunning }
+    nonisolated var port: UInt16 { _port }
+
+    /// Synchronous URL for the started-server alert. Returns nil when not running.
+    nonisolated var localNetworkURLSync: String? {
+        guard _isRunning else { return nil }
+        if let ip = Self.localLANIP() { return "http://\(ip):\(_port)" }
+        return "http://localhost:\(_port)"
+    }
 
     // Injected at start — replaced on library switch.
     private var library: CalibreLibrary?
@@ -96,6 +119,35 @@ actor LocalFeedServer {
 
     init(config: Config = Config()) {
         self.config = config
+    }
+
+    /// Best-guess local network IPv4 address by scanning en0/en1 interfaces.
+    private static func localLANIP() -> String? {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        defer { freeifaddrs(first) }
+        var ptr: UnsafeMutablePointer<ifaddrs>? = first
+        while let current = ptr {
+            let ifa = current.pointee
+            if ifa.ifa_addr.pointee.sa_family == UInt8(AF_INET) {
+                let name = String(cString: ifa.ifa_name)
+                // en0 = Wi-Fi, en1 = Ethernet on most Macs; skip loopback (lo0).
+                if name.hasPrefix("en") {
+                    var addr = ifa.ifa_addr.pointee
+                    var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    if getnameinfo(&addr, socklen_t(ifa.ifa_addr.pointee.sa_len),
+                                   &hostname, socklen_t(NI_MAXHOST),
+                                   nil, 0, NI_NUMERICHOST) == 0 {
+                        let ip = String(cString: hostname)
+                        if !ip.isEmpty && ip != "127.0.0.1" {
+                            return ip
+                        }
+                    }
+                }
+            }
+            ptr = ifa.ifa_next
+        }
+        return nil
     }
 
     // MARK: - Lifecycle
@@ -109,13 +161,16 @@ actor LocalFeedServer {
         self.metaDB  = metaDB
         self.collectionStore = collectionStore
         self.config  = config
+        _port = config.port
         restartServerTask()
+        _isRunning = true
     }
 
     /// Stop the server and release library references.
     func stop() {
         serverTask?.cancel()
         serverTask = nil
+        _isRunning = false
         library = nil
         metaDB  = nil
         collectionStore = nil
@@ -131,8 +186,6 @@ actor LocalFeedServer {
         self.collectionStore = collectionStore
         htmlCache.removeAll()   // stale EPUB cache
     }
-
-    var isRunning: Bool { serverTask != nil }
 
     // MARK: - Private: server task
 

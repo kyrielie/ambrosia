@@ -257,7 +257,49 @@ struct ExportManager {
         }
     }
 
-    // MARK: - §3: EPUB folder export
+    // MARK: - §3: EPUB folder export (async, with progress)
+
+    /// Copy EPUBs to `destination` and call `progress` after each file.
+    /// Returns (copied, skippedTitles) when done.
+    static func exportEPUBs(
+        books: [CalibreBook],
+        libraryRoot: URL,
+        destination: URL,
+        ao3Map: [Int: AO3MetadataRecord],
+        groupBySeries: Bool,
+        seriesEntries: [Int: SeriesCacheEntry] = [:],
+        filenameIDSource: ExportFilenameIDSource = .ao3ThenCalibre,
+        progress: @Sendable @escaping (Int) -> Void
+    ) async -> (copied: Int, skipped: [String]) {
+        await Task.detached(priority: .userInitiated) {
+            var copied = 0
+            var skipped: [String] = []
+
+            for book in books {
+                guard let source = book.epubURL(libraryRoot: libraryRoot) else {
+                    skipped.append(book.displayTitle); progress(copied + skipped.count); continue
+                }
+                let targetFolder: URL
+                if groupBySeries, let entry = seriesEntries[book.id] {
+                    let folderName = CalibreBook.sanitizedForFilename(entry.seriesName)
+                    targetFolder = destination.appendingPathComponent(folderName)
+                } else {
+                    targetFolder = destination
+                }
+                try? FileManager.default.createDirectory(at: targetFolder, withIntermediateDirectories: true)
+                let filename = book.exportFilename(ao3: ao3Map[book.id], idSource: filenameIDSource)
+                let dest = uniqueDestination(for: filename, in: targetFolder)
+                do {
+                    try FileManager.default.copyItem(at: source, to: dest)
+                    copied += 1
+                } catch {
+                    skipped.append(book.displayTitle)
+                }
+                progress(copied + skipped.count)
+            }
+            return (copied, skipped)
+        }.value
+    }
 
     /// Present a folder picker and copy all matching EPUBs into the chosen directory.
     /// Files are renamed using exportFilename() (§3). Collisions are resolved with -2, -3, …
@@ -324,7 +366,9 @@ struct ExportManager {
                 }
 
                 await MainActor.run {
-                    presentEPUBExportSummary(copied: copied, skipped: skipped)
+                    let finalCopied = copied
+                    let finalSkipped = skipped
+                    presentEPUBExportSummary(copied: finalCopied, skipped: finalSkipped)
                 }
             }
         }
@@ -345,7 +389,7 @@ struct ExportManager {
     }
 
     @MainActor
-    private static func presentEPUBExportSummary(copied: Int, skipped: [String]) {
+    static func presentEPUBExportSummary(copied: Int, skipped: [String]) {
         let alert = NSAlert()
         if skipped.isEmpty {
             alert.messageText = "Export Complete"
