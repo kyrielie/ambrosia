@@ -19,6 +19,7 @@ enum FilterField: String, CaseIterable, Identifiable, Codable {
     case collection
     case status
     case fulltext
+    case crossover  // §6: new; boolean — fandoms.count > 1
 
     var id: String { rawValue }
 
@@ -40,6 +41,7 @@ enum FilterField: String, CaseIterable, Identifiable, Codable {
         case .collection:  return "Collection"
         case .status:      return "Status"
         case .fulltext:    return "Full text"
+        case .crossover:   return "Crossover"
         }
     }
 
@@ -47,7 +49,7 @@ enum FilterField: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .title, .authorName, .tag, .rating, .warning, .category, .series, .comment, .collection, .status, .fulltext:
             return true
-        case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT, .isLiked:
+        case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT, .isLiked, .crossover:
             return false
         }
     }
@@ -65,17 +67,28 @@ enum FilterField: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+// MARK: - AO3CompletionStatus
+//
+// §5: Renamed from .finished/.unfinished → .complete/.workInProgress.
+// Raw values updated to "Complete"/"Work in Progress" (UI labels).
+// init?(userValue:) accepts legacy "finished"/"unfinished" so that saved
+// FilterRule.value strings and typed search text continue to resolve correctly.
+// Does NOT touch SystemCollectionID.finished ("Finished" reading collection).
+
 enum AO3CompletionStatus: String, CaseIterable, Identifiable {
-    case finished = "Finished"
-    case unfinished = "Unfinished"
+    case complete       = "Complete"
+    case workInProgress = "Work in Progress"
 
     var id: String { rawValue }
 
     init?(userValue: String) {
         switch userValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "finished": self = .finished
-        case "unfinished": self = .unfinished
-        default: return nil
+        case "complete", "finished":
+            self = .complete
+        case "work in progress", "wip", "incomplete", "unfinished":
+            self = .workInProgress
+        default:
+            return nil
         }
     }
 }
@@ -140,7 +153,7 @@ struct FilterRule: Identifiable, Codable {
 
     var isComplete: Bool {
         switch field {
-        case .isLiked:
+        case .isLiked, .crossover:
             return true
         case .status:
             return AO3CompletionStatus(userValue: value) != nil
@@ -158,7 +171,7 @@ struct FilterRule: Identifiable, Codable {
         switch field {
         case .rating:
             return FilterOperator.ratingOperators
-        case .warning, .category, .collection, .status:
+        case .warning, .category, .collection, .status, .crossover:
             return FilterOperator.exactOperators
         case .fulltext:
             return [.contains, .notContains]

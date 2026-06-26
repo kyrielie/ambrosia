@@ -1,0 +1,401 @@
+import Foundation
+import FlyingFox
+
+// MARK: - §9 / §4: LocalFeedServer
+//
+// Lightweight RSS 2.0 + `content:encoded` feed server backed by FlyingFox.
+// Serves three routes:
+//   GET /                             — HTML index listing all available feeds
+//   GET /feed/collection/<id>.xml     — one item per book in the named collection
+//   GET /feed/search.xml              — the last-published current-search snapshot
+//
+// Lifecycle:
+//   • Started from the Preferences toggle (off by default).
+//   • Torn down and recreated on library switch (same pattern as AmbrosiaMetaDB).
+//   • The server runs inside a Task owned by this actor; cancelling that task
+//     stops FlyingFox immediately.
+//
+// Security posture:
+//   • Binds to loopback only by default (127.0.0.1:<port>).
+//   • No auth — this is a local-only feed for a single user's library.
+//   • Off by default; user must enable in Preferences.
+//
+// Thread safety:
+//   • This is a Swift actor — all mutable state is actor-isolated.
+//   • FlyingFox handlers fire on their own Tasks; they call back into this actor
+//     via async methods.
+
+// MARK: - Current-search snapshot persistence (§4 point 8)
+//
+// A tiny UserDefaults key: "feedServer.currentSearchSnapshot"
+// Stored as JSON: { "ids": [Int], "timestamp": ISO8601 String, "label": String }
+// Explicitly a snapshot — not re-queried on every poll.
+
+struct CurrentSearchSnapshot: Codable {
+    let calibreIDs: [Int]
+    let publishedAt: String     // ISO 8601
+    let label: String           // e.g. "tag: Horror" — displayed in the feed title
+}
+
+extension CurrentSearchSnapshot {
+    private static let defaultsKey = "feedServer.currentSearchSnapshot"
+
+    static func load() -> CurrentSearchSnapshot? {
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey) else { return nil }
+        return try? JSONDecoder().decode(CurrentSearchSnapshot.self, from: data)
+    }
+
+    func save() {
+        let data = try? JSONEncoder().encode(self)
+        UserDefaults.standard.set(data, forKey: CurrentSearchSnapshot.defaultsKey)
+    }
+
+    static func publish(calibreIDs: [Int], label: String) {
+        let snapshot = CurrentSearchSnapshot(
+            calibreIDs: calibreIDs,
+            publishedAt: ISO8601DateFormatter().string(from: Date()),
+            label: label.isEmpty ? "Current Search" : label
+        )
+        snapshot.save()
+    }
+}
+
+// MARK: - Per-item HTML cache (§4 point 6)
+//
+// Keyed by (calibreID, epub file mtime). Invalidated only when the EPUB file changes,
+// not on every poll. In-memory — no new SQLite table.
+
+private struct HTMLCacheKey: Hashable {
+    let calibreID: Int
+    let epubMtime: Date
+}
+
+// MARK: - LocalFeedServer actor
+
+actor LocalFeedServer {
+
+    // MARK: Configuration
+
+    struct Config {
+        var port: UInt16 = 8765
+        var bindLoopbackOnly: Bool = true
+    }
+
+    // MARK: Stored state
+
+    private var config: Config
+    private var serverTask: Task<Void, Never>?
+    private var htmlCache: [HTMLCacheKey: String] = [:]
+
+    // Injected at start — replaced on library switch.
+    private var library: CalibreLibrary?
+    private var metaDB: AmbrosiaMetaDB?
+    private var collectionStore: CollectionStore?
+
+    // MARK: - Init
+
+    init(config: Config = Config()) {
+        self.config = config
+    }
+
+    // MARK: - Lifecycle
+
+    /// Start the server. Safe to call while already running (no-op if port unchanged).
+    func start(library: CalibreLibrary,
+               metaDB: AmbrosiaMetaDB,
+               collectionStore: CollectionStore,
+               config: Config = Config()) {
+        self.library = library
+        self.metaDB  = metaDB
+        self.collectionStore = collectionStore
+        self.config  = config
+        restartServerTask()
+    }
+
+    /// Stop the server and release library references.
+    func stop() {
+        serverTask?.cancel()
+        serverTask = nil
+        library = nil
+        metaDB  = nil
+        collectionStore = nil
+        htmlCache.removeAll()
+    }
+
+    /// Replace library references on a library switch without restarting the task.
+    func updateLibrary(_ library: CalibreLibrary,
+                       metaDB: AmbrosiaMetaDB,
+                       collectionStore: CollectionStore) {
+        self.library = library
+        self.metaDB  = metaDB
+        self.collectionStore = collectionStore
+        htmlCache.removeAll()   // stale EPUB cache
+    }
+
+    var isRunning: Bool { serverTask != nil }
+
+    // MARK: - Private: server task
+
+    private func restartServerTask() {
+        serverTask?.cancel()
+        let capturedSelf = self
+        let port = config.port
+        serverTask = Task {
+            do {
+                let server = HTTPServer(port: port)
+                await server.appendRoute("GET /") { [capturedSelf] _ in
+                    try await capturedSelf.handleIndex()
+                }
+                await server.appendRoute("GET /feed/collection/*") { [capturedSelf] request in
+                    try await capturedSelf.handleCollectionFeed(request: request)
+                }
+                await server.appendRoute("GET /feed/search.xml") { [capturedSelf] _ in
+                    try await capturedSelf.handleSearchFeed()
+                }
+                try await server.run()
+            } catch {
+                if !Task.isCancelled {
+                    print("[LocalFeedServer] Server stopped with error: \(error)")
+                }
+            }
+        }
+    }
+
+    // MARK: - Route handlers
+
+    private func handleIndex() async throws -> HTTPResponse {
+        let collections = (try? await collectionStore?.collections()) ?? []
+        var links = collections.map { col in
+            "<li><a href=\"/feed/collection/\(col.id).xml\">\(htmlEscape(col.name))</a></li>"
+        }.joined(separator: "\n")
+
+        if let snapshot = CurrentSearchSnapshot.load() {
+            links += "\n<li><a href=\"/feed/search.xml\">Current Search: \(htmlEscape(snapshot.label))</a></li>"
+        }
+
+        let html = """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head><meta charset="utf-8"><title>Ambrosia Feeds</title></head>
+        <body>
+        <h1>Ambrosia Library Feeds</h1>
+        <ul>
+        \(links.isEmpty ? "<li>No collections yet.</li>" : links)
+        </ul>
+        </body>
+        </html>
+        """
+        return HTTPResponse(statusCode: .ok,
+                            headers: [.contentType: "text/html; charset=utf-8"],
+                            body: Data(html.utf8))
+    }
+
+    private func handleCollectionFeed(request: HTTPRequest) async throws -> HTTPResponse {
+        // Extract collection ID from path: /feed/collection/<id>.xml
+        let path = request.path               // e.g. "/feed/collection/abc123.xml"
+        guard path.hasPrefix("/feed/collection/") else {
+            return HTTPResponse(statusCode: .notFound)
+        }
+        let suffix = String(path.dropFirst("/feed/collection/".count))
+        let collectionID = suffix.hasSuffix(".xml")
+            ? String(suffix.dropLast(4))
+            : suffix
+
+        guard !collectionID.isEmpty else {
+            return HTTPResponse(statusCode: .notFound)
+        }
+
+        let collections = (try? await collectionStore?.collections()) ?? []
+        guard let collection = collections.first(where: { $0.id == collectionID }) else {
+            return HTTPResponse(statusCode: .notFound)
+        }
+        let memberIDs = (try? await collectionStore?.members(of: collectionID)) ?? []
+
+        let xml = try await buildRSSFeed(
+            title: "Ambrosia — \(collection.name)",
+            feedDescription: "Books in the \(collection.name) collection",
+            calibreIDs: memberIDs
+        )
+        return HTTPResponse(statusCode: .ok,
+                            headers: [.contentType: "application/rss+xml; charset=utf-8"],
+                            body: Data(xml.utf8))
+    }
+
+    private func handleSearchFeed() async throws -> HTTPResponse {
+        guard let snapshot = CurrentSearchSnapshot.load() else {
+            let empty = buildEmptyFeed(title: "Ambrosia — Current Search",
+                                       message: "No search has been published yet.")
+            return HTTPResponse(statusCode: .ok,
+                                headers: [.contentType: "application/rss+xml; charset=utf-8"],
+                                body: Data(empty.utf8))
+        }
+        let xml = try await buildRSSFeed(
+            title: "Ambrosia — \(snapshot.label)",
+            feedDescription: "Published search snapshot from \(snapshot.publishedAt)",
+            calibreIDs: snapshot.calibreIDs
+        )
+        return HTTPResponse(statusCode: .ok,
+                            headers: [.contentType: "application/rss+xml; charset=utf-8"],
+                            body: Data(xml.utf8))
+    }
+
+    // MARK: - RSS generation
+
+    private func buildRSSFeed(title: String,
+                               feedDescription: String,
+                               calibreIDs: [Int]) async throws -> String {
+        guard let library, let metaDB else { return buildEmptyFeed(title: title, message: "No library open.") }
+
+        let ao3Map = (try? await metaDB.ao3Metadata(for: calibreIDs)) ?? [:]
+
+        // Fetch book stubs from Calibre (title, series, path) — bulk, not per-book.
+        let books = library.books(ids: calibreIDs, offset: 0, limit: min(calibreIDs.count, 500),
+                                   sort: .title, ascending: true)
+
+        var items: [String] = []
+        for book in books {
+            let ao3 = ao3Map[book.id]
+            let itemXML = await buildRSSItem(book: book, ao3: ao3, library: library)
+            items.append(itemXML)
+        }
+
+        return """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+          <channel>
+            <title>\(xmlEscape(title))</title>
+            <description>\(xmlEscape(feedDescription))</description>
+            <generator>Ambrosia</generator>
+            \(items.joined(separator: "\n    "))
+          </channel>
+        </rss>
+        """
+    }
+
+    private func buildEmptyFeed(title: String, message: String) -> String {
+        """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+          <channel>
+            <title>\(xmlEscape(title))</title>
+            <description>\(xmlEscape(message))</description>
+          </channel>
+        </rss>
+        """
+    }
+
+    private func buildRSSItem(book: CalibreBook,
+                               ao3: AO3MetadataRecord?,
+                               library: CalibreLibrary) async -> String {
+        // §4 point 3: description = stripped comment + AO3 stats line
+        let strippedComment = book.comment.map { HTMLStripper.strip($0) } ?? ""
+        let statsLine = buildStatsLine(book: book, ao3: ao3)
+        let description = [strippedComment, statsLine]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+
+        // §4 point 3: content:encoded = full merged HTML from EPUB (CDATA-wrapped)
+        // §4 point 6: cache keyed by (calibreID, epub mtime)
+        let contentEncoded = await cachedMergedHTML(book: book, library: library)
+
+        // §4 point 3: pubDate = ao3 published_date if present, else Calibre pubdate
+        let pubDateStr: String
+        if let ao3Date = ao3?.publishedDate, !ao3Date.isEmpty {
+            pubDateStr = rfc822Date(from: ao3Date)
+        } else if let calibreDate = book.publishedDate {
+            pubDateStr = rfc822Date(from: calibreDate)
+        } else {
+            pubDateStr = ""
+        }
+
+        var xml = """
+            <item>
+              <title>\(xmlEscape(book.displayTitle))</title>
+              <guid isPermaLink="false">ambrosia-book-\(book.id)</guid>
+              <description>\(xmlEscape(description))</description>
+        """
+        if !pubDateStr.isEmpty {
+            xml += "\n      <pubDate>\(pubDateStr)</pubDate>"
+        }
+        if !contentEncoded.isEmpty {
+            xml += "\n      <content:encoded><![CDATA[\(contentEncoded)]]></content:encoded>"
+        }
+        xml += "\n    </item>"
+        return xml
+    }
+
+    private func buildStatsLine(book: CalibreBook, ao3: AO3MetadataRecord?) -> String {
+        var parts: [String] = []
+        if let wc = ao3?.wordCount ?? book.wordCount, wc > 0 {
+            parts.append(book.displayWordCount)
+        }
+        if let fandoms = ao3?.fandoms, !fandoms.isEmpty {
+            parts.append(fandoms.prefix(3).joined(separator: ", "))
+        }
+        if let ao3 {
+            // §5: use new case names
+            let status = ao3.isComplete
+                ? AO3CompletionStatus.complete.rawValue
+                : AO3CompletionStatus.workInProgress.rawValue
+            parts.append(status)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    // MARK: - §4 point 6: per-item HTML cache
+
+    private func cachedMergedHTML(book: CalibreBook, library: CalibreLibrary) async -> String {
+        guard let epubURL = book.epubURL(libraryRoot: library.root) else { return "" }
+        let mtime = (try? epubURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date.distantPast
+        let cacheKey = HTMLCacheKey(calibreID: book.id, epubMtime: mtime)
+
+        if let cached = htmlCache[cacheKey] { return cached }
+
+        // Parse off-actor so we don't block the server task.
+        let html = await Task.detached(priority: .utility) {
+            do {
+                var parser = EPUBParser(epubURL: epubURL)
+                try parser.parse()
+                return try parser.mergedHTML(userCSS: "")
+            } catch {
+                return ""
+            }
+        }.value
+
+        htmlCache[cacheKey] = html
+        return html
+    }
+
+    // MARK: - Helpers
+
+    private func xmlEscape(_ s: String) -> String {
+        s.replacingOccurrences(of: "&",  with: "&amp;")
+         .replacingOccurrences(of: "<",  with: "&lt;")
+         .replacingOccurrences(of: ">",  with: "&gt;")
+         .replacingOccurrences(of: "\"", with: "&quot;")
+    }
+
+    private func htmlEscape(_ s: String) -> String { xmlEscape(s) }
+
+    private func rfc822Date(from isoString: String) -> String {
+        // Try to parse as ISO 8601 date, return RFC 822 for the <pubDate> field.
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = iso.date(from: isoString) ?? {
+            iso.formatOptions = [.withInternetDateTime]
+            return iso.date(from: isoString)
+        }() ?? {
+            let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.locale = Locale(identifier: "en_US_POSIX")
+            return f.date(from: isoString)
+        }()
+        return rfc822Date(from: date ?? Date.distantPast)
+    }
+
+    private func rfc822Date(from date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f.string(from: date)
+    }
+}

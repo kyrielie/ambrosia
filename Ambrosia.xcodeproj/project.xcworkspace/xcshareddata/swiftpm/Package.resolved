@@ -1,6 +1,15 @@
 {
-  "originHash" : "210d69a15c3f677004bae309ed62a1365b33c46c67b0ed907f544d88062e50d1",
+  "originHash" : "171092ff4621e520b8c578740b21a4f2122743d683fb5f0834a8a39fac68458f",
   "pins" : [
+    {
+      "identity" : "flyingfox",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swhitty/FlyingFox.git",
+      "state" : {
+        "revision" : "de38230104cf63ef4843cb569ba11c13f8165685",
+        "version" : "0.26.2"
+      }
+    },
     {
       "identity" : "sqlite.swift",
       "kind" : "remoteSourceControl",

@@ -1,7 +1,62 @@
 import Foundation
 import AppKit
 
-/// Exports a list of `CalibreBook` structs to a CSV string and writes it to disk.
+// MARK: - §3b: Tag export options
+
+/// Controls which tag categories appear in the CSV "Tags" column.
+/// Defaults: all AO3 structural tags on; freeform off (avoids noise).
+struct TagExportOptions {
+    var includeFandom       = true
+    var includeRelationship = true
+    var includeCharacter    = true
+    var includeCategory     = true   // from Calibre tags, via AO3TagKind.classify
+    var includeRating       = true   // from Calibre tags, via AO3TagKind.classify
+    var includeWarning      = true   // from Calibre tags, via AO3TagKind.classify
+    var includeFreeform     = false  // AO3 "Additional Tags" — off by default
+}
+
+/// §3b: Assemble the tag list for one book using the selected categories.
+/// Fandoms/relationships/characters come from AO3MetadataRecord (extracted fields).
+/// Rating/warning/category come from Calibre's tag table, classified via AO3TagKind.
+/// Because §2 gives those buckets their own dedicated CSV columns, the Tags column
+/// in the CSV carries whatever subset the user has opted into — freeform by default off.
+func filteredTagsForExport(book: CalibreBook,
+                            ao3: AO3MetadataRecord?,
+                            options: TagExportOptions) -> [String] {
+    var result: [String] = []
+    if options.includeFandom,       let ao3 { result += ao3.fandoms }
+    if options.includeRelationship, let ao3 { result += ao3.relationships }
+    if options.includeCharacter,    let ao3 { result += ao3.characters }
+    if options.includeFreeform,     let ao3 { result += ao3.additionalTags }
+    // Classify Calibre tags so we can separate rating/warning/category from freeform.
+    let buckets = AO3TagBuckets.from(tags: book.tags)
+    if options.includeCategory { result += buckets.categories }
+    if options.includeRating   { result += buckets.ratings }
+    if options.includeWarning  { result += buckets.warnings }
+    return result
+}
+
+// MARK: - §2: ExportRow
+
+/// Bundles a book with its enrichment data. Assembled once at the call site,
+/// passed into CSV generation. No N+1 queries — data is bulk-fetched before building rows.
+struct ExportRow {
+    let book: CalibreBook
+    let ao3: AO3MetadataRecord?
+    let collectionNames: [String]       // all Ambrosia collections (system + user)
+    let epubAbsolutePath: String?
+}
+
+// MARK: - §3: Filename ID source
+
+enum ExportFilenameIDSource {
+    /// Use AO3 work ID when present, fall back to Calibre ID.
+    case ao3ThenCalibre
+}
+
+// MARK: - ExportManager
+
+/// Exports a list of `CalibreBook` structs to a CSV or copies their EPUBs to a folder.
 ///
 /// CSV rules (RFC 4180 compliant):
 /// - First row is the header.
@@ -10,13 +65,81 @@ import AppKit
 /// - Newlines within fields are replaced with a space (keeps rows on one line).
 struct ExportManager {
 
-    // MARK: - Public API
+    // MARK: - §2: Enriched CSV
 
-    /// Present an NSSavePanel and, if the user confirms, write the CSV to the chosen URL.
+    /// Build the enriched CSV string from an array of `ExportRow` values.
     ///
-    /// - Parameter books: The current page / filter result to export.
+    /// §2 columns (20 total):
+    /// Title, Authors, Series, Tags (§3b filtered),
+    /// Word Count (ao3 primary, book fallback), Kudos,
+    /// Published Date (ao3 primary, Calibre fallback), Updated Date,
+    /// Status (§5: Complete / Work in Progress / Unknown),
+    /// Fandoms, Relationships, Characters, Additional Tags, Category,
+    /// AO3 Collections, AO3 Series, Story URL, AO3 Work ID,
+    /// Collections (all Ambrosia), File Location.
+    static func exportToCSV(rows: [ExportRow],
+                             tagOptions: TagExportOptions = TagExportOptions()) -> String {
+        let header = [
+            "Title", "Authors", "Series", "Tags",
+            "Word Count", "Kudos",
+            "Published Date", "Updated Date",
+            "Status",
+            "Fandoms", "Relationships", "Characters", "Additional Tags", "Category",
+            "AO3 Collections", "AO3 Series", "Story URL", "AO3 Work ID",
+            "Collections",
+            "File Location"
+        ]
+
+        var csvRows: [[String]] = [header]
+
+        for r in rows {
+            let tags = filteredTagsForExport(book: r.book, ao3: r.ao3, options: tagOptions)
+            csvRows.append([
+                r.book.title,
+                r.book.authors.joined(separator: "; "),
+                r.book.displaySeries ?? "",
+                tags.joined(separator: "; "),
+                // §2a: ao3 word count is primary; Calibre custom column is fallback.
+                (r.ao3?.wordCount ?? r.book.wordCount).map(String.init) ?? "",
+                r.book.kudos.map(String.init) ?? "",
+                r.ao3?.publishedDate ?? r.book.publishedDate.map { isoDate($0) } ?? "",
+                r.ao3?.updatedDate ?? "",
+                completionLabel(r.ao3),                              // §5 naming
+                (r.ao3?.fandoms ?? []).joined(separator: "; "),
+                (r.ao3?.relationships ?? []).joined(separator: "; "),
+                (r.ao3?.characters ?? []).joined(separator: "; "),
+                (r.ao3?.additionalTags ?? []).joined(separator: "; "),
+                (r.ao3?.categories ?? []).joined(separator: "; "),
+                (r.ao3?.ao3Collections ?? []).joined(separator: "; "),
+                (r.ao3?.series ?? []).map(\.name).joined(separator: "; "),
+                r.ao3?.storyURL ?? "",
+                r.ao3?.workID ?? "",
+                r.collectionNames.joined(separator: "; "),
+                r.epubAbsolutePath ?? ""
+            ])
+        }
+
+        return csvRows.map { csvRow($0) }.joined(separator: "\r\n") + "\r\n"
+    }
+
+    // MARK: - §1: Present CSV export panel (enriched)
+
+    /// Present an NSSavePanel and, if the user confirms, fetch all matching books,
+    /// enrich with AO3 metadata and collection membership, then write the CSV.
+    ///
+    /// - Parameters:
+    ///   - currentPageBooks: The currently displayed page (used only as a fallback
+    ///     if `session` is unavailable; normally all matching books are fetched via §1).
+    ///   - session: The active LibrarySession — used to bulk-fetch AO3 metadata
+    ///     and collection membership.
+    ///   - filterResult: The active FilterResult, whose calibreIDs drive fetchAllMatchingBooks.
+    ///   - toolbarState: Provides sort/ascending and the active filter expression.
     @MainActor
-    static func presentExportPanel(books: [CalibreBook]) {
+    static func presentExportPanel(books currentPageBooks: [CalibreBook],
+                                   session: LibrarySession? = nil,
+                                   filterResult: FilterResult? = nil,
+                                   toolbarState: LibraryToolbarState? = nil,
+                                   tagOptions: TagExportOptions = TagExportOptions()) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.nameFieldStringValue = "Ambrosia Export.csv"
@@ -25,83 +148,285 @@ struct ExportManager {
 
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            let csv = exportToCSV(books: books)
-            do {
-                try csv.write(to: url, atomically: true, encoding: .utf8)
-            } catch {
-                let alert = NSAlert()
-                alert.messageText = "Export Failed"
-                alert.informativeText = error.localizedDescription
-                alert.alertStyle = .warning
-                alert.runModal()
+            Task { @MainActor in
+                let rows = await buildExportRows(
+                    currentPageBooks: currentPageBooks,
+                    session: session,
+                    filterResult: filterResult,
+                    toolbarState: toolbarState
+                )
+                let csv = exportToCSV(rows: rows, tagOptions: tagOptions)
+                do {
+                    try csv.write(to: url, atomically: true, encoding: .utf8)
+                } catch {
+                    let alert = NSAlert()
+                    alert.messageText = "Export Failed"
+                    alert.informativeText = error.localizedDescription
+                    alert.alertStyle = .warning
+                    alert.runModal()
+                }
             }
         }
     }
 
-    /// Build the CSV string from an array of `CalibreBook` values.
-    ///
-    /// Columns: Title, Authors, Series, Tags, Word Count, Kudos, Published Date.
-    /// Authors and Tags are semicolon-separated within their cells.
-    static func exportToCSV(books: [CalibreBook]) -> String {
-        let header = ["Title", "Authors", "Series", "Tags",
-                      "Word Count", "Kudos", "Published Date"]
+    // MARK: - §1: Build ExportRows (bulk fetch, no N+1)
 
-        var rows: [[String]] = [header]
-
-        let dateFormatter: DateFormatter = {
-            let f = DateFormatter()
-            f.dateFormat = "yyyy-MM-dd"
-            f.locale     = Locale(identifier: "en_US_POSIX")
-            return f
-        }()
-
-        for book in books {
-            let seriesStr: String = {
-                guard let s = book.series, !s.isEmpty else { return "" }
-                if let idx = book.seriesIndex {
-                    let idxStr = idx.truncatingRemainder(dividingBy: 1) == 0
-                        ? String(Int(idx)) : String(idx)
-                    return "\(s) #\(idxStr)"
-                }
-                return s
-            }()
-
-            let row: [String] = [
-                book.title,
-                book.authors.joined(separator: "; "),
-                seriesStr,
-                book.tags.joined(separator: "; "),
-                book.wordCount.map(String.init) ?? "",
-                book.kudos.map(String.init) ?? "",
-                book.publishedDate.map { dateFormatter.string(from: $0) } ?? "",
-            ]
-            rows.append(row)
+    @MainActor
+    static func buildExportRows(currentPageBooks: [CalibreBook],
+                                 session: LibrarySession?,
+                                 filterResult: FilterResult?,
+                                 toolbarState: LibraryToolbarState?) async -> [ExportRow] {
+        guard let session, let library = session.library else {
+            // Fallback: export current page only, no enrichment
+            return currentPageBooks.map { ExportRow(book: $0, ao3: nil, collectionNames: [], epubAbsolutePath: nil) }
         }
 
-        return rows.map { csvRow($0) }.joined(separator: "\r\n") + "\r\n"
+        // §1: Fetch all matching books (no pagination), respecting active filter + search.
+        let sort = toolbarState?.sortField ?? .title
+        let ascending = toolbarState?.ascending ?? true
+        let query: SearchQuery
+        if let text = toolbarState?.searchText, !text.isEmpty {
+            query = SearchQueryParser.parse(text)
+        } else {
+            query = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+        }
+        // SQL-backed filters (e.g. NOT-tag rules) resolve via the FilterExpression itself,
+        // not a pre-resolved ID list — calibreIDs is expected to be empty in that case.
+        // Only collapse to "no ID restriction" when there's genuinely no active filter.
+        let restrictIDs: [Int]? = filterResult.flatMap { result in
+            result.isSQLBacked ? nil : (result.calibreIDs.isEmpty ? nil : result.calibreIDs)
+        }
+        let activeFilter: FilterExpression? = {
+            guard let result = filterResult, result.isSQLBacked else { return nil }
+            return toolbarState?.filterExpression
+        }()
+
+        let books = await Task.detached(priority: .userInitiated) {
+            library.fetchAllMatchingBooks(
+                ids: restrictIDs,
+                query: query,
+                filter: activeFilter,
+                sort: sort,
+                ascending: ascending
+            )
+        }.value
+
+        // §2: Bulk-fetch AO3 metadata and collection membership (not per-book).
+        // Sequential awaits on actor-isolated methods; optional-chain async-let
+        // has implicit sendability issues in Swift 5.10+.
+        let ids = books.map(\.id)
+        let ao3Map: [Int: AO3MetadataRecord]
+        if let metaDB = session.metaDB {
+            ao3Map = (try? await metaDB.ao3Metadata(for: ids)) ?? [:]
+        } else {
+            ao3Map = [:]
+        }
+        let membershipByCollectionID: [String: Set<Int>]
+        let allCollections: [CollectionRow]
+        if let cs = session.collectionStore {
+            membershipByCollectionID = (try? await cs.membershipByCollectionID()) ?? [:]
+            allCollections = (try? await cs.collections()) ?? []
+        } else {
+            membershipByCollectionID = [:]
+            allCollections = []
+        }
+        let nameByID = Dictionary(uniqueKeysWithValues: allCollections.map { ($0.id, $0.name) })
+
+        // Invert: collectionID → Set<calibreID>  ⟹  calibreID → [collectionName]
+        // Includes ALL collections (system + user-created) per plan decision.
+        var collectionsForBook: [Int: [String]] = [:]
+        for (collectionID, memberIDs) in membershipByCollectionID {
+            guard let name = nameByID[collectionID] else { continue }
+            for calibreID in memberIDs {
+                collectionsForBook[calibreID, default: []].append(name)
+            }
+        }
+        // Sort each book's collection list for stable CSV output
+        for key in collectionsForBook.keys {
+            collectionsForBook[key]?.sort()
+        }
+
+        let libraryRoot = library.root
+
+        return books.map { book in
+            let ao3 = ao3Map[book.id]
+            let epubPath = book.epubURL(libraryRoot: libraryRoot)?.path
+            let collections = collectionsForBook[book.id] ?? []
+            return ExportRow(book: book, ao3: ao3, collectionNames: collections,
+                             epubAbsolutePath: epubPath)
+        }
+    }
+
+    // MARK: - §3: EPUB folder export
+
+    /// Present a folder picker and copy all matching EPUBs into the chosen directory.
+    /// Files are renamed using exportFilename() (§3). Collisions are resolved with -2, -3, …
+    @MainActor
+    static func presentEPUBExportPanel(books: [CalibreBook],
+                                        libraryRoot: URL,
+                                        ao3Map: [Int: AO3MetadataRecord],
+                                        groupBySeries: Bool = false,
+                                        seriesEntries: [Int: SeriesCacheEntry] = [:],
+                                        filenameIDSource: ExportFilenameIDSource = .ao3ThenCalibre) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose Folder"
+        panel.message = "Choose a folder to copy \(books.count) EPUB\(books.count == 1 ? "" : "s") into."
+
+        panel.begin { response in
+            guard response == .OK, let destination = panel.url else { return }
+            Task.detached(priority: .userInitiated) {
+                var copied = 0, skipped: [String] = []
+
+                if groupBySeries {
+                    // §3a: Series-grouped export
+                    for book in books {
+                        guard let source = book.epubURL(libraryRoot: libraryRoot) else {
+                            skipped.append(book.displayTitle); continue
+                        }
+                        let targetFolder: URL
+                        if let entry = seriesEntries[book.id] {
+                            let folderName = CalibreBook.sanitizedForFilename(entry.seriesName)
+                            targetFolder = destination.appendingPathComponent(folderName)
+                        } else {
+                            targetFolder = destination
+                        }
+                        try? FileManager.default.createDirectory(
+                            at: targetFolder, withIntermediateDirectories: true)
+                        let filename = book.exportFilename(ao3: ao3Map[book.id],
+                                                           idSource: filenameIDSource)
+                        let dest = uniqueDestination(for: filename, in: targetFolder)
+                        do {
+                            try FileManager.default.copyItem(at: source, to: dest)
+                            copied += 1
+                        } catch {
+                            skipped.append(book.displayTitle)
+                        }
+                    }
+                } else {
+                    // §3: Flat folder export
+                    for book in books {
+                        guard let source = book.epubURL(libraryRoot: libraryRoot) else {
+                            skipped.append(book.displayTitle); continue
+                        }
+                        let filename = book.exportFilename(ao3: ao3Map[book.id],
+                                                           idSource: filenameIDSource)
+                        let dest = uniqueDestination(for: filename, in: destination)
+                        do {
+                            try FileManager.default.copyItem(at: source, to: dest)
+                            copied += 1
+                        } catch {
+                            skipped.append(book.displayTitle)
+                        }
+                    }
+                }
+
+                await MainActor.run {
+                    presentEPUBExportSummary(copied: copied, skipped: skipped)
+                }
+            }
+        }
+    }
+
+    /// §3: Unique destination — appends -2, -3, … to the stem to avoid overwriting.
+    static func uniqueDestination(for filename: String, in directory: URL) -> URL {
+        let ext  = (filename as NSString).pathExtension
+        let stem = (filename as NSString).deletingPathExtension
+        var candidate = directory.appendingPathComponent(filename)
+        var n = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            let newName = ext.isEmpty ? "\(stem)-\(n)" : "\(stem)-\(n).\(ext)"
+            candidate = directory.appendingPathComponent(newName)
+            n += 1
+        }
+        return candidate
+    }
+
+    @MainActor
+    private static func presentEPUBExportSummary(copied: Int, skipped: [String]) {
+        let alert = NSAlert()
+        if skipped.isEmpty {
+            alert.messageText = "Export Complete"
+            alert.informativeText = "Copied \(copied) EPUB\(copied == 1 ? "" : "s")."
+            alert.alertStyle = .informational
+        } else {
+            alert.messageText = "Export Finished with Warnings"
+            let skippedList = skipped.prefix(10).joined(separator: "\n")
+            let more = skipped.count > 10 ? "\n… and \(skipped.count - 10) more." : ""
+            alert.informativeText = "Copied \(copied) EPUB\(copied == 1 ? "" : "s").\n\nCould not copy:\n\(skippedList)\(more)"
+            alert.alertStyle = .warning
+        }
+        alert.runModal()
     }
 
     // MARK: - Helpers
+
+    /// ISO date string for a Date value (yyyy-MM-dd).
+    private static func isoDate(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f.string(from: date)
+    }
+
+    /// §5: Map AO3 completion state to a human-readable string using the new case names.
+    private static func completionLabel(_ ao3: AO3MetadataRecord?) -> String {
+        guard let ao3 else { return "Unknown" }
+        if ao3.isComplete { return AO3CompletionStatus.complete.rawValue }
+        return AO3CompletionStatus.workInProgress.rawValue
+    }
 
     /// Encode a single CSV row. Each field is escaped individually.
     private static func csvRow(_ fields: [String]) -> String {
         fields.map { csvEscape($0) }.joined(separator: ",")
     }
 
-    /// Escape a single field per RFC 4180:
-    /// - Replace internal newlines with a space (keeps rows on one line in most apps).
-    /// - Wrap in quotes if the field contains a comma, quote, or newline.
-    /// - Double any internal quotes.
+    /// Escape a single field per RFC 4180.
     private static func csvEscape(_ field: String) -> String {
-        // Normalise embedded newlines to a space so the file stays one-row-per-book
-        let sanitised = field.replacingOccurrences(of: "\r\n", with: " ")
-                             .replacingOccurrences(of: "\n",   with: " ")
-                             .replacingOccurrences(of: "\r",   with: " ")
+        let sanitised = field
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n",   with: " ")
+            .replacingOccurrences(of: "\r",   with: " ")
         let needsQuoting = sanitised.contains(",") || sanitised.contains("\"")
         if needsQuoting {
             let escaped = sanitised.replacingOccurrences(of: "\"", with: "\"\"")
             return "\"\(escaped)\""
         }
         return sanitised
+    }
+}
+
+// MARK: - §3: CalibreBook filename helpers
+
+extension CalibreBook {
+
+    /// §3: Produce a filesystem-safe EPUB filename.
+    /// Format: "<sanitised-title>-<id>.epub"
+    /// ID: AO3 work ID when available; Calibre ID as fallback.
+    func exportFilename(ao3: AO3MetadataRecord?,
+                        idSource: ExportFilenameIDSource = .ao3ThenCalibre) -> String {
+        let base = Self.sanitizedForFilename(displayTitle)
+        let suffix = ao3?.workID ?? String(id)
+        return "\(base)-\(suffix).epub"
+    }
+
+    /// Strip characters that are illegal or problematic in macOS filenames.
+    /// Truncates to 120 characters to stay well under HFS+ limits.
+    static func sanitizedForFilename(_ raw: String) -> String {
+        // Characters forbidden in macOS filenames (HFS+): / and NUL.
+        // We also strip characters that cause problems cross-platform or in shells.
+        let invalid = CharacterSet(charactersIn: "/:\\?%*|\"<>\0")
+        let cleaned = raw
+            .components(separatedBy: invalid)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // Collapse runs of whitespace
+        let collapsed = cleaned.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        // Truncate — String.prefix returns a Substring; convert to String
+        return String(collapsed.prefix(120))
     }
 }

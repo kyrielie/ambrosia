@@ -252,6 +252,7 @@ struct CollectionsView: View {
         let ids = selectedCalibreIDs
         Task {
             _ = try? await session.collectionStore?.createCollection(name: trimmed, calibreIDs: ids)
+            session.bumpMembershipVersion()  // §7
             await reload()
             isCreating = false
             newName = ""
@@ -277,6 +278,7 @@ struct CollectionsView: View {
             } else {
                 try? await session.collectionStore?.bulkAdd(calibreIDs: selectedCalibreIDs, to: collection.id)
             }
+            session.bumpMembershipVersion()  // §7
             await reload()
         }
     }
@@ -412,6 +414,7 @@ struct CollectionSearchPickerView: View {
             } else {
                 try? await session.collectionStore?.bulkAdd(calibreIDs: calibreIDs, to: collection.id)
             }
+            session.bumpMembershipVersion()  // §7
             await reload()
             await onChange?()
             onComplete?()
@@ -421,6 +424,7 @@ struct CollectionSearchPickerView: View {
     private func createCollection(named name: String) {
         Task {
             _ = try? await session.collectionStore?.createCollection(name: name, calibreIDs: calibreIDs)
+            session.bumpMembershipVersion()  // §7
             await reload()
             await onChange?()
             onComplete?()

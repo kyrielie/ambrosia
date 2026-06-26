@@ -248,8 +248,37 @@ struct LibraryRootView: View {
             }
             .onChange(of: toolbarState.triggerExport) {
                 if toolbarState.triggerExport {
-                    ExportManager.presentExportPanel(books: books)
+                    ExportManager.presentExportPanel(         // §1
+                        books: books,
+                        session: session,
+                        filterResult: toolbarState.activeFilterResult,
+                        toolbarState: toolbarState
+                    )
                     toolbarState.triggerExport = false
+                }
+            }
+            .onChange(of: toolbarState.triggerEPUBExport) {
+                if toolbarState.triggerEPUBExport {
+                    if let libraryRoot = session.library?.root {
+                        Task {
+                            let rows = await ExportManager.buildExportRows(
+                                currentPageBooks: books,
+                                session: session,
+                                filterResult: toolbarState.activeFilterResult,
+                                toolbarState: toolbarState
+                            )
+                            let ao3Map = Dictionary(uniqueKeysWithValues: rows.compactMap { row in
+                                row.ao3.map { (row.book.id, $0) }
+                            })
+                            ExportManager.presentEPUBExportPanel(
+                                books: rows.map(\.book),
+                                libraryRoot: libraryRoot,
+                                ao3Map: ao3Map,
+                                groupBySeries: toolbarState.groupBySeries
+                            )
+                        }
+                    }
+                    toolbarState.triggerEPUBExport = false
                 }
             }
     }
@@ -288,7 +317,42 @@ struct LibraryRootView: View {
             return
         }
 
-        if let result = toolbarState.activeFilterResult, result.isSQLBacked {
+        if toolbarState.sortField == .wordCount {
+            // §2a fix (2): word count can't be sorted by a single SQL ORDER BY —
+            // see orderByClause(.wordCount) and wordCountSortedPage(...) for why.
+            // Resolve the same three filter states as below, but route through the
+            // full-set in-memory sort instead of an offset/limit SQL query.
+            let restrictIDs: [Int]?
+            let filterForSQL: FilterExpression?
+            if let result = toolbarState.activeFilterResult, result.isSQLBacked {
+                restrictIDs = nil
+                filterForSQL = toolbarState.filterExpression
+            } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
+                restrictIDs = visibleIDs(intersect(result.calibreIDs, with: query.ftsMatchedIDs))
+                filterForSQL = nil
+            } else if toolbarState.activeFilterResult != nil {
+                LibraryFilterDebug.log("loadPage.start", [
+                    "surface": "list", "mode": "emptyExplicitIDs.wordCount", "page": currentPage
+                ])
+                books = []; items = []; hasNextPage = false
+                rebuildItems(); loadAO3MetadataForCurrentPage(); pruneSelection()
+                return
+            } else {
+                restrictIDs = nil
+                filterForSQL = nil
+            }
+            LibraryFilterDebug.log("loadPage.start", [
+                "surface": "list", "mode": "wordCountSorted", "page": currentPage,
+                "query": LibraryFilterDebug.summary(query: query)
+            ])
+            let (page, hasMore) = library.wordCountSortedPage(
+                offset: currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
+                query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                metaDBPath: session.metaDB?.databaseURL.path
+            )
+            books = page
+            hasNextPage = hasMore
+        } else if let result = toolbarState.activeFilterResult, result.isSQLBacked {
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "list",
                 "mode": "sqlPagedDeferredCount",
@@ -652,6 +716,22 @@ struct LibraryRootView: View {
             ])
             return
         }
+        // §7: Check the LRU cache before kicking off the expensive Task pipeline.
+        if let cached = session.cachedFilterResult(for: expression) {
+            toolbarState.activeFilterResult = cached
+            toolbarState.clearPendingFullTextSearch()
+            toolbarState.cancelLibraryFilterApplication()
+            selectedIDs.removeAll()
+            currentPage = 0
+            loadPage()
+            LibraryFilterDebug.log("applyFilter.end", [
+                "surface": "list",
+                "mode": "cached",
+                "ids": cached.calibreIDs.count,
+                "elapsedMS": LibraryFilterDebug.elapsedMS(since: applyStart)
+            ])
+            return
+        }
         let token = toolbarState.beginLibraryFilterApplication()
         let fulltextRules = expression.groups.flatMap(\.rules)
             .filter { $0.field == .fulltext && $0.isComplete }
@@ -691,13 +771,35 @@ struct LibraryRootView: View {
             // Run matchingIDs and all post-filter data fetches concurrently and
             // off the main actor. matchingIDs uses Task.detached internally;
             // the three membership fetches are actor-isolated but independent.
+            // §6: Crossover map — IDs with fandoms.count > 1 in ao3_metadata
+            var crossoverMap: Set<Int> = []
+            let needsCrossover = expression.groups.flatMap(\.rules).contains { $0.field == .crossover }
+            if needsCrossover, let metaDBPath = session.metaDB?.databaseURL.path {
+                crossoverMap = await Task.detached(priority: .userInitiated) {
+                    library.crossoverBookIDs(metaDBPath: metaDBPath)
+                }.value
+            }
+            // §2a: Word-count fallback from ao3_metadata when no custom column configured
+            var wordCountFallbackMap: [Int: Int]? = nil
+            let needsWordCount = expression.groups.flatMap(\.rules).contains {
+                $0.field == .wordCountGT || $0.field == .wordCountLT
+            }
+            if needsWordCount && CustomColumnConfig.shared.wordCountLabel == nil {
+                if let metaDBPath = session.metaDB?.databaseURL.path {
+                    wordCountFallbackMap = await Task.detached(priority: .userInitiated) {
+                        library.ao3WordCounts(metaDBPath: metaDBPath, ids: library.allBookIDs())
+                    }.value
+                }
+            }
             let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary)
             async let asyncResult = builder.matchingIDs(
                 expression: expression,
                 likedIDs: currentLikedIDs,
                 collectionMap: collectionMapSnapshot,
                 statusMap: statusMapSnapshot,
-                fulltextMap: fulltextMap
+                fulltextMap: fulltextMap,
+                crossoverMap: crossoverMap,              // §6
+                wordCountFallbackMap: wordCountFallbackMap  // §2a
             )
             async let fetchedSkipped = session.collectionStore?.members(of: SystemCollectionID.skipped)
             async let fetchedSeriesOrMerged = session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)
@@ -715,10 +817,12 @@ struct LibraryRootView: View {
                 .filter { !prefs.hideNonAO3PublisherBooks || publisherIDs.contains($0) }
             guard toolbarState.libraryFilterApplicationToken == token else { return }
             defer { toolbarState.finishLibraryFilterApplication(token: token) }
-            toolbarState.activeFilterResult = FilterResult(
+            let cacheableResult = FilterResult(
                 calibreIDs: visibleFilteredIDs,
                 totalCount: visibleFilteredIDs.count
             )
+            toolbarState.activeFilterResult = cacheableResult
+            session.rememberFilterResult(cacheableResult, for: expression)  // §7
             toolbarState.clearPendingFullTextSearch()
             likedIDs = currentLikedIDs
             skippedIDs = currentSkipped
@@ -995,6 +1099,7 @@ struct LibraryRootView: View {
     private func toggleLike(for book: CalibreBook) {
         Task {
             try? await session.collectionStore?.toggleLiked(calibreID: book.id)
+            session.bumpMembershipVersion()  // §7
             likedIDs = (try? await session.collectionStore?.likedIDs()) ?? []
         }
     }
@@ -1004,6 +1109,7 @@ struct LibraryRootView: View {
         let shouldLike = !series.works.allSatisfy { likedIDs.contains($0.id) }
         Task {
             try? await session.collectionStore?.setLiked(calibreIDs: ids, liked: shouldLike)
+            session.bumpMembershipVersion()  // §7
             likedIDs = (try? await session.collectionStore?.likedIDs()) ?? []
         }
     }
@@ -1046,6 +1152,7 @@ struct LibraryRootView: View {
         let ids = books.map(\.id)
         Task {
             try? await session.collectionStore?.setLiked(calibreIDs: ids, liked: liked)
+            session.bumpMembershipVersion()  // §7
             likedIDs = (try? await session.collectionStore?.likedIDs()) ?? []
         }
     }
@@ -1054,6 +1161,7 @@ struct LibraryRootView: View {
         let ids = books.map(\.id)
         Task {
             try? await session.collectionStore?.bulkAdd(calibreIDs: ids, to: SystemCollectionID.readLater)
+            session.bumpMembershipVersion()  // §7
         }
     }
 
@@ -1063,6 +1171,7 @@ struct LibraryRootView: View {
                 try? await session.collectionStore?.skipBook(calibreID: book.id)
                 skippedIDs.insert(book.id)
             }
+            session.bumpMembershipVersion()  // §7
             applyFilterRules()
         }
     }
@@ -1088,6 +1197,7 @@ struct LibraryRootView: View {
                     shouldBeMember: false
                 )
             }
+            session.bumpMembershipVersion()  // §7
         }
     }
 
@@ -1112,6 +1222,7 @@ struct LibraryRootView: View {
                     shouldBeMember: false
                 )
             }
+            session.bumpMembershipVersion()  // §7
         }
     }
 

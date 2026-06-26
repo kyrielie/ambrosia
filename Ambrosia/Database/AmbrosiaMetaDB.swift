@@ -692,13 +692,13 @@ actor AmbrosiaMetaDB {
     func ao3CompletionStatusIDs(_ status: AO3CompletionStatus) throws -> Set<Int> {
         let predicate: String
         switch status {
-        case .finished:
+        case .complete:             // §5: was .finished
             predicate = """
             chapter_current IS NOT NULL
               AND chapter_total IS NOT NULL
               AND chapter_current = chapter_total
             """
-        case .unfinished:
+        case .workInProgress:       // §5: was .unfinished
             predicate = """
             chapter_current IS NOT NULL
               AND (chapter_total IS NULL OR chapter_current != chapter_total)
