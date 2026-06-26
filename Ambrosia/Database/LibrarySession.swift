@@ -28,6 +28,9 @@ final class LibrarySession {
     /// Typed collection operations for the active library.
     private(set) var collectionStore: CollectionStore?
 
+    // §4: Local RSS feed server. nil when disabled in Preferences (off by default).
+    private(set) var feedServer: LocalFeedServer?
+
     /// Cached total book count from metadata.db. Refreshed on library open
     /// and on search input (debounced). Never recomputed on page turns.
     private(set) var totalCount: Int = 0
@@ -56,6 +59,17 @@ final class LibrarySession {
     private var resolvedFulltextCache: [String: [Int]] = [:]
     private let resolvedFulltextCacheLimit = 12
 
+    // §7: True LRU cache for FilterResult (limit 8).
+    var filterResultCache = LRUCache<FilterResultCacheKey, FilterResult>(limit: 8)
+
+    // §7: Membership version — bump after any liked/skipped/status change to
+    // invalidate stale filter-result cache entries keyed on an older version.
+    var membershipVersion: Int = 0
+
+    // §7: Insertion-order tracker for correct LRU eviction of the fulltext cache.
+    // The old implementation used .keys.first which picks an arbitrary hash bucket.
+    var resolvedFulltextCacheOrder: [String] = []
+
     // MARK: - Opening / closing
 
     /// Open a Calibre library at the given URL.
@@ -71,6 +85,9 @@ final class LibrarySession {
             totalCount = newLibrary.bookCount()
             ftsLibrary = CalibreFTSLibrary(libraryURL: url)
             resolvedFulltextCache.removeAll()
+            resolvedFulltextCacheOrder.removeAll()           // §7
+            filterResultCache.removeAll()                    // §7
+            membershipVersion = 0                            // §7
             cachedLikedIDs = []
             cachedSkippedIDs = []
             cachedSeriesOrMergedIDs = []
@@ -80,6 +97,11 @@ final class LibrarySession {
             importAO3TagSeeds()
             startAO3Extraction()
             seedCalibreSeriesCache()
+            // §4: Restart feed server with new library if it was already running
+            if let server = feedServer {
+                let cs = collectionStore!
+                Task { await server.updateLibrary(newLibrary, metaDB: newMetaDB, collectionStore: cs) }
+            }
             print("[LibrarySession] Opened \(url.lastPathComponent) — \(totalCount) books")
         } catch {
             lastError = "Could not open library: \(error.localizedDescription)"
@@ -100,11 +122,15 @@ final class LibrarySession {
         totalCount = 0
         activePath = nil
         resolvedFulltextCache.removeAll()
+        resolvedFulltextCacheOrder.removeAll()           // §7
+        filterResultCache.removeAll()                    // §7
+        membershipVersion = 0                            // §7
         cachedLikedIDs = []
         cachedSkippedIDs = []
         cachedSeriesOrMergedIDs = []
         SearchActivityLog.shared.clear()
         cachedAO3PublisherIDs = []
+        stopFeedServer()                                     // §4
     }
 
     // MARK: - Count refresh
@@ -209,11 +235,65 @@ final class LibrarySession {
     }
 
     private func rememberResolvedFulltext(ids: [Int], key: String) {
-        resolvedFulltextCache[key] = ids
-        if resolvedFulltextCache.count > resolvedFulltextCacheLimit,
-           let firstKey = resolvedFulltextCache.keys.first {
-            resolvedFulltextCache.removeValue(forKey: firstKey)
+        // §7: Insertion-order LRU eviction — evicts the oldest entry, not a random
+        // hash-bucket occupant (which is what .keys.first would give us).
+        if resolvedFulltextCache[key] != nil {
+            // Refresh: move to back of order list so it is not evicted next.
+            resolvedFulltextCacheOrder.removeAll { $0 == key }
+        } else if resolvedFulltextCache.count >= resolvedFulltextCacheLimit {
+            // Evict least-recently-used (front of insertion-order list).
+            if let oldest = resolvedFulltextCacheOrder.first {
+                resolvedFulltextCache.removeValue(forKey: oldest)
+                resolvedFulltextCacheOrder.removeFirst()
+            }
         }
+        resolvedFulltextCache[key] = ids
+        resolvedFulltextCacheOrder.append(key)
+    }
+
+    // MARK: - §7: Filter result cache
+
+    /// Look up a cached FilterResult. Returns nil on cache miss.
+    func cachedFilterResult(for expression: FilterExpression) -> FilterResult? {
+        let key = FilterResultCacheKey(expression: expression,
+                                       membershipVersion: membershipVersion)
+        return filterResultCache[key]
+    }
+
+    /// Store a FilterResult in the LRU cache.
+    func rememberFilterResult(_ result: FilterResult, for expression: FilterExpression) {
+        let key = FilterResultCacheKey(expression: expression,
+                                       membershipVersion: membershipVersion)
+        filterResultCache.set(result, for: key)
+    }
+
+    /// Increment the membership version, invalidating all cached filter results
+    /// that depend on collection / liked / status membership data.
+    /// Call after: liked/skipped toggle, AO3 extraction batch flush, series sync.
+    func bumpMembershipVersion() {
+        membershipVersion &+= 1   // wrapping add — no overflow crash
+    }
+
+    // MARK: - §4: Feed server lifecycle
+
+    func startFeedServer(port: UInt16 = 8765) {
+        guard let library, let metaDB, let collectionStore else { return }
+        if feedServer == nil { feedServer = LocalFeedServer() }
+        let server = feedServer!
+        Task {
+            await server.start(
+                library: library,
+                metaDB: metaDB,
+                collectionStore: collectionStore,
+                config: LocalFeedServer.Config(port: port)
+            )
+        }
+    }
+
+    func stopFeedServer() {
+        let server = feedServer
+        feedServer = nil
+        Task { await server?.stop() }
     }
 
     private func fulltextCacheKey(_ phrase: String) -> String {

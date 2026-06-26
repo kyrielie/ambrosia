@@ -692,8 +692,10 @@ final class EmailBookCellView: NSTableCellView {
 
     private static func completionStatus(for metadata: AO3MetadataRecord?) -> String? {
         guard let current = metadata?.chapterCurrent else { return nil }
-        guard let total = metadata?.chapterTotal else { return "Unfinished" }
-        return current == total ? "Finished" : "Unfinished"
+        guard let total = metadata?.chapterTotal else { return AO3CompletionStatus.workInProgress.rawValue }
+        return current == total
+            ? AO3CompletionStatus.complete.rawValue         // §5
+            : AO3CompletionStatus.workInProgress.rawValue   // §5
     }
 
     private static func formatWordCount(_ count: Int) -> String {

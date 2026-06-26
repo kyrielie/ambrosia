@@ -28,6 +28,7 @@ final class LibraryToolbarState {
     var showCollections:    Bool = false
     var showReadingGoal:    Bool = false
     var triggerExport:      Bool = false
+    var triggerEPUBExport:  Bool = false
     var toggleEmailSidebar: Bool = false
     var toggleEmailReaderSidebar: Bool = false
     var showEmailReaderSidebar: Bool = false

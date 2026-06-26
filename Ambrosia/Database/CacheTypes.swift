@@ -1,0 +1,63 @@
+import Foundation
+
+// MARK: - LRU cache key
+
+/// Cache key for a FilterResult: the serialised expression + membership version.
+/// Two calls with identical filter rules but different membership states (e.g. the user
+/// just liked a book) must NOT share a cache entry.
+struct FilterResultCacheKey: Hashable {
+    let expressionDigest: String    // serialised rule descriptions (stable, cheap)
+    let membershipVersion: Int
+}
+
+extension FilterResultCacheKey {
+    init(expression: FilterExpression, membershipVersion: Int) {
+        // Stable digest: sorted rule descriptions joined with "|"
+        let digest = expression.groups
+            .flatMap(\.completeRules)
+            .map { "\($0.field.rawValue).\($0.op.rawValue).\($0.value)" }
+            .sorted()
+            .joined(separator: "|")
+        self.expressionDigest = digest
+        self.membershipVersion = membershipVersion
+    }
+}
+
+// MARK: - LRU container
+
+/// A simple bounded LRU dictionary. The oldest-inserted entry is evicted when `limit` is reached.
+/// Not thread-safe — must be accessed from a single actor (MainActor via LibrarySession).
+struct LRUCache<Key: Hashable, Value> {
+    private(set) var limit: Int
+    private var store: [Key: Value] = [:]
+    private var order: [Key] = []        // front = oldest, back = most recently inserted
+
+    init(limit: Int) {
+        precondition(limit > 0)
+        self.limit = limit
+    }
+
+    subscript(key: Key) -> Value? {
+        get { store[key] }
+    }
+
+    mutating func set(_ value: Value, for key: Key) {
+        if store[key] != nil {
+            // Refresh: remove from current position, append to back
+            order.removeAll { $0 == key }
+        } else if store.count >= limit, let oldest = order.first {
+            // Evict LRU
+            store.removeValue(forKey: oldest)
+            order.removeFirst()
+        }
+        store[key] = value
+        order.append(key)
+    }
+
+    mutating func removeAll() {
+        store.removeAll()
+        order.removeAll()
+    }
+
+    var count: Int { store.count }
+}

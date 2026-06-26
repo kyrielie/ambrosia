@@ -684,6 +684,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                         shouldBeMember: true
                     )
                 }
+                await MainActor.run {
+                    AppDelegate.shared?.session.bumpMembershipVersion()  // §7
+                }
             } catch {
                 print("[ReadingHistory] \(final ? "Final update" : "Update") failed: \(error)")
             }

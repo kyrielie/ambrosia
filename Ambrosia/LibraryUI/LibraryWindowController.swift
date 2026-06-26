@@ -26,6 +26,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private weak var session: LibrarySession?
     private var viewModeControl: NSSegmentedControl?
     private var sortMenuToolbarItem: NSMenuToolbarItem?
+    private var exportMenuToolbarItem: NSMenuToolbarItem?
     private var ficCountLabel: NSTextField?
     private var ficCountProgress: NSProgressIndicator?
     private var readCountLabel: NSTextField?
@@ -181,8 +182,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
                                 image: "target", action: #selector(showReadingGoal))
 
         case .libraryExport:
-            return makeIconItem(identifier, label: "Export",
-                                image: "arrow.up.doc", action: #selector(triggerExport))
+            return makeExportMenuItem(identifier)
 
         case .libraryViewMode:
             return makeViewModeItem(identifier)
@@ -222,6 +222,44 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
                 self.scheduleSearchTextObservation()
             }
         }
+    }
+
+    private func makeExportMenuItem(_ identifier: NSToolbarItem.Identifier) -> NSMenuToolbarItem {
+        let item = NSMenuToolbarItem(itemIdentifier: identifier)
+        item.label   = "Export"
+        item.toolTip = "Export library"
+        let cfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        item.image = NSImage(systemSymbolName: "arrow.up.doc",
+                             accessibilityDescription: "Export")?.withSymbolConfiguration(cfg)
+        item.showsIndicator = true
+        item.menu = makeExportMenu()
+        exportMenuToolbarItem = item
+        return item
+    }
+
+    private func makeExportMenu() -> NSMenu {
+        let menu = NSMenu()
+
+        let csvItem = NSMenuItem(title: "Export CSV…", action: #selector(triggerCSVExport), keyEquivalent: "")
+        csvItem.target = self
+        menu.addItem(csvItem)
+
+        let epubItem = NSMenuItem(title: "Export EPUBs…", action: #selector(triggerEPUBExport), keyEquivalent: "")
+        epubItem.target = self
+        menu.addItem(epubItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let feedTitle = (session?.feedServer?.isRunning == true) ? "Stop RSS Feed Server" : "Start RSS Feed Server"
+        let feedItem = NSMenuItem(title: feedTitle, action: #selector(triggerRSSFeed), keyEquivalent: "")
+        feedItem.target = self
+        menu.addItem(feedItem)
+
+        return menu
+    }
+
+    private func refreshExportMenu() {
+        exportMenuToolbarItem?.menu = makeExportMenu()
     }
 
     private func makeSortItem(_ identifier: NSToolbarItem.Identifier) -> NSMenuToolbarItem {
@@ -654,7 +692,17 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     }
     @objc private func showCollections()     { toolbarState?.showCollections    = true }
     @objc private func showReadingGoal()     { toolbarState?.showReadingGoal    = true }
-    @objc private func triggerExport()       { toolbarState?.triggerExport      = true }
+    @objc private func triggerCSVExport()    { toolbarState?.triggerExport      = true }
+    @objc private func triggerEPUBExport()   { toolbarState?.triggerEPUBExport  = true }
+    @objc private func triggerRSSFeed() {
+        guard let session else { return }
+        if session.feedServer?.isRunning == true {
+            session.stopFeedServer()
+        } else {
+            session.startFeedServer()
+        }
+        refreshExportMenu()
+    }
 
     @objc private func sortMenuItemSelected(_ sender: NSMenuItem) {
         guard let field = sender.representedObject as? SortField else { return }

@@ -84,7 +84,7 @@ extension FilterExpression {
         guard !completeRules.isEmpty else { return false }
         return completeRules.allSatisfy { rule in
             switch rule.field {
-            case .collection, .isLiked, .status, .fulltext:
+            case .collection, .isLiked, .status, .fulltext, .crossover:
                 return false
             default:
                 return true
@@ -122,40 +122,39 @@ struct FilterBuilder {
 
     /// Async variant — dispatches all CPU-bound set intersection and sorting work to a
     /// background priority detached task so the main actor is never blocked.
-    ///
-    /// Call sites inside `Task {}` (which inherits @MainActor) must use this overload;
-    /// the synchronous overload below is retained for call sites that already run off-actor.
     func matchingIDs(
         expression: FilterExpression,
         likedIDs: Set<Int>,
         collectionMap: [String: Set<Int>] = [:],
         statusMap: [AO3CompletionStatus: Set<Int>] = [:],
-        fulltextMap: [String: Set<Int>] = [:]
+        fulltextMap: [String: Set<Int>] = [:],
+        crossoverMap: Set<Int> = [],
+        wordCountFallbackMap: [Int: Int]? = nil
     ) async -> FilterResult {
-        // Capture value types so the detached task needs no references to actor-isolated state.
         let lib   = library
         let ftLib = ftsLibrary
         return await Task.detached(priority: .userInitiated) {
             let builder = FilterBuilder(library: lib, ftsLibrary: ftLib)
             return builder.matchingIDs(
-                expression:    expression,
-                likedIDs:      likedIDs,
-                collectionMap: collectionMap,
-                statusMap:     statusMap,
-                fulltextMap:   fulltextMap
+                expression:          expression,
+                likedIDs:            likedIDs,
+                collectionMap:       collectionMap,
+                statusMap:           statusMap,
+                fulltextMap:         fulltextMap,
+                crossoverMap:        crossoverMap,
+                wordCountFallbackMap: wordCountFallbackMap
             )
         }.value
     }
 
     /// Evaluate a full FilterExpression (multiple groups joined by groupConjunction).
-    ///
-    /// - Parameter collectionMap: name → Set<calibreID> for all known Collections.
-    ///   Populated from SwiftData by the caller since FilterBuilder has no ModelContext.
     func matchingIDs(expression: FilterExpression,
                      likedIDs: Set<Int>,
                      collectionMap: [String: Set<Int>] = [:],
                      statusMap: [AO3CompletionStatus: Set<Int>] = [:],
-                     fulltextMap: [String: Set<Int>] = [:]) -> FilterResult {
+                     fulltextMap: [String: Set<Int>] = [:],
+                     crossoverMap: Set<Int> = [],
+                     wordCountFallbackMap: [Int: Int]? = nil) -> FilterResult {
         let start = LibraryFilterDebug.now()
         LibraryFilterDebug.log("matchingIDs.start", [
             "mode": "explicitIDs",
@@ -173,8 +172,6 @@ struct FilterBuilder {
             return result
         }
 
-        // Separate fulltext rules from non-fulltext rules, preserving group structure
-        // for both so that AND/OR conjunctions are respected correctly.
         let fulltextGroups: [(rules: [FilterRule], conjunction: FilterConjunction)] = completeGroups.compactMap { group in
             let rules = group.completeRules.filter { $0.field == .fulltext }
             guard !rules.isEmpty else { return nil }
@@ -186,9 +183,13 @@ struct FilterBuilder {
             return FilterGroup(rules: rules, conjunction: group.conjunction)
         }
 
-        // Evaluate non-fulltext groups independently, then combine with groupConjunction.
         let groupResults: [Set<Int>] = nonFulltextGroups.map { group in
-            Set(matchingIDsForGroup(group, likedIDs: likedIDs, collectionMap: collectionMap, statusMap: statusMap))
+            Set(matchingIDsForGroup(group,
+                                    likedIDs: likedIDs,
+                                    collectionMap: collectionMap,
+                                    statusMap: statusMap,
+                                    crossoverMap: crossoverMap,
+                                    wordCountFallbackMap: wordCountFallbackMap))
         }
 
         var finalIDSet: Set<Int>
@@ -227,21 +228,34 @@ struct FilterBuilder {
     private func matchingIDsForGroup(_ group: FilterGroup,
                                      likedIDs: Set<Int>,
                                      collectionMap: [String: Set<Int>],
-                                     statusMap: [AO3CompletionStatus: Set<Int>]) -> [Int] {
+                                     statusMap: [AO3CompletionStatus: Set<Int>],
+                                     crossoverMap: Set<Int> = [],
+                                     wordCountFallbackMap: [Int: Int]? = nil) -> [Int] {
         let complete = group.completeRules
         guard !complete.isEmpty else { return library.allCalibreIDs() }
 
-        // Partition: SQL-evaluated vs app-evaluated (isLiked, collection, AO3 status, fulltext)
-        let sqlRules        = complete.filter { $0.field != .isLiked && $0.field != .collection && $0.field != .status && $0.field != .fulltext }
+        // Partition into SQL-evaluated vs in-memory-evaluated rules.
+        // §6: .crossover is in-memory (backed by ao3_metadata fandoms).
+        // §2a: .wordCountGT/.wordCountLT are SQL when custom column configured,
+        //      in-memory via wordCountFallbackMap when not.
+        let sqlRules        = complete.filter {
+            $0.field != .isLiked && $0.field != .collection &&
+            $0.field != .status && $0.field != .fulltext && $0.field != .crossover
+        }
         let likedRules      = complete.filter { $0.field == .isLiked }
         let collectionRules = complete.filter { $0.field == .collection }
         let statusRules     = complete.filter { $0.field == .status }
+        let crossoverRules  = complete.filter { $0.field == .crossover }  // §6
 
+        // SQL rules: pass word-count rules through SQL if custom column is available;
+        // signal nil back (by returning nil from sqlFragment) when not — handle below.
         var ids: [Int]
         if sqlRules.isEmpty {
             ids = library.allCalibreIDs()
         } else {
-            ids = library.calibreIDs(matchingRules: sqlRules, conjunction: group.conjunction)
+            ids = library.calibreIDs(matchingRules: sqlRules,
+                                     conjunction: group.conjunction,
+                                     wordCountFallbackMap: wordCountFallbackMap)
         }
 
         // Apply isLiked in-memory
@@ -250,8 +264,6 @@ struct FilterBuilder {
         }
 
         // Apply collection rules in-memory
-        // Each collection rule restricts (AND) or excludes (NOT) a set of IDs.
-        // Multiple collection rules within a group follow the group's conjunction.
         if !collectionRules.isEmpty {
             var idSet = Set(ids)
             if group.conjunction == .and {
@@ -260,11 +272,10 @@ struct FilterBuilder {
                     switch rule.op {
                     case .equals:    idSet = idSet.intersection(memberIDs)
                     case .notEquals: idSet = idSet.subtracting(memberIDs)
-                    default:         break   // only equals/notEquals are offered in the UI
+                    default:         break
                     }
                 }
             } else {
-                // OR: book passes if it satisfies ANY collection rule
                 var unionIDs = Set<Int>()
                 for rule in collectionRules {
                     let memberIDs = collectionMap[rule.value] ?? []
@@ -279,6 +290,7 @@ struct FilterBuilder {
             ids = Array(idSet).sorted()
         }
 
+        // Apply status rules in-memory (§5: uses renamed AO3CompletionStatus cases)
         if !statusRules.isEmpty {
             var idSet = Set(ids)
             if group.conjunction == .and {
@@ -307,17 +319,20 @@ struct FilterBuilder {
             ids = Array(idSet).sorted()
         }
 
+        // §6: Apply crossover rules in-memory (crossoverMap = Set<Int> of IDs with fandoms.count > 1)
+        if !crossoverRules.isEmpty {
+            var idSet = Set(ids)
+            for rule in crossoverRules {
+                let wantsCrossover = rule.value == "true"
+                idSet = wantsCrossover ? idSet.intersection(crossoverMap)
+                                       : idSet.subtracting(crossoverMap)
+            }
+            ids = Array(idSet).sorted()
+        }
+
         return ids
     }
 
-    /// Apply fulltext filter groups to `candidateIDs`, respecting both the within-group
-    /// conjunction (AND/OR between rules in the same group) and the top-level
-    /// `groupConjunction` (AND/OR between groups).
-    ///
-    /// Example — two groups, groupConjunction = OR:
-    ///   Group 1 (AND): [contains "hockey", notContains "nhl"]  → intersection
-    ///   Group 2 (AND): [contains "poker"]                      → intersection
-    ///   Result: union of Group 1 result and Group 2 result (OR at the top level)
     private func applyFulltextGroupsAsGlobalRefinement(
         _ groups: [(rules: [FilterRule], conjunction: FilterConjunction)],
         groupConjunction: FilterConjunction,
@@ -335,7 +350,6 @@ struct FilterBuilder {
             return result
         }
 
-        // Apply a single rule to an ID set.
         func apply(_ rule: FilterRule, to ids: Set<Int>) -> Set<Int> {
             let memberIDs = cachedFulltextIDs(for: rule)
             let before = ids.count
@@ -355,14 +369,11 @@ struct FilterBuilder {
             return result
         }
 
-        // Evaluate each group: rules within the group are combined by group.conjunction.
         func evaluateGroup(_ group: (rules: [FilterRule], conjunction: FilterConjunction)) -> Set<Int> {
             switch group.conjunction {
             case .and:
-                // AND: each rule narrows the candidate set.
                 return group.rules.reduce(candidateIDs) { apply($1, to: $0) }
             case .or:
-                // OR: union the result of applying each rule independently to candidateIDs.
                 return group.rules.reduce(Set<Int>()) { union, rule in
                     union.union(apply(rule, to: candidateIDs))
                 }
@@ -376,7 +387,6 @@ struct FilterBuilder {
 
         let groupResults = groups.map { evaluateGroup($0) }
 
-        // Combine group results with groupConjunction.
         switch groupConjunction {
         case .or:
             return groupResults.reduce(Set<Int>()) { $0.union($1) }
@@ -413,22 +423,35 @@ extension CalibreLibrary {
         return rows.compactMap { row in (row[0] as? Int64).map(Int.init) }
     }
 
-    func calibreIDs(matchingRules rules: [FilterRule], conjunction: FilterConjunction) -> [Int] {
+    // bulkCustomColumnInts moved to CalibreLibrary.swift — this is CalibreLibrary's
+    // data, not a filter concern. See "Custom column discovery" section there.
+
+    func calibreIDs(matchingRules rules: [FilterRule], conjunction: FilterConjunction,
+                    wordCountFallbackMap: [Int: Int]? = nil) -> [Int] {
         guard !rules.isEmpty else { return allCalibreIDs() }
 
+        // §2a: Separate out word-count rules that need in-memory fallback.
+        // sqlFragment(for:) returns nil for wordCountGT/LT when no custom column is
+        // configured — those rules are handled below against wordCountFallbackMap.
         var clauses: [String] = []
         var args: [Binding?]  = []
+        var wordCountFallbackRules: [FilterRule] = []
 
         for rule in rules {
-            if let (clause, ruleArgs) = sqlFragment(for: rule) {
+            if rule.field == .wordCountGT || rule.field == .wordCountLT {
+                if let (clause, ruleArgs) = sqlFragment(for: rule) {
+                    clauses.append(clause)
+                    args.append(contentsOf: ruleArgs)
+                } else {
+                    // No custom column — collect for in-memory fallback
+                    wordCountFallbackRules.append(rule)
+                }
+            } else if let (clause, ruleArgs) = sqlFragment(for: rule) {
                 clauses.append(clause)
                 args.append(contentsOf: ruleArgs)
             }
         }
 
-        guard !clauses.isEmpty else { return allCalibreIDs() }
-
-        // Build JOIN clause — only add joins actually required by the rules
         let needsAuthorJoin  = rules.contains { $0.field == .authorName }
         let needsTagJoin     = rules.contains { [.tag, .rating, .warning, .category].contains($0.field) }
         let needsSeriesJoin  = rules.contains { $0.field == .series }
@@ -451,19 +474,45 @@ extension CalibreLibrary {
             joins.append("LEFT JOIN comments c ON c.book = b.id")
         }
 
-        let joinClause = joins.joined(separator: "\n")
-        let op         = conjunction == .and ? " AND " : " OR "
-        let where_     = "WHERE " + clauses.joined(separator: op)
+        var ids: [Int]
+        if clauses.isEmpty {
+            ids = allCalibreIDs()
+        } else {
+            let joinClause = joins.joined(separator: "\n")
+            let op         = conjunction == .and ? " AND " : " OR "
+            let where_     = "WHERE " + clauses.joined(separator: op)
 
-        let sql = """
-            SELECT DISTINCT b.id FROM books b
-            \(joinClause)
-            \(where_)
-            ORDER BY b.id
-            """
+            let sql = """
+                SELECT DISTINCT b.id FROM books b
+                \(joinClause)
+                \(where_)
+                ORDER BY b.id
+                """
 
-        guard let rows = try? db_prepare(sql, args) else { return [] }
-        return rows.compactMap { row in (row[0] as? Int64).map(Int.init) }
+            guard let rows = try? db_prepare(sql, args) else { return [] }
+            ids = rows.compactMap { row in (row[0] as? Int64).map(Int.init) }
+        }
+
+        // §2a: Apply word-count fallback in-memory when no custom column is configured.
+        if !wordCountFallbackRules.isEmpty, let fallbackMap = wordCountFallbackMap {
+            var idSet = Set(ids)
+            for rule in wordCountFallbackRules {
+                guard let threshold = rule.numericValue else { continue }
+                switch rule.field {
+                case .wordCountGT:
+                    idSet = idSet.filter { id in (fallbackMap[id] ?? 0) > threshold }
+                case .wordCountLT:
+                    idSet = idSet.filter { id in
+                        guard let wc = fallbackMap[id] else { return false }
+                        return wc < threshold
+                    }
+                default: break
+                }
+            }
+            ids = Array(idSet).sorted()
+        }
+
+        return ids
     }
 
     func sqlFilterClause(for expression: FilterExpression) -> (String, [Binding?])? {
@@ -552,7 +601,6 @@ extension CalibreLibrary {
             return textFragment(column: "b.title", op: rule.op, value: v)
 
         case .series:
-            // Series name is in the series table — requires needsSeriesJoin = true
             return textFragment(column: "s.name", op: rule.op, value: v,
                                 nullClause: "s.name IS NULL")
 
@@ -564,24 +612,24 @@ extension CalibreLibrary {
             return textFragment(column: "a.name", op: rule.op, value: v)
 
         case .tag:
-            // Correlated subquery ensures AND works across multi-value tag fields.
             return expandedTagFragment(op: rule.op, value: v)
         case .rating:
             return ao3TagFragment(op: rule.op, value: v)
-
         case .warning:
             return ao3TagFragment(op: rule.op, value: v)
-
         case .category:
             return ao3TagFragment(op: rule.op, value: v)
 
         case .wordCountGT:
             guard let n = rule.numericValue else { return nil }
-            return (wordCountSQL(sqlOp: ">"), [n as Binding?])
+            // §2a: Returns nil when no custom column is configured — caller handles fallback.
+            guard let sql = wordCountSQL(sqlOp: ">") else { return nil }
+            return (sql, [n as Binding?])
 
         case .wordCountLT:
             guard let n = rule.numericValue else { return nil }
-            return (wordCountSQL(sqlOp: "<"), [n as Binding?])
+            guard let sql = wordCountSQL(sqlOp: "<") else { return nil }
+            return (sql, [n as Binding?])
 
         case .kudosGT:
             guard let n = rule.numericValue else { return nil }
@@ -591,20 +639,17 @@ extension CalibreLibrary {
             guard let n = rule.numericValue else { return nil }
             return (kudosSQL(sqlOp: "<"), [n as Binding?])
 
-        case .isLiked:
+        case .isLiked, .crossover:
+            // Evaluated in-memory; never produce a SQL fragment.
             return nil
 
         case .collection, .status, .fulltext:
-            // Collection membership is evaluated in-memory against SwiftData.
-            // SQL layer never sees this field.
             return nil
         }
     }
 
     // MARK: - Fragment helpers
 
-    /// Generic text column fragment. Handles all four operators correctly,
-    /// including NULL-safe NOT clauses.
     private func textFragment(column: String, op: FilterOperator, value: String,
                               nullClause: String? = nil) -> (String, [Binding?])? {
         let null = nullClause.map { "(\($0) OR " } ?? ""
@@ -621,8 +666,6 @@ extension CalibreLibrary {
         case .startsWith:
             return ("\(column) LIKE ?", ["\(value)%"])
         case .ratingAtMost, .ratingAtLeast:
-            // These operators only make sense for the .rating field (routed via ao3TagFragment).
-            // If reached here, fall back to exact match.
             return ("\(column) = ?", [value])
         }
     }
@@ -656,76 +699,94 @@ extension CalibreLibrary {
         }
     }
 
+    /// §8: Rewritten from NOT IN subquery to correlated NOT EXISTS.
+    ///
+    /// The old shape:
+    ///   b.id NOT IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ... WHERE ...)
+    /// Forces SQLite to materialise the entire matching-book set and anti-join against
+    /// all of `books`. Leading-wildcard LIKE cannot use any index, so this is a full
+    /// scan of `tags` per evaluation — doubly expensive for synonyms.
+    ///
+    /// The new shape:
+    ///   NOT EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ... WHERE btl2.book = b.id AND ...)
+    /// Correlates on `btl2.book = b.id` so SQLite can use the index on
+    /// `books_tags_link(book)` to seek directly to each book's tag rows. This mirrors
+    /// the EXISTS shape already used for positive tag matching in CalibreLibrarySearch.swift.
     private func tagMembershipFragment(matcher: String,
                                        args: [Binding?],
                                        negated: Bool) -> (String, [Binding?])? {
         guard !matcher.isEmpty else { return nil }
-        let operatorText = negated ? "NOT IN" : "IN"
+        if negated {
+            return (
+                "NOT EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND (\(matcher)))",
+                args
+            )
+        }
         return (
-            "b.id \(operatorText) (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE \(matcher))",
+            "EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND (\(matcher)))",
             args
         )
     }
 
-    /// AO3 metadata (rating/warning/category) — all stored as tags in Calibre.
-    /// Uses subquery so AND conjunction works correctly across multi-value fields.
+    /// §8: All negative ao3TagFragment branches use correlated NOT EXISTS, matching
+    /// the pattern established for general tags in tagMembershipFragment. This avoids
+    /// materialising the full matching-book set for the anti-join.
     private func ao3TagFragment(op: FilterOperator, value: String) -> (String, [Binding?])? {
         switch op {
         case .equals:
-            return ("b.id IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name = ?)", [value])
+            return (
+                "EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND t2.name = ?)",
+                [value]
+            )
         case .notEquals:
-            return ("b.id NOT IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name = ?)", [value])
+            return (
+                "NOT EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND t2.name = ?)",
+                [value]
+            )
         case .contains:
-            return ("b.id IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name LIKE ?)", ["%\(value)%"])
+            return (
+                "EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND t2.name LIKE ?)",
+                ["%\(value)%"]
+            )
         case .notContains:
-            return ("b.id NOT IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name LIKE ?)", ["%\(value)%"])
+            return (
+                "NOT EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND t2.name LIKE ?)",
+                ["%\(value)%"]
+            )
         case .startsWith:
-            return ("b.id IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name LIKE ?)", ["\(value)%"])
+            return (
+                "EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND t2.name LIKE ?)",
+                ["\(value)%"]
+            )
 
         case .ratingAtMost:
-            // "Show me books rated AT MOST X."
-            //
-            // A book passes iff it has NO tag with a rating level HIGHER than X.
-            // This correctly handles:
-            //   - books with a single rating tag at or below X → ✓
-            //   - books with multiple rating tags where one is above X → ✗
-            //   - books tagged only "Not Rated" → ✓ (no higher tag exists)
-            //   - books with no rating tag at all → ✓
             guard let rating = AO3Rating(rawValue: value) else {
                 return ao3TagFragment(op: .equals, value: value)
             }
             let higher = rating.higherRatings
             if higher.isEmpty {
-                // Explicit is the maximum — ratingAtMost Explicit matches everything
                 return ("1 = 1", [])
             }
-            // Build: NOT IN (books that have any higher-rated tag)
             let placeholders = higher.map { _ in "?" }.joined(separator: ", ")
             let args: [Binding?] = higher.map { $0.rawValue as Binding? }
             return (
-                "b.id NOT IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name IN (\(placeholders)))",
+                "NOT EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND t2.name IN (\(placeholders)))",
                 args
             )
 
         case .ratingAtLeast:
-            // "Show me books rated AT LEAST X."
-            //
-            // A book passes iff it has AT LEAST ONE tag with a rating level >= X.
-            // Books tagged only "Not Rated" do NOT pass (level is nil).
             guard let rating = AO3Rating(rawValue: value) else {
                 return ao3TagFragment(op: .equals, value: value)
             }
             guard let myLevel = rating.level else {
-                // "Not Rated" as a floor is undefined; fall back to exact match
                 return ao3TagFragment(op: .equals, value: value)
             }
-            // Collect all ratings at or above this level
             let qualified = AO3Rating.allCases.filter { ($0.level ?? 0) >= myLevel }
             if qualified.isEmpty { return ("0 = 1", []) }
             let placeholders = qualified.map { _ in "?" }.joined(separator: ", ")
             let args: [Binding?] = qualified.map { $0.rawValue as Binding? }
             return (
-                "b.id IN (SELECT book FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE t2.name IN (\(placeholders)))",
+                "EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND t2.name IN (\(placeholders)))",
                 args
             )
         }
@@ -733,16 +794,19 @@ extension CalibreLibrary {
 
     // MARK: - Custom column helpers
 
-    private func wordCountSQL(sqlOp: String) -> String {
+    /// §2a: Returns nil when no custom column is configured (caller applies ao3_metadata fallback).
+    /// Previously returned "0 = 1" — that silently matched nothing. Now signals the caller
+    /// to apply wordCountFallbackMap in-memory instead.
+    private func wordCountSQL(sqlOp: String) -> String? {
         let cfg = CustomColumnConfig.shared
         let label = cfg.wordCountLabel
             ?? customColumnTableName(label: "words").map { _ in "words" }
             ?? customColumnTableName(label: "word_count").map { _ in "word_count" }
             ?? customColumnTableName(label: "wordcount").map { _ in "wordcount" }
-        if let tbl = label.flatMap({ customColumnTableName(label: $0) }) {
-            return "b.id IN (SELECT book FROM \(tbl) WHERE value \(sqlOp) ?)"
+        guard let tbl = label.flatMap({ customColumnTableName(label: $0) }) else {
+            return nil  // signal: no SQL available — caller handles fallback
         }
-        return "0 = 1"
+        return "b.id IN (SELECT book FROM \(tbl) WHERE value \(sqlOp) ?)"
     }
 
     private func kudosSQL(sqlOp: String) -> String {

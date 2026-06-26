@@ -200,6 +200,7 @@ final class EmailLibraryViewController: NSViewController {
             guard let self else { return }
             Task {
                 try? await self.session.collectionStore?.setLiked(calibreIDs: books.map(\.id), liked: liked)
+                self.session.bumpMembershipVersion()  // §7
                 await self.refreshCollectionSnapshots()
             }
         }
@@ -207,6 +208,7 @@ final class EmailLibraryViewController: NSViewController {
             guard let self else { return }
             Task {
                 try? await self.session.collectionStore?.toggleLiked(calibreID: book.id)
+                self.session.bumpMembershipVersion()  // §7
                 await self.refreshCollectionSnapshots()
             }
         }
@@ -214,6 +216,7 @@ final class EmailLibraryViewController: NSViewController {
             guard let self else { return }
             Task {
                 try? await self.session.collectionStore?.bulkAdd(calibreIDs: books.map(\.id), to: SystemCollectionID.readLater)
+                self.session.bumpMembershipVersion()  // §7
                 await self.refreshCollectionSnapshots()
             }
         }
@@ -223,6 +226,7 @@ final class EmailLibraryViewController: NSViewController {
                 for book in books {
                     try? await self.session.collectionStore?.skipBook(calibreID: book.id)
                 }
+                self.session.bumpMembershipVersion()  // §7
                 await self.refreshCollectionSnapshots()
                 self.applyFilterRules()
             }
@@ -494,6 +498,20 @@ final class EmailLibraryViewController: NSViewController {
             ])
             return
         }
+        // §7: Check the LRU cache before kicking off the expensive Task pipeline.
+        if let cached = session.cachedFilterResult(for: expression) {
+            toolbarState.activeFilterResult = cached
+            toolbarState.clearPendingFullTextSearch()
+            toolbarState.cancelLibraryFilterApplication()
+            loadPage(reset: true)
+            LibraryFilterDebug.log("applyFilter.end", [
+                "surface": "email",
+                "mode": "cached",
+                "ids": cached.calibreIDs.count,
+                "elapsedMS": LibraryFilterDebug.elapsedMS(since: applyStart)
+            ])
+            return
+        }
         let token = toolbarState.beginLibraryFilterApplication()
         let fulltextRules = expression.groups.flatMap(\.rules)
             .filter { $0.field == .fulltext && $0.isComplete }
@@ -528,13 +546,35 @@ final class EmailLibraryViewController: NSViewController {
                 return (key, Set(session.cachedFulltextIDs(for: rule.value) ?? []))
             })
 
+            // §6: Crossover map
+            var crossoverMap: Set<Int> = []
+            let needsCrossover = expression.groups.flatMap(\.rules).contains { $0.field == .crossover }
+            if needsCrossover, let metaDBPath = session.metaDB?.databaseURL.path {
+                crossoverMap = await Task.detached(priority: .userInitiated) {
+                    library.crossoverBookIDs(metaDBPath: metaDBPath)
+                }.value
+            }
+            // §2a: Word-count fallback from ao3_metadata when no custom column configured
+            var wordCountFallbackMap: [Int: Int]? = nil
+            let needsWordCount = expression.groups.flatMap(\.rules).contains {
+                $0.field == .wordCountGT || $0.field == .wordCountLT
+            }
+            if needsWordCount && CustomColumnConfig.shared.wordCountLabel == nil {
+                if let metaDBPath = session.metaDB?.databaseURL.path {
+                    wordCountFallbackMap = await Task.detached(priority: .userInitiated) {
+                        library.ao3WordCounts(metaDBPath: metaDBPath, ids: library.allBookIDs())
+                    }.value
+                }
+            }
             let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary)
             let result = await builder.matchingIDs(
                 expression: expression,
                 likedIDs:      currentLikedIDs,
                 collectionMap: collectionMap,
                 statusMap: statusMap,
-                fulltextMap: fulltextMap
+                fulltextMap: fulltextMap,
+                crossoverMap: crossoverMap,              // §6
+                wordCountFallbackMap: wordCountFallbackMap  // §2a
             )
             let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
             let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
@@ -547,10 +587,12 @@ final class EmailLibraryViewController: NSViewController {
                 .filter { !ReaderPreferences.shared.hideNonAO3PublisherBooks || currentAO3PublisherIDs.contains($0) }
             guard toolbarState.libraryFilterApplicationToken == token else { return }
             defer { toolbarState.finishLibraryFilterApplication(token: token) }
-            toolbarState.activeFilterResult = FilterResult(
+            let cacheableResult = FilterResult(
                 calibreIDs: visibleFilteredIDs,
                 totalCount: visibleFilteredIDs.count
             )
+            toolbarState.activeFilterResult = cacheableResult
+            session.rememberFilterResult(cacheableResult, for: expression)  // §7
             toolbarState.clearPendingFullTextSearch()
             likedIDs = currentLikedIDs
             skippedIDs = currentSkipped
@@ -697,7 +739,47 @@ final class EmailLibraryViewController: NSViewController {
         if reset { currentPage = 0; books = [] }
 
         let raw: [CalibreBook]
-        if let result = toolbarState.activeFilterResult, result.isSQLBacked {
+        var wordCountPage: [CalibreBook]? = nil
+        var wordCountHasMore = false
+        if toolbarState.sortField == .wordCount {
+            // §2a fix (2): see orderByClause(.wordCount) / wordCountSortedPage(...)
+            // in CalibreLibrary.swift — word count can't be sorted via a single SQL
+            // ORDER BY, so it's resolved in memory over the full matching set.
+            let restrictIDs: [Int]?
+            let filterForSQL: FilterExpression?
+            var isEmptyExplicitIDs = false
+            if let result = toolbarState.activeFilterResult, result.isSQLBacked {
+                restrictIDs = nil
+                filterForSQL = toolbarState.filterExpression
+            } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
+                restrictIDs = visibleIDs(intersect(result.calibreIDs, with: query.ftsMatchedIDs))
+                filterForSQL = nil
+            } else if toolbarState.activeFilterResult != nil {
+                restrictIDs = nil
+                filterForSQL = nil
+                isEmptyExplicitIDs = true
+            } else {
+                restrictIDs = nil
+                filterForSQL = nil
+            }
+            LibraryFilterDebug.log("loadPage.start", [
+                "surface": "email", "mode": "wordCountSorted", "page": currentPage,
+                "query": LibraryFilterDebug.summary(query: query)
+            ])
+            if isEmptyExplicitIDs {
+                wordCountPage = []
+                wordCountHasMore = false
+            } else {
+                let (page, hasMore) = library.wordCountSortedPage(
+                    offset: currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
+                    query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                    metaDBPath: session.metaDB?.databaseURL.path
+                )
+                wordCountPage = page
+                wordCountHasMore = hasMore
+            }
+            raw = []
+        } else if let result = toolbarState.activeFilterResult, result.isSQLBacked {
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "email",
                 "mode": "sqlPagedDeferredCount",
@@ -748,9 +830,15 @@ final class EmailLibraryViewController: NSViewController {
             )
         }
 
-        let visible = visibleBooks(raw)
-        hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
-        let page    = Array(visible.prefix(pageSize))
+        let page: [CalibreBook]
+        if let wordCountPage {
+            hasNextPage = wordCountHasMore
+            page = wordCountPage
+        } else {
+            let visible = visibleBooks(raw)
+            hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
+            page = Array(visible.prefix(pageSize))
+        }
         if reset { books = page } else { books.append(contentsOf: page) }
 
         rebuildSidebarItems()
@@ -970,6 +1058,7 @@ final class EmailLibraryViewController: NSViewController {
                     shouldBeMember: false
                 )
             }
+            session.bumpMembershipVersion()  // §7
             refreshBookStates()
             loadPage(reset: true)
         }
@@ -997,6 +1086,7 @@ final class EmailLibraryViewController: NSViewController {
                     shouldBeMember: false
                 )
             }
+            session.bumpMembershipVersion()  // §7
             refreshBookStates()
             loadPage(reset: true)
         }
@@ -1334,9 +1424,41 @@ struct FilterSheetCarrier: View {
             .onChange(of: toolbarState.triggerExport) {
                 if toolbarState.triggerExport {
                     if let books = emailVC?.currentBooks {
-                        ExportManager.presentExportPanel(books: books)
+                        ExportManager.presentExportPanel(         // §1
+                            books: books,
+                            session: emailVC?.session,
+                            filterResult: emailVC?.toolbarState.activeFilterResult,
+                            toolbarState: emailVC?.toolbarState
+                        )
                     }
                     toolbarState.triggerExport = false
+                }
+            }
+            .onChange(of: toolbarState.triggerEPUBExport) {
+                if toolbarState.triggerEPUBExport {
+                    if let books = emailVC?.currentBooks,
+                       let session = emailVC?.session,
+                       let libraryRoot = session.library?.root {
+                        let capturedToolbarState = emailVC?.toolbarState
+                        Task {
+                            let rows = await ExportManager.buildExportRows(
+                                currentPageBooks: books,
+                                session: session,
+                                filterResult: capturedToolbarState?.activeFilterResult,
+                                toolbarState: capturedToolbarState
+                            )
+                            let ao3Map = Dictionary(uniqueKeysWithValues: rows.compactMap { row in
+                                row.ao3.map { (row.book.id, $0) }
+                            })
+                            ExportManager.presentEPUBExportPanel(
+                                books: rows.map(\.book),
+                                libraryRoot: libraryRoot,
+                                ao3Map: ao3Map,
+                                groupBySeries: capturedToolbarState?.groupBySeries ?? false
+                            )
+                        }
+                    }
+                    toolbarState.triggerEPUBExport = false
                 }
             }
     }
