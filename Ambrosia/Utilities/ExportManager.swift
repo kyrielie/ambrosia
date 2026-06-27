@@ -365,9 +365,9 @@ struct ExportManager {
                     }
                 }
 
+                let finalCopied = copied
+                let finalSkipped = skipped
                 await MainActor.run {
-                    let finalCopied = copied
-                    let finalSkipped = skipped
                     presentEPUBExportSummary(copied: finalCopied, skipped: finalSkipped)
                 }
             }

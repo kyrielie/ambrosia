@@ -35,11 +35,6 @@ enum SortField: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Whether this sort field requires a JOIN against ao3_metadata.
-    /// Used by _fetchBooks to decide whether to add the optional JOIN.
-    var requiresAO3MetadataJoin: Bool {
-        self == .ao3Published || self == .ao3Updated
-    }
 }
 
 // MARK: - CalibreLibrary
@@ -51,15 +46,17 @@ final class CalibreLibrary {
 
     let root: URL                   // absolute path to the Calibre library folder
     internal let db: Connection
+    private let metaDB: Connection  // read-only connection to ambrosia_meta.db
 
     /// §6: Seeded random sort seed. Stable within a session; refreshed on library open
     /// or when the user explicitly requests a new shuffle.
     private(set) var randomSeed: UInt64 = UInt64.random(in: 0 ... UInt64.max)
 
-    init(root: URL) throws {
+    init(root: URL, metaDBPath: String) throws {
         self.root = root
         let dbPath = root.appendingPathComponent("metadata.db").path
         db = try Connection(dbPath, readonly: true)
+        metaDB = try Connection(metaDBPath, readonly: true)
         // Increase the page cache to 32 MB and keep temp tables in memory.
         // These are session-scoped PRAGMAs — safe on a read-only connection.
         try? db.execute("PRAGMA cache_size = -32768")   // negative = kibibytes
@@ -148,8 +145,7 @@ final class CalibreLibrary {
     // the book is a crossover. We use SQLite's JSON1 extension: json_array_length().
     // If JSON1 is unavailable (should not happen on macOS 14+) we fall back to an
     // in-memory scan of all IDs and return empty so filtering is a no-op rather than crash.
-    func crossoverBookIDs(metaDBPath: String) -> Set<Int> {
-        guard let metaDB = try? Connection(metaDBPath, readonly: true) else { return [] }
+    func crossoverBookIDs() -> Set<Int> {
         let sql = """
         SELECT calibre_id
         FROM ao3_metadata
@@ -182,19 +178,10 @@ final class CalibreLibrary {
     }
 
     // MARK: - §6: orderByClause — updated with new sort cases
-    //
-    // ao3Published / ao3Updated require a LEFT JOIN against ao3_metadata.
-    // The join is added by _fetchBooks when sort.requiresAO3MetadataJoin == true.
-    // NULLs sort last in both directions: NULLS LAST is explicit for clarity.
-    // SQLite does not support NULLS LAST natively but we achieve it by coalescing
-    // to a sentinel:
-    //   - ascending:  COALESCE(date, '0000') — blank dates sort before real ones → last when ASC
-    //   We use '' which sorts before any real ISO date in ASCII order.
-    //   - descending: COALESCE(date, '9999-99-99') — sorts after any real date → last when DESC
-    //
-    // wordCount: §2a fix — the old expression referenced a non-existent
-    // custom_column_wordcount column directly on `books`. Fixed to use the
-    // wcJoin LEFT JOIN alias `wc`.
+    // ao3Published / ao3Updated: sort is resolved in-memory post-fetch via sortedByAO3Date.
+    // SQL only needs a stable title-order baseline here; the cross-database JOIN that was
+    // previously attempted here against ao3_metadata was always invalid (ao3_metadata lives
+    // in ambrosia_meta.db, not metadata.db) and caused _fetchBooks to throw, returning [].
     func orderByClause(sort: SortField, direction: String) -> String {
         switch sort {
         case .title:
@@ -202,16 +189,8 @@ final class CalibreLibrary {
         case .author:
             return "MIN(a.sort) \(direction), b.title ASC"
         case .wordCount:
-            // §2a fix (2): the wc.value JOIN approach is broken whenever no Calibre
-            // custom column is configured (wcJoin is empty in that case, so wc.value
-            // doesn't exist -> SQL error -> _fetchBooks throws -> books() catches it
-            // and returns [], i.e. word-count sort silently shows an empty library).
-            // ao3_metadata.word_count also can't be reached from this query at all --
-            // it lives in a separate database file (ambrosia_meta.db), and cross-database
-            // JOINs are not used anywhere in this codebase (see §6/§2a notes elsewhere).
-            // Word-count sort is therefore resolved entirely in Swift, in the caller,
-            // via wordCountSortedPage(...) / sortedByWordCount(...) below. SQL only
-            // needs a stable baseline order here, exactly like .random.
+            // Word-count sort is resolved entirely in Swift via wordCountSortedPage.
+            // SQL only needs a stable baseline order here.
             return "b.title \(direction)"
         case .kudos:
             return "COALESCE(k.value, 0) \(direction)"
@@ -222,26 +201,18 @@ final class CalibreLibrary {
         case .series:
             return "s.name \(direction), b.series_index ASC"
         case .ao3Published:
-            // §6: Sort by ao3_metadata.published_date (ISO text, lexicographic == chronological).
-            // NULLs last in both directions.
-            let sentinel = direction == "ASC" ? "''" : "'9999-99-99'"
-            return "COALESCE(ao3m.published_date, \(sentinel)) \(direction), b.title ASC"
+            // In-memory sort via sortedByAO3Date; SQL baseline only.
+            return "b.title ASC"
         case .ao3Updated:
-            // §6: Sort by ao3_metadata.updated_date.
-            let sentinel = direction == "ASC" ? "''" : "'9999-99-99'"
-            return "COALESCE(ao3m.updated_date, \(sentinel)) \(direction), b.title ASC"
+            // In-memory sort via sortedByAO3Date; SQL baseline only.
+            return "b.title ASC"
         case .random:
-            // §6: Seeded random is handled post-fetch in the caller (sortedRandomly).
-            // Fall back to title so the SQL ORDER BY is stable — post-sort will reshuffle.
+            // Seeded random is handled post-fetch in the caller (sortedRandomly).
             return "b.title ASC"
         }
     }
 
     // MARK: - §6: Shared AO3 metadata sort helper
-    //
-    // Called by both _fetchBooks (search/filter path) and books(ids:…) (explicit-IDs path)
-    // to add the ao3_metadata JOIN when the sort field requires it and to compute the
-    // word-count custom column JOIN alias name when sorting by word count.
 
     /// Returns the table name for the kudos custom column.
     func kudosCustomColumnTable() -> String? {
@@ -251,15 +222,10 @@ final class CalibreLibrary {
 
     // MARK: - §6: Bulk AO3 word-count fallback
     //
-    // When no Calibre custom column for word count is configured, the caller can pass
-    // a wordCountFallbackMap built from ao3_metadata.word_count. This function
-    // bulk-fetches those values from the AmbrosiaMetaDB so the call site does not
-    // need to reach into the AmbrosiaMetaDB actor directly at query time.
-    //
-    // The metaDBPath is passed in because CalibreLibrary does not hold a reference
-    // to AmbrosiaMetaDB (they are different SQLite files, opened independently).
-    func ao3WordCounts(metaDBPath: String, ids: [Int]) -> [Int: Int] {
-        guard !ids.isEmpty, let metaDB = try? Connection(metaDBPath, readonly: true) else { return [:] }
+    // When no Calibre custom column for word count is configured, this bulk-fetches
+    // ao3_metadata.word_count values via the cached self.metaDB connection.
+    func ao3WordCounts(ids: [Int]) -> [Int: Int] {
+        guard !ids.isEmpty else { return [:] }
         let ph = ids.map { _ in "?" }.joined(separator: ",")
         let sql = "SELECT calibre_id, word_count FROM ao3_metadata WHERE calibre_id IN (\(ph)) AND word_count IS NOT NULL"
         let args = ids.map { $0 as Binding? }
@@ -271,6 +237,46 @@ final class CalibreLibrary {
             }
         }
         return result
+    }
+
+    /// Bulk-fetch AO3 published/updated dates from ambrosia_meta.db for a set of IDs.
+    /// Returns ISO-8601 date strings keyed by calibre ID. Missing entries = no AO3 metadata.
+    func ao3Dates(ids: [Int]) -> [Int: (published: String?, updated: String?)] {
+        guard !ids.isEmpty else { return [:] }
+        let ph = ids.map { _ in "?" }.joined(separator: ",")
+        let sql = """
+            SELECT calibre_id, published_date, updated_date
+            FROM ao3_metadata
+            WHERE calibre_id IN (\(ph))
+            """
+        let args = ids.map { $0 as Binding? }
+        guard let rows = try? metaDB.prepare(sql, args).map({ $0 }) else { return [:] }
+        var result: [Int: (published: String?, updated: String?)] = [:]
+        for row in rows {
+            guard let id = (row[0] as? Int64).map(Int.init) else { continue }
+            result[id] = (row[1] as? String, row[2] as? String)
+        }
+        return result
+    }
+
+    /// Sort books by an AO3 date field (ISO-8601 string, lexicographic order).
+    /// Books with no AO3 metadata sort last in both directions.
+    func sortedByAO3Date(
+        books: [CalibreBook],
+        keyPath: KeyPath<(published: String?, updated: String?), String?>,
+        ascending: Bool
+    ) -> [CalibreBook] {
+        let dates = ao3Dates(ids: books.map(\.id))
+        return books.sorted { a, b in
+            let av = dates[a.id].flatMap { $0[keyPath: keyPath] }
+            let bv = dates[b.id].flatMap { $0[keyPath: keyPath] }
+            switch (av, bv) {
+            case (nil, nil): return a.title < b.title
+            case (nil, _):   return false
+            case (_, nil):   return true
+            case let (x?, y?): return ascending ? x < y : x > y
+            }
+        }
     }
 
     /// Nil-safe comparator shared by every in-memory sort that may have missing
@@ -318,22 +324,75 @@ final class CalibreLibrary {
     /// path whenever sort == .wordCount.
     func wordCountSortedPage(offset: Int, limit: Int, ascending: Bool,
                               query: SearchQuery, filter: FilterExpression?,
-                              restrictIDs: [Int]?, metaDBPath: String?) -> (page: [CalibreBook], hasMore: Bool) {
-        let all = fetchAllMatchingBooks(ids: restrictIDs, query: query, filter: filter,
-                                        sort: .title, ascending: true)
-        let ao3Counts = metaDBPath.map { ao3WordCounts(metaDBPath: $0, ids: all.map(\.id)) } ?? [:]
-        let usingCustomColumn = CustomColumnConfig.shared.wordCountLabel != nil
-        print("[WordCountSort] totalBooks=\(all.count) ao3CountsFound=\(ao3Counts.count) usingCustomColumn=\(usingCustomColumn) label=\(CustomColumnConfig.shared.wordCountLabel ?? "nil") offset=\(offset) limit=\(limit) ascending=\(ascending)")
-        let sorted = sortedByWordCount(books: all, ascending: ascending, ao3WordCounts: ao3Counts)
-        let start = min(offset, sorted.count)
-        let end = min(offset + limit, sorted.count)
-        let page = start < end ? Array(sorted[start..<end]) : []
-        let sampleDesc = page.prefix(5).map { book in
-            let wc = ao3Counts[book.id].map(String.init) ?? "nil"
-            return "\(book.id):\(wc)"
-        }.joined(separator: ", ")
-        print("[WordCountSort] page=[\(sampleDesc)] hasMore=\(end < sorted.count)")
-        return (page, end < sorted.count)
+                              restrictIDs: [Int]?) -> (page: [CalibreBook], hasMore: Bool) {
+        // 1. Fetch all matching IDs (no author/tag/comment hydration).
+        let allIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs)
+
+        // 2. Bulk-fetch word counts for this ID set only.
+        let wordCounts: [Int: Int]
+        if let label = CustomColumnConfig.shared.wordCountLabel,
+           let tbl = customColumnTableName(label: label) {
+            wordCounts = bulkCustomColumnInts(table: tbl, ids: allIDs)
+        } else {
+            wordCounts = ao3WordCounts(ids: allIDs)
+        }
+
+        // 3. Sort IDs by word count in Swift. Unknown word count sorts last.
+        let sortedIDs = allIDs.sorted { a, b in
+            compareNilsLast(wordCounts[a], wordCounts[b], ascending: ascending)
+        }
+
+        // 4. Slice the requested page.
+        let start = min(offset, sortedIDs.count)
+        let end   = min(offset + limit, sortedIDs.count)
+        guard start < end else { return ([], false) }
+        let pageIDs = Array(sortedIDs[start..<end])
+
+        // 5. Hydrate only the page (authors, tags, comments).
+        let page = booksForIDs(pageIDs)
+        return (page, end < sortedIDs.count)
+    }
+
+    // MARK: - §1: fetchAllMatchingIDs (lightweight — IDs only, no hydration)
+    //
+    // Used by wordCountSortedPage to get the full matching set without the cost of
+    // hydrating authors, tags, and comments for every book. The authors LEFT JOIN is
+    // kept because whereClause may emit author conditions; tags and comments joins
+    // are omitted (never referenced in WHERE by _fetchBooks).
+
+    func fetchAllMatchingIDs(
+        query: SearchQuery,
+        filter: FilterExpression?,
+        restrictIDs: [Int]?
+    ) -> [Int] {
+        var conditions: [String] = []
+        var args: [Binding?] = []
+
+        if let ids = restrictIDs, !ids.isEmpty {
+            let ph = ids.map { _ in "?" }.joined(separator: ",")
+            conditions.append("b.id IN (\(ph))")
+            args.append(contentsOf: ids.map { $0 as Binding? })
+        }
+        let (qClause, qArgs) = whereClause(for: query)
+        if !qClause.isEmpty {
+            conditions.append(qClause)
+            args.append(contentsOf: qArgs)
+        }
+        if let filter, let (fClause, fArgs) = sqlFilterClause(for: filter) {
+            conditions.append(fClause)
+            args.append(contentsOf: fArgs)
+        }
+        let where_ = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
+        let sql = """
+            SELECT b.id FROM books b
+            LEFT JOIN books_authors_link bal ON bal.book = b.id
+            LEFT JOIN authors a ON a.id = bal.author
+            \(where_)
+            GROUP BY b.id
+            ORDER BY b.title ASC
+            """
+        guard let rows = try? db.prepare(sql, args).map({ $0 }) else { return [] }
+        return rows.compactMap { ($0[0] as? Int64).map(Int.init) }
     }
 
     // MARK: - §1: fetchAllMatchingBooks
@@ -410,13 +469,22 @@ final class CalibreLibrary {
                 "rows": rows.count,
                 "elapsedMS": LibraryFilterDebug.elapsedMS(since: start)
             ])
-            return rows.map { book in
+            var result = rows.map { book in
                 var b = book
                 b.authors = authorsMap[book.id] ?? []
                 b.tags    = tagsMap[book.id] ?? []
                 b.comment = commentsMap[book.id]
                 return b
             }
+            switch sort {
+            case .ao3Published:
+                result = sortedByAO3Date(books: result, keyPath: \.published, ascending: ascending)
+            case .ao3Updated:
+                result = sortedByAO3Date(books: result, keyPath: \.updated, ascending: ascending)
+            default:
+                break
+            }
+            return result
         } catch {
             print("[CalibreLibrary] books error: \(error)")
             return []
@@ -445,10 +513,6 @@ final class CalibreLibrary {
             guard sort == .kudos, let tbl = kudosCustomColumnTable() else { return "" }
             return "LEFT JOIN \(tbl) k ON k.book = b.id"
         }()
-        // §6: ao3_metadata JOIN for date-based sorts.
-        let ao3Join: String = sort.requiresAO3MetadataJoin
-            ? "LEFT JOIN ao3_metadata ao3m ON ao3m.calibre_id = b.id"
-            : ""
 
         // §perf: Only join `comments` when a filter rule references the comment field.
         // `comments` stores large HTML blobs; joining it unconditionally forces SQLite to
@@ -494,7 +558,6 @@ final class CalibreLibrary {
             LEFT JOIN publishers p ON p.id = bpl.publisher
             \(commentJoin)
             \(kJoin)
-            \(ao3Join)
             \(where_)
             GROUP BY b.id
             ORDER BY \(orderBy)
@@ -541,12 +604,20 @@ final class CalibreLibrary {
             let authorsMap  = try _authors(for: fetchedIDs)
             let tagsMap     = try _tags(for: fetchedIDs)
             let commentsMap = try _comments(for: fetchedIDs)
-            let books = rows.map { book in
+            var books = rows.map { book in
                 var b = book
                 b.authors = authorsMap[book.id] ?? []
                 b.tags    = tagsMap[book.id] ?? []
                 b.comment = commentsMap[book.id]
                 return b
+            }
+            switch sort {
+            case .ao3Published:
+                books = sortedByAO3Date(books: books, keyPath: \.published, ascending: ascending)
+            case .ao3Updated:
+                books = sortedByAO3Date(books: books, keyPath: \.updated, ascending: ascending)
+            default:
+                break
             }
             LibraryFilterDebug.log("books.page.end", [
                 "mode": ids == nil ? "unfilteredIDs" : "explicitIDs",
@@ -666,15 +737,41 @@ final class CalibreLibrary {
 
     // MARK: - Date parsing
 
+    private static let isoWithFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let isoWithoutFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+    private static let ymdFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
+
     internal func parseDate(_ string: String) -> Date? {
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = iso.date(from: string) { return d }
-        iso.formatOptions = [.withInternetDateTime]
-        if let d = iso.date(from: string) { return d }
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
-        return f.date(from: string)
+        if let d = Self.isoWithFractional.date(from: string) { return d }
+        if let d = Self.isoWithoutFractional.date(from: string) { return d }
+        return Self.ymdFormatter.date(from: string)
     }
+
+    // MARK: - Custom column cache (lazy — must live in primary class declaration, not extension)
+
+    private lazy var _customColumns: [CustomColumn] = {
+        let sql = "SELECT id, label, datatype FROM custom_columns"
+        guard let rows = try? db.prepare(sql, []).map({ $0 }) else { return [] }
+        return rows.compactMap { row -> CustomColumn? in
+            guard let id    = (row[0] as? Int64).map(Int.init),
+                  let label = row[1] as? String,
+                  let dtype = row[2] as? String else { return nil }
+            return CustomColumn(id: id, label: label.lowercased(), dataType: dtype)
+        }
+    }()
 }
 
 // MARK: - EPUB path lookup
@@ -767,16 +864,7 @@ extension CalibreLibrary {
     }
 
     /// Returns all custom columns defined in the library.
-    func customColumns() -> [CustomColumn] {
-        let sql = "SELECT id, label, datatype FROM custom_columns"
-        guard let rows = try? db.prepare(sql, []).map({ $0 }) else { return [] }
-        return rows.compactMap { row -> CustomColumn? in
-            guard let id    = (row[0] as? Int64).map(Int.init),
-                  let label = row[1] as? String,
-                  let dtype = row[2] as? String else { return nil }
-            return CustomColumn(id: id, label: label.lowercased(), dataType: dtype)
-        }
-    }
+    func customColumns() -> [CustomColumn] { _customColumns }
 
     /// Returns the table name (e.g. "custom_column_3") for a given column label,
     /// case-insensitively. Returns nil if no matching column exists.

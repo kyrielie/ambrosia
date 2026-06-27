@@ -76,7 +76,16 @@ final class LibrarySession {
     func open(url: URL) {
         lastError = nil
         do {
-            let newLibrary = try CalibreLibrary(root: url)
+            let hash = Ambrosia.libraryHash(for: url)
+            let support = FileManager.default.urls(
+                for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let metaDBPath = support
+                .appendingPathComponent("Ambrosia")
+                .appendingPathComponent("libraries")
+                .appendingPathComponent(hash)
+                .appendingPathComponent("ambrosia_meta.db")
+                .path
+            let newLibrary = try CalibreLibrary(root: url, metaDBPath: metaDBPath)
             let newMetaDB = try AmbrosiaMetaDB(libraryURL: url)
             library    = newLibrary
             metaDB = newMetaDB
