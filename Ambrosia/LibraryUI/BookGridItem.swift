@@ -413,8 +413,7 @@ struct LibraryRootView: View {
             ])
             let (page, hasMore) = library.wordCountSortedPage(
                 offset: currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
-                query: query, filter: filterForSQL, restrictIDs: restrictIDs,
-                metaDBPath: session.metaDB?.databaseURL.path
+                query: query, filter: filterForSQL, restrictIDs: restrictIDs
             )
             books = page
             hasNextPage = hasMore
@@ -841,45 +840,94 @@ struct LibraryRootView: View {
             // §6: Crossover map — IDs with fandoms.count > 1 in ao3_metadata
             var crossoverMap: Set<Int> = []
             let needsCrossover = expression.groups.flatMap(\.rules).contains { $0.field == .crossover }
-            if needsCrossover, let metaDBPath = session.metaDB?.databaseURL.path {
+            if needsCrossover {
                 crossoverMap = await Task.detached(priority: .userInitiated) {
-                    library.crossoverBookIDs(metaDBPath: metaDBPath)
+                    library.crossoverBookIDs()
                 }.value
             }
-            // §2a: Word-count fallback from ao3_metadata when no custom column configured
-            var wordCountFallbackMap: [Int: Int]? = nil
+            // §perf Fix 6: Two-pass word-count filter.
+            // Pass 1 runs all non-wordcount rules to get candidates; pass 2 fetches
+            // word counts only for candidates, then applies wordcount rules in-memory.
             let needsWordCount = expression.groups.flatMap(\.rules).contains {
                 $0.field == .wordCountGT || $0.field == .wordCountLT
             }
-            if needsWordCount && CustomColumnConfig.shared.wordCountLabel == nil {
-                if let metaDBPath = session.metaDB?.databaseURL.path {
-                    wordCountFallbackMap = await Task.detached(priority: .userInitiated) {
-                        library.ao3WordCounts(metaDBPath: metaDBPath, ids: library.allBookIDs())
-                    }.value
+            let needsWordCountFallback = needsWordCount && CustomColumnConfig.shared.wordCountLabel == nil
+
+            // Strip wordcount rules for the first pass (no-op if fallback not needed).
+            let expressionWithoutWordCount: FilterExpression = needsWordCountFallback ? {
+                var stripped = expression
+                stripped.groups = expression.groups.compactMap { group in
+                    let rules = group.rules.filter {
+                        $0.field != .wordCountGT && $0.field != .wordCountLT
+                    }
+                    guard !rules.isEmpty else { return nil }
+                    return FilterGroup(rules: rules, conjunction: group.conjunction)
                 }
-            }
+                return stripped
+            }() : expression
+
             let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary)
-            async let asyncResult = builder.matchingIDs(
-                expression: expression,
+
+            // Pass 1: run all non-wordcount rules.
+            let pass1Result = await builder.matchingIDs(
+                expression: expressionWithoutWordCount,
                 likedIDs: currentLikedIDs,
                 collectionMap: collectionMapSnapshot,
                 statusMap: statusMapSnapshot,
                 fulltextMap: fulltextMap,
-                crossoverMap: crossoverMap,              // §6
-                wordCountFallbackMap: wordCountFallbackMap  // §2a
+                crossoverMap: crossoverMap,
+                wordCountFallbackMap: nil
             )
+
+            // Pass 2: if wordcount fallback is needed, fetch counts for candidates only.
+            var finalResult: FilterResult
+            if needsWordCountFallback {
+                let candidateIDs = pass1Result.calibreIDs
+                let fallbackMap = await Task.detached(priority: .userInitiated) {
+                    library.ao3WordCounts(ids: candidateIDs)
+                }.value
+
+                var wcOnlyExpression = FilterExpression()
+                wcOnlyExpression.groups = expression.groups.compactMap { group in
+                    let rules = group.rules.filter {
+                        ($0.field == .wordCountGT || $0.field == .wordCountLT) && $0.isComplete
+                    }
+                    guard !rules.isEmpty else { return nil }
+                    return FilterGroup(rules: rules, conjunction: group.conjunction)
+                }
+                wcOnlyExpression.groupConjunction = expression.groupConjunction
+
+                if wcOnlyExpression.hasCompleteRules {
+                    let pass2Result = await builder.matchingIDs(
+                        expression: wcOnlyExpression,
+                        likedIDs: [],
+                        collectionMap: [:],
+                        statusMap: [:],
+                        fulltextMap: [:],
+                        crossoverMap: [],
+                        wordCountFallbackMap: fallbackMap
+                    )
+                    let pass2Set = Set(pass2Result.calibreIDs)
+                    let combined = candidateIDs.filter { pass2Set.contains($0) }
+                    finalResult = FilterResult(calibreIDs: combined, totalCount: combined.count)
+                } else {
+                    finalResult = pass1Result
+                }
+            } else {
+                finalResult = pass1Result
+            }
+
             async let fetchedSkipped = session.collectionStore?.members(of: SystemCollectionID.skipped)
             async let fetchedSeriesOrMerged = session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)
             async let fetchedPublisherIDs: Set<Int> = await Task.detached(priority: .userInitiated) {
                 session.library?.ao3PublisherBookIDs() ?? []
             }.value
-            let result = await asyncResult
             let currentSkipped = Set((try? await fetchedSkipped) ?? [])
             let currentSeriesOrMerged = Set((try? await fetchedSeriesOrMerged) ?? [])
             let publisherIDs = await fetchedPublisherIDs
             let filteredIDs = prefs.showSkippedCollection
-                ? result.calibreIDs
-                : result.calibreIDs.filter { !currentSkipped.contains($0) }
+                ? finalResult.calibreIDs
+                : finalResult.calibreIDs.filter { !currentSkipped.contains($0) }
             let visibleFilteredIDs = filteredIDs.filter { !currentSeriesOrMerged.contains($0) }
                 .filter { !prefs.hideNonAO3PublisherBooks || publisherIDs.contains($0) }
             guard toolbarState.libraryFilterApplicationToken == token else { return }

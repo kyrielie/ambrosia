@@ -12,12 +12,16 @@ struct FilterResultCacheKey: Hashable {
 
 extension FilterResultCacheKey {
     init(expression: FilterExpression, membershipVersion: Int) {
-        // Stable digest: sorted rule descriptions joined with "|"
-        let digest = expression.groups
-            .flatMap(\.completeRules)
-            .map { "\($0.field.rawValue).\($0.op.rawValue).\($0.value)" }
-            .sorted()
-            .joined(separator: "|")
+        // Encode group index, within-group conjunction, and sorted rules per group.
+        // Two expressions with the same rules but different grouping must not share
+        // a cache entry — (A OR B) AND C ≠ A OR (B AND C).
+        let digest = expression.groups.enumerated().map { (i, group) in
+            let rules = group.completeRules
+                .map { "\($0.field.rawValue).\($0.op.rawValue).\($0.value)" }
+                .sorted()
+                .joined(separator: ",")
+            return "g\(i)[\(group.conjunction.rawValue):\(rules)]"
+        }.joined(separator: "|") + "|gc:\(expression.groupConjunction.rawValue)"
         self.expressionDigest = digest
         self.membershipVersion = membershipVersion
     }
