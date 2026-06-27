@@ -419,6 +419,13 @@ actor LocalFeedServer {
         return html
     }
 
+    // MARK: - UI helpers (called from LibraryWindowController)
+
+    func collectionList() async -> [(id: String, name: String)] {
+        let rows = (try? await collectionStore?.collections()) ?? []
+        return rows.map { ($0.id, $0.name) }
+    }
+
     // MARK: - Helpers
 
     private func xmlEscape(_ s: String) -> String {
