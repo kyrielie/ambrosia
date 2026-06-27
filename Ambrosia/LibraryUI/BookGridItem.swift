@@ -789,6 +789,7 @@ struct LibraryRootView: View {
             toolbarState.cancelLibraryFilterApplication()
             selectedIDs.removeAll()
             currentPage = 0
+            suppressNextReloadToken = true   // §perf: we call loadPage() below; skip onChange duplicate
             loadPage()
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "list",
@@ -943,6 +944,7 @@ struct LibraryRootView: View {
             skippedIDs = currentSkipped
             seriesOrMergedIDs = currentSeriesOrMerged
             selectedIDs.removeAll()
+            suppressNextReloadToken = true   // §perf: we call loadPage() below; skip onChange duplicate
             currentPage = 0; loadPage()
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "list",

@@ -64,6 +64,29 @@ final class EmailLibraryViewController: NSViewController {
     private var lastSidebarToggle: Bool  = false
     private var lastReaderSidebarToggle: Bool = false
 
+    /// §switch-flicker fix: set true by `stopObserving()` when this controller is
+    /// removed from the view hierarchy (see LibraryViewController.applyViewMode).
+    /// Switching to email view recreates a brand new EmailLibraryViewController
+    /// every time — old instances were never deallocated because scheduleObservation()
+    /// implicitly captured `self` strongly via `self.toolbarState` inside the
+    /// withObservationTracking apply-closure, which the Observation runtime holds
+    /// onto until it next fires. Since toolbarState is shared and kept alive by
+    /// LibraryViewController, every "dead" EmailLibraryViewController stayed fully
+    /// alive too, kept reacting to toolbarState changes, and kept calling
+    /// loadPage()/applyFilterRules() — racing with the current, visible instance and
+    /// overwriting the shared toolbarState.activeFilterResult out from under it.
+    /// That's the source of both the load/sort/loadPage "blink" and the
+    /// briefly-shows-then-clears flicker when a filter is active.
+    private var isTornDown = false
+
+    /// Called by LibraryViewController right before this controller is removed from
+    /// the view hierarchy. Stops the observation loop from rescheduling itself, so
+    /// the only remaining strong reference to self is released the next time
+    /// toolbarState changes (instead of being held indefinitely).
+    func stopObserving() {
+        isTornDown = true
+    }
+
     private let debouncer = DebounceTimer(delay: 0.4)
     private var fullTextTask: Task<Void, Never>?
     private var filterCountTask: Task<Void, Never>?
@@ -368,19 +391,28 @@ final class EmailLibraryViewController: NSViewController {
     private func startObservingToolbarState() { scheduleObservation() }
 
     private func scheduleObservation() {
+        // §switch-flicker fix: capture `ts` directly rather than reading
+        // `toolbarState` (= `self.toolbarState`) inside the apply-closure below.
+        // withObservationTracking's apply-closure is held by the Observation
+        // runtime until it next fires, so any implicit `self` capture there keeps
+        // this whole controller alive for as long as that closure goes unfired —
+        // which, since toolbarState is shared and long-lived, could be indefinitely
+        // after this controller has already been removed from the view hierarchy.
+        let ts = toolbarState
         withObservationTracking {
-            _ = toolbarState.searchText
-            _ = toolbarState.sortField
-            _ = toolbarState.ascending
-            _ = toolbarState.activeFilterResult?.reloadToken
-            _ = toolbarState.isApplyingLibraryFilter
-            _ = toolbarState.pendingFullTextSearch
-            _ = toolbarState.toggleEmailSidebar
-            _ = toolbarState.toggleEmailReaderSidebar
+            _ = ts.searchText
+            _ = ts.sortField
+            _ = ts.ascending
+            _ = ts.activeFilterResult?.reloadToken
+            _ = ts.isApplyingLibraryFilter
+            _ = ts.pendingFullTextSearch
+            _ = ts.toggleEmailSidebar
+            _ = ts.toggleEmailReaderSidebar
         } onChange: { [weak self] in
             DispatchQueue.main.async {
-                self?.toolbarStateDidChange()
-                self?.scheduleObservation()
+                guard let self, !self.isTornDown else { return }
+                self.toolbarStateDidChange()
+                self.scheduleObservation()
             }
         }
     }

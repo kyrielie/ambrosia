@@ -59,6 +59,10 @@ class LibraryViewController: NSViewController {
     private func applyViewMode(_ mode: LibraryViewMode) {
         // Remove existing child VCs
         children.forEach {
+            // §switch-flicker fix: stop EmailLibraryViewController's observation
+            // loop before it's removed, so it doesn't keep reacting to shared
+            // toolbarState changes (and racing the new view) after it's gone.
+            ($0 as? EmailLibraryViewController)?.stopObserving()
             $0.view.removeFromSuperview()
             $0.removeFromParent()
         }

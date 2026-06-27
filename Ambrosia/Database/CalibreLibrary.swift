@@ -383,10 +383,17 @@ final class CalibreLibrary {
             args.append(contentsOf: fArgs)
         }
         let where_ = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
+        // §perf: Only join `comments` when a filter rule references the comment field.
+        let needsCommentJoin = filter?.groups.flatMap(\.completeRules)
+            .contains { $0.field == .comment } == true
+        let commentJoin = needsCommentJoin ? "LEFT JOIN comments c ON c.book = b.id" : ""
         let sql = """
             SELECT b.id FROM books b
             LEFT JOIN books_authors_link bal ON bal.book = b.id
             LEFT JOIN authors a ON a.id = bal.author
+            LEFT JOIN books_series_link bsl ON bsl.book = b.id
+            LEFT JOIN series s ON s.id = bsl.series
+            \(commentJoin)
             \(where_)
             GROUP BY b.id
             ORDER BY b.title ASC
