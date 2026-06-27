@@ -20,7 +20,7 @@ extension NSToolbarItem.Identifier {
 
 // MARK: - LibraryWindowController
 
-class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFieldDelegate {
+class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFieldDelegate, NSMenuDelegate, NSMenuItemValidation {
 
     private weak var toolbarState: LibraryToolbarState?
     private weak var session: LibrarySession?
@@ -250,8 +250,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
         menu.addItem(NSMenuItem.separator())
 
-        let feedTitle = (session?.feedServer?.isRunning == true) ? "Stop RSS Feed Server" : "Start RSS Feed Server"
-        let feedItem = NSMenuItem(title: feedTitle, action: #selector(triggerRSSFeed), keyEquivalent: "")
+        let feedItem = NSMenuItem(title: "RSS Feed Server...", action: #selector(showRSSPanel), keyEquivalent: "")
         feedItem.target = self
         menu.addItem(feedItem)
 
@@ -281,15 +280,46 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             menu.addItem(mi)
         }
         menu.addItem(.separator())
+        let reshuffleItem = NSMenuItem(title: "Reshuffle", action: #selector(reshuffleSort), keyEquivalent: "")
+        reshuffleItem.target = self
+        menu.addItem(reshuffleItem)
+        menu.addItem(.separator())
         let asc  = NSMenuItem(title: "Ascending",  action: #selector(setSortAscending),  keyEquivalent: "")
         let desc = NSMenuItem(title: "Descending", action: #selector(setSortDescending), keyEquivalent: "")
         asc.target  = self
         desc.target = self
         menu.addItem(asc)
         menu.addItem(desc)
+        menu.delegate = self
         item.menu = menu
         sortMenuToolbarItem = item
         return item
+    }
+
+    // MARK: - NSMenuDelegate (sort menu)
+
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === sortMenuToolbarItem?.menu else { return }
+        let current = toolbarState?.sortField
+        let isRandom = current == .random
+        for item in menu.items {
+            if let field = item.representedObject as? SortField {
+                item.state = (field == current) ? .on : .off
+            }
+        }
+        // Enable/disable Ascending/Descending based on whether sort is random
+        for item in menu.items where item.action == #selector(setSortAscending) || item.action == #selector(setSortDescending) {
+            item.isEnabled = !isRandom
+        }
+    }
+
+    // MARK: - NSMenuItemValidation
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(reshuffleSort) {
+            return toolbarState?.sortField == .random
+        }
+        return true
     }
 
     private func makeViewModeItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
@@ -694,6 +724,139 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     @objc private func showReadingGoal()     { toolbarState?.showReadingGoal    = true }
     @objc private func triggerCSVExport()    { toolbarState?.triggerExport      = true }
     @objc private func triggerEPUBExport()   { toolbarState?.triggerEPUBExport  = true }
+    @objc private func showRSSPanel() {
+        guard let session else { return }
+
+        let startAndProceed: (@escaping () -> Void) -> Void = { [weak self] completion in
+            guard self != nil else { return }
+            if session.feedServer?.isRunning != true {
+                session.startFeedServer()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    completion()
+                }
+            } else {
+                completion()
+            }
+        }
+
+        startAndProceed { [weak self] in
+            guard let self, let feedServer = session.feedServer else { return }
+            Task { @MainActor in
+                let collections = await feedServer.collectionList()
+                self.presentRSSChoicePanel(feedServer: feedServer, collections: collections)
+            }
+        }
+    }
+
+    @MainActor
+    private func presentRSSChoicePanel(feedServer: LocalFeedServer,
+                                        collections: [(id: String, name: String)]) {
+        guard let session else { return }
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 260, height: 26), pullsDown: false)
+        popup.addItem(withTitle: "Current search results")
+        if !collections.isEmpty {
+            popup.menu?.addItem(.separator())
+            for col in collections {
+                let item = NSMenuItem(title: col.name, action: nil, keyEquivalent: "")
+                item.representedObject = col.id
+                popup.menu?.addItem(item)
+            }
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Publish to RSS Feed"
+        alert.informativeText = "Choose what to publish. The feed URL updates immediately and stays until you publish again."
+        alert.accessoryView = popup
+        alert.addButton(withTitle: "Publish")
+        alert.addButton(withTitle: "Copy Feed URL")
+        alert.addButton(withTitle: "Cancel")
+
+        let response = alert.runModal()
+        guard response != .alertThirdButtonReturn else { return }
+
+        let baseURL = feedServer.localNetworkURLSync ?? "http://localhost:\(feedServer.port)"
+
+        let selectedIndex = popup.indexOfSelectedItem
+        // 0 = "Current search results"; 1 = separator (skip); >=2 = collection items
+        // popup indexes with separator: index 0 = current search, index 1 = separator, index 2+ = collections
+        let isCurrentSearch = selectedIndex == 0
+
+        let feedURL: String
+        let collectionID: String?
+
+        if isCurrentSearch {
+            feedURL = "\(baseURL)/feed/search.xml"
+            collectionID = nil
+        } else {
+            // Find the selected collection ID
+            if let selectedItem = popup.selectedItem,
+               let cid = selectedItem.representedObject as? String {
+                feedURL = "\(baseURL)/feed/collection/\(cid).xml"
+                collectionID = cid
+            } else {
+                feedURL = "\(baseURL)/feed/search.xml"
+                collectionID = nil
+            }
+        }
+
+        if response == .alertFirstButtonReturn {
+            // Publish
+            if isCurrentSearch || collectionID == nil {
+                // Build snapshot for current search
+                let label: String
+                if let ts = toolbarState, !ts.searchText.isEmpty {
+                    label = ts.searchText
+                } else if let ts = toolbarState, ts.filterExpression.hasCompleteRules {
+                    label = LibraryFilterDebug.summary(expression: ts.filterExpression)
+                } else {
+                    label = "All books"
+                }
+                let ids: [Int]
+                if let result = toolbarState?.activeFilterResult, !result.calibreIDs.isEmpty {
+                    ids = result.calibreIDs
+                } else if let result = toolbarState?.activeFilterResult, result.isSQLBacked {
+                    let q = toolbarState?.searchText.isEmpty == false
+                        ? SearchQueryParser.parse(toolbarState?.searchText ?? "")
+                        : SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+                    ids = session.library?.fetchAllMatchingIDs(query: q, filter: toolbarState?.filterExpression, restrictIDs: nil) ?? []
+                } else {
+                    let q = toolbarState?.searchText.isEmpty == false
+                        ? SearchQueryParser.parse(toolbarState?.searchText ?? "")
+                        : SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+                    ids = session.library?.fetchAllMatchingIDs(query: q, filter: nil, restrictIDs: nil) ?? []
+                }
+                CurrentSearchSnapshot.publish(calibreIDs: ids, label: label)
+            }
+            // Show follow-up with URL
+            let confirmAlert = NSAlert()
+            confirmAlert.messageText = "Feed Published"
+            confirmAlert.informativeText = "Feed URL:\n\(feedURL)"
+            confirmAlert.addButton(withTitle: "Copy URL")
+            confirmAlert.addButton(withTitle: "OK")
+            if confirmAlert.runModal() == .alertFirstButtonReturn {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(feedURL, forType: .string)
+            }
+        } else if response == .alertSecondButtonReturn {
+            // Copy Feed URL
+            if isCurrentSearch || collectionID == nil {
+                // Publish snapshot first so the URL is valid
+                let label = toolbarState?.searchText.isEmpty == false
+                    ? (toolbarState?.searchText ?? "Current Search")
+                    : (toolbarState?.filterExpression.hasCompleteRules == true
+                        ? LibraryFilterDebug.summary(expression: toolbarState!.filterExpression)
+                        : "All books")
+                let q = toolbarState?.searchText.isEmpty == false
+                    ? SearchQueryParser.parse(toolbarState?.searchText ?? "")
+                    : SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+                let ids = session.library?.fetchAllMatchingIDs(query: q, filter: toolbarState?.activeFilterResult?.isSQLBacked == true ? toolbarState?.filterExpression : nil, restrictIDs: toolbarState?.activeFilterResult?.calibreIDs.isEmpty == false ? toolbarState?.activeFilterResult?.calibreIDs : nil) ?? []
+                CurrentSearchSnapshot.publish(calibreIDs: ids, label: label)
+            }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(feedURL, forType: .string)
+        }
+    }
+
     @objc private func triggerRSSFeed() {
         guard let session else { return }
         if session.feedServer?.isRunning == true {
@@ -728,6 +891,12 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(url, forType: .string)
         }
+    }
+
+    @objc private func reshuffleSort() {
+        session?.library?.reshuffleRandom()
+        // Toggle reshuffleToken to trigger reload in both views
+        toolbarState?.reshuffleToken.toggle()
     }
 
     @objc private func sortMenuItemSelected(_ sender: NSMenuItem) {

@@ -44,6 +44,7 @@ final class EmailLibraryViewController: NSViewController {
     var bookStates: [Int: BookState] = [:]
     private var ao3Metadata: [Int: AO3MetadataRecord] = [:]
     private var likedIDs: Set<Int> = []
+    private var readLaterIDs: Set<Int> = []
     private var skippedIDs: Set<Int> = []
     private var seriesOrMergedIDs: Set<Int> = []
     private var ao3PublisherIDs: Set<Int> = []
@@ -63,6 +64,7 @@ final class EmailLibraryViewController: NSViewController {
     private var lastFilterToken: String? = nil
     private var lastSidebarToggle: Bool  = false
     private var lastReaderSidebarToggle: Bool = false
+    private var lastReshuffleToken: Bool = false
 
     /// §switch-flicker fix: set true by `stopObserving()` when this controller is
     /// removed from the view hierarchy (see LibraryViewController.applyViewMode).
@@ -229,6 +231,9 @@ final class EmailLibraryViewController: NSViewController {
         }
         sidebarVC.onToggleLiked = { [weak self] book in
             guard let self else { return }
+        sidebarVC.onToggleReadLater = { [weak self] book in
+            self?.toggleReadLater(for: book)
+        }
             Task {
                 try? await self.session.collectionStore?.toggleLiked(calibreID: book.id)
                 self.session.bumpMembershipVersion()  // §7
@@ -408,6 +413,7 @@ final class EmailLibraryViewController: NSViewController {
             _ = ts.pendingFullTextSearch
             _ = ts.toggleEmailSidebar
             _ = ts.toggleEmailReaderSidebar
+            _ = ts.reshuffleToken
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 guard let self, !self.isTornDown else { return }
@@ -425,6 +431,12 @@ final class EmailLibraryViewController: NSViewController {
         if toolbarState.toggleEmailReaderSidebar != lastReaderSidebarToggle {
             lastReaderSidebarToggle = toolbarState.toggleEmailReaderSidebar
             performReaderSidebarToggle()
+        }
+        if toolbarState.reshuffleToken != lastReshuffleToken {
+            lastReshuffleToken = toolbarState.reshuffleToken
+            if toolbarState.sortField == .random {
+                loadPage(reset: true)
+            }
         }
         let newSearch    = toolbarState.searchText
         let newSort      = toolbarState.sortField
@@ -815,7 +827,48 @@ final class EmailLibraryViewController: NSViewController {
         let raw: [CalibreBook]
         var wordCountPage: [CalibreBook]? = nil
         var wordCountHasMore = false
-        if toolbarState.sortField == .wordCount {
+        if toolbarState.sortField == .random {
+            let restrictIDs: [Int]?
+            let filterForSQL: FilterExpression?
+            var isEmptyExplicitIDs = false
+            if let result = toolbarState.activeFilterResult, result.isSQLBacked {
+                restrictIDs = nil
+                filterForSQL = toolbarState.filterExpression
+            } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
+                restrictIDs = visibleIDs(intersect(result.calibreIDs, with: query.ftsMatchedIDs))
+                filterForSQL = nil
+            } else if toolbarState.activeFilterResult != nil {
+                isEmptyExplicitIDs = true
+                restrictIDs = nil
+                filterForSQL = nil
+            } else {
+                restrictIDs = nil
+                filterForSQL = nil
+            }
+            if isEmptyExplicitIDs {
+                if reset { books = [] }
+                hasNextPage = false
+                rebuildSidebarItems()
+                sidebarVC?.books = books
+                sidebarVC?.items = items
+                sidebarVC?.ao3Metadata = ao3Metadata
+                sidebarVC?.likedIDs = likedIDs
+                return
+            }
+            let (page, hasMore) = library.randomSortedPage(
+                offset: currentPage * pageSize, limit: pageSize,
+                query: query, filter: filterForSQL, restrictIDs: restrictIDs
+            )
+            if reset { books = page } else { books.append(contentsOf: page) }
+            hasNextPage = hasMore
+            rebuildSidebarItems()
+            sidebarVC?.books = books
+            sidebarVC?.bookStates = bookStates
+            sidebarVC?.ao3Metadata = ao3Metadata
+            sidebarVC?.likedIDs = likedIDs
+            loadAO3MetadataForSidebarBooks()
+            return
+        } else if toolbarState.sortField == .wordCount {
             // §2a fix (2): see orderByClause(.wordCount) / wordCountSortedPage(...)
             // in CalibreLibrary.swift — word count can't be sorted via a single SQL
             // ORDER BY, so it's resolved in memory over the full matching set.
@@ -919,6 +972,7 @@ final class EmailLibraryViewController: NSViewController {
         sidebarVC?.bookStates = bookStates
         sidebarVC?.ao3Metadata = ao3Metadata
         sidebarVC?.likedIDs = likedIDs
+        sidebarVC?.readLaterIDs = readLaterIDs
         loadAO3MetadataForSidebarBooks()
         LibraryFilterDebug.log("loadPage.end", [
             "surface": "email",
@@ -1109,6 +1163,19 @@ final class EmailLibraryViewController: NSViewController {
         return ids
     }
 
+    private func toggleReadLater(for book: CalibreBook) {
+        let isCurrentlyInReadLater = readLaterIDs.contains(book.id)
+        Task {
+            if isCurrentlyInReadLater {
+                try? await session.collectionStore?.remove(calibreID: book.id, from: SystemCollectionID.readLater)
+            } else {
+                try? await session.collectionStore?.bulkAdd(calibreIDs: [book.id], to: SystemCollectionID.readLater)
+            }
+            session.bumpMembershipVersion()
+            await refreshCollectionSnapshots()
+        }
+    }
+
     private func markRead(_ books: [CalibreBook]) {
         let ids = books.map(\.id)
         let container = modelContainer
@@ -1188,12 +1255,14 @@ final class EmailLibraryViewController: NSViewController {
             return (collection.name, membershipByID[collection.id] ?? [])
         })
         likedIDs = (try? await session.collectionStore?.likedIDs()) ?? []
+        readLaterIDs = Set((try? await session.collectionStore?.members(of: SystemCollectionID.readLater)) ?? [])
         let shouldReloadPage = skippedIDs != currentSkipped || seriesOrMergedIDs != currentSeriesOrMerged || ao3PublisherIDs != currentAO3PublisherIDs
         skippedIDs = currentSkipped
         seriesOrMergedIDs = currentSeriesOrMerged
         ao3PublisherIDs = currentAO3PublisherIDs
         sidebarVC?.collectionMembership = collectionMembership
         sidebarVC?.likedIDs = likedIDs
+        sidebarVC?.readLaterIDs = readLaterIDs
         if shouldReloadPage {
             loadPage(reset: true)
         }

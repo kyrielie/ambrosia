@@ -33,6 +33,7 @@ final class EmailSidebarViewController: NSViewController,
     var onContextMenuReadLater:        (([CalibreBook]) -> Void)?
     var onContextMenuCollectionPicker: (([CalibreBook], NSView, NSRect) -> Void)?
     var onToggleLiked:                 ((CalibreBook) -> Void)?
+    var onToggleReadLater:             ((CalibreBook) -> Void)?
 
     // MARK: - Dependencies
 
@@ -45,6 +46,7 @@ final class EmailSidebarViewController: NSViewController,
     var bookStates: [Int: BookState] = [:] { didSet { reloadVisibleRows() } }
     var ao3Metadata: [Int: AO3MetadataRecord] = [:] { didSet { reloadVisibleRows() } }
     var likedIDs: Set<Int> = [] { didSet { reloadVisibleRows() } }
+    var readLaterIDs: Set<Int> = [] { didSet { reloadVisibleRows() } }
     /// Collection snapshot for building context menu submenus. Key = name, value = member calibreIDs.
     var collectionMembership: [String: Set<Int>] = [:] { didSet { reloadVisibleRows() } }
 
@@ -138,10 +140,14 @@ final class EmailSidebarViewController: NSViewController,
             readPercent: bookStates[items[row].primaryBook.id]?.totalReadPercent ?? 0,
             ao3Metadata: ao3Metadata[items[row].primaryBook.id],
             isLiked: likedIDs.contains(items[row].primaryBook.id),
+            isInReadLater: readLaterIDs.contains(items[row].primaryBook.id),
             collectionPills: manualCollectionPills(for: items[row]),
             showCollectionPills: ReaderPreferences.shared.emailPillsShowCollections,
             onToggleLiked: { [weak self] book in
                 self?.onToggleLiked?(book)
+            },
+            onToggleReadLater: { [weak self] book in
+                self?.onToggleReadLater?(book)
             }
         )
         return cell
@@ -411,8 +417,10 @@ final class EmailBookCellView: NSTableCellView {
     private let progressTrack = NSView()
     private let progressFill  = NSView()
     private let likeButton = NSButton()
+    private let readLaterButton = NSButton()
     private var representedBook: CalibreBook?
     private var onToggleLiked: ((CalibreBook) -> Void)?
+    private var onToggleReadLater: ((CalibreBook) -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -436,6 +444,14 @@ final class EmailBookCellView: NSTableCellView {
         likeButton.action = #selector(toggleLiked)
         likeButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(likeButton)
+
+        readLaterButton.isBordered = false
+        readLaterButton.bezelStyle = .regularSquare
+        readLaterButton.imagePosition = .imageOnly
+        readLaterButton.target = self
+        readLaterButton.action = #selector(toggleReadLaterAction)
+        readLaterButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(readLaterButton)
 
         authorLabel.font = NSFont.systemFont(ofSize: 11)
         authorLabel.textColor = .secondaryLabelColor
@@ -477,8 +493,13 @@ final class EmailBookCellView: NSTableCellView {
 
         NSLayoutConstraint.activate([
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            titleLabel.trailingAnchor.constraint(equalTo: likeButton.leadingAnchor, constant: -6),
+            titleLabel.trailingAnchor.constraint(equalTo: readLaterButton.leadingAnchor, constant: -6),
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 9),
+
+            readLaterButton.trailingAnchor.constraint(equalTo: likeButton.leadingAnchor, constant: -4),
+            readLaterButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            readLaterButton.widthAnchor.constraint(equalToConstant: 18),
+            readLaterButton.heightAnchor.constraint(equalToConstant: 18),
 
             likeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             likeButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
@@ -521,14 +542,19 @@ final class EmailBookCellView: NSTableCellView {
         readPercent: Double,
         ao3Metadata: AO3MetadataRecord?,
         isLiked: Bool,
+        isInReadLater: Bool,
         collectionPills: [String],
         showCollectionPills: Bool,
-        onToggleLiked: @escaping (CalibreBook) -> Void
+        onToggleLiked: @escaping (CalibreBook) -> Void,
+        onToggleReadLater: @escaping (CalibreBook) -> Void
     ) {
         representedBook = item.primaryBook
         self.onToggleLiked = onToggleLiked
+        self.onToggleReadLater = onToggleReadLater
         likeButton.image = NSImage(systemSymbolName: isLiked ? "star.fill" : "star", accessibilityDescription: isLiked ? "Unlike" : "Like")
         likeButton.contentTintColor = isLiked ? .systemYellow : .secondaryLabelColor
+        readLaterButton.image = NSImage(systemSymbolName: isInReadLater ? "bookmark.fill" : "bookmark", accessibilityDescription: isInReadLater ? "Remove from Read Later" : "Add to Read Later")
+        readLaterButton.contentTintColor = isInReadLater ? .controlAccentColor : .secondaryLabelColor
         switch item {
         case .book(let book):
             titleLabel.stringValue = book.displayTitle
@@ -568,6 +594,11 @@ final class EmailBookCellView: NSTableCellView {
     @objc private func toggleLiked() {
         guard let representedBook else { return }
         onToggleLiked?(representedBook)
+    }
+
+    @objc private func toggleReadLaterAction() {
+        guard let representedBook else { return }
+        onToggleReadLater?(representedBook)
     }
 
     private func configureCollectionPills(_ names: [String]) {

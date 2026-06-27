@@ -12,7 +12,6 @@ enum SortField: String, CaseIterable, Identifiable {
     case wordCount
     case kudos
     case published      // Calibre pubdate column
-    case lastOpened
     case series
     case ao3Published   // §6: ao3_metadata.published_date
     case ao3Updated     // §6: ao3_metadata.updated_date
@@ -27,7 +26,6 @@ enum SortField: String, CaseIterable, Identifiable {
         case .wordCount:    return "Word Count"
         case .kudos:        return "Kudos"
         case .published:    return "Published (Calibre)"
-        case .lastOpened:   return "Last Opened"
         case .series:       return "Series"
         case .ao3Published: return "AO3 Published"
         case .ao3Updated:   return "AO3 Updated"
@@ -196,8 +194,6 @@ final class CalibreLibrary {
             return "COALESCE(k.value, 0) \(direction)"
         case .published:
             return "b.pubdate \(direction)"
-        case .lastOpened:
-            return "b.title \(direction)"
         case .series:
             return "s.name \(direction), b.series_index ASC"
         case .ao3Published:
@@ -349,6 +345,21 @@ final class CalibreLibrary {
         let pageIDs = Array(sortedIDs[start..<end])
 
         // 5. Hydrate only the page (authors, tags, comments).
+        let page = booksForIDs(pageIDs)
+        return (page, end < sortedIDs.count)
+    }
+
+    /// Random-sorted page, analogous to wordCountSortedPage.
+    /// Fetches all matching IDs, shuffles with the current seed, slices the page.
+    func randomSortedPage(offset: Int, limit: Int,
+                           query: SearchQuery, filter: FilterExpression?,
+                           restrictIDs: [Int]?) -> (page: [CalibreBook], hasMore: Bool) {
+        let allIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs)
+        let sortedIDs = sortedRandomly(allIDs)
+        let start = min(offset, sortedIDs.count)
+        let end   = min(offset + limit, sortedIDs.count)
+        guard start < end else { return ([], false) }
+        let pageIDs = Array(sortedIDs[start..<end])
         let page = booksForIDs(pageIDs)
         return (page, end < sortedIDs.count)
     }

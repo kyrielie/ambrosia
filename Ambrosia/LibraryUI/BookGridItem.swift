@@ -54,6 +54,7 @@ struct LibraryRootView: View {
     // Seeded from LibrarySession cache so the first render on every mode
     // switch uses correct membership data — no flash of wrong ordering.
     @State private var likedIDs: Set<Int> = []
+    @State private var readLaterIDs: Set<Int> = []
     @State private var skippedIDs: Set<Int> = []
     @State private var seriesOrMergedIDs: Set<Int> = []
     @State private var ao3PublisherIDs: Set<Int> = []
@@ -92,10 +93,11 @@ struct LibraryRootView: View {
     /// Pagination, sort, search-text, and filter-result changes.
     private func attachDataHandlers<V: View>(to view: V) -> some View {
         view
-            .onChange(of: currentPage)                { loadPage() }
-            .onChange(of: toolbarState.sortField)     { selectedIDs.removeAll(); currentPage = 0; loadPage() }
-            .onChange(of: toolbarState.ascending)     { selectedIDs.removeAll(); currentPage = 0; loadPage() }
-            .onChange(of: toolbarState.groupBySeries) { selectedIDs.removeAll(); currentPage = 0; loadPage() }
+            .onChange(of: currentPage)                { print("[StarDiag] onChange:currentPage fired"); loadPage() }
+            .onChange(of: toolbarState.sortField)     { print("[StarDiag] onChange:sortField fired"); selectedIDs.removeAll(); currentPage = 0; loadPage() }
+            .onChange(of: toolbarState.ascending)     { print("[StarDiag] onChange:ascending fired"); selectedIDs.removeAll(); currentPage = 0; loadPage() }
+            .onChange(of: toolbarState.reshuffleToken)   { print("[StarDiag] onChange:reshuffleToken fired"); loadPage() }
+            .onChange(of: toolbarState.groupBySeries) { print("[StarDiag] onChange:groupBySeries fired"); selectedIDs.removeAll(); currentPage = 0; loadPage() }
             .onChange(of: toolbarState.searchText) {
                 selectedIDs.removeAll()
                 currentPage = 0
@@ -132,6 +134,7 @@ struct LibraryRootView: View {
             }
             .onChange(of: toolbarState.activeFilterResult?.reloadToken) {
                 if suppressNextReloadToken { suppressNextReloadToken = false; return }
+                print("[StarDiag] onChange:activeFilterResult.reloadToken fired")
                 selectedIDs.removeAll()
                 currentPage = 0; loadPage()
             }
@@ -190,6 +193,7 @@ struct LibraryRootView: View {
                     // first ever open the cache is empty and behaviour is
                     // unchanged; on subsequent mode switches it's populated.
                     likedIDs = session.cachedLikedIDs
+                    readLaterIDs = session.cachedReadLaterIDs
                     skippedIDs = session.cachedSkippedIDs
                     seriesOrMergedIDs = session.cachedSeriesOrMergedIDs
                     ao3PublisherIDs = session.cachedAO3PublisherIDs
@@ -372,6 +376,7 @@ struct LibraryRootView: View {
     // MARK: - Data loading
 
     private func loadPage() {
+        print("[StarDiag] loadPage called -- sort=\(toolbarState.sortField) page=\(currentPage)", Thread.callStackSymbols.prefix(6).joined(separator: "\n"))
         let loadStart = LibraryFilterDebug.now()
         guard let library = session.library else { books = []; return }
         let rawQuery = toolbarState.searchText.isEmpty
@@ -383,7 +388,30 @@ struct LibraryRootView: View {
             return
         }
 
-        if toolbarState.sortField == .wordCount {
+        if toolbarState.sortField == .random {
+            let restrictIDs: [Int]?
+            let filterForSQL: FilterExpression?
+            if let result = toolbarState.activeFilterResult, result.isSQLBacked {
+                restrictIDs = nil
+                filterForSQL = toolbarState.filterExpression
+            } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
+                restrictIDs = visibleIDs(intersect(result.calibreIDs, with: query.ftsMatchedIDs))
+                filterForSQL = nil
+            } else if toolbarState.activeFilterResult != nil {
+                books = []; items = []; hasNextPage = false
+                rebuildItems(); loadAO3MetadataForCurrentPage(); pruneSelection()
+                return
+            } else {
+                restrictIDs = nil
+                filterForSQL = nil
+            }
+            let (page, hasMore) = library.randomSortedPage(
+                offset: currentPage * pageSize, limit: pageSize,
+                query: query, filter: filterForSQL, restrictIDs: restrictIDs
+            )
+            books = page
+            hasNextPage = hasMore
+        } else if toolbarState.sortField == .wordCount {
             // §2a fix (2): word count can't be sorted by a single SQL ORDER BY —
             // see orderByClause(.wordCount) and wordCountSortedPage(...) for why.
             // Resolve the same three filter states as below, but route through the
@@ -503,6 +531,7 @@ struct LibraryRootView: View {
     }
 
     private func rebuildItems() {
+        print("[StarDiag] rebuildItems called -- sort=\(toolbarState.sortField) page=\(currentPage)", Thread.callStackSymbols.prefix(6).joined(separator: "\n"))
         guard shouldGroupSeriesRows, let metaDB = session.metaDB, let library = session.library else {
             items = books.map { .book($0) }
             return
@@ -665,6 +694,7 @@ struct LibraryRootView: View {
     }
 
     private func refreshBookStates() {
+        print("[StarDiag] refreshBookStates called", Thread.callStackSymbols.prefix(6).joined(separator: "\n"))
         let rbs_t0 = Date()
         let all = (try? modelContext.fetch(FetchDescriptor<BookState>())) ?? []
         bookStates = all.reduce(into: [:]) { $0[$1.calibreID] = $1 }
@@ -672,18 +702,23 @@ struct LibraryRootView: View {
         Task {
             let task_t0 = Date()
             async let fetchedLiked = session.collectionStore?.likedIDs()
+            async let fetchedReadLater = session.collectionStore?.members(of: SystemCollectionID.readLater)
             async let fetchedSkipped = session.collectionStore?.members(of: SystemCollectionID.skipped)
             async let fetchedSeriesOrMerged = session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)
+            let capturedLibrary = session.library
             async let fetchedPublisherIDs: Set<Int> = await Task.detached(priority: .userInitiated) {
-                session.library?.ao3PublisherBookIDs() ?? []
+                capturedLibrary?.ao3PublisherBookIDs() ?? []
             }.value
             let currentLiked = (try? await fetchedLiked) ?? []
+            let currentReadLater = Set((try? await fetchedReadLater) ?? [])
             let currentSkipped = Set((try? await fetchedSkipped) ?? [])
             let currentSeriesOrMerged = Set((try? await fetchedSeriesOrMerged) ?? [])
             let currentAO3PublisherIDs = await fetchedPublisherIDs
             print("[FlashDiag] refreshBookStates — all async fetches resolved: liked=\(currentLiked.count) skipped=\(currentSkipped.count) seriesOrMerged=\(currentSeriesOrMerged.count) publisherIDs=\(currentAO3PublisherIDs.count) t=\(Int(Date().timeIntervalSince(task_t0)*1000))ms")
             await MainActor.run {
             likedIDs = currentLiked
+            readLaterIDs = currentReadLater
+            session.cachedReadLaterIDs = currentReadLater
             skippedIDs = currentSkipped
             seriesOrMergedIDs = currentSeriesOrMerged
             ao3PublisherIDs = currentAO3PublisherIDs
@@ -920,8 +955,9 @@ struct LibraryRootView: View {
 
             async let fetchedSkipped = session.collectionStore?.members(of: SystemCollectionID.skipped)
             async let fetchedSeriesOrMerged = session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)
+            let capturedLibrary2 = session.library
             async let fetchedPublisherIDs: Set<Int> = await Task.detached(priority: .userInitiated) {
-                session.library?.ao3PublisherBookIDs() ?? []
+                capturedLibrary2?.ao3PublisherBookIDs() ?? []
             }.value
             let currentSkipped = Set((try? await fetchedSkipped) ?? [])
             let currentSeriesOrMerged = Set((try? await fetchedSeriesOrMerged) ?? [])
@@ -1182,6 +1218,8 @@ struct LibraryRootView: View {
                 addOrReplaceRule(FilterRule(field: .authorName, op: .equals, value: author))
             },
             onOpenSelected: { open(selectedBooks(fallback: book)) },
+            isInReadLater: readLaterIDs.contains(book.id),
+            onReadLaterToggle: { toggleReadLater(for: book) },
             onLikeToggle: { toggleLike(for: book) },
             onLikeSelected: { setLiked(selectedBooks(fallback: book), liked: true) },
             onUnlikeSelected: { setLiked(selectedBooks(fallback: book), liked: false) },
@@ -1210,7 +1248,12 @@ struct LibraryRootView: View {
                 addTagPillRule(tag: tag, field: field)
             },
             onLikeToggle: { toggleLike(for: series) },
-            onOpen: { AppDelegate.shared?.openReaderWindow(target: .series(series), modelContext: modelContext) }
+            onOpen: { AppDelegate.shared?.openReaderWindow(target: .series(series), modelContext: modelContext) },
+            onReadLater:      { addToReadLater(series.works) },
+            onSkip:           { skip(series.works) },
+            onMarkRead:       { markRead(series.works) },
+            onResetProgress:  { resetProgress(series.works) },
+            onCollectionChanged: { refreshBookStates() }
         )
         .listRowSeparator(.visible)
         .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
@@ -1219,7 +1262,9 @@ struct LibraryRootView: View {
     private func toggleLike(for book: CalibreBook) {
         Task {
             try? await session.collectionStore?.toggleLiked(calibreID: book.id)
+            print("[StarDiag] toggleLike -- before bumpMembershipVersion")
             session.bumpMembershipVersion()
+            print("[StarDiag] toggleLike -- after bumpMembershipVersion, filterUsesLiked will be checked")
             let refreshed = (try? await session.collectionStore?.likedIDs()) ?? []
             await MainActor.run {
                 likedIDs = refreshed
@@ -1247,6 +1292,23 @@ struct LibraryRootView: View {
                 let filterUsesLiked = toolbarState.filterExpression.groups
                     .flatMap(\.rules).contains { $0.field == .isLiked }
                 if filterUsesLiked { applyFilterRules() }
+            }
+        }
+    }
+
+    private func toggleReadLater(for book: CalibreBook) {
+        let isCurrentlyInReadLater = readLaterIDs.contains(book.id)
+        Task {
+            if isCurrentlyInReadLater {
+                try? await session.collectionStore?.remove(calibreID: book.id, from: SystemCollectionID.readLater)
+            } else {
+                try? await session.collectionStore?.bulkAdd(calibreIDs: [book.id], to: SystemCollectionID.readLater)
+            }
+            session.bumpMembershipVersion()
+            let refreshed = Set((try? await session.collectionStore?.members(of: SystemCollectionID.readLater)) ?? [])
+            await MainActor.run {
+                readLaterIDs = refreshed
+                session.cachedReadLaterIDs = refreshed
             }
         }
     }
@@ -1431,6 +1493,8 @@ struct BookListRow: View, Equatable {
     let ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?
     let singletonSeriesWarning: SingletonSeriesWarning?
     let isLiked: Bool
+    let isInReadLater: Bool
+    let onReadLaterToggle: () -> Void
     let hideFanworksTagPill: Bool
     let correctCalibreAmpEntities: Bool
     let modelContext: ModelContext
@@ -1464,6 +1528,7 @@ struct BookListRow: View, Equatable {
             && lhs.singletonSeriesWarning == rhs.singletonSeriesWarning
             && lhs.bookState?.calibreID        == rhs.bookState?.calibreID
             && lhs.isLiked                     == rhs.isLiked
+            && lhs.isInReadLater                == rhs.isInReadLater
             && lhs.hideFanworksTagPill         == rhs.hideFanworksTagPill
             && lhs.correctCalibreAmpEntities   == rhs.correctCalibreAmpEntities
             && lhs.bookState?.totalReadPercent == rhs.bookState?.totalReadPercent
@@ -1474,6 +1539,8 @@ struct BookListRow: View, Equatable {
          onTagTap: @escaping (String, FilterField) -> Void,
          onAuthorTap: @escaping (String) -> Void,
          onOpenSelected: @escaping () -> Void,
+         isInReadLater: Bool,
+         onReadLaterToggle: @escaping () -> Void,
          onLikeToggle: @escaping () -> Void,
          onLikeSelected: @escaping () -> Void,
          onUnlikeSelected: @escaping () -> Void,
@@ -1490,6 +1557,8 @@ struct BookListRow: View, Equatable {
         self.ao3ExtractionDiagnostic = ao3ExtractionDiagnostic
         self.singletonSeriesWarning = singletonSeriesWarning
         self.isLiked      = isLiked
+        self.isInReadLater = isInReadLater
+        self.onReadLaterToggle = onReadLaterToggle
         self.hideFanworksTagPill = hideFanworksTagPill
         self.correctCalibreAmpEntities = correctCalibreAmpEntities
         self.modelContext = modelContext
@@ -1566,6 +1635,12 @@ struct BookListRow: View, Equatable {
             }
             Spacer()
             singletonSeriesWarningButton
+            Button(action: onReadLaterToggle) {
+                Image(systemName: isInReadLater ? "bookmark.fill" : "bookmark")
+                    .foregroundStyle(isInReadLater ? Color.accentColor : Color.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help(isInReadLater ? "Remove from Read Later" : "Add to Read Later")
             Button(action: onLikeToggle) {
                 Image(systemName: isLiked ? "star.fill" : "star")
                     .foregroundStyle(isLiked ? Color.yellow : Color.secondary)
@@ -2004,8 +2079,14 @@ private struct SeriesListRow: View {
     let onTagTap: (String, FilterField) -> Void
     let onLikeToggle: () -> Void
     let onOpen: () -> Void
+    let onReadLater: () -> Void
+    let onSkip: () -> Void
+    let onMarkRead: () -> Void
+    let onResetProgress: () -> Void
+    let onCollectionChanged: () -> Void
 
     @State private var showIndex = false
+    @State private var showCollectionPicker = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2054,9 +2135,22 @@ private struct SeriesListRow: View {
         .onTapGesture(count: 2, perform: onOpen)
         .contextMenu {
             Button("Open Series", action: onOpen)
-            Button("Show Individual Works") {
-                showIndex = true
-            }
+            Button("Show Individual Works") { showIndex = true }
+            Divider()
+            Button(isLiked ? "Unlike Series" : "Like Series", action: onLikeToggle)
+            Button("Add Series to Read Later", action: onReadLater)
+            Button("Mark Series as Read", action: onMarkRead)
+            Button("Reset Series Reading Progress", action: onResetProgress)
+            Button("Skip Series", action: onSkip)
+            Divider()
+            Button("Add to Collection...") { showCollectionPicker = true }
+        }
+        .popover(isPresented: $showCollectionPicker, arrowEdge: .trailing) {
+            CollectionSearchPickerView(
+                calibreIDs: series.works.map(\.id),
+                onChange: { onCollectionChanged() },
+                onComplete: { showCollectionPicker = false }
+            )
         }
     }
 
@@ -2156,6 +2250,7 @@ private extension String {
 private struct SingletonSeriesWarningButton: View {
     let warning: SingletonSeriesWarning
     @State private var showIndex = false
+    @State private var showCollectionPicker = false
 
     var body: some View {
         Button {

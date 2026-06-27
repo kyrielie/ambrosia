@@ -45,6 +45,7 @@ final class LibrarySession {
     var cachedSkippedIDs: Set<Int> = []
     var cachedSeriesOrMergedIDs: Set<Int> = []
     var cachedAO3PublisherIDs: Set<Int> = []
+    var cachedReadLaterIDs: Set<Int> = []
 
     /// The path of the currently open library.
     private(set) var activePath: String?
@@ -101,6 +102,8 @@ final class LibrarySession {
             cachedSkippedIDs = []
             cachedSeriesOrMergedIDs = []
             cachedAO3PublisherIDs = []
+        cachedReadLaterIDs = []
+            cachedReadLaterIDs = []
             LibraryRegistry.shared.register(url)
             LibraryIndexManager.shared.record(url: url)
             importAO3TagSeeds()
