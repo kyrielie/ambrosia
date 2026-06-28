@@ -55,6 +55,14 @@ final class EmailLibraryViewController: NSViewController {
     private let pageSize    = 25
     private var pageFetchLimit: Int { (pageSize * 3) + 1 }
 
+    /// Async-resolved synonym expansions for the current search query's tag terms.
+    /// Mirrors `LibraryRootView.resolvedTagExpansions` — see that property for rationale.
+    private var resolvedTagExpansions: [String: [String]] = [:]
+
+    /// Expansions for committed filter rule tag values, populated async in
+    /// `applyFilterRules` and read sync in `loadPage`'s SQL-paged path.
+    private var cachedFilterTagExpansions: [String: [String]] = [:]
+
     // MARK: - Toolbar snapshots
 
     private var lastSearch:    String    = ""
@@ -478,6 +486,12 @@ final class EmailLibraryViewController: NSViewController {
                     self.toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
                 }
                 if !self.startPendingSearchTextFullTextIfNeeded() {
+                    let tagTerms = self.toolbarState.searchText.isEmpty
+                        ? []
+                        : SearchQueryParser.parse(self.toolbarState.searchText).tagTerms
+                    if tagTerms != Array(self.resolvedTagExpansions.keys).sorted() {
+                        self.resolveTagExpansionsIfNeeded(terms: tagTerms)
+                    }
                     let token = self.toolbarState.beginLibraryFilterApplication()
                     self.loadPage(reset: true)
                     self.toolbarState.finishLibraryFilterApplication(token: token)
@@ -616,7 +630,18 @@ final class EmailLibraryViewController: NSViewController {
                 return stripped
             }() : expression
 
-            let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary)
+            var filterTagExpansions: [String: [String]] = [:]
+            if let metaDB = session.metaDB {
+                let tagValues = Set(expression.groups.flatMap(\.rules)
+                    .filter { $0.field == .tag && $0.isComplete }
+                    .map(\.value))
+                for value in tagValues {
+                    filterTagExpansions[value] = await metaDB.expandedTerms(for: value)
+                }
+            }
+            cachedFilterTagExpansions = filterTagExpansions
+            let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary,
+                                        tagExpansions: filterTagExpansions)
 
             let pass1Result = await builder.matchingIDs(
                 expression: expressionWithoutWordCount,
@@ -768,7 +793,9 @@ final class EmailLibraryViewController: NSViewController {
             "filter": filterSignature
         ])
         filterCountTask = Task { [weak self] in
-            let count = library.bookCount(query: query, filter: expression)
+            let tagExpansions = self?.cachedFilterTagExpansions ?? [:]
+            let count = library.bookCount(query: query, filter: expression,
+                                          filterTagExpansions: tagExpansions)
             await MainActor.run {
                 guard let self,
                       !Task.isCancelled,
@@ -816,7 +843,9 @@ final class EmailLibraryViewController: NSViewController {
         let rawQuery = toolbarState.searchText.isEmpty
             ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
             : SearchQueryParser.parse(toolbarState.searchText)
-        let query = queryWithCachedFullText(rawQuery)
+        var query = queryWithCachedFullText(rawQuery)
+        // Inject pre-resolved synonym expansions (Invariant 10 — mirrors LibraryRootView).
+        query.expandedTagTerms = resolvedTagExpansions
         if rawQuery.fulltextPhrase?.isEmpty == false && query.ftsMatchedIDs == nil {
             _ = startPendingSearchTextFullTextIfNeeded()
             return
@@ -857,7 +886,8 @@ final class EmailLibraryViewController: NSViewController {
             }
             let (page, hasMore) = library.randomSortedPage(
                 offset: currentPage * pageSize, limit: pageSize,
-                query: query, filter: filterForSQL, restrictIDs: restrictIDs
+                query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                filterTagExpansions: cachedFilterTagExpansions
             )
             if reset { books = page } else { books.append(contentsOf: page) }
             hasNextPage = hasMore
@@ -899,7 +929,8 @@ final class EmailLibraryViewController: NSViewController {
             } else {
                 let (page, hasMore) = library.wordCountSortedPage(
                     offset: currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
-                    query: query, filter: filterForSQL, restrictIDs: restrictIDs
+                    query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                    filterTagExpansions: cachedFilterTagExpansions
                 )
                 wordCountPage = page
                 wordCountHasMore = hasMore
@@ -917,7 +948,8 @@ final class EmailLibraryViewController: NSViewController {
                 offset: currentPage * pageSize, limit: pageFetchLimit,
                 sort: toolbarState.sortField, ascending: toolbarState.ascending,
                 query: query,
-                filter: toolbarState.filterExpression
+                filter: toolbarState.filterExpression,
+                filterTagExpansions: cachedFilterTagExpansions
             )
             scheduleDeferredSQLFilterCount(query: query)
         } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
@@ -1008,6 +1040,23 @@ final class EmailLibraryViewController: NSViewController {
             plainTerms: [],
             ftsMatchedIDs: ids
         )
+    }
+
+    /// Mirrors `LibraryRootView.resolveTagExpansionsIfNeeded`. See that method for rationale.
+    private func resolveTagExpansionsIfNeeded(terms: [String]) {
+        guard !terms.isEmpty, let metaDB = session.metaDB else {
+            resolvedTagExpansions = [:]
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self, !self.isTornDown else { return }
+            var resolved: [String: [String]] = [:]
+            for term in terms {
+                resolved[term] = await metaDB.expandedTerms(for: term)
+            }
+            self.resolvedTagExpansions = resolved
+            self.loadPage(reset: false)
+        }
     }
 
     private func rebuildSidebarItems() {
@@ -1604,20 +1653,4 @@ struct FilterSheetCarrier: View {
                 }
             }
     }
-}
-
-private func missingIndices(in indices: [Int]) -> [Int] {
-    let unique = Array(Set(indices)).sorted()
-    guard let last = unique.last, last > 1 else { return [] }
-    let present = Set(unique)
-    return (1...last).filter { !present.contains($0) }
-}
-
-private func parseISODate(_ value: String?) -> Date? {
-    guard let value, !value.isEmpty else { return nil }
-    let iso = ISO8601DateFormatter()
-    if let date = iso.date(from: value) { return date }
-    let formatter = DateFormatter()
-    formatter.dateFormat = "yyyy-MM-dd"
-    return formatter.date(from: value)
 }

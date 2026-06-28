@@ -157,7 +157,9 @@ private struct SuggestionAnchorView: NSViewRepresentable {
         // teardown, at which point the window hierarchy may be partially
         // released.  Any call through panel.parent or anchorView.window
         // at this point risks a use-after-free trap.
+        #if DEBUG
         print("[FilterSuggestions] dismantleNSView — removing mouse monitor only")
+        #endif
         coordinator.removeMouseMonitor()
     }
 
@@ -182,7 +184,9 @@ private struct SuggestionAnchorView: NSViewRepresentable {
                 suggestions: suggestions,
                 field: field,
                 onSelect: { [weak self] value in
+                    #if DEBUG
                     print("[FilterSuggestions] suggestion selected: '\(value)' — hiding panel")
+                    #endif
                     self?.hide()
                     onSelect(value)
                 }
@@ -197,7 +201,9 @@ private struct SuggestionAnchorView: NSViewRepresentable {
             hide()
 
             guard let parentWindow = anchorView.window else {
+                #if DEBUG
                 print("[FilterSuggestions] show: anchorView has no window — aborting")
+                #endif
                 return
             }
 
@@ -205,7 +211,9 @@ private struct SuggestionAnchorView: NSViewRepresentable {
             hc.view.frame = NSRect(x: 0, y: 0, width: Self.panelWidth, height: 200)
             hc.view.layoutSubtreeIfNeeded()
             let fitting = hc.sizeThatFits(in: NSSize(width: Self.panelWidth, height: 500))
+            #if DEBUG
             print("[FilterSuggestions] show: fitting size \(fitting), \(suggestions.count) suggestions")
+            #endif
 
             let newPanel = NSPanel(
                 contentRect: NSRect(origin: .zero, size: fitting),
@@ -266,7 +274,9 @@ private struct SuggestionAnchorView: NSViewRepresentable {
 
         private func reposition(panel: NSPanel, anchorView: NSView) {
             guard let anchorWindow = anchorView.window else {
+                #if DEBUG
                 print("[FilterSuggestions] reposition: no window")
+                #endif
                 return
             }
 
@@ -291,7 +301,9 @@ private struct SuggestionAnchorView: NSViewRepresentable {
             let fieldInWindow  = fieldView.convert(fieldView.bounds, to: nil)
             let fieldOnScreen  = anchorWindow.convertToScreen(fieldInWindow)
 
+            #if DEBUG
             print("[FilterSuggestions] reposition: fieldOnScreen=\(fieldOnScreen)")
+            #endif
 
             let fitting: NSSize = hostingController.map {
                 $0.sizeThatFits(in: NSSize(width: Self.panelWidth, height: 500))
@@ -310,7 +322,9 @@ private struct SuggestionAnchorView: NSViewRepresentable {
             // Place panel top at field bottom, shifted down by gap.
             let originY = fieldOnScreen.minY - panelHeight - 4
 
+            #if DEBUG
             print("[FilterSuggestions] reposition: panel frame x=\(clampedX) y=\(originY) w=\(panelWidth) h=\(panelHeight)")
+            #endif
 
             panel.setFrame(
                 NSRect(x: clampedX, y: originY, width: panelWidth, height: panelHeight),

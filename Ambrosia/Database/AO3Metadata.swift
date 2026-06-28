@@ -46,7 +46,11 @@ enum AO3Rating: String, CaseIterable {
 enum AO3Warning: String, CaseIterable {
     case noWarnings           = "No Archive Warnings Apply"
     case creatorChoseNot      = "Creator Chose Not To Use Archive Warnings"
-    case chooseNotTo          = "Choose Not To Use Archive Warnings"  // alternate AO3 export spelling
+    // "Choose Not To Use Archive Warnings" is a real alternate spelling that appears in
+    // some AO3 EPUB exports (observed in the wild). It is intentionally kept alongside
+    // `creatorChoseNot` so both spellings match in filter UI and extraction. If future
+    // sampling shows it never appears in practice, remove this case.
+    case chooseNotTo          = "Choose Not To Use Archive Warnings"
     case graphicViolence      = "Graphic Depictions Of Violence"
     case majorCharDeath       = "Major Character Death"
     case underage             = "Underage Sex"

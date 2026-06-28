@@ -73,6 +73,16 @@ enum FilterRuleFactory {
         rule(kind: suggestion.kind, value: suggestion.value)
     }
 
+    /// Async variant for tag suggestions: resolves the canonical term via
+    /// `AmbrosiaMetaDB` (Invariant 10) before building the rule.
+    static func rule(for suggestion: SearchSuggestion, metaDB: AmbrosiaMetaDB?) async -> FilterRule {
+        if suggestion.kind == .tag, let metaDB {
+            let resolved = await metaDB.canonicalTerm(for: suggestion.value)
+            return rule(kind: .tag, value: suggestion.value, resolvedTagValue: resolved)
+        }
+        return rule(kind: suggestion.kind, value: suggestion.value)
+    }
+
     static func tagPillRule(label: String, field: FilterField) -> FilterRule {
         if field == .tag {
             return rule(kind: .tag, value: label)
@@ -81,11 +91,15 @@ enum FilterRuleFactory {
         return FilterRule(field: field, op: op, value: label)
     }
 
-    private static func rule(kind: SuggestionKind, value: String) -> FilterRule {
+    private static func rule(kind: SuggestionKind, value: String, resolvedTagValue: String? = nil) -> FilterRule {
         let resolvedValue: String
         switch kind {
         case .tag:
-            resolvedValue = AO3TagSearchResolver.canonicalTerm(for: value)
+            // Canonical term resolution is done asynchronously by the caller via
+            // AmbrosiaMetaDB.canonicalTerm (Invariant 10). Use the pre-resolved
+            // value when provided; fall back to the raw value when seeds are off
+            // or metaDB is unavailable.
+            resolvedValue = resolvedTagValue ?? value
         case .status:
             resolvedValue = AO3CompletionStatus(userValue: value)?.rawValue ?? value
         default:

@@ -77,16 +77,7 @@ final class LibrarySession {
     func open(url: URL) {
         lastError = nil
         do {
-            let hash = Ambrosia.libraryHash(for: url)
-            let support = FileManager.default.urls(
-                for: .applicationSupportDirectory, in: .userDomainMask).first!
-            let metaDBPath = support
-                .appendingPathComponent("Ambrosia")
-                .appendingPathComponent("libraries")
-                .appendingPathComponent(hash)
-                .appendingPathComponent("ambrosia_meta.db")
-                .path
-            let newLibrary = try CalibreLibrary(root: url, metaDBPath: metaDBPath)
+            let newLibrary = try CalibreLibrary(root: url)
             let newMetaDB = try AmbrosiaMetaDB(libraryURL: url)
             library    = newLibrary
             metaDB = newMetaDB
@@ -102,24 +93,48 @@ final class LibrarySession {
             cachedSkippedIDs = []
             cachedSeriesOrMergedIDs = []
             cachedAO3PublisherIDs = []
-        cachedReadLaterIDs = []
             cachedReadLaterIDs = []
             LibraryRegistry.shared.register(url)
             LibraryIndexManager.shared.record(url: url)
             importAO3TagSeeds()
             startAO3Extraction()
             seedCalibreSeriesCache()
+            refreshAO3MetaCaches()
             // Load persisted search history for this library.
             SearchActivityLog.shared.load(libraryHash: Ambrosia.libraryHash(for: url))
-            // §4: Restart feed server with new library if it was already running
-            if let server = feedServer {
-                let cs = collectionStore!
+            // TODO(§4): Restart feed server with new library if it was already running
+            if let server = feedServer, let cs = collectionStore {
                 Task { await server.updateLibrary(newLibrary, metaDB: newMetaDB, collectionStore: cs) }
             }
             print("[LibrarySession] Opened \(url.lastPathComponent) — \(totalCount) books")
         } catch {
             lastError = "Could not open library: \(error.localizedDescription)"
             print("[LibrarySession] Open failed: \(error)")
+        }
+    }
+
+    /// Bulk-refreshes `CalibreLibrary`'s AO3 word-count/date/crossover caches
+    /// from `AmbrosiaMetaDB`. Called on open and after AO3 extraction
+    /// completes. `AmbrosiaMetaDB` remains the sole owner of reads against
+    /// ambrosia_meta.db (Invariant 10); `CalibreLibrary` only ever sees the
+    /// results pushed in here.
+    private func refreshAO3MetaCaches() {
+        guard let library, let metaDB else { return }
+        Task { [weak self] in
+            async let wordCounts = metaDB.allAO3WordCounts()
+            async let dates = metaDB.allAO3Dates()
+            async let crossoverIDs = metaDB.allCrossoverBookIDs()
+            let resolvedWordCounts = await wordCounts
+            let resolvedDates = await dates
+            let resolvedCrossoverIDs = await crossoverIDs
+            await MainActor.run {
+                guard self?.library === library else { return }
+                library.updateAO3MetaCaches(
+                    wordCounts: resolvedWordCounts,
+                    dates: resolvedDates,
+                    crossoverIDs: resolvedCrossoverIDs
+                )
+            }
         }
     }
 
@@ -145,6 +160,7 @@ final class LibrarySession {
         cachedLikedIDs = []
         cachedSkippedIDs = []
         cachedSeriesOrMergedIDs = []
+        cachedReadLaterIDs = []
         SearchActivityLog.shared.clear()
         cachedAO3PublisherIDs = []
         stopFeedServer()                                     // §4
@@ -448,6 +464,7 @@ final class LibrarySession {
                 self?.extractionProgress.isRunning = false
             }
             await self?.syncSeriesOrMergedCollection()
+            self?.refreshAO3MetaCaches()
         }
     }
 

@@ -44,21 +44,44 @@ final class CalibreLibrary {
 
     let root: URL                   // absolute path to the Calibre library folder
     internal let db: Connection
-    private let metaDB: Connection  // read-only connection to ambrosia_meta.db
+
+    // MARK: - AO3 metadata caches
+    //
+    // `AmbrosiaMetaDB` is the sole owner of ambrosia_meta.db (Invariant 10).
+    // CalibreLibrary used to open its own read-only `Connection` to that file,
+    // which violated that ownership boundary. These three caches are bulk-
+    // fetched by `AmbrosiaMetaDB` and pushed in by `LibrarySession` (on open
+    // and after AO3 extraction completes) via `updateAO3MetaCaches`. The
+    // methods below read from these caches instead of querying a database.
+    private(set) var ao3WordCountCache: [Int: Int] = [:]
+    private(set) var ao3DateCache: [Int: (published: String?, updated: String?)] = [:]
+    private(set) var crossoverIDCache: Set<Int> = []
 
     /// §6: Seeded random sort seed. Stable within a session; refreshed on library open
     /// or when the user explicitly requests a new shuffle.
     private(set) var randomSeed: UInt64 = UInt64.random(in: 0 ... UInt64.max)
 
-    init(root: URL, metaDBPath: String) throws {
+    init(root: URL) throws {
         self.root = root
         let dbPath = root.appendingPathComponent("metadata.db").path
         db = try Connection(dbPath, readonly: true)
-        metaDB = try Connection(metaDBPath, readonly: true)
         // Increase the page cache to 32 MB and keep temp tables in memory.
         // These are session-scoped PRAGMAs — safe on a read-only connection.
         try? db.execute("PRAGMA cache_size = -32768")   // negative = kibibytes
         try? db.execute("PRAGMA temp_store = MEMORY")
+    }
+
+    /// Called by `LibrarySession` whenever the AO3 metadata caches should be
+    /// refreshed from `AmbrosiaMetaDB` (on library open and after extraction
+    /// batches complete).
+    func updateAO3MetaCaches(
+        wordCounts: [Int: Int],
+        dates: [Int: (published: String?, updated: String?)],
+        crossoverIDs: Set<Int>
+    ) {
+        ao3WordCountCache = wordCounts
+        ao3DateCache = dates
+        crossoverIDCache = crossoverIDs
     }
 
     // MARK: - Count
@@ -144,16 +167,7 @@ final class CalibreLibrary {
     // If JSON1 is unavailable (should not happen on macOS 14+) we fall back to an
     // in-memory scan of all IDs and return empty so filtering is a no-op rather than crash.
     func crossoverBookIDs() -> Set<Int> {
-        let sql = """
-        SELECT calibre_id
-        FROM ao3_metadata
-        WHERE json_array_length(fandoms_json) > 1
-        """
-        let rows = (try? metaDB.prepare(sql).map { $0 }) ?? []
-        return Set(rows.compactMap { row in
-            if let v = row[0] as? Int64 { return Int(v) }
-            return row[0] as? Int
-        })
+        crossoverIDCache
     }
 
     // MARK: - §6: Seeded random sort helpers
@@ -219,40 +233,21 @@ final class CalibreLibrary {
     // MARK: - §6: Bulk AO3 word-count fallback
     //
     // When no Calibre custom column for word count is configured, this bulk-fetches
-    // ao3_metadata.word_count values via the cached self.metaDB connection.
+    // ao3_metadata.word_count values via the cached ao3WordCountCache, which
+    // is bulk-fetched by AmbrosiaMetaDB and pushed in by LibrarySession.
     func ao3WordCounts(ids: [Int]) -> [Int: Int] {
         guard !ids.isEmpty else { return [:] }
-        let ph = ids.map { _ in "?" }.joined(separator: ",")
-        let sql = "SELECT calibre_id, word_count FROM ao3_metadata WHERE calibre_id IN (\(ph)) AND word_count IS NOT NULL"
-        let args = ids.map { $0 as Binding? }
-        guard let rows = try? metaDB.prepare(sql, args).map({ $0 }) else { return [:] }
-        var result: [Int: Int] = [:]
-        for row in rows {
-            if let idBind = row[0] as? Int64, let wc = row[1] as? Int64 {
-                result[Int(idBind)] = Int(wc)
-            }
-        }
-        return result
+        let idSet = Set(ids)
+        return ao3WordCountCache.filter { idSet.contains($0.key) }
     }
 
-    /// Bulk-fetch AO3 published/updated dates from ambrosia_meta.db for a set of IDs.
+    /// Bulk-fetch AO3 published/updated dates for a set of IDs from the
+    /// cached `ao3DateCache` (see the AO3 metadata caches note above).
     /// Returns ISO-8601 date strings keyed by calibre ID. Missing entries = no AO3 metadata.
     func ao3Dates(ids: [Int]) -> [Int: (published: String?, updated: String?)] {
         guard !ids.isEmpty else { return [:] }
-        let ph = ids.map { _ in "?" }.joined(separator: ",")
-        let sql = """
-            SELECT calibre_id, published_date, updated_date
-            FROM ao3_metadata
-            WHERE calibre_id IN (\(ph))
-            """
-        let args = ids.map { $0 as Binding? }
-        guard let rows = try? metaDB.prepare(sql, args).map({ $0 }) else { return [:] }
-        var result: [Int: (published: String?, updated: String?)] = [:]
-        for row in rows {
-            guard let id = (row[0] as? Int64).map(Int.init) else { continue }
-            result[id] = (row[1] as? String, row[2] as? String)
-        }
-        return result
+        let idSet = Set(ids)
+        return ao3DateCache.filter { idSet.contains($0.key) }
     }
 
     /// Sort books by an AO3 date field (ISO-8601 string, lexicographic order).
@@ -320,9 +315,11 @@ final class CalibreLibrary {
     /// path whenever sort == .wordCount.
     func wordCountSortedPage(offset: Int, limit: Int, ascending: Bool,
                               query: SearchQuery, filter: FilterExpression?,
-                              restrictIDs: [Int]?) -> (page: [CalibreBook], hasMore: Bool) {
+                              restrictIDs: [Int]?,
+                              filterTagExpansions: [String: [String]] = [:]) -> (page: [CalibreBook], hasMore: Bool) {
         // 1. Fetch all matching IDs (no author/tag/comment hydration).
-        let allIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs)
+        let allIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
+                                         filterTagExpansions: filterTagExpansions)
 
         // 2. Bulk-fetch word counts for this ID set only.
         let wordCounts: [Int: Int]
@@ -353,8 +350,10 @@ final class CalibreLibrary {
     /// Fetches all matching IDs, shuffles with the current seed, slices the page.
     func randomSortedPage(offset: Int, limit: Int,
                            query: SearchQuery, filter: FilterExpression?,
-                           restrictIDs: [Int]?) -> (page: [CalibreBook], hasMore: Bool) {
-        let allIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs)
+                           restrictIDs: [Int]?,
+                           filterTagExpansions: [String: [String]] = [:]) -> (page: [CalibreBook], hasMore: Bool) {
+        let allIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
+                                         filterTagExpansions: filterTagExpansions)
         let sortedIDs = sortedRandomly(allIDs)
         let start = min(offset, sortedIDs.count)
         let end   = min(offset + limit, sortedIDs.count)
@@ -374,7 +373,8 @@ final class CalibreLibrary {
     func fetchAllMatchingIDs(
         query: SearchQuery,
         filter: FilterExpression?,
-        restrictIDs: [Int]?
+        restrictIDs: [Int]?,
+        filterTagExpansions: [String: [String]] = [:]
     ) -> [Int] {
         var conditions: [String] = []
         var args: [Binding?] = []
@@ -389,7 +389,7 @@ final class CalibreLibrary {
             conditions.append(qClause)
             args.append(contentsOf: qArgs)
         }
-        if let filter, let (fClause, fArgs) = sqlFilterClause(for: filter) {
+        if let filter, let (fClause, fArgs) = sqlFilterClause(for: filter, tagExpansions: filterTagExpansions) {
             conditions.append(fClause)
             args.append(contentsOf: fArgs)
         }
@@ -469,7 +469,8 @@ final class CalibreLibrary {
         sort: SortField,
         ascending: Bool,
         query: SearchQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: []),
-        filter: FilterExpression? = nil
+        filter: FilterExpression? = nil,
+        filterTagExpansions: [String: [String]] = [:]
     ) -> [CalibreBook] {
         let start = LibraryFilterDebug.now()
         do {
@@ -477,7 +478,8 @@ final class CalibreLibrary {
                 offset: offset, limit: limit,
                 sort: sort, ascending: ascending,
                 query: query, filter: filter,
-                restrictIDs: nil
+                restrictIDs: nil,
+                filterTagExpansions: filterTagExpansions
             )
             let fetchedIDs = rows.map(\.id)
             let authorsMap  = try _authors(for: fetchedIDs)
@@ -518,7 +520,8 @@ final class CalibreLibrary {
         ascending: Bool,
         query: SearchQuery,
         filter: FilterExpression?,
-        restrictIDs: [Int]? = nil
+        restrictIDs: [Int]? = nil,
+        filterTagExpansions: [String: [String]] = [:]
     ) throws -> [CalibreBook] {
         let direction = ascending ? "ASC" : "DESC"
         // §6 fix: random sort falls back to title in SQL; caller reshuffles post-fetch.
@@ -555,7 +558,7 @@ final class CalibreLibrary {
             conditions.append(qClause)
             args.append(contentsOf: qArgs)
         }
-        if let filter, let (fClause, fArgs) = sqlFilterClause(for: filter) {
+        if let filter, let (fClause, fArgs) = sqlFilterClause(for: filter, tagExpansions: filterTagExpansions) {
             conditions.append(fClause)
             args.append(contentsOf: fArgs)
         }
