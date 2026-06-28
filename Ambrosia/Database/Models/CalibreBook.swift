@@ -156,6 +156,59 @@ struct SeriesGroup: Identifiable, Hashable {
     let placeholders: [SeriesPlaceholder]
     let isComplete: Bool
 
+    init(
+        id: String,
+        seriesKey: String,
+        seriesName: String,
+        works: [CalibreBook],
+        allFandoms: [String],
+        allRelationships: [String],
+        allCharacters: [String],
+        allCategories: [String],
+        allWarnings: [String],
+        allRatings: [String],
+        allAdditionalTags: [String],
+        allTags: [String],
+        allAuthors: [String],
+        allDescriptions: [String],
+        totalWordCount: Int,
+        chapterCurrentTotal: Int?,
+        chapterTotalTotal: Int?,
+        hasUnknownChapterTotal: Bool,
+        earliestPublished: Date?,
+        latestUpdated: Date?,
+        workIndices: [Int],
+        missingIndices: [Int],
+        placeholders: [SeriesPlaceholder],
+        isComplete: Bool
+    ) {
+        precondition(!works.isEmpty, "SeriesGroup must be constructed with at least one work")
+        self.id = id
+        self.seriesKey = seriesKey
+        self.seriesName = seriesName
+        self.works = works
+        self.allFandoms = allFandoms
+        self.allRelationships = allRelationships
+        self.allCharacters = allCharacters
+        self.allCategories = allCategories
+        self.allWarnings = allWarnings
+        self.allRatings = allRatings
+        self.allAdditionalTags = allAdditionalTags
+        self.allTags = allTags
+        self.allAuthors = allAuthors
+        self.allDescriptions = allDescriptions
+        self.totalWordCount = totalWordCount
+        self.chapterCurrentTotal = chapterCurrentTotal
+        self.chapterTotalTotal = chapterTotalTotal
+        self.hasUnknownChapterTotal = hasUnknownChapterTotal
+        self.earliestPublished = earliestPublished
+        self.latestUpdated = latestUpdated
+        self.workIndices = workIndices
+        self.missingIndices = missingIndices
+        self.placeholders = placeholders
+        self.isComplete = isComplete
+    }
+
     var displayAuthors: String {
         allAuthors.isEmpty ? "Unknown Author" : allAuthors.joined(separator: ", ")
     }
@@ -237,7 +290,9 @@ enum ReadingTarget: Hashable {
     var primaryBook: CalibreBook {
         switch self {
         case .singleBook(let book): return book
-        case .series(let series): return series.works.first!
+        case .series(let series):
+            precondition(!series.works.isEmpty, "SeriesGroup invariant violated: works must be non-empty")
+            return series.works[0]
         }
     }
 

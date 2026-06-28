@@ -63,6 +63,7 @@ actor AmbrosiaMetaDB {
         try createAnnotations(db: db)
         try createReadingHistory(db: db)
         try createAO3Metadata(db: db)
+        try migrateSeriesPlaceholdersToKeyedIfNeeded(db: db)
         try createAO3TagSynonyms(db: db)
         try bootstrapSystemCollections(db: db)
     }
@@ -217,27 +218,43 @@ actor AmbrosiaMetaDB {
             ON ao3_extraction_diagnostics(status);
 
         """)
-        _ = try? db.run("ALTER TABLE series_placeholders ADD COLUMN series_key TEXT")
-        try db.run("UPDATE series_placeholders SET series_key = 'calibre:' || series_name WHERE series_key IS NULL OR series_key = ''")
-        try db.execute("""
-        CREATE TABLE IF NOT EXISTS series_placeholders_keyed (
-            series_key TEXT NOT NULL,
-            series_name TEXT NOT NULL,
-            part_index INTEGER NOT NULL,
-            note TEXT,
-            PRIMARY KEY (series_key, part_index)
-        );
+    }
 
-        INSERT OR IGNORE INTO series_placeholders_keyed (series_key, series_name, part_index, note)
-        SELECT series_key, series_name, part_index, note
-        FROM series_placeholders
-        WHERE series_key IS NOT NULL AND series_key != '';
+    /// One-time migration: the original `series_placeholders` table predates
+    /// the `series_key` column. This rekeys it onto `series_key` as the
+    /// primary key component instead of bare `series_name`. Gated on
+    /// `PRAGMA user_version` so the destructive DROP + RENAME runs exactly
+    /// once instead of on every cold start, and wrapped in a transaction so
+    /// a crash mid-migration cannot leave the database without the table.
+    private static let seriesPlaceholdersKeyedMigrationVersion: Int64 = 1
 
-        DROP TABLE series_placeholders;
-        ALTER TABLE series_placeholders_keyed RENAME TO series_placeholders;
+    private static func migrateSeriesPlaceholdersToKeyedIfNeeded(db: Connection) throws {
+        let version = (try? db.scalar("PRAGMA user_version")) as? Int64 ?? 0
+        guard version < seriesPlaceholdersKeyedMigrationVersion else { return }
+        try db.transaction {
+            _ = try? db.run("ALTER TABLE series_placeholders ADD COLUMN series_key TEXT")
+            try db.run("UPDATE series_placeholders SET series_key = 'calibre:' || series_name WHERE series_key IS NULL OR series_key = ''")
+            try db.execute("""
+            CREATE TABLE IF NOT EXISTS series_placeholders_keyed (
+                series_key TEXT NOT NULL,
+                series_name TEXT NOT NULL,
+                part_index INTEGER NOT NULL,
+                note TEXT,
+                PRIMARY KEY (series_key, part_index)
+            );
 
-        CREATE INDEX IF NOT EXISTS idx_series_placeholders_key ON series_placeholders(series_key);
-        """)
+            INSERT OR IGNORE INTO series_placeholders_keyed (series_key, series_name, part_index, note)
+            SELECT series_key, series_name, part_index, note
+            FROM series_placeholders
+            WHERE series_key IS NOT NULL AND series_key != '';
+
+            DROP TABLE series_placeholders;
+            ALTER TABLE series_placeholders_keyed RENAME TO series_placeholders;
+
+            CREATE INDEX IF NOT EXISTS idx_series_placeholders_key ON series_placeholders(series_key);
+            """)
+            try db.run("PRAGMA user_version = \(seriesPlaceholdersKeyedMigrationVersion)")
+        }
     }
 
     private static func createAO3TagSynonyms(db: Connection) throws {
@@ -470,6 +487,13 @@ actor AmbrosiaMetaDB {
         }
     }
 
+    // MARK: - Reading session write path (incomplete — no callers)
+    //
+    // These three methods manage `reading_history` and `book_opens` row lifecycle.
+    // The schema and query logic are complete. The call sites in `ReaderWindowController`
+    // have not been wired up. See "Not Yet Built" in ambrosia_architecture.md.
+    // Do not delete; do not treat as live code.
+
     func closeZombieReadingSessions(calibreID: Int, endedAt: Date = Date()) throws {
         let end = ISO8601DateFormatter().string(from: endedAt)
         try run(
@@ -692,13 +716,13 @@ actor AmbrosiaMetaDB {
     func ao3CompletionStatusIDs(_ status: AO3CompletionStatus) throws -> Set<Int> {
         let predicate: String
         switch status {
-        case .complete:             // §5: was .finished
+        case .complete:
             predicate = """
             chapter_current IS NOT NULL
               AND chapter_total IS NOT NULL
               AND chapter_current = chapter_total
             """
-        case .workInProgress:       // §5: was .unfinished
+        case .workInProgress:
             predicate = """
             chapter_current IS NOT NULL
               AND (chapter_total IS NULL OR chapter_current != chapter_total)
@@ -1076,6 +1100,109 @@ actor AmbrosiaMetaDB {
         """
         let rows = try prepare(sql)
         return Set(rows.compactMap { $0.int(at: 0) })
+    }
+
+    // MARK: - Bulk AO3 metadata reads
+    //
+    // These three methods are the sole owners of cross-database AO3 metadata
+    // reads (Invariant 10). `CalibreLibrary` previously opened its own
+    // read-only `Connection` to this same file to serve these queries; that
+    // connection has been removed. `LibrarySession` calls these on the actor
+    // and pushes the results into `CalibreLibrary`'s in-memory caches via
+    // `updateAO3MetaCaches`.
+
+    func allAO3WordCounts() -> [Int: Int] {
+        let sql = "SELECT calibre_id, word_count FROM ao3_metadata WHERE word_count IS NOT NULL"
+        guard let rows = try? readDB.prepare(sql).map({ $0 }) else { return [:] }
+        var result: [Int: Int] = [:]
+        for row in rows {
+            if let idBind = row[0] as? Int64, let wc = row[1] as? Int64 {
+                result[Int(idBind)] = Int(wc)
+            }
+        }
+        return result
+    }
+
+    func allAO3Dates() -> [Int: (published: String?, updated: String?)] {
+        let sql = "SELECT calibre_id, published_date, updated_date FROM ao3_metadata"
+        guard let rows = try? readDB.prepare(sql).map({ $0 }) else { return [:] }
+        var result: [Int: (published: String?, updated: String?)] = [:]
+        for row in rows {
+            guard let id = (row[0] as? Int64).map(Int.init) else { continue }
+            result[id] = (row[1] as? String, row[2] as? String)
+        }
+        return result
+    }
+
+    func allCrossoverBookIDs() -> Set<Int> {
+        let sql = """
+        SELECT calibre_id
+        FROM ao3_metadata
+        WHERE json_array_length(fandoms_json) > 1
+        """
+        let rows = (try? readDB.prepare(sql).map { $0 }) ?? []
+        return Set(rows.compactMap { row in
+            if let v = row[0] as? Int64 { return Int(v) }
+            return row[0] as? Int
+        })
+    }
+
+    // MARK: - Tag synonym resolution
+    //
+    // These replace `AO3TagSearchResolver`, which previously opened an independent
+    // `Connection` to this file on every call (Invariant 10). Callers that need
+    // synchronous behaviour (e.g. the search-as-you-type WHERE clause) should
+    // pre-resolve terms with `await` before building the query.
+
+    /// Returns the canonical tag name for `term` if a synonym mapping exists,
+    /// otherwise returns `term` unchanged.
+    func canonicalTerm(for term: String) -> String {
+        guard AO3TagSeedDatabaseConfig.shared.isEnabled,
+              AO3TagSeedDatabaseConfig.shared.validDatabaseURLIfEnabled() != nil else { return term }
+        let sql = """
+            SELECT c.name
+            FROM tag_synonyms s
+            JOIN canonical_tags c ON c.id = s.canonical_id
+            WHERE LOWER(s.synonym) = LOWER(?)
+            LIMIT 1
+            """
+        if let row = (try? readDB.prepare(sql, [term as Binding?]).map { $0 })?.first,
+           let canonical = row[0] as? String {
+            return canonical
+        }
+        return term
+    }
+
+    /// Returns `term` plus all known synonyms. Returns `[term]` when no mapping exists
+    /// or when AO3 tag seeds are disabled.
+    func expandedTerms(for term: String) -> [String] {
+        guard AO3TagSeedDatabaseConfig.shared.isEnabled,
+              AO3TagSeedDatabaseConfig.shared.validDatabaseURLIfEnabled() != nil else { return [term] }
+        let sql = """
+            WITH root(id, name) AS (
+                SELECT id, name FROM canonical_tags WHERE LOWER(name) = LOWER(?)
+                UNION
+                SELECT c.id, c.name
+                FROM tag_synonyms s
+                JOIN canonical_tags c ON c.id = s.canonical_id
+                WHERE LOWER(s.synonym) = LOWER(?)
+            )
+            SELECT name FROM root
+            UNION
+            SELECT synonym
+            FROM tag_synonyms
+            WHERE canonical_id IN (SELECT id FROM root)
+            """
+        guard let rows = try? readDB.prepare(sql, [term as Binding?, term as Binding?]).map({ $0 }) else {
+            return [term]
+        }
+        var seen = Set<String>()
+        var terms: [String] = []
+        for row in rows {
+            guard let value = row[0] as? String else { continue }
+            if seen.insert(value.lowercased()).inserted { terms.append(value) }
+        }
+        return terms.isEmpty ? [term] : terms
     }
 }
 

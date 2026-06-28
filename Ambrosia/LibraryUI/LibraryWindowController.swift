@@ -475,8 +475,31 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         guard !text.isEmpty else { closeSuggestionPanel(); return }
 
         let query = SearchQueryParser.parse(text)
+        let metaDB = AppDelegate.shared?.session.metaDB
 
-        if let rule = query.asSingleFilterRule {
+        // If the query is a single tag term, resolve the canonical form before
+        // building the FilterRule. This was previously done synchronously inside
+        // asSingleFilterRule via AO3TagSearchResolver (Invariant 10 violation).
+        if query.tagTerms.count == 1, let metaDB {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let resolved = await metaDB.canonicalTerm(for: query.tagTerms[0])
+                if let rule = query.asSingleFilterRule(resolvedTagTerm: resolved) {
+                    LibraryFilterDebug.log("commit.scopedSearch", [
+                        "field": rule.field.rawValue,
+                        "op": rule.op.rawValue,
+                        "value": rule.value
+                    ])
+                    self.toolbarState?.suppressNextSearchTextReload()
+                    self.clearSearchField()
+                    self.commitFilterRule(rule)
+                }
+                self.closeSuggestionPanel()
+            }
+            return
+        }
+
+        if let rule = query.asSingleFilterRule() {
             // Scoped token: add as filter rule and clear the search field
             LibraryFilterDebug.log("commit.scopedSearch", [
                 "field": rule.field.rawValue,
@@ -494,17 +517,21 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
     /// Commits a suggestion row tap: always produces a filter rule and clears the field.
     private func commitSuggestion(_ suggestion: SearchSuggestion) {
-        let rule = suggestion.asFilterRule
-        LibraryFilterDebug.log("commit.suggestion", [
-            "kind": "\(suggestion.kind)",
-            "value": suggestion.value,
-            "field": rule.field.rawValue,
-            "op": rule.op.rawValue
-        ])
-        toolbarState?.suppressNextSearchTextReload()
-        clearSearchField()
-        commitFilterRule(rule)
-        closeSuggestionPanel()
+        let metaDB = AppDelegate.shared?.session.metaDB
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let rule = await FilterRuleFactory.rule(for: suggestion, metaDB: metaDB)
+            LibraryFilterDebug.log("commit.suggestion", [
+                "kind": "\(suggestion.kind)",
+                "value": suggestion.value,
+                "field": rule.field.rawValue,
+                "op": rule.op.rawValue
+            ])
+            self.toolbarState?.suppressNextSearchTextReload()
+            self.clearSearchField()
+            self.commitFilterRule(rule)
+            self.closeSuggestionPanel()
+        }
     }
 
     /// Delivers a FilterRule to the active content view via the registered handler.

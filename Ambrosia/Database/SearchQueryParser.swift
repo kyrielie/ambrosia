@@ -30,6 +30,11 @@ struct SearchQuery {
     /// by this explicit ID set in the SQL layer.
     var ftsMatchedIDs: [Int]? = nil
 
+    /// Pre-resolved synonym expansions for each tag term, populated asynchronously
+    /// by the caller via `AmbrosiaMetaDB.expandedTerms(for:)` before any SQL is built.
+    /// When nil for a given term, `whereClause` falls back to the raw term.
+    var expandedTagTerms: [String: [String]] = [:]
+
     var isEmpty: Bool {
         tagTerms.isEmpty && authorTerms.isEmpty &&
         titleTerms.isEmpty && seriesTerms.isEmpty &&
@@ -44,11 +49,15 @@ struct SearchQuery {
     /// If the entire search string is a single scoped prefix token, returns the
     /// corresponding FilterRule. Used by the commit path to convert "tag:horror"
     /// into a FilterRule without leaving residual plain terms.
-    var asSingleFilterRule: FilterRule? {
+    ///
+    /// `resolvedTagTerm` is the canonical form of `tagTerms[0]` after synonym
+    /// resolution, provided by the async caller via `AmbrosiaMetaDB.canonicalTerm`.
+    /// When nil (seeds disabled or metaDB unavailable), the raw tag term is used.
+    func asSingleFilterRule(resolvedTagTerm: String? = nil) -> FilterRule? {
         // Exactly one scoped term and no plain text
         if tagTerms.count == 1 && authorTerms.isEmpty && titleTerms.isEmpty
             && seriesTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty {
-            let v = AO3TagSearchResolver.canonicalTerm(for: tagTerms[0])
+            let v = resolvedTagTerm ?? tagTerms[0]
             // AO3 rating/warning/category tags get their proper field and operator.
             // Rating tags default to .ratingAtMost — almost always the right intent.
             let kind = AO3TagKind.classify(v)

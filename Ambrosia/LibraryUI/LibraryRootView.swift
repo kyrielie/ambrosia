@@ -65,6 +65,17 @@ struct LibraryRootView: View {
     // loadPage() when applyFilterRules() has already called it synchronously.
     @State private var suppressNextReloadToken = false
 
+    /// Async-resolved synonym expansions for the current search query's tag terms.
+    /// Populated by `resolveTagExpansionsIfNeeded` whenever `tagTerms` changes.
+    /// `loadPage` injects these into the `SearchQuery` before passing to `whereClause`
+    /// so `CalibreLibrary` never opens its own connection to `ambrosia_meta.db`
+    /// (Invariant 10).
+    @State private var resolvedTagExpansions: [String: [String]] = [:]
+
+    /// Expansions for committed filter rule tag values, populated async in
+    /// `applyFilterRules` and read sync in `loadPage`'s SQL-paged path.
+    @State private var cachedFilterTagExpansions: [String: [String]] = [:]
+
     private let pageSize = 25
     private var pageFetchLimit: Int { (pageSize * 3) + 1 }
     private let debouncer = DebounceTimer(delay: 0.4)
@@ -93,11 +104,11 @@ struct LibraryRootView: View {
     /// Pagination, sort, search-text, and filter-result changes.
     private func attachDataHandlers<V: View>(to view: V) -> some View {
         view
-            .onChange(of: currentPage)                { print("[StarDiag] onChange:currentPage fired"); loadPage() }
-            .onChange(of: toolbarState.sortField)     { print("[StarDiag] onChange:sortField fired"); selectedIDs.removeAll(); currentPage = 0; loadPage() }
-            .onChange(of: toolbarState.ascending)     { print("[StarDiag] onChange:ascending fired"); selectedIDs.removeAll(); currentPage = 0; loadPage() }
-            .onChange(of: toolbarState.reshuffleToken)   { print("[StarDiag] onChange:reshuffleToken fired"); loadPage() }
-            .onChange(of: toolbarState.groupBySeries) { print("[StarDiag] onChange:groupBySeries fired"); selectedIDs.removeAll(); currentPage = 0; loadPage() }
+            .onChange(of: currentPage)                { loadPage() }
+            .onChange(of: toolbarState.sortField)     { selectedIDs.removeAll(); currentPage = 0; loadPage() }
+            .onChange(of: toolbarState.ascending)     { selectedIDs.removeAll(); currentPage = 0; loadPage() }
+            .onChange(of: toolbarState.reshuffleToken)   { loadPage() }
+            .onChange(of: toolbarState.groupBySeries) { selectedIDs.removeAll(); currentPage = 0; loadPage() }
             .onChange(of: toolbarState.searchText) {
                 selectedIDs.removeAll()
                 currentPage = 0
@@ -121,6 +132,15 @@ struct LibraryRootView: View {
                     if startPendingSearchTextFullTextIfNeeded() {
                         return
                     }
+                    // Resolve tag synonym expansions async. resolveTagExpansionsIfNeeded
+                    // calls loadPage() again once the actor responds; the loadPage()
+                    // below runs immediately with any previously cached expansions.
+                    let tagTerms = toolbarState.searchText.isEmpty
+                        ? []
+                        : SearchQueryParser.parse(toolbarState.searchText).tagTerms
+                    if tagTerms != Array(resolvedTagExpansions.keys).sorted() {
+                        resolveTagExpansionsIfNeeded(terms: tagTerms)
+                    }
                     let token = toolbarState.beginLibraryFilterApplication()
                     loadPage()
                     if toolbarState.searchText.isEmpty {
@@ -134,7 +154,6 @@ struct LibraryRootView: View {
             }
             .onChange(of: toolbarState.activeFilterResult?.reloadToken) {
                 if suppressNextReloadToken { suppressNextReloadToken = false; return }
-                print("[StarDiag] onChange:activeFilterResult.reloadToken fired")
                 selectedIDs.removeAll()
                 currentPage = 0; loadPage()
             }
@@ -197,12 +216,8 @@ struct LibraryRootView: View {
                     skippedIDs = session.cachedSkippedIDs
                     seriesOrMergedIDs = session.cachedSeriesOrMergedIDs
                     ao3PublisherIDs = session.cachedAO3PublisherIDs
-                    let t0 = Date()
-                    print("[FlashDiag] onAppear — calling loadPage() t=0ms")
                     loadPage()
-                    print("[FlashDiag] onAppear — loadPage() done, calling refreshBookStates() t=\(Int(Date().timeIntervalSince(t0)*1000))ms")
                     refreshBookStates()
-                    print("[FlashDiag] onAppear — refreshBookStates() Task enqueued t=\(Int(Date().timeIntervalSince(t0)*1000))ms")
                 }
                 // Register so LibraryWindowController can deliver committed filter rules
                 toolbarState.registerFilterCommitHandler { [self] rule in
@@ -376,13 +391,16 @@ struct LibraryRootView: View {
     // MARK: - Data loading
 
     private func loadPage() {
-        print("[StarDiag] loadPage called -- sort=\(toolbarState.sortField) page=\(currentPage)", Thread.callStackSymbols.prefix(6).joined(separator: "\n"))
         let loadStart = LibraryFilterDebug.now()
         guard let library = session.library else { books = []; return }
         let rawQuery = toolbarState.searchText.isEmpty
             ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
             : SearchQueryParser.parse(toolbarState.searchText)
-        let query = queryWithCachedFullText(rawQuery)
+        var query = queryWithCachedFullText(rawQuery)
+        // Inject pre-resolved synonym expansions so whereClause needs no actor
+        // calls (Invariant 10). resolvedTagExpansions is populated async by
+        // resolveTagExpansionsIfNeeded whenever the tag terms change.
+        query.expandedTagTerms = resolvedTagExpansions
         if rawQuery.fulltextPhrase?.isEmpty == false && query.ftsMatchedIDs == nil {
             _ = startPendingSearchTextFullTextIfNeeded()
             return
@@ -407,7 +425,8 @@ struct LibraryRootView: View {
             }
             let (page, hasMore) = library.randomSortedPage(
                 offset: currentPage * pageSize, limit: pageSize,
-                query: query, filter: filterForSQL, restrictIDs: restrictIDs
+                query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                filterTagExpansions: cachedFilterTagExpansions
             )
             books = page
             hasNextPage = hasMore
@@ -441,7 +460,8 @@ struct LibraryRootView: View {
             ])
             let (page, hasMore) = library.wordCountSortedPage(
                 offset: currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
-                query: query, filter: filterForSQL, restrictIDs: restrictIDs
+                query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                filterTagExpansions: cachedFilterTagExpansions
             )
             books = page
             hasNextPage = hasMore
@@ -457,7 +477,8 @@ struct LibraryRootView: View {
                 offset: currentPage * pageSize, limit: pageFetchLimit,
                 sort: toolbarState.sortField, ascending: toolbarState.ascending,
                 query: query,
-                filter: toolbarState.filterExpression
+                filter: toolbarState.filterExpression,
+                filterTagExpansions: cachedFilterTagExpansions
             )
             let visible = visibleBooks(raw)
             hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
@@ -531,7 +552,6 @@ struct LibraryRootView: View {
     }
 
     private func rebuildItems() {
-        print("[StarDiag] rebuildItems called -- sort=\(toolbarState.sortField) page=\(currentPage)", Thread.callStackSymbols.prefix(6).joined(separator: "\n"))
         guard shouldGroupSeriesRows, let metaDB = session.metaDB, let library = session.library else {
             items = books.map { .book($0) }
             return
@@ -539,18 +559,35 @@ struct LibraryRootView: View {
         let pageBooks = books
         Task {
             let pageIDs = pageBooks.map(\.id)
-            let pageMetadata = (try? await metaDB.ao3Metadata(for: pageIDs)) ?? [:]
-            let pageDiagnostics = (try? await metaDB.ao3ExtractionDiagnostics(for: pageIDs)) ?? [:]
-            let entries = (try? await metaDB.seriesEntries(for: pageIDs)) ?? []
+            let pageMetadata: [Int: AO3MetadataRecord]
+            let pageDiagnostics: [Int: AO3ExtractionDiagnostic]
+            let entries: [SeriesCacheEntry]
+            do { pageMetadata   = try await metaDB.ao3Metadata(for: pageIDs) }
+            catch { pageMetadata = [:]; print("[LibraryRootView] rebuildItems: ao3Metadata(page) failed: \(error)") }
+            do { pageDiagnostics = try await metaDB.ao3ExtractionDiagnostics(for: pageIDs) }
+            catch { pageDiagnostics = [:]; print("[LibraryRootView] rebuildItems: ao3ExtractionDiagnostics(page) failed: \(error)") }
+            do { entries = try await metaDB.seriesEntries(for: pageIDs) }
+            catch { entries = []; print("[LibraryRootView] rebuildItems: seriesEntries(page) failed: \(error)") }
             let groupedEntries = Dictionary(grouping: entries.filter { !$0.isAnthology }, by: \.seriesKey)
             let seriesKeys = groupedEntries.keys.sorted()
-            let allEntries = (try? await metaDB.seriesEntries(keys: seriesKeys)) ?? []
+            let allEntries: [SeriesCacheEntry]
+            do { allEntries = try await metaDB.seriesEntries(keys: seriesKeys) }
+            catch { allEntries = []; print("[LibraryRootView] rebuildItems: seriesEntries(keys) failed: \(error)") }
             let allIDs = Array(Set(allEntries.map(\.calibreID)))
             let allBooks = library.booksForIDs(allIDs)
-            let seriesMetadata = (try? await metaDB.ao3Metadata(for: allIDs)) ?? [:]
-            let seriesDiagnostics = (try? await metaDB.ao3ExtractionDiagnostics(for: allIDs)) ?? [:]
-            let warnings = enrichWarnings((try? await metaDB.singletonNonLeadingSeriesEntries(for: pageIDs)) ?? [:], books: pageBooks)
-            let placeholders = (try? await metaDB.placeholders(for: seriesKeys)) ?? [:]
+            let seriesMetadata: [Int: AO3MetadataRecord]
+            let seriesDiagnostics: [Int: AO3ExtractionDiagnostic]
+            let singletonWarnings: [Int: SingletonSeriesWarning]
+            let placeholders: [String: [SeriesPlaceholder]]
+            do { seriesMetadata   = try await metaDB.ao3Metadata(for: allIDs) }
+            catch { seriesMetadata = [:]; print("[LibraryRootView] rebuildItems: ao3Metadata(series) failed: \(error)") }
+            do { seriesDiagnostics = try await metaDB.ao3ExtractionDiagnostics(for: allIDs) }
+            catch { seriesDiagnostics = [:]; print("[LibraryRootView] rebuildItems: ao3ExtractionDiagnostics(series) failed: \(error)") }
+            do { singletonWarnings = try await metaDB.singletonNonLeadingSeriesEntries(for: pageIDs) }
+            catch { singletonWarnings = [:]; print("[LibraryRootView] rebuildItems: singletonNonLeadingSeriesEntries failed: \(error)") }
+            do { placeholders = try await metaDB.placeholders(for: seriesKeys) }
+            catch { placeholders = [:]; print("[LibraryRootView] rebuildItems: placeholders failed: \(error)") }
+            let warnings = enrichWarnings(singletonWarnings, books: pageBooks)
             let byID = Dictionary(uniqueKeysWithValues: allBooks.map { ($0.id, $0) })
             let entriesBySeries = Dictionary(grouping: allEntries.filter { !$0.isAnthology }, by: \.seriesKey)
             var collapsedIDs = Set<Int>()
@@ -694,27 +731,21 @@ struct LibraryRootView: View {
     }
 
     private func refreshBookStates() {
-        print("[StarDiag] refreshBookStates called", Thread.callStackSymbols.prefix(6).joined(separator: "\n"))
-        let rbs_t0 = Date()
         let all = (try? modelContext.fetch(FetchDescriptor<BookState>())) ?? []
         bookStates = all.reduce(into: [:]) { $0[$1.calibreID] = $1 }
-        print("[FlashDiag] refreshBookStates — SwiftData fetch done: \(all.count) BookState records t=\(Int(Date().timeIntervalSince(rbs_t0)*1000))ms")
         Task {
-            let task_t0 = Date()
             async let fetchedLiked = session.collectionStore?.likedIDs()
             async let fetchedReadLater = session.collectionStore?.members(of: SystemCollectionID.readLater)
             async let fetchedSkipped = session.collectionStore?.members(of: SystemCollectionID.skipped)
             async let fetchedSeriesOrMerged = session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)
             let capturedLibrary = session.library
-            async let fetchedPublisherIDs: Set<Int> = await Task.detached(priority: .userInitiated) {
+            let currentAO3PublisherIDs = await Task.detached(priority: .userInitiated) {
                 capturedLibrary?.ao3PublisherBookIDs() ?? []
             }.value
             let currentLiked = (try? await fetchedLiked) ?? []
             let currentReadLater = Set((try? await fetchedReadLater) ?? [])
             let currentSkipped = Set((try? await fetchedSkipped) ?? [])
             let currentSeriesOrMerged = Set((try? await fetchedSeriesOrMerged) ?? [])
-            let currentAO3PublisherIDs = await fetchedPublisherIDs
-            print("[FlashDiag] refreshBookStates — all async fetches resolved: liked=\(currentLiked.count) skipped=\(currentSkipped.count) seriesOrMerged=\(currentSeriesOrMerged.count) publisherIDs=\(currentAO3PublisherIDs.count) t=\(Int(Date().timeIntervalSince(task_t0)*1000))ms")
             await MainActor.run {
             likedIDs = currentLiked
             readLaterIDs = currentReadLater
@@ -730,9 +761,7 @@ struct LibraryRootView: View {
             session.cachedAO3PublisherIDs = currentAO3PublisherIDs
             pruneSelection()
             currentPage = 0
-            print("[FlashDiag] refreshBookStates — calling second loadPage() t=\(Int(Date().timeIntervalSince(task_t0)*1000))ms")
             loadPage()
-            print("[FlashDiag] refreshBookStates — second loadPage() done t=\(Int(Date().timeIntervalSince(task_t0)*1000))ms")
             }
         }
     }
@@ -753,7 +782,8 @@ struct LibraryRootView: View {
             "filter": filterSignature
         ])
         filterCountTask = Task {
-            let count = library.bookCount(query: query, filter: expression)
+            let count = library.bookCount(query: query, filter: expression,
+                                          filterTagExpansions: cachedFilterTagExpansions)
             await MainActor.run {
                 guard !Task.isCancelled,
                       toolbarState.activeFilterResult?.isSQLBacked == true,
@@ -902,7 +932,18 @@ struct LibraryRootView: View {
                 return stripped
             }() : expression
 
-            let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary)
+            var filterTagExpansions: [String: [String]] = [:]
+            if let metaDB = session.metaDB {
+                let tagValues = Set(expression.groups.flatMap(\.rules)
+                    .filter { $0.field == .tag && $0.isComplete }
+                    .map(\.value))
+                for value in tagValues {
+                    filterTagExpansions[value] = await metaDB.expandedTerms(for: value)
+                }
+            }
+            cachedFilterTagExpansions = filterTagExpansions
+            let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary,
+                                        tagExpansions: filterTagExpansions)
 
             // Pass 1: run all non-wordcount rules.
             let pass1Result = await builder.matchingIDs(
@@ -956,12 +997,11 @@ struct LibraryRootView: View {
             async let fetchedSkipped = session.collectionStore?.members(of: SystemCollectionID.skipped)
             async let fetchedSeriesOrMerged = session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)
             let capturedLibrary2 = session.library
-            async let fetchedPublisherIDs: Set<Int> = await Task.detached(priority: .userInitiated) {
-                capturedLibrary2?.ao3PublisherBookIDs() ?? []
-            }.value
             let currentSkipped = Set((try? await fetchedSkipped) ?? [])
             let currentSeriesOrMerged = Set((try? await fetchedSeriesOrMerged) ?? [])
-            let publisherIDs = await fetchedPublisherIDs
+            let publisherIDs = await Task.detached(priority: .userInitiated) {
+                capturedLibrary2?.ao3PublisherBookIDs() ?? []
+            }.value
             let filteredIDs = prefs.showSkippedCollection
                 ? finalResult.calibreIDs
                 : finalResult.calibreIDs.filter { !currentSkipped.contains($0) }
@@ -1083,6 +1123,27 @@ struct LibraryRootView: View {
             plainTerms: [],
             ftsMatchedIDs: ids
         )
+    }
+
+    /// Resolves synonym expansions for `terms` via `AmbrosiaMetaDB` (Invariant 10)
+    /// and stores them in `resolvedTagExpansions`. Called whenever tag terms in the
+    /// search field change. `loadPage` reads the result synchronously via
+    /// `query.expandedTagTerms` — no actor calls inside the hot page-fetch path.
+    private func resolveTagExpansionsIfNeeded(terms: [String]) {
+        guard !terms.isEmpty, let metaDB = session.metaDB else {
+            resolvedTagExpansions = [:]
+            return
+        }
+        Task { @MainActor in
+            var resolved: [String: [String]] = [:]
+            for term in terms {
+                resolved[term] = await metaDB.expandedTerms(for: term)
+            }
+            resolvedTagExpansions = resolved
+            // Re-run loadPage now that expansions are available, so the WHERE
+            // clause reflects synonym expansion on the first keystroke delay.
+            loadPage()
+        }
     }
 
     private func addTagPillRule(tag: String, field: FilterField) {
@@ -1262,9 +1323,7 @@ struct LibraryRootView: View {
     private func toggleLike(for book: CalibreBook) {
         Task {
             try? await session.collectionStore?.toggleLiked(calibreID: book.id)
-            print("[StarDiag] toggleLike -- before bumpMembershipVersion")
             session.bumpMembershipVersion()
-            print("[StarDiag] toggleLike -- after bumpMembershipVersion, filterUsesLiked will be checked")
             let refreshed = (try? await session.collectionStore?.likedIDs()) ?? []
             await MainActor.run {
                 likedIDs = refreshed
@@ -1484,802 +1543,3 @@ struct LibraryRootView: View {
     }
 }
 
-// MARK: - Book list row
-
-struct BookListRow: View, Equatable {
-    let book: CalibreBook
-    let bookState: BookState?
-    let ao3Metadata: AO3MetadataRecord?
-    let ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?
-    let singletonSeriesWarning: SingletonSeriesWarning?
-    let isLiked: Bool
-    let isInReadLater: Bool
-    let onReadLaterToggle: () -> Void
-    let hideFanworksTagPill: Bool
-    let correctCalibreAmpEntities: Bool
-    let modelContext: ModelContext
-    let onTagTap: (String, FilterField) -> Void
-    let onAuthorTap: (String) -> Void
-    let onOpenSelected: () -> Void
-    let onLikeToggle: () -> Void
-    let onLikeSelected: () -> Void
-    let onUnlikeSelected: () -> Void
-    let onReadLater: () -> Void
-    let onSkip: () -> Void
-    let onMarkRead: () -> Void
-    let onResetProgress: () -> Void
-    let onCollectionChanged: () -> Void
-    let selectedCount: Int
-    let selectedIDs: [Int]
-    @State private var showCollectionPicker = false
-
-    static func == (lhs: BookListRow, rhs: BookListRow) -> Bool {
-        lhs.book.id                       == rhs.book.id
-            && lhs.book.title             == rhs.book.title
-            && lhs.book.series            == rhs.book.series
-            && lhs.book.seriesIndex       == rhs.book.seriesIndex
-            && lhs.book.wordCount         == rhs.book.wordCount
-            && lhs.book.kudos             == rhs.book.kudos
-            && lhs.book.authors           == rhs.book.authors
-            && lhs.book.tags              == rhs.book.tags
-            && lhs.book.comment           == rhs.book.comment
-            && lhs.ao3Metadata            == rhs.ao3Metadata
-            && lhs.ao3ExtractionDiagnostic == rhs.ao3ExtractionDiagnostic
-            && lhs.singletonSeriesWarning == rhs.singletonSeriesWarning
-            && lhs.bookState?.calibreID        == rhs.bookState?.calibreID
-            && lhs.isLiked                     == rhs.isLiked
-            && lhs.isInReadLater                == rhs.isInReadLater
-            && lhs.hideFanworksTagPill         == rhs.hideFanworksTagPill
-            && lhs.correctCalibreAmpEntities   == rhs.correctCalibreAmpEntities
-            && lhs.bookState?.totalReadPercent == rhs.bookState?.totalReadPercent
-            && lhs.selectedCount               == rhs.selectedCount
-    }
-
-    init(book: CalibreBook, bookState: BookState?, ao3Metadata: AO3MetadataRecord?, ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?, singletonSeriesWarning: SingletonSeriesWarning?, isLiked: Bool, hideFanworksTagPill: Bool, correctCalibreAmpEntities: Bool, modelContext: ModelContext,
-         onTagTap: @escaping (String, FilterField) -> Void,
-         onAuthorTap: @escaping (String) -> Void,
-         onOpenSelected: @escaping () -> Void,
-         isInReadLater: Bool,
-         onReadLaterToggle: @escaping () -> Void,
-         onLikeToggle: @escaping () -> Void,
-         onLikeSelected: @escaping () -> Void,
-         onUnlikeSelected: @escaping () -> Void,
-         onReadLater: @escaping () -> Void,
-         onSkip: @escaping () -> Void,
-         onMarkRead: @escaping () -> Void,
-         onResetProgress: @escaping () -> Void,
-         onCollectionChanged: @escaping () -> Void,
-         selectedCount: Int,
-         selectedIDs: [Int]) {
-        self.book         = book
-        self.bookState    = bookState
-        self.ao3Metadata  = ao3Metadata
-        self.ao3ExtractionDiagnostic = ao3ExtractionDiagnostic
-        self.singletonSeriesWarning = singletonSeriesWarning
-        self.isLiked      = isLiked
-        self.isInReadLater = isInReadLater
-        self.onReadLaterToggle = onReadLaterToggle
-        self.hideFanworksTagPill = hideFanworksTagPill
-        self.correctCalibreAmpEntities = correctCalibreAmpEntities
-        self.modelContext = modelContext
-        self.onTagTap     = onTagTap
-        self.onAuthorTap  = onAuthorTap
-        self.onOpenSelected = onOpenSelected
-        self.onLikeToggle = onLikeToggle
-        self.onLikeSelected = onLikeSelected
-        self.onUnlikeSelected = onUnlikeSelected
-        self.onReadLater = onReadLater
-        self.onSkip       = onSkip
-        self.onMarkRead   = onMarkRead
-        self.onResetProgress = onResetProgress
-        self.onCollectionChanged = onCollectionChanged
-        self.selectedCount = selectedCount
-        self.selectedIDs = selectedIDs
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            titleRow
-            authorsRow
-            LibraryStatsRow(stats: libraryStats)
-            tagsRow
-            statsRow
-            descriptionRow
-        }
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            AppDelegate.shared?.openReaderWindow(book: book, modelContext: modelContext)
-        }
-        .contextMenu {
-            Button(selectedCount == 1 ? "Open" : "Open Selected") {
-                onOpenSelected()
-            }
-            Divider()
-            if selectedCount == 1 {
-                Button(isLiked ? "Unlike" : "Like") { onLikeToggle() }
-            } else {
-                Button("Like Selected") { onLikeSelected() }
-                Button("Unlike Selected") { onUnlikeSelected() }
-            }
-            Button(selectedCount == 1 ? "Read Later" : "Add Selected to Read Later") { onReadLater() }
-            Button(selectedCount == 1 ? "Mark as Read" : "Mark Selected as Read") { onMarkRead() }
-            Button("Reset Reading Progress") { onResetProgress() }
-            Button(selectedCount == 1 ? "Skip" : "Skip Selected") { onSkip() }
-            Divider()
-            Button("Add to Collection...") { showCollectionPicker = true }
-        }
-        .popover(isPresented: $showCollectionPicker, arrowEdge: .trailing) {
-            CollectionSearchPickerView(
-                calibreIDs: selectedIDs,
-                onChange: {
-                    onCollectionChanged()
-                },
-                onComplete: {
-                    showCollectionPicker = false
-                }
-            )
-        }
-        .onAppear {
-            logMissingDisplayedMetadataIfNeeded()
-        }
-    }
-
-    // MARK: - Row sections
-
-    private var titleRow: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(book.displayTitle).font(.headline).lineLimit(1)
-            if let series = book.displaySeries {
-                Text("·").foregroundStyle(.tertiary)
-                Text(series).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer()
-            singletonSeriesWarningButton
-            Button(action: onReadLaterToggle) {
-                Image(systemName: isInReadLater ? "bookmark.fill" : "bookmark")
-                    .foregroundStyle(isInReadLater ? Color.accentColor : Color.secondary)
-            }
-            .buttonStyle(.borderless)
-            .help(isInReadLater ? "Remove from Read Later" : "Add to Read Later")
-            Button(action: onLikeToggle) {
-                Image(systemName: isLiked ? "star.fill" : "star")
-                    .foregroundStyle(isLiked ? Color.yellow : Color.secondary)
-            }
-            .buttonStyle(.borderless)
-            .help(isLiked ? "Unlike" : "Like")
-        }
-    }
-
-    @ViewBuilder
-    private var singletonSeriesWarningButton: some View {
-        if let warning = singletonSeriesWarning {
-            SingletonSeriesWarningButton(warning: warning)
-        }
-    }
-
-    @ViewBuilder
-    private var authorsRow: some View {
-        if !book.authors.isEmpty {
-            HStack(spacing: 4) {
-                ForEach(book.authors, id: \.self) { author in
-                    Text(author)
-                        .font(.subheadline).foregroundStyle(.secondary)
-                        .onTapGesture { onAuthorTap(author) }
-                    if author != book.authors.last {
-                        Text("·").foregroundStyle(.tertiary).font(.subheadline)
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var tagsRow: some View {
-        let pills = visibleTagPills
-        if !pills.isEmpty {
-            FlowLayout(spacing: 4) {
-                ForEach(pills) { pill in
-                    tagPill(pill.label, color: pill.color)
-                        .onTapGesture { onTagTap(pill.label, pill.field) }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var statsRow: some View {
-        let k  = book.displayKudos
-        let ao3Kudos = book.kudos == nil ? ao3Metadata?.kudosCount : nil
-        let pct = bookState.map { $0.totalReadPercent }
-        if !k.isEmpty || ao3Kudos != nil || (pct ?? 0) > 0 {
-            HStack(spacing: 14) {
-                if !k.isEmpty  { statChip(k,  icon: "heart") }
-                if let ao3Kudos { statChip(Self.formatKudos(ao3Kudos), icon: "heart") }
-                if let p = pct, p > 0 {
-                    statChip(String(format: "%.0f%% read", min(p, 1.0) * 100), icon: "book.pages")
-                }
-                Spacer()
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var descriptionRow: some View {
-        if let comment = book.displayComment, !comment.isEmpty {
-            Text(comment)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    // MARK: - Helpers
-
-    private var libraryStats: LibraryStats {
-        LibraryStats(
-            chapterText: ao3Metadata.flatMap(Self.chapterText),
-            isComplete: ao3Metadata?.isComplete == true,
-            wordText: (ao3Metadata?.wordCount ?? book.wordCount).map(Self.formatWordCount),
-            publishedText: Self.nonEmpty(ao3Metadata?.publishedDate),
-            updatedText: Self.nonEmpty(ao3Metadata?.updatedDate)
-        )
-    }
-
-    private static func nonEmpty(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private static func chapterText(_ metadata: AO3MetadataRecord) -> String? {
-        guard let current = metadata.chapterCurrent else { return nil }
-        if let total = metadata.chapterTotal {
-            return "\(current)/\(total) ch"
-        }
-        return "\(current)/? ch"
-    }
-
-    private static func formatWordCount(_ count: Int) -> String {
-        switch count {
-        case 0..<1_000: return "\(count) words"
-        case 0..<1_000_000: return String(format: "%.1fk words", Double(count) / 1_000)
-        default: return String(format: "%.2fM words", Double(count) / 1_000_000)
-        }
-    }
-
-    private static func formatKudos(_ count: Int) -> String {
-        count >= 1_000 ? String(format: "%.1fk kudos", Double(count) / 1_000) : "\(count) kudos"
-    }
-
-    private func tagPill(_ label: String, color: Color?) -> some View {
-        Text(label)
-            .font(.caption2)
-            .fixedSize(horizontal: true, vertical: false)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                color.map { $0.opacity(0.18) }
-                    ?? Color(NSColor.controlBackgroundColor)
-            )
-            .foregroundStyle(color ?? .secondary)
-            .clipShape(Capsule())
-    }
-
-    private var visibleTagPills: [TagPillDisplay] {
-        TagPillDisplay.make(
-            calibreTags: book.tags,
-            ao3Metadata: ao3Metadata,
-            hideFanworks: hideFanworksTagPill
-        )
-    }
-
-    private func statChip(_ label: String, icon: String) -> some View {
-        Label(label, systemImage: icon).font(.caption2).foregroundStyle(.tertiary)
-    }
-
-    private func logMissingDisplayedMetadataIfNeeded() {
-        #if DEBUG
-        logMissingVisibleWorkMetadata(book: book, ao3Metadata: ao3Metadata, diagnostic: ao3ExtractionDiagnostic)
-        #endif
-    }
-}
-
-private struct LibraryStats: Equatable {
-    let chapterText: String?
-    let isComplete: Bool
-    let wordText: String?
-    let publishedText: String?
-    let updatedText: String?
-
-    var isEmpty: Bool {
-        chapterText == nil && wordText == nil && publishedText == nil && normalizedUpdatedText == nil
-    }
-
-    var normalizedUpdatedText: String? {
-        guard let updatedText, !updatedText.isEmpty, updatedText != publishedText else { return nil }
-        return updatedText
-    }
-}
-
-private struct LibraryStatsRow: View {
-    let stats: LibraryStats
-
-    var body: some View {
-        if !stats.isEmpty {
-            HStack(spacing: 14) {
-                if let chapterText = stats.chapterText {
-                    statChip(chapterText, icon: stats.isComplete ? "checkmark.circle" : "clock")
-                }
-                if let wordText = stats.wordText {
-                    statChip(wordText, icon: "text.word.spacing")
-                }
-                if let publishedText = stats.publishedText {
-                    statChip("Pub \(publishedText)", icon: "calendar")
-                }
-                if let updatedText = stats.normalizedUpdatedText {
-                    statChip("Upd \(updatedText)", icon: "arrow.triangle.2.circlepath")
-                }
-                Spacer()
-            }
-        }
-    }
-
-    private func statChip(_ label: String, icon: String) -> some View {
-        Label(label, systemImage: icon).font(.caption2).foregroundStyle(.tertiary)
-    }
-}
-
-private struct TagPillDisplay: Identifiable, Equatable {
-    enum Role {
-        case rating
-        case fandom
-        case relationship
-        case character
-        case category
-        case warning
-        case regular
-    }
-
-    let label: String
-    let field: FilterField
-    let role: Role
-
-    var id: String { "\(role)-\(label)" }
-
-    var color: Color? {
-        switch role {
-        case .rating:       return .orange
-        case .fandom:       return .purple
-        case .relationship: return .pink
-        case .character:    return .teal
-        case .category:     return .blue
-        case .warning:      return .red
-        case .regular:      return nil
-        }
-    }
-
-    static func make(
-        calibreTags: [String],
-        ao3Metadata: AO3MetadataRecord?,
-        hideFanworks: Bool
-    ) -> [TagPillDisplay] {
-        var seen = Set<String>()
-        var pills: [TagPillDisplay] = []
-
-        func append(_ tags: [String], role: Role, field: FilterField = .tag) {
-            for tag in tags where shouldShow(tag, hideFanworks: hideFanworks) {
-                guard seen.insert(tag).inserted else { continue }
-                pills.append(TagPillDisplay(label: tag, field: field, role: role))
-            }
-        }
-
-        let buckets = AO3TagBuckets.from(tags: calibreTags)
-        append(buckets.ratings, role: .rating, field: .rating)
-
-        if let ao3Metadata {
-            append(ao3Metadata.fandoms, role: .fandom)
-            append(ao3Metadata.relationships, role: .relationship)
-            append(ao3Metadata.characters, role: .character)
-            append(ao3Metadata.categories, role: .category, field: .category)
-            append(buckets.categories, role: .category, field: .category)
-            append(buckets.warnings, role: .warning, field: .warning)
-            append(ao3Metadata.additionalTags, role: .regular)
-        } else {
-            append(buckets.categories, role: .category, field: .category)
-            append(buckets.warnings, role: .warning, field: .warning)
-        }
-
-        append(buckets.regular, role: .regular)
-        return pills
-    }
-
-    static func makeForSeries(
-        fandoms: [String],
-        relationships: [String],
-        characters: [String],
-        categories: [String],
-        warnings: [String],
-        ratings: [String],
-        additionalTags: [String],
-        tags: [String],
-        hideFanworks: Bool
-    ) -> [TagPillDisplay] {
-        let buckets = AO3TagBuckets.from(tags: tags)
-        let regularTags = buckets.regular.filter { tag in
-            !additionalTags.contains(tag) &&
-            !fandoms.contains(tag) &&
-            !relationships.contains(tag) &&
-            !characters.contains(tag)
-        }
-        var seen = Set<String>()
-        var pills: [TagPillDisplay] = []
-
-        func append(_ values: [String], role: Role, field: FilterField = .tag) {
-            for value in values where shouldShow(value, hideFanworks: hideFanworks) {
-                guard seen.insert(value).inserted else { continue }
-                pills.append(TagPillDisplay(label: value, field: field, role: role))
-            }
-        }
-
-        append(ratings + buckets.ratings, role: .rating, field: .rating)
-        append(fandoms, role: .fandom)
-        append(relationships, role: .relationship)
-        append(characters, role: .character)
-        append(categories + buckets.categories, role: .category, field: .category)
-        append(warnings + buckets.warnings, role: .warning, field: .warning)
-        append(additionalTags, role: .regular)
-        append(regularTags, role: .regular)
-        return pills
-    }
-
-    private static func shouldShow(_ tag: String, hideFanworks: Bool) -> Bool {
-        !(hideFanworks && tag == "Fanworks")
-    }
-}
-
-// MARK: - FlowLayout
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 4
-
-    struct Cache {
-        var subviewSizes: [CGSize] = []
-        var lastWidth: CGFloat = -1
-        var rows: [(startIndex: Int, y: CGFloat, height: CGFloat)] = []
-        var totalHeight: CGFloat = 0
-    }
-
-    func makeCache(subviews: Subviews) -> Cache {
-        var c = Cache()
-        c.subviewSizes = subviews.map { $0.sizeThatFits(.unspecified) }
-        return c
-    }
-
-    func updateCache(_ cache: inout Cache, subviews: Subviews) {
-        cache.subviewSizes = subviews.map { $0.sizeThatFits(.unspecified) }
-        cache.lastWidth = -1
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
-        let maxWidth = proposal.width ?? 800
-        refreshSubviewSizes(in: &cache, subviews: subviews)
-        rebuildRows(in: &cache, maxWidth: maxWidth)
-        return CGSize(width: maxWidth, height: cache.totalHeight)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
-        refreshSubviewSizes(in: &cache, subviews: subviews)
-        rebuildRows(in: &cache, maxWidth: bounds.width)
-        var rowIdx = 0
-        var x = bounds.minX
-
-        for (i, sub) in subviews.enumerated() {
-            let size = cache.subviewSizes[i]
-            if rowIdx + 1 < cache.rows.count && i >= cache.rows[rowIdx + 1].startIndex {
-                rowIdx += 1
-                x = bounds.minX
-            }
-            let currentRowY = bounds.minY + cache.rows[rowIdx].y
-            let currentRowH = cache.rows[rowIdx].height
-            let yOffset = (currentRowH - size.height) / 2
-            sub.place(at: CGPoint(x: x, y: currentRowY + yOffset), proposal: .unspecified)
-            x += size.width + spacing
-        }
-    }
-
-    private func refreshSubviewSizes(in cache: inout Cache, subviews: Subviews) {
-        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
-        if sizes != cache.subviewSizes {
-            cache.subviewSizes = sizes
-            cache.lastWidth = -1
-        }
-    }
-
-    private func rebuildRows(in cache: inout Cache, maxWidth: CGFloat) {
-        guard abs(cache.lastWidth - maxWidth) > 0.5 else { return }
-        cache.lastWidth = maxWidth
-
-        var rows: [(startIndex: Int, y: CGFloat, height: CGFloat)] = []
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var rowH: CGFloat = 0
-        var rowStart = 0
-
-        for (i, size) in cache.subviewSizes.enumerated() {
-            if x + size.width > maxWidth && x > 0 {
-                rows.append((startIndex: rowStart, y: y, height: rowH))
-                y += rowH + spacing
-                x = 0; rowH = 0; rowStart = i
-            }
-            rowH = max(rowH, size.height)
-            x += size.width + spacing
-        }
-        rows.append((startIndex: rowStart, y: y, height: rowH))
-        cache.rows = rows
-        cache.totalHeight = y + rowH
-    }
-}
-
-private func isAnthology(_ book: CalibreBook) -> Bool {
-    book.isDescriptionAnthology
-}
-
-private func missingIndices(in indices: [Int]) -> [Int] {
-    let unique = Array(Set(indices)).sorted()
-    guard let last = unique.last, last > 1 else { return [] }
-    let present = Set(unique)
-    return (1...last).filter { !present.contains($0) }
-}
-
-private func parseISODate(_ value: String?) -> Date? {
-    guard let value, !value.isEmpty else { return nil }
-    let iso = ISO8601DateFormatter()
-    if let date = iso.date(from: value) { return date }
-    let formatter = DateFormatter()
-    formatter.dateFormat = "yyyy-MM-dd"
-    return formatter.date(from: value)
-}
-
-private func logMissingVisibleWorkMetadata(
-    book: CalibreBook,
-    ao3Metadata: AO3MetadataRecord?,
-    diagnostic: AO3ExtractionDiagnostic?
-) {
-    #if DEBUG
-    let missingWords = (ao3Metadata?.wordCount ?? book.wordCount) == nil
-    let missingChapters = ao3Metadata?.chapterCurrent == nil
-    guard missingWords || missingChapters else { return }
-
-    var reasons: [String] = []
-    if ao3Metadata == nil {
-        if let diagnostic {
-            reasons.append("no AO3 metadata row; extractionStatus=\(diagnostic.status); extractionReason=\(diagnostic.reason)")
-        } else {
-            reasons.append("no AO3 metadata row; extraction has not recorded a status yet (pending, not attempted under diagnostics schema, or pre-diagnostics DB)")
-        }
-    } else {
-        if ao3Metadata?.wordCount == nil {
-            reasons.append("AO3 metadata has nil word count")
-        }
-        if ao3Metadata?.chapterCurrent == nil {
-            reasons.append("AO3 metadata has nil chapter current")
-        }
-    }
-    if missingWords, book.wordCount == nil {
-        reasons.append("Calibre fallback missing")
-    }
-
-    print("[LibraryMetadata] visible work missing displayed metadata reason=\(reasons.joined(separator: "; ")) calibreID=\(book.id) title=\"\(book.displayTitle)\" hasAO3Metadata=\(ao3Metadata != nil) ao3WorkID=\(ao3Metadata?.workID ?? "nil") ao3Words=\(ao3Metadata?.wordCount.map(String.init) ?? "nil") ao3ChapterCurrent=\(ao3Metadata?.chapterCurrent.map(String.init) ?? "nil") ao3ChapterTotal=\(ao3Metadata?.chapterTotal.map(String.init) ?? "nil") calibreWords=\(book.wordCount.map(String.init) ?? "nil") extractedAt=\(ao3Metadata?.extractedAt ?? "nil") extractionStatus=\(diagnostic?.status ?? "nil") extractionReason=\"\(diagnostic?.reason ?? "nil")\" attemptedAt=\(diagnostic?.attemptedAt ?? "nil") epubFilename=\"\(diagnostic?.epubFilename ?? "nil")\" epubPath=\"\(diagnostic?.epubPath ?? "nil")\" spineItemsChecked=\(diagnostic?.spineItemsChecked.map(String.init) ?? "nil")")
-    #endif
-}
-
-private struct SeriesListRow: View {
-    let series: SeriesGroup
-    let hideFanworksTagPill: Bool
-    let isLiked: Bool
-    let onTagTap: (String, FilterField) -> Void
-    let onLikeToggle: () -> Void
-    let onOpen: () -> Void
-    let onReadLater: () -> Void
-    let onSkip: () -> Void
-    let onMarkRead: () -> Void
-    let onResetProgress: () -> Void
-    let onCollectionChanged: () -> Void
-
-    @State private var showIndex = false
-    @State private var showCollectionPicker = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(series.seriesName)
-                    .font(.headline.weight(.semibold))
-                    .lineLimit(2)
-                Text("\(series.works.count) works")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if !series.indexRangeText.isEmpty {
-                    Text(series.indexRangeText)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(series.missingIndices.isEmpty ? Color.secondary : Color.orange)
-                }
-                Spacer()
-                Button {
-                    showIndex.toggle()
-                } label: {
-                    Image(systemName: series.missingIndices.isEmpty ? "list.number" : "exclamationmark.triangle.fill")
-                }
-                .buttonStyle(.borderless)
-                .help(series.missingIndices.isEmpty ? "Show series index" : "Missing works")
-                .popover(isPresented: $showIndex) { indexPopover }
-                Button(action: onLikeToggle) {
-                    Image(systemName: isLiked ? "star.fill" : "star")
-                        .foregroundStyle(isLiked ? Color.yellow : Color.secondary)
-                }
-                .buttonStyle(.borderless)
-                .help(isLiked ? "Unlike Series" : "Like Series")
-            }
-            Text(series.displayAuthors)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            LibraryStatsRow(stats: libraryStats)
-            tagsRow
-            if !series.allDescriptions.isEmpty {
-                Text(series.allDescriptions.joined(separator: "\n\n"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(4)
-            }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2, perform: onOpen)
-        .contextMenu {
-            Button("Open Series", action: onOpen)
-            Button("Show Individual Works") { showIndex = true }
-            Divider()
-            Button(isLiked ? "Unlike Series" : "Like Series", action: onLikeToggle)
-            Button("Add Series to Read Later", action: onReadLater)
-            Button("Mark Series as Read", action: onMarkRead)
-            Button("Reset Series Reading Progress", action: onResetProgress)
-            Button("Skip Series", action: onSkip)
-            Divider()
-            Button("Add to Collection...") { showCollectionPicker = true }
-        }
-        .popover(isPresented: $showCollectionPicker, arrowEdge: .trailing) {
-            CollectionSearchPickerView(
-                calibreIDs: series.works.map(\.id),
-                onChange: { onCollectionChanged() },
-                onComplete: { showCollectionPicker = false }
-            )
-        }
-    }
-
-    @ViewBuilder
-    private var tagsRow: some View {
-        let pills = TagPillDisplay.makeForSeries(
-            fandoms: series.allFandoms,
-            relationships: series.allRelationships,
-            characters: series.allCharacters,
-            categories: series.allCategories,
-            warnings: series.allWarnings,
-            ratings: series.allRatings,
-            additionalTags: series.allAdditionalTags,
-            tags: series.allTags,
-            hideFanworks: hideFanworksTagPill
-        )
-        if !pills.isEmpty {
-            FlowLayout(spacing: 4) {
-                ForEach(pills) { pill in
-                    tagPill(pill.label, color: pill.color)
-                        .onTapGesture { onTagTap(pill.label, pill.field) }
-                }
-            }
-        }
-    }
-
-    private var libraryStats: LibraryStats {
-        LibraryStats(
-            chapterText: series.displayChapterCount.nilIfEmptyForLibraryRow,
-            isComplete: series.isComplete,
-            wordText: series.displayWordCount.nilIfEmptyForLibraryRow,
-            publishedText: series.earliestPublished.map(Self.formatDate),
-            updatedText: series.latestUpdated.map(Self.formatDate)
-        )
-    }
-
-    private static func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
-    }
-
-    private func tagPill(_ label: String, color: Color?) -> some View {
-        Text(label)
-            .font(.caption2)
-            .fixedSize(horizontal: true, vertical: false)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                color.map { $0.opacity(0.18) }
-                    ?? Color(NSColor.controlBackgroundColor)
-            )
-            .foregroundStyle(color ?? .secondary)
-            .clipShape(Capsule())
-    }
-
-    private var indexPopover: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(series.seriesName).font(.headline)
-
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 6) {
-                    ForEach(series.works, id: \.id) { work in
-                        HStack {
-                            Text("\(series.displayIndex(for: work) ?? 0).")
-                                .foregroundStyle(.secondary)
-                                .frame(width: 28, alignment: .trailing)
-                            Text(work.displayTitle).lineLimit(1)
-                        }
-                    }
-                }
-            }
-            .frame(maxHeight: 360)
-
-            if !series.missingIndices.isEmpty {
-                Divider()
-                Text("Missing: \(series.missingIndices.map(String.init).joined(separator: ", "))")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-        }
-        .padding(14)
-        .frame(width: 340)
-        .frame(maxHeight: 460)
-    }
-}
-
-private extension String {
-    var nilIfEmptyForLibraryRow: String? {
-        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-}
-
-private struct SingletonSeriesWarningButton: View {
-    let warning: SingletonSeriesWarning
-    @State private var showIndex = false
-    @State private var showCollectionPicker = false
-
-    var body: some View {
-        Button {
-            showIndex.toggle()
-        } label: {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-        }
-        .buttonStyle(.borderless)
-        .help(warning.displayText)
-        .popover(isPresented: $showIndex) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(warning.seriesName).font(.headline)
-                Text("Local index: #\(warning.seriesIndex)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                HStack {
-                    Text("\(warning.seriesIndex).")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, alignment: .trailing)
-                    Text(warning.title).lineLimit(1)
-                }
-                Divider()
-                Text(warning.displayText)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-            .padding(14)
-            .frame(width: 340)
-        }
-    }
-}

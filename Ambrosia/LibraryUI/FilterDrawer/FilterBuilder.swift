@@ -115,9 +115,16 @@ struct FilterBuilder {
     let library: CalibreLibrary
     let ftsLibrary: CalibreFTSLibrary?
 
-    init(library: CalibreLibrary, ftsLibrary: CalibreFTSLibrary? = nil) {
+    /// Pre-resolved synonym expansions for tag rule values, keyed by raw value.
+    /// Populated async by the call site via `AmbrosiaMetaDB.expandedTerms(for:)`
+    /// before the `Task.detached` is launched (Invariant 10).
+    let tagExpansions: [String: [String]]
+
+    init(library: CalibreLibrary, ftsLibrary: CalibreFTSLibrary? = nil,
+         tagExpansions: [String: [String]] = [:]) {
         self.library = library
         self.ftsLibrary = ftsLibrary
+        self.tagExpansions = tagExpansions
     }
 
     /// Async variant — dispatches all CPU-bound set intersection and sorting work to a
@@ -131,10 +138,11 @@ struct FilterBuilder {
         crossoverMap: Set<Int> = [],
         wordCountFallbackMap: [Int: Int]? = nil
     ) async -> FilterResult {
-        let lib   = library
-        let ftLib = ftsLibrary
+        let lib      = library
+        let ftLib    = ftsLibrary
+        let expansions = tagExpansions
         return await Task.detached(priority: .userInitiated) {
-            let builder = FilterBuilder(library: lib, ftsLibrary: ftLib)
+            let builder = FilterBuilder(library: lib, ftsLibrary: ftLib, tagExpansions: expansions)
             return builder.matchingIDs(
                 expression:          expression,
                 likedIDs:            likedIDs,
@@ -255,7 +263,8 @@ struct FilterBuilder {
         } else {
             ids = library.calibreIDs(matchingRules: sqlRules,
                                      conjunction: group.conjunction,
-                                     wordCountFallbackMap: wordCountFallbackMap)
+                                     wordCountFallbackMap: wordCountFallbackMap,
+                                     tagExpansions: tagExpansions)
         }
 
         // Apply isLiked in-memory
@@ -427,7 +436,8 @@ extension CalibreLibrary {
     // data, not a filter concern. See "Custom column discovery" section there.
 
     func calibreIDs(matchingRules rules: [FilterRule], conjunction: FilterConjunction,
-                    wordCountFallbackMap: [Int: Int]? = nil) -> [Int] {
+                    wordCountFallbackMap: [Int: Int]? = nil,
+                    tagExpansions: [String: [String]] = [:]) -> [Int] {
         guard !rules.isEmpty else { return allCalibreIDs() }
 
         // §2a: Separate out word-count rules that need in-memory fallback.
@@ -439,14 +449,14 @@ extension CalibreLibrary {
 
         for rule in rules {
             if rule.field == .wordCountGT || rule.field == .wordCountLT {
-                if let (clause, ruleArgs) = sqlFragment(for: rule) {
+                if let (clause, ruleArgs) = sqlFragment(for: rule, tagExpansions: tagExpansions) {
                     clauses.append(clause)
                     args.append(contentsOf: ruleArgs)
                 } else {
                     // No custom column — collect for in-memory fallback
                     wordCountFallbackRules.append(rule)
                 }
-            } else if let (clause, ruleArgs) = sqlFragment(for: rule) {
+            } else if let (clause, ruleArgs) = sqlFragment(for: rule, tagExpansions: tagExpansions) {
                 clauses.append(clause)
                 args.append(contentsOf: ruleArgs)
             }
@@ -515,7 +525,8 @@ extension CalibreLibrary {
         return ids
     }
 
-    func sqlFilterClause(for expression: FilterExpression) -> (String, [Binding?])? {
+    func sqlFilterClause(for expression: FilterExpression,
+                         tagExpansions: [String: [String]] = [:]) -> (String, [Binding?])? {
         guard expression.isSQLPageable else { return nil }
         let completeGroups = expression.groups.filter(\.isComplete)
         var groupClauses: [String] = []
@@ -524,7 +535,7 @@ extension CalibreLibrary {
         for group in completeGroups {
             var clauses: [String] = []
             for rule in group.completeRules {
-                guard let (clause, ruleArgs) = sqlFragment(for: rule) else { continue }
+                guard let (clause, ruleArgs) = sqlFragment(for: rule, tagExpansions: tagExpansions) else { continue }
                 clauses.append(clause)
                 args.append(contentsOf: ruleArgs)
             }
@@ -539,7 +550,8 @@ extension CalibreLibrary {
         return (groupClauses.joined(separator: op), args)
     }
 
-    func bookCount(query: SearchQuery, filter: FilterExpression?) -> Int {
+    func bookCount(query: SearchQuery, filter: FilterExpression?,
+                   filterTagExpansions: [String: [String]] = [:]) -> Int {
         let start = LibraryFilterDebug.now()
         LibraryFilterDebug.log("count.start", [
             "mode": "sqlPagedDeferredCount",
@@ -547,7 +559,7 @@ extension CalibreLibrary {
             "filter": filter.map { LibraryFilterDebug.summary(expression: $0) }
         ])
         do {
-            let count = try _bookCount(query: query, filter: filter)
+            let count = try _bookCount(query: query, filter: filter, filterTagExpansions: filterTagExpansions)
             LibraryFilterDebug.log("count.end", [
                 "mode": "sqlPagedDeferredCount",
                 "count": count,
@@ -560,7 +572,8 @@ extension CalibreLibrary {
         }
     }
 
-    private func _bookCount(query: SearchQuery, filter: FilterExpression?) throws -> Int {
+    private func _bookCount(query: SearchQuery, filter: FilterExpression?,
+                            filterTagExpansions: [String: [String]] = [:]) throws -> Int {
         var conditions: [String] = []
         var args: [Binding?] = []
 
@@ -569,7 +582,7 @@ extension CalibreLibrary {
             conditions.append(qClause)
             args.append(contentsOf: qArgs)
         }
-        if let filter, let (fClause, fArgs) = sqlFilterClause(for: filter) {
+        if let filter, let (fClause, fArgs) = sqlFilterClause(for: filter, tagExpansions: filterTagExpansions) {
             conditions.append(fClause)
             args.append(contentsOf: fArgs)
         }
@@ -596,7 +609,8 @@ extension CalibreLibrary {
     // MARK: - SQL fragment builder
 
     // swiftlint:disable cyclomatic_complexity
-    private func sqlFragment(for rule: FilterRule) -> (String, [Binding?])? {
+    private func sqlFragment(for rule: FilterRule,
+                             tagExpansions: [String: [String]] = [:]) -> (String, [Binding?])? {
         let v = rule.value.trimmingCharacters(in: .whitespaces)
 
         switch rule.field {
@@ -616,7 +630,7 @@ extension CalibreLibrary {
             return textFragment(column: "a.name", op: rule.op, value: v)
 
         case .tag:
-            return expandedTagFragment(op: rule.op, value: v)
+            return expandedTagFragment(op: rule.op, value: v, tagExpansions: tagExpansions)
         case .rating:
             return ao3TagFragment(op: rule.op, value: v)
         case .warning:
@@ -674,8 +688,9 @@ extension CalibreLibrary {
         }
     }
 
-    private func expandedTagFragment(op: FilterOperator, value: String) -> (String, [Binding?])? {
-        let terms = expandedAO3TagTerms(for: value)
+    private func expandedTagFragment(op: FilterOperator, value: String,
+                                     tagExpansions: [String: [String]]) -> (String, [Binding?])? {
+        let terms = tagExpansions[value] ?? [value]
         let matcher: String
         let args: [Binding?]
 
