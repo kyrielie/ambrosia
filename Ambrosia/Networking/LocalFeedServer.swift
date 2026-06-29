@@ -88,6 +88,19 @@ actor LocalFeedServer {
     private var serverTask: Task<Void, Never>?
     private var htmlCache: [HTMLCacheKey: String] = [:]
 
+    /// Calibre's null-pubdate sentinel: 2000-12-31 00:00:00 UTC.
+    /// `CalibreLibrary.parseDate` parses this successfully into a `Date`, so any
+    /// book with no real pubdate set still produces a non-nil `publishedDate`.
+    /// Items must be filtered against this value or every undated book renders
+    /// a "Sat, 31 Dec 2000" pubDate.
+    private static let calibrePubdateSentinel: Date = {
+        var c = DateComponents()
+        c.year = 2000; c.month = 12; c.day = 31
+        c.hour = 0; c.minute = 0; c.second = 0
+        c.timeZone = TimeZone(identifier: "UTC")
+        return Calendar(identifier: .gregorian).date(from: c)!
+    }()
+
     // MARK: - MainActor-readable mirrors
     //
     // `isRunning` and `localNetworkURLSync` are read synchronously from @MainActor
@@ -205,6 +218,12 @@ actor LocalFeedServer {
                 await server.appendRoute("GET /feed/search.xml") { [capturedSelf] _ in
                     try await capturedSelf.handleSearchFeed()
                 }
+                await server.appendRoute("GET /feed/random-daily.xml") { [capturedSelf] _ in
+                    try await capturedSelf.handleRandomDailyFeed()
+                }
+                await server.appendRoute("GET /feeds.opml") { [capturedSelf] _ in
+                    try await capturedSelf.handleOPML()
+                }
                 try await server.run()
             } catch {
                 if !Task.isCancelled {
@@ -217,10 +236,20 @@ actor LocalFeedServer {
     // MARK: - Route handlers
 
     private func handleIndex() async throws -> HTTPResponse {
-        let collections = (try? await collectionStore?.collections()) ?? []
+        let ud = UserDefaults.standard
+        let excludedRaw = ud.string(forKey: "rp.feedServerExcludedCollectionIDs") ?? ""
+        let excluded = excludedRaw.isEmpty ? Set<String>() : Set(excludedRaw.split(separator: ",").map(String.init))
+        let dailyEnabled = ud.object(forKey: "rp.feedServerEnableDailyStory").flatMap { _ in ud.bool(forKey: "rp.feedServerEnableDailyStory") as Bool? } ?? false
+
+        let collections = ((try? await collectionStore?.collections()) ?? [])
+            .filter { !excluded.contains($0.id) }
         var links = collections.map { col in
             "<li><a href=\"/feed/collection/\(col.id).xml\">\(htmlEscape(col.name))</a></li>"
         }.joined(separator: "\n")
+
+        if dailyEnabled {
+            links += "\n<li><a href=\"/feed/random-daily.xml\">Daily Story</a></li>"
+        }
 
         if let snapshot = CurrentSearchSnapshot.load() {
             links += "\n<li><a href=\"/feed/search.xml\">Current Search: \(htmlEscape(snapshot.label))</a></li>"
@@ -233,8 +262,9 @@ actor LocalFeedServer {
         <body>
         <h1>Ambrosia Library Feeds</h1>
         <ul>
-        \(links.isEmpty ? "<li>No collections yet.</li>" : links)
+        \(links)
         </ul>
+        <p><a href="/feeds.opml">Export all feeds as OPML</a></p>
         </body>
         </html>
         """
@@ -260,6 +290,13 @@ actor LocalFeedServer {
 
         let collections = (try? await collectionStore?.collections()) ?? []
         guard let collection = collections.first(where: { $0.id == collectionID }) else {
+            return HTTPResponse(statusCode: .notFound)
+        }
+
+        // Return 404 if this collection has been excluded in Preferences.
+        let excludedRaw = UserDefaults.standard.string(forKey: "rp.feedServerExcludedCollectionIDs") ?? ""
+        let excluded = excludedRaw.isEmpty ? Set<String>() : Set(excludedRaw.split(separator: ",").map(String.init))
+        guard !excluded.contains(collectionID) else {
             return HTTPResponse(statusCode: .notFound)
         }
         let memberIDs = (try? await collectionStore?.members(of: collectionID)) ?? []
@@ -292,6 +329,108 @@ actor LocalFeedServer {
                             body: Data(xml.utf8))
     }
 
+    /// A single random book, re-picked once per UTC calendar day. The seed is
+    /// derived from the day index, not a stored value, so it is stable for any
+    /// number of polls within the same day and changes deterministically at
+    /// the next UTC midnight.
+    private func handleRandomDailyFeed() async throws -> HTTPResponse {
+        let ud = UserDefaults.standard
+        let dailyEnabled = ud.object(forKey: "rp.feedServerEnableDailyStory").flatMap { _ in ud.bool(forKey: "rp.feedServerEnableDailyStory") as Bool? } ?? false
+        guard dailyEnabled else {
+            return HTTPResponse(statusCode: .notFound)
+        }
+        guard let library else {
+            return HTTPResponse(statusCode: .serviceUnavailable)
+        }
+        let allIDs = library.allBookIDs()
+        guard !allIDs.isEmpty else {
+            return HTTPResponse(statusCode: .ok,
+                headers: [.contentType: "application/rss+xml; charset=utf-8"],
+                body: Data(buildEmptyFeed(title: "Ambrosia — Daily Story",
+                                         message: "No books in library.").utf8))
+        }
+        let seed = Int(Date().timeIntervalSince1970 / 86400)
+        let picked = allIDs[seed % allIDs.count]
+        let xml = try await buildRSSFeed(
+            title: "Ambrosia — Daily Story",
+            feedDescription: "A random story from your library, refreshed each day.",
+            calibreIDs: [picked]
+        )
+        return HTTPResponse(statusCode: .ok,
+            headers: [.contentType: "application/rss+xml; charset=utf-8"],
+            body: Data(xml.utf8))
+    }
+
+    /// Generates an OPML 2.0 outline of every collection feed, plus the
+    /// current-search snapshot feed when one has been published. The random
+    /// daily feed is a permanent entry — it has no collection ID and is
+    /// always available once a library is open.
+    func generateOPML(baseURL: String) async -> String {
+        let ud = UserDefaults.standard
+        let excludedRaw = ud.string(forKey: "rp.feedServerExcludedCollectionIDs") ?? ""
+        let excluded = excludedRaw.isEmpty ? Set<String>() : Set(excludedRaw.split(separator: ",").map(String.init))
+        let dailyEnabled = ud.object(forKey: "rp.feedServerEnableDailyStory").flatMap { _ in ud.bool(forKey: "rp.feedServerEnableDailyStory") as Bool? } ?? false
+
+        let collections = ((try? await collectionStore?.collections()) ?? [])
+            .filter { !excluded.contains($0.id) }
+        let now = ISO8601DateFormatter().string(from: Date())
+
+        var outlines = collections.map { col in
+            """
+            <outline type="rss"
+                     text="\(xmlEscape(col.name))"
+                     title="\(xmlEscape(col.name))"
+                     xmlUrl="\(xmlEscape("\(baseURL)/feed/collection/\(col.id).xml"))"/>
+            """
+        }
+
+        if dailyEnabled {
+            outlines.append("""
+            <outline type="rss"
+                     text="Daily Story"
+                     title="Daily Story"
+                     xmlUrl="\(xmlEscape("\(baseURL)/feed/random-daily.xml"))"/>
+            """)
+        }
+
+        if let snapshot = CurrentSearchSnapshot.load() {
+            outlines.append("""
+            <outline type="rss"
+                     text="\(xmlEscape("Search: \(snapshot.label)"))"
+                     title="\(xmlEscape("Search: \(snapshot.label)"))"
+                     xmlUrl="\(xmlEscape("\(baseURL)/feed/search.xml"))"/>
+            """)
+        }
+
+        let body = outlines.isEmpty
+            ? "<!-- No collections or search snapshot to export. -->"
+            : outlines.joined(separator: "\n    ")
+
+        return """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <opml version="2.0">
+          <head>
+            <title>Ambrosia Library Feeds</title>
+            <dateCreated>\(now)</dateCreated>
+            <docs>Feed URLs are tied to this Mac's current local network address and may break if the address changes or the server restarts. Re-export from Ambrosia to get updated URLs.</docs>
+          </head>
+          <body>
+            \(body)
+          </body>
+        </opml>
+        """
+    }
+
+    private func handleOPML() async throws -> HTTPResponse {
+        let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
+        let opml = await generateOPML(baseURL: baseURL)
+        return HTTPResponse(
+            statusCode: .ok,
+            headers: [.contentType: "text/x-opml; charset=utf-8"],
+            body: Data(opml.utf8)
+        )
+    }
+
     // MARK: - RSS generation
 
     private func buildRSSFeed(title: String,
@@ -319,6 +458,7 @@ actor LocalFeedServer {
             <title>\(xmlEscape(title))</title>
             <description>\(xmlEscape(feedDescription))</description>
             <generator>Ambrosia</generator>
+            <lastBuildDate>\(rfc822Date(from: Date()))</lastBuildDate>
             \(items.joined(separator: "\n    "))
           </channel>
         </rss>
@@ -355,7 +495,8 @@ actor LocalFeedServer {
         let pubDateStr: String
         if let ao3Date = ao3?.publishedDate, !ao3Date.isEmpty {
             pubDateStr = rfc822Date(from: ao3Date)
-        } else if let calibreDate = book.publishedDate {
+        } else if let calibreDate = book.publishedDate,
+                  calibreDate > Self.calibrePubdateSentinel {
             pubDateStr = rfc822Date(from: calibreDate)
         } else {
             pubDateStr = ""
@@ -365,8 +506,14 @@ actor LocalFeedServer {
             <item>
               <title>\(xmlEscape(book.displayTitle))</title>
               <guid isPermaLink="false">ambrosia-book-\(book.id)</guid>
-              <description>\(xmlEscape(description))</description>
         """
+        if let workURL = ao3?.storyURL {
+            xml += "\n      <link>\(xmlEscape(workURL))</link>"
+        }
+        xml += "\n      <description>\(xmlEscape(description))</description>"
+        if !book.authors.isEmpty {
+            xml += "\n      <author>\(xmlEscape(book.authors.joined(separator: ", ")))</author>"
+        }
         if !pubDateStr.isEmpty {
             xml += "\n      <pubDate>\(pubDateStr)</pubDate>"
         }
@@ -421,6 +568,8 @@ actor LocalFeedServer {
 
     // MARK: - UI helpers (called from LibraryWindowController)
 
+    /// Returns all collections. ManageFeedsView uses this for its picker;
+    /// per-collection exclusion display is handled in the view using ReaderPreferences.
     func collectionList() async -> [(id: String, name: String)] {
         let rows = (try? await collectionStore?.collections()) ?? []
         return rows.map { ($0.id, $0.name) }

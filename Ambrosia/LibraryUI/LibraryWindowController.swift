@@ -754,133 +754,123 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     @objc private func showRSSPanel() {
         guard let session else { return }
 
-        let startAndProceed: (@escaping () -> Void) -> Void = { [weak self] completion in
-            guard self != nil else { return }
-            if session.feedServer?.isRunning != true {
-                session.startFeedServer()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    completion()
-                }
-            } else {
-                completion()
-            }
-        }
-
-        startAndProceed { [weak self] in
-            guard let self, let feedServer = session.feedServer else { return }
-            Task { @MainActor in
-                let collections = await feedServer.collectionList()
-                self.presentRSSChoicePanel(feedServer: feedServer, collections: collections)
-            }
+        if session.feedServer?.isRunning == true {
+            // Server already running — go straight to Manage Feeds.
+            guard let feedServer = session.feedServer else { return }
+            showManageFeedsSheet(feedServer: feedServer)
+        } else {
+            // Show the warning/confirmation sheet before starting.
+            showRSSWarningSheet()
         }
     }
 
     @MainActor
-    private func presentRSSChoicePanel(feedServer: LocalFeedServer,
-                                        collections: [(id: String, name: String)]) {
+    private func showRSSWarningSheet() {
+        let host = NSHostingController(rootView: RSSPublishWarningView(
+            onPublish: { [weak self] in
+                guard let self, let session = self.session else { return }
+                self.dismissRSSSheet()
+                session.startFeedServer()
+                // Give the async Task a moment to bind before reading isRunning/config.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                    guard let self, let feedServer = session.feedServer else { return }
+                    self.showManageFeedsSheet(feedServer: feedServer)
+                }
+            },
+            onCancel: { [weak self] in
+                self?.dismissRSSSheet()
+            }
+        ))
+        guard let window else { return }
+        let sheetWindow = NSWindow(contentViewController: host)
+        sheetWindow.styleMask = [.titled]
+        window.beginSheet(sheetWindow, completionHandler: nil)
+    }
+
+    @MainActor
+    private func showManageFeedsSheet(feedServer: LocalFeedServer) {
+        Task { @MainActor in
+            let collections = await feedServer.collectionList()
+            let baseURL = feedServer.localNetworkURLSync ?? "http://localhost:\(feedServer.port)"
+            let snapshot = CurrentSearchSnapshot.load()
+
+            let host = NSHostingController(rootView: ManageFeedsView(
+                collections: collections,
+                baseURL: baseURL,
+                hasSearchSnapshot: snapshot != nil,
+                snapshotLabel: snapshot?.label,
+                onPublishSearch: { [weak self] in
+                    self?.publishCurrentSearchSnapshot()
+                },
+                onExportOPML: { [weak self] in
+                    self?.exportOPML(feedServer: feedServer)
+                },
+                onStopServer: { [weak self] in
+                    self?.dismissRSSSheet()
+                    self?.session?.stopFeedServer()
+                    self?.refreshExportMenu()
+                },
+                onDone: { [weak self] in
+                    self?.dismissRSSSheet()
+                }
+            ))
+            guard let window = self.window else { return }
+            let sheetWindow = NSWindow(contentViewController: host)
+            sheetWindow.styleMask = [.titled]
+            window.beginSheet(sheetWindow, completionHandler: nil)
+        }
+    }
+
+    @MainActor
+    private func dismissRSSSheet() {
+        guard let window, let sheet = window.attachedSheet else { return }
+        window.endSheet(sheet)
+    }
+
+    /// Builds the calibre IDs and label for the current search, writing a
+    /// frozen snapshot to UserDefaults so `/feed/search.xml` serves it.
+    /// Called from ManageFeedsView when the user clicks "Publish Current Search".
+    private func publishCurrentSearchSnapshot() {
         guard let session else { return }
-        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 260, height: 26), pullsDown: false)
-        popup.addItem(withTitle: "Current search results")
-        if !collections.isEmpty {
-            popup.menu?.addItem(.separator())
-            for col in collections {
-                let item = NSMenuItem(title: col.name, action: nil, keyEquivalent: "")
-                item.representedObject = col.id
-                popup.menu?.addItem(item)
-            }
-        }
-
-        let alert = NSAlert()
-        alert.messageText = "Publish to RSS Feed"
-        alert.informativeText = "Choose what to publish. The feed URL updates immediately and stays until you publish again."
-        alert.accessoryView = popup
-        alert.addButton(withTitle: "Publish")
-        alert.addButton(withTitle: "Copy Feed URL")
-        alert.addButton(withTitle: "Cancel")
-
-        let response = alert.runModal()
-        guard response != .alertThirdButtonReturn else { return }
-
-        let baseURL = feedServer.localNetworkURLSync ?? "http://localhost:\(feedServer.port)"
-
-        let selectedIndex = popup.indexOfSelectedItem
-        // 0 = "Current search results"; 1 = separator (skip); >=2 = collection items
-        // popup indexes with separator: index 0 = current search, index 1 = separator, index 2+ = collections
-        let isCurrentSearch = selectedIndex == 0
-
-        let feedURL: String
-        let collectionID: String?
-
-        if isCurrentSearch {
-            feedURL = "\(baseURL)/feed/search.xml"
-            collectionID = nil
+        let label: String
+        if let ts = toolbarState, !ts.searchText.isEmpty {
+            label = ts.searchText
+        } else if let ts = toolbarState, ts.filterExpression.hasCompleteRules {
+            label = LibraryFilterDebug.summary(expression: ts.filterExpression)
         } else {
-            // Find the selected collection ID
-            if let selectedItem = popup.selectedItem,
-               let cid = selectedItem.representedObject as? String {
-                feedURL = "\(baseURL)/feed/collection/\(cid).xml"
-                collectionID = cid
-            } else {
-                feedURL = "\(baseURL)/feed/search.xml"
-                collectionID = nil
-            }
+            label = "All books"
         }
+        let ids: [Int]
+        if let result = toolbarState?.activeFilterResult, !result.calibreIDs.isEmpty {
+            ids = result.calibreIDs
+        } else if let result = toolbarState?.activeFilterResult, result.isSQLBacked {
+            let q = toolbarState?.searchText.isEmpty == false
+                ? SearchQueryParser.parse(toolbarState?.searchText ?? "")
+                : SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+            ids = session.library?.fetchAllMatchingIDs(query: q, filter: toolbarState?.filterExpression, restrictIDs: nil) ?? []
+        } else {
+            let q = toolbarState?.searchText.isEmpty == false
+                ? SearchQueryParser.parse(toolbarState?.searchText ?? "")
+                : SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+            ids = session.library?.fetchAllMatchingIDs(query: q, filter: nil, restrictIDs: nil) ?? []
+        }
+        CurrentSearchSnapshot.publish(calibreIDs: ids, label: label)
+    }
 
-        if response == .alertFirstButtonReturn {
-            // Publish
-            if isCurrentSearch || collectionID == nil {
-                // Build snapshot for current search
-                let label: String
-                if let ts = toolbarState, !ts.searchText.isEmpty {
-                    label = ts.searchText
-                } else if let ts = toolbarState, ts.filterExpression.hasCompleteRules {
-                    label = LibraryFilterDebug.summary(expression: ts.filterExpression)
-                } else {
-                    label = "All books"
-                }
-                let ids: [Int]
-                if let result = toolbarState?.activeFilterResult, !result.calibreIDs.isEmpty {
-                    ids = result.calibreIDs
-                } else if let result = toolbarState?.activeFilterResult, result.isSQLBacked {
-                    let q = toolbarState?.searchText.isEmpty == false
-                        ? SearchQueryParser.parse(toolbarState?.searchText ?? "")
-                        : SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
-                    ids = session.library?.fetchAllMatchingIDs(query: q, filter: toolbarState?.filterExpression, restrictIDs: nil) ?? []
-                } else {
-                    let q = toolbarState?.searchText.isEmpty == false
-                        ? SearchQueryParser.parse(toolbarState?.searchText ?? "")
-                        : SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
-                    ids = session.library?.fetchAllMatchingIDs(query: q, filter: nil, restrictIDs: nil) ?? []
-                }
-                CurrentSearchSnapshot.publish(calibreIDs: ids, label: label)
-            }
-            // Show follow-up with URL
-            let confirmAlert = NSAlert()
-            confirmAlert.messageText = "Feed Published"
-            confirmAlert.informativeText = "Feed URL:\n\(feedURL)"
-            confirmAlert.addButton(withTitle: "Copy URL")
-            confirmAlert.addButton(withTitle: "OK")
-            if confirmAlert.runModal() == .alertFirstButtonReturn {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(feedURL, forType: .string)
-            }
-        } else if response == .alertSecondButtonReturn {
-            // Copy Feed URL
-            if isCurrentSearch || collectionID == nil {
-                // Publish snapshot first so the URL is valid
-                let label = toolbarState?.searchText.isEmpty == false
-                    ? (toolbarState?.searchText ?? "Current Search")
-                    : (toolbarState?.filterExpression.hasCompleteRules == true
-                        ? LibraryFilterDebug.summary(expression: toolbarState!.filterExpression)
-                        : "All books")
-                let q = toolbarState?.searchText.isEmpty == false
-                    ? SearchQueryParser.parse(toolbarState?.searchText ?? "")
-                    : SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
-                let ids = session.library?.fetchAllMatchingIDs(query: q, filter: toolbarState?.activeFilterResult?.isSQLBacked == true ? toolbarState?.filterExpression : nil, restrictIDs: toolbarState?.activeFilterResult?.calibreIDs.isEmpty == false ? toolbarState?.activeFilterResult?.calibreIDs : nil) ?? []
-                CurrentSearchSnapshot.publish(calibreIDs: ids, label: label)
-            }
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(feedURL, forType: .string)
+    /// Exports all collection feeds (plus the daily-story and current-search
+    /// feeds, when applicable) as an OPML file and presents the system share
+    /// sheet so the user can AirDrop, email, or save it.
+    @MainActor
+    private func exportOPML(feedServer: LocalFeedServer) {
+        Task { @MainActor in
+            let baseURL = feedServer.localNetworkURLSync ?? "http://localhost:\(feedServer.port)"
+            let opml = await feedServer.generateOPML(baseURL: baseURL)
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("ambrosia-feeds.opml")
+            try? opml.write(to: tmp, atomically: true, encoding: .utf8)
+            guard let anchorView = self.window?.contentView else { return }
+            let picker = NSSharingServicePicker(items: [tmp as NSURL])
+            picker.show(relativeTo: .zero, of: anchorView, preferredEdge: .minY)
         }
     }
 

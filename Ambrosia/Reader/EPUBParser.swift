@@ -124,7 +124,7 @@ struct EPUBParser {
     /// Returns a single HTML document concatenating all spine items.
     /// Each item's <body> content is wrapped in a <section> with a
     /// data-spine-index attribute for JS reference. userCSS is injected once.
-    func mergedHTML(userCSS: String) throws -> String {
+    func mergedHTML(userCSS: String, ao3Record: AO3MetadataRecord? = nil) throws -> String {
         let archive = try openArchive()
         var bodyChunks: [String] = []
 
@@ -138,12 +138,16 @@ struct EPUBParser {
                     ?? ""
 
             // Extract only the <body>…</body> content
-            let bodyContent = Self.extractBodyContent(from: raw)
+            let bodyContent = Self.extractBodyContent(from: raw, isFirstSpineItem: item.index == 0)
             bodyChunks.append("""
             <section data-spine-index="\(item.index)" data-spine-id="\(item.id)">
             \(bodyContent)
             </section>
             """)
+        }
+
+        if let record = ao3Record, let workURL = record.storyURL {
+            bodyChunks.append(Self.buildAO3Endmatter(record: record, workURL: workURL))
         }
 
         let merged = bodyChunks.joined(separator: "\n")
@@ -284,7 +288,7 @@ struct EPUBParser {
     }
 
     /// Extracts the content between <body> and </body> tags, or the whole string if not found.
-    private static func extractBodyContent(from xhtml: String) -> String {
+    private static func extractBodyContent(from xhtml: String, isFirstSpineItem: Bool) -> String {
         // Strip publisher CSS first so we don't drag styles into the merged doc
         var s = xhtml
         s = s.replacingOccurrences(
@@ -304,12 +308,43 @@ struct EPUBParser {
             with: "", options: .regularExpression)
 
         // Extract body content
+        var body: String
         if let bodyStart = s.range(of: "<body", options: .caseInsensitive),
            let bodyTagEnd = s[bodyStart.lowerBound...].range(of: ">"),
            let bodyClose  = s.range(of: "</body>", options: .caseInsensitive) {
-            return String(s[bodyTagEnd.upperBound..<bodyClose.lowerBound])
+            body = String(s[bodyTagEnd.upperBound..<bodyClose.lowerBound])
+        } else {
+            body = s
         }
-        return s
+
+        // AO3 EPUBs emit a redundant "Preface" heading on the first spine item;
+        // the spine item is the preface by definition once rendered in Ambrosia.
+        // This becomes unreachable once AO3PrefaceRenderer replaces the chunk
+        // entirely, but remains a safe fallback for un-extracted EPUBs.
+        if isFirstSpineItem {
+            body = body.replacingOccurrences(
+                of: #"<h1[^>]*>\s*[Pp]reface\s*</h1>"#,
+                with: "", options: .regularExpression)
+        }
+
+        return body
+    }
+
+    /// Builds the end-of-book AO3 endmatter: work URL, comment link, series links.
+    /// Appended after the last spine item when an AO3MetadataRecord is available.
+    private static func buildAO3Endmatter(record: AO3MetadataRecord, workURL: String) -> String {
+        var lines: [String] = ["<section class=\"ao3-endmatter\">", "<hr>"]
+        lines.append("<p><a href=\"\(workURL)\">Read on AO3</a></p>")
+        lines.append("<p><a href=\"\(workURL)#add_comment_field\">Leave a comment</a></p>")
+
+        for entry in record.series {
+            guard let ao3ID = entry.ao3ID else { continue }
+            let seriesURL = "https://archiveofourown.org/series/\(ao3ID)"
+            lines.append("<p>Part \(entry.index) of <a href=\"\(seriesURL)\">\(entry.name)</a></p>")
+        }
+
+        lines.append("</section>")
+        return lines.joined(separator: "\n")
     }
 
     /// Strips all HTML tags, returning raw text content only.

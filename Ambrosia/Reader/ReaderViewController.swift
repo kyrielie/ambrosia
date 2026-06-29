@@ -55,6 +55,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private var webView: ReaderMenuWebView!
     private var parser: EPUBParser?
     private var imageBaseURL: URL?
+    /// AO3 metadata for the primary book, fetched asynchronously after the
+    /// parser loads. Threaded into mergedHTML for endmatter emission.
+    private var ao3Record: AO3MetadataRecord?
 
     fileprivate var currentMode: ReadingMode = .scroll
     private var currentHTML: String = ""
@@ -166,6 +169,10 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         webView = ReaderMenuWebView(frame: .zero, configuration: config)
         webView.viewController = self
         webView.navigationDelegate = self
+        if let bg = Self.nsColor(hex: ReaderPreferences.shared.readerBackgroundColor) {
+            webView.underPageBackgroundColor = bg   // macOS 12+ — fills the scroll area
+            webView.setValue(false, forKey: "drawsBackground")  // suppress white default draw
+        }
         let engine = PaginationEngine(webView: webView)
         engine.spineNavigationHandler = { [weak self] forward in
             forward ? self?.loadNextSpineItem() : self?.loadPreviousSpineItem()
@@ -290,13 +297,15 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
         let libraryRoot = URL(fileURLWithPath: pathStr)
         do {
-            let loaded = try loadHTML(for: target, libraryRoot: libraryRoot)
+            let record = await fetchAO3Record()
+            let loaded = try loadHTML(for: target, libraryRoot: libraryRoot, ao3Record: record)
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                self.parser       = loaded.parser
-                self.imageBaseURL = loaded.imageBaseURL
-                self.currentHTML  = loaded.html
+                self.ao3Record     = record
+                self.parser        = loaded.parser
+                self.imageBaseURL  = loaded.imageBaseURL
+                self.currentHTML   = loaded.html
                 self.loadCurrentHTML()
             }
         } catch {
@@ -304,7 +313,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
     }
 
-    private func loadHTML(for target: ReadingTarget, libraryRoot: URL) throws -> (parser: EPUBParser?, imageBaseURL: URL?, html: String) {
+    private func fetchAO3Record() async -> AO3MetadataRecord? {
+        guard let metaDB = await MainActor.run(body: { AppDelegate.shared?.session.metaDB }) else { return nil }
+        let id = book.id
+        let map = (try? await metaDB.ao3Metadata(for: [id])) ?? [:]
+        return map[id]
+    }
+
+    private func loadHTML(for target: ReadingTarget, libraryRoot: URL, ao3Record: AO3MetadataRecord?) throws -> (parser: EPUBParser?, imageBaseURL: URL?, html: String) {
         switch target {
         case .singleBook(let book):
             guard let epubURL = book.epubURL(libraryRoot: libraryRoot),
@@ -314,7 +330,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             var p = EPUBParser(epubURL: epubURL)
             try p.parse()
             let imgBase = try EPUBParser.extractImages(from: epubURL, calibreID: book.id)
-            let html = try p.mergedHTML(userCSS: ReaderPreferences.shared.css)
+            let html = try p.mergedHTML(userCSS: ReaderPreferences.shared.css, ao3Record: ao3Record)
             return (p, imgBase, html)
 
         case .series(let series):
@@ -337,6 +353,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 let breakHTML = """
                 <div class="ambrosia-series-break"><h2>Work \(displayIndex): \(Self.escapeHTML(work.displayTitle))</h2></div>
                 """
+                // Endmatter is only appended for the primary book's parser elsewhere;
+                // series reading currently has no per-work record threading.
                 let workHTML = try parser.mergedHTML(userCSS: ReaderPreferences.shared.css)
                 parts.append(breakHTML + workHTML)
             }
@@ -357,7 +375,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     func reloadHTML() {
         guard let p = parser else { return }
         do {
-            let html = try p.mergedHTML(userCSS: ReaderPreferences.shared.css)
+            let html = try p.mergedHTML(userCSS: ReaderPreferences.shared.css, ao3Record: ao3Record)
             currentHTML = html
             loadCurrentHTML()
         } catch {
@@ -413,6 +431,10 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private func subscribeToPreferences() {
         prefsCancellable = ReaderPreferences.shared.objectWillChange
             .sink { [weak self] _ in
+                if let bg = Self.nsColor(hex: ReaderPreferences.shared.readerBackgroundColor) {
+                    self?.webView.underPageBackgroundColor = bg
+                    self?.view.layer?.backgroundColor = bg.cgColor
+                }
                 DispatchQueue.main.asyncAfter(deadline: .now()) {
                     self?.reloadHTML()
                 }
