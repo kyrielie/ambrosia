@@ -319,11 +319,11 @@ struct EPUBParser {
 
         // AO3 EPUBs emit a redundant "Preface" heading on the first spine item;
         // the spine item is the preface by definition once rendered in Ambrosia.
-        // This becomes unreachable once AO3PrefaceRenderer replaces the chunk
-        // entirely, but remains a safe fallback for un-extracted EPUBs.
+        // AO3 uses <h2 class="toc-heading"> in practice, but the level varies;
+        // match h1-h6 with a backreference so only the matching close tag is eaten.
         if isFirstSpineItem {
             body = body.replacingOccurrences(
-                of: #"<h1[^>]*>\s*[Pp]reface\s*</h1>"#,
+                of: #"<(h[1-6])[^>]*>\s*[Pp]reface\s*</\1>"#,
                 with: "", options: .regularExpression)
         }
 
@@ -335,7 +335,6 @@ struct EPUBParser {
     private static func buildAO3Endmatter(record: AO3MetadataRecord, workURL: String) -> String {
         var lines: [String] = ["<section class=\"ao3-endmatter\">", "<hr>"]
         lines.append("<p><a href=\"\(workURL)\">Read on AO3</a></p>")
-        lines.append("<p><a href=\"\(workURL)#add_comment_field\">Leave a comment</a></p>")
 
         for entry in record.series {
             guard let ao3ID = entry.ao3ID else { continue }
