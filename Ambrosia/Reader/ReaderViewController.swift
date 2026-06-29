@@ -63,8 +63,25 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private var pendingAnnotationJump: Annotation?
     private var paginationEngine: PaginationEngine?
 
+    /// Set once the view has completed its first AppKit layout pass. Gates
+    /// loadSpineItem so paginated geometry is never computed against a
+    /// transient .zero/partial bounds (see Known Issue #3).
+    private var isLayoutReady = false
+    /// A spine load requested before the first layout pass completed.
+    /// Replayed once isLayoutReady flips true.
+    private var pendingSpineLoad: (index: Int, restorePage: Int?)?
+
     // Resize debounce
     private let resizeDebounce = DebounceTimer(delay: 0.3)
+
+    /// Local NSEvent monitor that intercepts trackpad/mouse scrollWheel events
+    /// before AppKit dispatches them into the WKWebView's own responder chain.
+    /// Needed because the NSView-level `scrollWheel(with:)` override on
+    /// ReaderMenuWebView never actually runs for trackpad input — WKWebView's
+    /// internal scrolling consumes the gesture itself before any subclass
+    /// override sees it, which is why `html { overflow-x: scroll }` was still
+    /// freely scrollable by hand in paginated mode despite that override.
+    private var scrollWheelMonitor: Any?
 
     // Annotation sidebar
     private var sidebarPanel: NSPanel?
@@ -192,10 +209,54 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     override func viewDidAppear() {
         super.viewDidAppear()
         startReadingHistoryIfNeeded()
+        installScrollWheelMonitor()
+    }
+
+    deinit {
+        if let m = scrollWheelMonitor { NSEvent.removeMonitor(m) }
+    }
+
+    // Intercepting at the window-event-monitor level — rather than overriding
+    // scrollWheel(with:) on the WKWebView subclass — is required because
+    // WKWebView's internal scrolling machinery handles trackpad/mouse wheel
+    // input itself; a subclass override of scrollWheel(with:) is bypassed
+    // entirely for that input path. A local monitor sees the event before
+    // AppKit's normal dispatch reaches the view hierarchy at all, so
+    // returning nil here reliably prevents the WKWebView from ever scrolling
+    // off a column boundary by hand. A completed two-finger swipe is still
+    // mapped to a discrete page turn so trackpad users keep that affordance.
+    private func installScrollWheelMonitor() {
+        guard scrollWheelMonitor == nil else { return }
+        scrollWheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self, self.currentMode == .paginated, event.window === self.view.window else {
+                return event
+            }
+            if event.phase == .ended || event.momentumPhase == .began {
+                let dx = event.scrollingDeltaX
+                if abs(dx) > 20 {
+                    dx < 0 ? self.goToNextPage() : self.goToPreviousPage()
+                }
+            }
+            return nil
+        }
+    }
+
+    private func removeScrollWheelMonitor() {
+        if let m = scrollWheelMonitor {
+            NSEvent.removeMonitor(m)
+            scrollWheelMonitor = nil
+        }
     }
 
     override func viewDidLayout() {
         super.viewDidLayout()
+        if !isLayoutReady {
+            isLayoutReady = true
+            if let pending = pendingSpineLoad {
+                pendingSpineLoad = nil
+                loadSpineItem(index: pending.index, restorePage: pending.restorePage)
+            }
+        }
         repositionFindBar()
         // Sync the annotation panel whenever the reader view's bounds change.
         // Window move/resize notifications cover whole-window geometry changes,
@@ -210,6 +271,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     override func viewWillDisappear() {
         super.viewWillDisappear()
+        removeScrollWheelMonitor()
         saveTimer?.invalidate()
         saveTimer = nil
         removeReaderWindowObservers()
@@ -321,20 +383,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private func loadPaginatedHTML() {
         let spineCount = parser?.spine.count ?? 0
         let savedSpine = min(max(0, bookState?.lastSpineIndex ?? currentSpineIndex), max(0, spineCount - 1))
-        let savedPage = Int(bookState?.lastScrollOffset ?? 0)
-        loadSpineItem(index: savedSpine, restorePage: savedPage)
+        loadSpineItem(index: savedSpine, restorePage: nil)
     }
 
     private func loadSpineItem(index: Int, restorePage: Int? = nil) {
         guard let parser, index >= 0, index < parser.spine.count else { return }
-        let vw = webView.bounds.width
-        let vh = webView.bounds.height
 
-        guard vw > 50, vh > 50, view.window != nil else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                guard let self, self.currentMode == .paginated else { return }
-                self.loadSpineItem(index: index, restorePage: restorePage)
-            }
+        guard isLayoutReady, view.window != nil else {
+            pendingSpineLoad = (index, restorePage)
             return
         }
 
@@ -343,8 +399,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
         let item = parser.spine[index]
         do {
-            let html = try parser.html(for: item, userCSS: ReaderPreferences.shared.css)
+            let html = try parser.html(for: item, userCSS: ReaderPreferences.shared.css(paginated: true))
             isReaderContentReady = false
+            paginationEngine?.setColsPerScreen(ReaderPreferences.shared.colsPerScreen)
             paginationEngine?.loadSpine(html: html, baseURL: imageBaseURL, restoreFraction: restorePage.map(Double.init) ?? bookState?.lastScrollOffset)
         } catch {
             showError(error.localizedDescription)
@@ -453,10 +510,16 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     // MARK: - Scroll mode: position save/restore
 
     private func restoreScrollPosition() {
-        let offset = bookState?.lastScrollOffset ?? 0
-        if offset > 0 {
-            webView.evaluateJavaScript("window.scrollTo(0, \(offset));", completionHandler: nil)
-        }
+        let fraction = bookState?.lastScrollOffset ?? 0
+        guard fraction > 0 else { return }
+        let clamped = max(0.0, min(1.0, fraction))
+        let js = """
+        (function() {
+            var maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+            window.scrollTo(0, \(clamped) * maxScroll);
+        })();
+        """
+        webView.evaluateJavaScript(js, completionHandler: nil)
     }
 
     private func injectScrollTracker() {
@@ -558,6 +621,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         } else {
             let js = """
             (function() {
+                var maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+                var percent = Math.max(0, Math.min(1, window.scrollY / maxScroll));
                 var targetY = window.scrollY + 20;
                 var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
                 var cumulative = 0, node;
@@ -582,20 +647,20 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                             var mid = Math.floor((lo + hi) / 2);
                             if (bottomFor(node, mid) < targetY) lo = mid + 1; else hi = mid;
                         }
-                        return { scrollY: window.scrollY, charOffset: cumulative + lo };
+                        return { percent: percent, charOffset: cumulative + lo };
                     }
                     cumulative += node.length;
                 }
-                return { scrollY: window.scrollY, charOffset: cumulative };
+                return { percent: percent, charOffset: cumulative };
             })();
             """
             webView.evaluateJavaScript(js) { [weak self] result, _ in
                 guard let self, let dict = result as? [String: Any] else {
                     completion(); return
                 }
-                let scrollY = Self.cgFloat(from: dict["scrollY"])
+                let percent = Self.double(from: dict["percent"]) ?? 0
                 let charOffset = dict["charOffset"] as? Int ?? 0
-                self.bookState?.lastScrollOffset    = Double(scrollY)
+                self.bookState?.lastScrollOffset    = min(max(percent, 0), 1)
                 self.bookState?.lastCharacterOffset = charOffset
                 completion()
             }
@@ -710,14 +775,12 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { return }
 
-            if let y = Self.double(from: json["scrollY"]) {
-                bookState?.lastScrollOffset = y
-            }
             if let fraction = Self.double(from: json["fraction"]) {
                 bookState?.lastSpineIndex = currentSpineIndex
                 bookState?.lastScrollOffset = min(max(fraction, 0), 1)
                 bookState?.totalReadPercent = min(max(fraction, 0), 1)
             } else if let percent = Self.double(from: json["percent"]) {
+                bookState?.lastScrollOffset = min(max(percent, 0), 1)
                 bookState?.totalReadPercent = min(max(percent, 0), 1)
             }
 
@@ -792,12 +855,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private func savePointAnnotationAtCurrentPosition() {
         guard let state = bookState else { return }
 
-        let offset: Int
-        if currentMode == .paginated {
-            offset = state.lastCharacterOffset
-        } else {
-            offset = Int(state.lastScrollOffset)
-        }
+        let offset = state.lastCharacterOffset
         let spineIndex = state.lastSpineIndex
 
         let sentenceJS = """
@@ -1590,14 +1648,15 @@ private class ReaderMenuWebView: WKWebView {
         evaluateJavaScript("window.scrollBy({ top: \(Int(direction)), left: 0, behavior: 'auto' });", completionHandler: nil)
     }
 
-    // Block trackpad/mouse scrolling in paginated mode. Page turns must go through
-    // goToNextPage/goToPreviousPage so the view stays on exact column boundaries.
+    // Real paginated-mode scroll suppression happens in ReaderViewController's
+    // window-level NSEvent local monitor (installScrollWheelMonitor), which
+    // intercepts scrollWheel events before AppKit dispatch reaches this view
+    // at all. This override is unreachable for that input path — WKWebView's
+    // internal scrolling consumes trackpad/mouse wheel input itself without
+    // calling up through a subclass override — but it's left as a passthrough
+    // rather than removed, in case a future WebKit version changes that.
     override func scrollWheel(with event: NSEvent) {
-        guard let vc = viewController, vc.currentMode == .paginated else {
-            super.scrollWheel(with: event)
-            return
-        }
-        return
+        super.scrollWheel(with: event)
     }
 
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {

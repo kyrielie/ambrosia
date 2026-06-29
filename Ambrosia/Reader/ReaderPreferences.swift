@@ -86,6 +86,9 @@ final class ReaderPreferences: ObservableObject {
     @Published var removeParagraphIndents: Bool {
         didSet { UserDefaults.standard.set(removeParagraphIndents, forKey: Keys.removeParagraphIndents) }
     }
+    @Published var colsPerScreen: ColsPerScreen {
+        didSet { UserDefaults.standard.set(colsPerScreen.rawValue, forKey: Keys.colsPerScreen) }
+    }
 
     // MARK: - Library appearance — colour mode
 
@@ -208,6 +211,7 @@ final class ReaderPreferences: ObservableObject {
         static let paddingV                    = 32
         static let allowReaderLinkClicks       = false
         static let removeParagraphIndents      = false
+        static let colsPerScreen               = ColsPerScreen.one
         static let libraryColorMode            = LibraryColorMode.systemDefault
         static let libraryAppearanceMode       = LibraryAppearanceMode.system
         static let libraryLightBackgroundColor = "#FFFFFF"
@@ -236,6 +240,7 @@ final class ReaderPreferences: ObservableObject {
         static let paddingV                    = "rp.paddingV"
         static let allowReaderLinkClicks       = "rp.allowReaderLinkClicks"
         static let removeParagraphIndents      = "rp.removeParagraphIndents"
+        static let colsPerScreen               = "rp.colsPerScreen"
         static let libraryColorMode            = "rp.libraryColorMode"
         static let libraryAppearanceMode       = "rp.libraryAppearanceMode"
         static let libraryLightBG              = "rp.libraryLightBG"
@@ -267,6 +272,8 @@ final class ReaderPreferences: ObservableObject {
         removeParagraphIndents = ud.object(forKey: Keys.removeParagraphIndents) != nil
             ? ud.bool(forKey: Keys.removeParagraphIndents)
             : Defaults.removeParagraphIndents
+        let rawCols = ud.integer(forKey: Keys.colsPerScreen).nonZero
+        colsPerScreen = rawCols.flatMap(ColsPerScreen.init(rawValue:)) ?? Defaults.colsPerScreen
 
         // Migrate old "rp.backgroundColor" key if present
         let legacyBG = ud.string(forKey: "rp.backgroundColor")
@@ -329,7 +336,15 @@ final class ReaderPreferences: ObservableObject {
     // MARK: - CSS (reader only)
 
     var css: String {
+        css(paginated: false)
+    }
+
+    /// - Parameter paginated: When true, omits body padding — paginated mode
+    ///   applies its own page-margin padding via PaginationJS's ambrosiaSetup,
+    ///   and would otherwise fight with this rule for the same property.
+    func css(paginated: Bool) -> String {
         let linkPointerEvents = allowReaderLinkClicks ? "auto" : "none"
+        let bodyPadding = paginated ? "0" : "\(paddingV)px \(paddingH)px"
         let paragraphIndentCSS = removeParagraphIndents
             ? """
         p, div, li {
@@ -352,7 +367,7 @@ final class ReaderPreferences: ObservableObject {
             line-height: \(lineHeight);
             max-width: \(maxWidth)px;
             margin: 0 auto;
-            padding: \(paddingV)px \(paddingH)px;
+            padding: \(bodyPadding);
             -webkit-font-smoothing: antialiased;
             word-wrap: break-word;
         }
@@ -420,6 +435,7 @@ final class ReaderPreferences: ObservableObject {
         paddingV              = Defaults.paddingV
         allowReaderLinkClicks = Defaults.allowReaderLinkClicks
         removeParagraphIndents = Defaults.removeParagraphIndents
+        colsPerScreen          = Defaults.colsPerScreen
         defaultReadingMode    = Defaults.defaultReadingMode
     }
 

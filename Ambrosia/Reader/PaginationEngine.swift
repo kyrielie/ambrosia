@@ -77,6 +77,9 @@ final class PaginationEngine: NSObject {
     private var colSize: CGFloat   = 0
     private var gap: CGFloat       = 0
     private var colAndGap: CGFloat = 0
+    /// Left/right page margin, applied as body padding-left/right inside
+    /// ambrosiaSetup. Distinct from `gap`, which is the space *between* columns.
+    private var marginH: CGFloat   = 0
 
     /// Whether the current spine has finished loading and ambrosiaSetup has been called.
     private var isReady = false
@@ -133,7 +136,7 @@ final class PaginationEngine: NSObject {
         // asynchronously after the style mutation.
         let js = """
         \(PaginationJS.script)
-        window.ambrosiaSetup(\(colSize), \(gap), \(colsPerScreen));
+        window.ambrosiaSetup(\(colSize), \(gap), \(colsPerScreen), \(marginH));
         """
 
         wv.evaluateJavaScript(js) { [weak self] _, error in
@@ -282,18 +285,24 @@ final class PaginationEngine: NSObject {
         let horizontalPadding = CGFloat(prefs.paddingH * 2)
         gap = max(1, horizontalPadding)
 
+        // Page margin (left/right edge padding, distinct from inter-column gap).
+        // Applied as body padding-left/right in ambrosiaSetup so columns never
+        // butt directly against the viewport edge.
+        marginH = max(0, CGFloat(prefs.paddingH))
+
+        let contentWidth = max(0, viewportWidth - 2 * marginH)
         let n = CGFloat(colsPerScreen)
 
         if n == 1 {
-            colSize = viewportWidth - gap
+            colSize = contentWidth - gap
         } else {
-            // Adjust gap so columns fit pixel-perfectly:
-            //   colSize * n + (n-1) * gap = viewportWidth
-            //   overhang = (viewportWidth + gap) % n
-            let raw = viewportWidth + gap
+            // Adjust gap so columns fit pixel-perfectly within contentWidth:
+            //   colSize * n + (n-1) * gap = contentWidth
+            //   overhang = (contentWidth + gap) % n
+            let raw = contentWidth + gap
             let overhang = raw.truncatingRemainder(dividingBy: n)
             if overhang != 0 { gap += n - overhang }
-            colSize = (viewportWidth + gap) / n - gap
+            colSize = (contentWidth + gap) / n - gap
         }
 
         colAndGap = colSize + gap
