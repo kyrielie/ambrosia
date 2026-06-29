@@ -20,6 +20,7 @@ final class PreferencesWindowController: NSWindowController {
         window.center()
         window.isReleasedWhenClosed = false
         window.toolbarStyle = .preference
+        window.animationBehavior = .documentWindow
         super.init(window: window)
         window.contentView = NSHostingView(rootView: PreferencesRootView())
     }
@@ -77,92 +78,90 @@ private struct ReaderTab: View {
     @State private var readerTextColor: Color = Color(hex: ReaderPreferences.shared.readerTextColor) ?? .black
 
     var body: some View {
-        ScrollView {
-            Form {
+        Form {
 
-                // ── Typography ────────────────────────────────────────────────
-                Section {
-                    fontFamilyRow
-                    stepperRow("Font size",          int: $prefs.fontSize,    range: 10...36, step: 1,  unit: "pt")
-                    stepperRow("Line height",      dbl: $prefs.lineHeight,    range: 1.0...3.0, step: 0.1)
-                    stepperRow("Max line width",     int: $prefs.maxWidth,    range: 400...1400, step: 20, unit: "px")
-                    stepperRow("Horizontal padding", int: $prefs.paddingH,    range: 0...120, step: 4,  unit: "px")
-                    stepperRow("Vertical padding",   int: $prefs.paddingV,    range: 0...120, step: 4,  unit: "px")
-                } header: {
-                    Label("Typography", systemImage: "textformat").font(.headline)
-                }
-
-                // ── Reader colours ────────────────────────────────────────────
-                Section {
-                    ColorPicker("Background", selection: $readerBgColor, supportsOpacity: false)
-                        .onChange(of: readerBgColor) { _, c in
-                            if let hex = c.hexString { prefs.readerBackgroundColor = hex }
-                        }
-                    ColorPicker("Text", selection: $readerTextColor, supportsOpacity: false)
-                        .onChange(of: readerTextColor) { _, c in
-                            if let hex = c.hexString { prefs.readerTextColor = hex }
-                        }
-                    themePresetRow(
-                        onPick: { bg, fg in
-                            prefs.readerBackgroundColor = bg
-                            prefs.readerTextColor       = fg
-                            readerBgColor   = Color(hex: bg) ?? .white
-                            readerTextColor = Color(hex: fg) ?? .black
-                        }
-                    )
-                } header: {
-                    Label("Reader Colours", systemImage: "paintbrush").font(.headline)
-                }
-
-                // ── Default reading mode ──────────────────────────────────────
-                Section {
-                    Picker("Default reading mode", selection: $prefs.defaultReadingMode) {
-                        ForEach(ReadingMode.allCases) { mode in
-                            Text(mode.label).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                } header: {
-                    Label("Reading Mode", systemImage: "book.pages").font(.headline)
-                }
-
-                // ── Reader cleanup and interaction ───────────────────────────
-                Section {
-                    Toggle("Allow link clicks", isOn: $prefs.allowReaderLinkClicks)
-                    Toggle("Remove paragraph indents", isOn: $prefs.removeParagraphIndents)
-                } header: {
-                    Label("Reader Content", systemImage: "doc.text.magnifyingglass").font(.headline)
-                } footer: {
-                    Text("Links open in your browser. Paragraph indent cleanup overrides publisher first-line indentation without changing EPUB files.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                // ── Preferences update behaviour ──────────────────────────────
-                Section {
-                    HStack(spacing: 6) {
-                        Image(systemName: "info.circle")
-                            .foregroundStyle(.secondary)
-                        Text("Open reader windows reload immediately when any preference changes.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Label("When Preferences Change", systemImage: "arrow.clockwise").font(.headline)
-                }
-
-                // ── Reset ─────────────────────────────────────────────────────
-                Section {
-                    Button("Restore Reader Defaults", role: .destructive) {
-                        prefs.resetReaderToDefaults()
-                        readerBgColor   = Color(hex: prefs.readerBackgroundColor) ?? .white
-                        readerTextColor = Color(hex: prefs.readerTextColor) ?? .black
-                    }
-                    .frame(maxWidth: .infinity)
-                }
+            // ── Typography ────────────────────────────────────────────────
+            Section {
+                fontFamilyRow
+                stepperRow("Font size",          int: $prefs.fontSize,    range: 10...36, step: 1,  unit: "pt")
+                stepperRow("Line height",      dbl: $prefs.lineHeight,    range: 1.0...3.0, step: 0.1)
+                stepperRow("Max line width",     int: $prefs.maxWidth,    range: 400...1400, step: 20, unit: "px")
+                stepperRow("Horizontal padding", int: $prefs.paddingH,    range: 0...120, step: 4,  unit: "px")
+                stepperRow("Vertical padding",   int: $prefs.paddingV,    range: 0...120, step: 4,  unit: "px")
+            } header: {
+                Label("Typography", systemImage: "textformat").font(.headline)
             }
-            .formStyle(.grouped)
-            .padding(.bottom, 8)
+
+            // ── Reader colours ────────────────────────────────────────────
+            Section {
+                ColorPicker("Background", selection: $readerBgColor, supportsOpacity: false)
+                    .onChange(of: readerBgColor) { _, c in
+                        if let hex = c.hexString { prefs.readerBackgroundColor = hex }
+                    }
+                ColorPicker("Text", selection: $readerTextColor, supportsOpacity: false)
+                    .onChange(of: readerTextColor) { _, c in
+                        if let hex = c.hexString { prefs.readerTextColor = hex }
+                    }
+                themePresetRow(
+                    onPick: { bg, fg in
+                        prefs.readerBackgroundColor = bg
+                        prefs.readerTextColor       = fg
+                        readerBgColor   = Color(hex: bg) ?? .white
+                        readerTextColor = Color(hex: fg) ?? .black
+                    }
+                )
+            } header: {
+                Label("Reader Colours", systemImage: "paintbrush").font(.headline)
+            }
+
+            // ── Default reading mode ──────────────────────────────────────
+            Section {
+                Picker("Default reading mode", selection: $prefs.defaultReadingMode) {
+                    ForEach(ReadingMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+            } header: {
+                Label("Reading Mode", systemImage: "book.pages").font(.headline)
+            }
+
+            // ── Reader cleanup and interaction ───────────────────────────
+            Section {
+                Toggle("Allow link clicks", isOn: $prefs.allowReaderLinkClicks)
+                Toggle("Remove paragraph indents", isOn: $prefs.removeParagraphIndents)
+            } header: {
+                Label("Reader Content", systemImage: "doc.text.magnifyingglass").font(.headline)
+            } footer: {
+                Text("Links open in your browser. Paragraph indent cleanup overrides publisher first-line indentation without changing EPUB files.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            // ── Preferences update behaviour ──────────────────────────────
+            Section {
+                HStack(spacing: 6) {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                    Text("Open reader windows reload immediately when any preference changes.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Label("When Preferences Change", systemImage: "arrow.clockwise").font(.headline)
+            }
+
+            // ── Reset ─────────────────────────────────────────────────────
+            Section {
+                Button("Restore Reader Defaults", role: .destructive) {
+                    prefs.resetReaderToDefaults()
+                    readerBgColor   = Color(hex: prefs.readerBackgroundColor) ?? .white
+                    readerTextColor = Color(hex: prefs.readerTextColor) ?? .black
+                }
+                .frame(maxWidth: .infinity)
+            }
         }
+        .formStyle(.grouped)
+        .padding(.bottom, 8)
     }
 
     // MARK: Font family row
@@ -291,110 +290,108 @@ private struct LibraryTab: View {
     }
 
     var body: some View {
-        ScrollView {
-            Form {
-                Section {
-                    Toggle("Show skipped books", isOn: $prefs.showSkippedCollection)
-                } header: {
-                    Label("Skipped Books", systemImage: "eye.slash").font(.headline)
-                } footer: {
-                    Text("When off, skipped books are hidden from the library and the Skipped collection is hidden from collection pickers and menus.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                Section {
-                    Toggle("Group series", isOn: Binding(
-                        get: { UserDefaults.standard.bool(forKey: "groupBySeries") },
-                        set: { UserDefaults.standard.set($0, forKey: "groupBySeries") }
-                    ))
-                } header: {
-                    Label("Series", systemImage: "link").font(.headline)
-                } footer: {
-                    Text("Collapses multi-work series into one library row and hides member books already represented by the series.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                Section {
-                    Toggle("Hide Fanworks tag pill", isOn: $prefs.hideFanworksTagPill)
-                    Toggle("Show AO3 books only", isOn: $prefs.hideNonAO3PublisherBooks)
-                    Toggle("Show collection pills in email view", isOn: $prefs.emailPillsShowCollections)
-                } header: {
-                    Label("Library Rows", systemImage: "list.bullet.rectangle").font(.headline)
-                } footer: {
-                    Text("AO3-only mode keeps books whose publisher is exactly Archive of Our Own. Collection pills apply to email view rows.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                // ── Appearance (light / dark / system) ───────────────────────
-                Section {
-                    Picker("Color scheme", selection: $prefs.libraryAppearanceMode) {
-                        ForEach(LibraryAppearanceMode.allCases) { m in
-                            Text(m.label).tag(m)
-                        }
-                    }
-                } header: {
-                    Label("Appearance", systemImage: "circle.lefthalf.filled").font(.headline)
-                } footer: {
-                    Text("Controls whether the library uses light or dark appearance, independently of the system setting.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                // ── Background colour ─────────────────────────────────────────
-                Section {
-                    Picker("Mode", selection: $prefs.libraryColorMode) {
-                        ForEach(LibraryColorMode.allCases) { m in
-                            Text(m.label).tag(m)
-                        }
-                    }
-
-                    switch prefs.libraryColorMode {
-                    case .systemDefault:
-                        HStack(spacing: 6) {
-                            Image(systemName: "info.circle").foregroundStyle(.secondary)
-                            Text("Uses NSColor.windowBackgroundColor and NSColor.labelColor — adapts automatically to light/dark mode.")
-                                .font(.callout).foregroundStyle(.secondary)
-                        }
-
-                    case .accentColor:
-                        HStack(spacing: 6) {
-                            Image(systemName: "info.circle").foregroundStyle(.secondary)
-                            Text("Applies a subtle tint of your system accent color to the library background.")
-                                .font(.callout).foregroundStyle(.secondary)
-                        }
-
-                    case .custom:
-                        customColourPairs
-                    }
-
-                } header: {
-                    Label("Background Color", systemImage: "paintbrush").font(.headline)
-                }
-
-                // ── Live preview ──────────────────────────────────────────────
-                Section {
-                    LibraryPreviewRows(
-                        bgColor: resolvedPreviewBG,
-                        textColor: resolvedPreviewText,
-                        accentMode: prefs.libraryColorMode == .accentColor
-                    )
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-                } header: {
-                    Label("Preview", systemImage: "eye").font(.headline)
-                }
-
-                // ── Reset ─────────────────────────────────────────────────────
-                Section {
-                    Button("Restore Library Defaults", role: .destructive) {
-                        prefs.resetLibraryToDefaults()
-                        syncLocalState()
-                    }
-                    .frame(maxWidth: .infinity)
-                }
+        Form {
+            Section {
+                Toggle("Show skipped books", isOn: $prefs.showSkippedCollection)
+            } header: {
+                Label("Skipped Books", systemImage: "eye.slash").font(.headline)
+            } footer: {
+                Text("When off, skipped books are hidden from the library and the Skipped collection is hidden from collection pickers and menus.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            .formStyle(.grouped)
-            .padding(.bottom, 8)
+
+            Section {
+                Toggle("Group series", isOn: Binding(
+                    get: { UserDefaults.standard.bool(forKey: "groupBySeries") },
+                    set: { UserDefaults.standard.set($0, forKey: "groupBySeries") }
+                ))
+            } header: {
+                Label("Series", systemImage: "link").font(.headline)
+            } footer: {
+                Text("Collapses multi-work series into one library row and hides member books already represented by the series.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Hide Fanworks tag pill", isOn: $prefs.hideFanworksTagPill)
+                Toggle("Show AO3 books only", isOn: $prefs.hideNonAO3PublisherBooks)
+                Toggle("Show collection pills in email view", isOn: $prefs.emailPillsShowCollections)
+            } header: {
+                Label("Library Rows", systemImage: "list.bullet.rectangle").font(.headline)
+            } footer: {
+                Text("AO3-only mode keeps books whose publisher is exactly Archive of Our Own. Collection pills apply to email view rows.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            // ── Appearance (light / dark / system) ───────────────────────
+            Section {
+                Picker("Color scheme", selection: $prefs.libraryAppearanceMode) {
+                    ForEach(LibraryAppearanceMode.allCases) { m in
+                        Text(m.label).tag(m)
+                    }
+                }
+            } header: {
+                Label("Appearance", systemImage: "circle.lefthalf.filled").font(.headline)
+            } footer: {
+                Text("Controls whether the library uses light or dark appearance, independently of the system setting.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            // ── Background colour ─────────────────────────────────────────
+            Section {
+                Picker("Mode", selection: $prefs.libraryColorMode) {
+                    ForEach(LibraryColorMode.allCases) { m in
+                        Text(m.label).tag(m)
+                    }
+                }
+
+                switch prefs.libraryColorMode {
+                case .systemDefault:
+                    HStack(spacing: 6) {
+                        Image(systemName: "info.circle").foregroundStyle(.secondary)
+                        Text("Uses NSColor.windowBackgroundColor and NSColor.labelColor — adapts automatically to light/dark mode.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+
+                case .accentColor:
+                    HStack(spacing: 6) {
+                        Image(systemName: "info.circle").foregroundStyle(.secondary)
+                        Text("Applies a subtle tint of your system accent color to the library background.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+
+                case .custom:
+                    customColourPairs
+                }
+
+            } header: {
+                Label("Background Color", systemImage: "paintbrush").font(.headline)
+            }
+
+            // ── Live preview ──────────────────────────────────────────────
+            Section {
+                LibraryPreviewRows(
+                    bgColor: resolvedPreviewBG,
+                    textColor: resolvedPreviewText,
+                    accentMode: prefs.libraryColorMode == .accentColor
+                )
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+            } header: {
+                Label("Preview", systemImage: "eye").font(.headline)
+            }
+
+            // ── Reset ─────────────────────────────────────────────────────
+            Section {
+                Button("Restore Library Defaults", role: .destructive) {
+                    prefs.resetLibraryToDefaults()
+                    syncLocalState()
+                }
+                .frame(maxWidth: .infinity)
+            }
         }
+        .formStyle(.grouped)
+        .padding(.bottom, 8)
         .onAppear {
             syncLocalState()
             reloadKnownLibraries()
@@ -647,79 +644,77 @@ private struct WindowTab: View {
     @State private var savedSizeMessage: String?
 
     var body: some View {
-        ScrollView {
-            Form {
-                Section {
-                    Toggle("Half-screen portrait", isOn: $prefs.useScreenFraction)
+        Form {
+            Section {
+                Toggle("Half-screen portrait", isOn: $prefs.useScreenFraction)
 
-                    if prefs.useScreenFraction {
-                        HStack(spacing: 6) {
-                            Image(systemName: "info.circle")
-                                .foregroundStyle(.secondary)
-                            Text("New reader windows open at half the visible screen width and 90% of the visible screen height.")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                        }
-                    } else {
-                        HStack {
-                            Text("Width")
-                            Spacer()
-                            Stepper(
-                                "\(Int(prefs.defaultWindowWidth)) px",
-                                value: Binding(
-                                    get: { Int(prefs.defaultWindowWidth) },
-                                    set: { prefs.defaultWindowWidth = CGFloat($0) }
-                                ),
-                                in: 480...3000, step: 20
-                            )
-                        }
-                        HStack {
-                            Text("Height")
-                            Spacer()
-                            Stepper(
-                                "\(Int(prefs.defaultWindowHeight)) px",
-                                value: Binding(
-                                    get: { Int(prefs.defaultWindowHeight) },
-                                    set: { prefs.defaultWindowHeight = CGFloat($0) }
-                                ),
-                                in: 400...2000, step: 20
-                            )
-                        }
-                    }
-                } header: {
-                    Label("Reader Window Default Size", systemImage: "macwindow").font(.headline)
-                } footer: {
-                    Text("Applies to new reader windows only.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                Section {
-                    Button {
-                        if let size = ReaderWindowController.saveFrontWindowSizeAsDefault() {
-                            savedSizeMessage = "Saved \(Int(size.width)) x \(Int(size.height)) px"
-                        } else {
-                            savedSizeMessage = "Open a reader window first"
-                        }
-                    } label: {
-                        Label("Save Current Reader Window Size", systemImage: "square.and.arrow.down")
-                    }
-                    .frame(maxWidth: .infinity)
-
-                    if let savedSizeMessage {
-                        Text(savedSizeMessage)
+                if prefs.useScreenFraction {
+                    HStack(spacing: 6) {
+                        Image(systemName: "info.circle")
+                            .foregroundStyle(.secondary)
+                        Text("New reader windows open at half the visible screen width and 90% of the visible screen height.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
-                } header: {
-                    Label("Custom Size", systemImage: "rectangle.inset.filled").font(.headline)
-                } footer: {
-                    Text("Saving a reader window switches new windows to the custom width and height above.")
-                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    HStack {
+                        Text("Width")
+                        Spacer()
+                        Stepper(
+                            "\(Int(prefs.defaultWindowWidth)) px",
+                            value: Binding(
+                                get: { Int(prefs.defaultWindowWidth) },
+                                set: { prefs.defaultWindowWidth = CGFloat($0) }
+                            ),
+                            in: 480...3000, step: 20
+                        )
+                    }
+                    HStack {
+                        Text("Height")
+                        Spacer()
+                        Stepper(
+                            "\(Int(prefs.defaultWindowHeight)) px",
+                            value: Binding(
+                                get: { Int(prefs.defaultWindowHeight) },
+                                set: { prefs.defaultWindowHeight = CGFloat($0) }
+                            ),
+                            in: 400...2000, step: 20
+                        )
+                    }
                 }
+            } header: {
+                Label("Reader Window Default Size", systemImage: "macwindow").font(.headline)
+            } footer: {
+                Text("Applies to new reader windows only.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            .formStyle(.grouped)
-            .padding(.bottom, 8)
+
+            Section {
+                Button {
+                    if let size = ReaderWindowController.saveFrontWindowSizeAsDefault() {
+                        savedSizeMessage = "Saved \(Int(size.width)) x \(Int(size.height)) px"
+                    } else {
+                        savedSizeMessage = "Open a reader window first"
+                    }
+                } label: {
+                    Label("Save Current Reader Window Size", systemImage: "square.and.arrow.down")
+                }
+                .frame(maxWidth: .infinity)
+
+                if let savedSizeMessage {
+                    Text(savedSizeMessage)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Label("Custom Size", systemImage: "rectangle.inset.filled").font(.headline)
+            } footer: {
+                Text("Saving a reader window switches new windows to the custom width and height above.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
+        .formStyle(.grouped)
+        .padding(.bottom, 8)
     }
 }
 
@@ -787,119 +782,153 @@ private struct DataTab: View {
     @State private var wordCountLabel: String = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
     @State private var kudosLabel: String = CustomColumnConfig.shared.kudosLabel ?? "(none)"
     @State private var availableColumns: [String] = []
+    @State private var rssCollections: [(id: String, name: String)] = []
 
     var body: some View {
-        ScrollView {
-            Form {
-                Section {
-                    if knownLibraries.isEmpty {
-                        Text("No known libraries")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(knownLibraries) { entry in
-                            libraryIndexRow(entry)
-                        }
+        Form {
+            Section {
+                if knownLibraries.isEmpty {
+                    Text("No known libraries")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(knownLibraries) { entry in
+                        libraryIndexRow(entry)
                     }
-                } header: {
-                    Label("Libraries", systemImage: "externaldrive").font(.headline)
                 }
-
-                Section {
-                    Toggle("Use AO3 tag synonyms", isOn: $tagSeedConfig.isEnabled)
-
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(tagSeedConfig.databasePath?.isEmpty == false ? URL(fileURLWithPath: tagSeedConfig.databasePath!).lastPathComponent : "No database selected")
-                                .font(.callout)
-                            if let path = tagSeedConfig.databasePath, !path.isEmpty {
-                                Text(path)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
-                        }
-                        Spacer()
-                        Button("Choose Database...") {
-                            chooseTagSeedDatabase()
-                        }
-                        .controlSize(.small)
-                    }
-
-                    tagSeedStatusView
-
-                    Button("Clear imported synonym cache") {
-                        clearTagSynonymCache()
-                    }
-                    .disabled(AppDelegate.shared?.session?.metaDB == nil)
-
-                    if let tagSynonymCacheMessage {
-                        Text(tagSynonymCacheMessage)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Label("Tag Synonyms", systemImage: "tag").font(.headline)
-                } footer: {
-                    Text("Uses an external ao3_tag_seeds.db. When off or invalid, tag search uses the Calibre tags already in the library.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                Section {
-                    Button("Re-extract AO3 metadata") {
-                        confirmReextract()
-                    }
-                    .disabled(AppDelegate.shared?.session?.isOpen != true)
-                    .frame(maxWidth: .infinity)
-                } header: {
-                    Label("AO3 Metadata", systemImage: "text.magnifyingglass").font(.headline)
-                } footer: {
-                    Text("Clears extracted AO3 metadata and series cache for the active library, then scans EPUB header pages again in the background.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                Section {
-                    if availableColumns.isEmpty {
-                        Text("Open a Calibre library to see available custom columns.")
-                            .font(.callout).foregroundStyle(.secondary)
-                    } else {
-                        let opts = ["(none)"] + availableColumns
-                        Picker("Word count column", selection: $wordCountLabel) {
-                            ForEach(opts, id: \.self) { Text($0).tag($0) }
-                        }
-                        .onChange(of: wordCountLabel) { _, v in
-                            CustomColumnConfig.shared.wordCountLabel = v == "(none)" ? nil : v
-                        }
-                        Picker("Kudos column", selection: $kudosLabel) {
-                            ForEach(opts, id: \.self) { Text($0).tag($0) }
-                        }
-                        .onChange(of: kudosLabel) { _, v in
-                            CustomColumnConfig.shared.kudosLabel = v == "(none)" ? nil : v
-                        }
-                    }
-                } header: {
-                    Label("Columns", systemImage: "tablecells").font(.headline)
-                } footer: {
-                    Text("Maps Calibre custom column labels to word count and kudos. Labels are case-sensitive.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                Section {
-                    Toggle("Correct &amp; to &", isOn: $prefs.correctCalibreAmpEntities)
-                } header: {
-                    Label("Calibre Display Cleanup", systemImage: "wand.and.stars").font(.headline)
-                } footer: {
-                    Text("Applies to displayed titles and descriptions only. Stored Calibre metadata is not changed.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+            } header: {
+                Label("Libraries", systemImage: "externaldrive").font(.headline)
             }
-            .formStyle(.grouped)
-            .padding(.bottom, 8)
+
+            Section {
+                Toggle("Use AO3 tag synonyms", isOn: $tagSeedConfig.isEnabled)
+
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(tagSeedConfig.databasePath?.isEmpty == false ? URL(fileURLWithPath: tagSeedConfig.databasePath!).lastPathComponent : "No database selected")
+                            .font(.callout)
+                        if let path = tagSeedConfig.databasePath, !path.isEmpty {
+                            Text(path)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                    Spacer()
+                    Button("Choose Database...") {
+                        chooseTagSeedDatabase()
+                    }
+                    .controlSize(.small)
+                }
+
+                tagSeedStatusView
+
+                Button("Clear imported synonym cache") {
+                    clearTagSynonymCache()
+                }
+                .disabled(AppDelegate.shared?.session?.metaDB == nil)
+
+                if let tagSynonymCacheMessage {
+                    Text(tagSynonymCacheMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Label("Tag Synonyms", systemImage: "tag").font(.headline)
+            } footer: {
+                Text("Uses an external ao3_tag_seeds.db. When off or invalid, tag search uses the Calibre tags already in the library.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                Button("Re-extract AO3 metadata") {
+                    confirmReextract()
+                }
+                .disabled(AppDelegate.shared?.session?.isOpen != true)
+                .frame(maxWidth: .infinity)
+            } header: {
+                Label("AO3 Metadata", systemImage: "text.magnifyingglass").font(.headline)
+            } footer: {
+                Text("Clears extracted AO3 metadata and series cache for the active library, then scans EPUB header pages again in the background.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                if availableColumns.isEmpty {
+                    Text("Open a Calibre library to see available custom columns.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    let opts = ["(none)"] + availableColumns
+                    Picker("Word count column", selection: $wordCountLabel) {
+                        ForEach(opts, id: \.self) { Text($0).tag($0) }
+                    }
+                    .onChange(of: wordCountLabel) { _, v in
+                        CustomColumnConfig.shared.wordCountLabel = v == "(none)" ? nil : v
+                    }
+                    Picker("Kudos column", selection: $kudosLabel) {
+                        ForEach(opts, id: \.self) { Text($0).tag($0) }
+                    }
+                    .onChange(of: kudosLabel) { _, v in
+                        CustomColumnConfig.shared.kudosLabel = v == "(none)" ? nil : v
+                    }
+                }
+            } header: {
+                Label("Columns", systemImage: "tablecells").font(.headline)
+            } footer: {
+                Text("Maps Calibre custom column labels to word count and kudos. Labels are case-sensitive.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Correct &amp; to &", isOn: $prefs.correctCalibreAmpEntities)
+            } header: {
+                Label("Calibre Display Cleanup", systemImage: "wand.and.stars").font(.headline)
+            } footer: {
+                Text("Applies to displayed titles and descriptions only. Stored Calibre metadata is not changed.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            // MARK: RSS Feeds
+            Section {
+                Toggle("Enable Daily Story feed", isOn: $prefs.feedServerEnableDailyStory)
+
+                if rssCollections.isEmpty {
+                    Text(rssCollections.isEmpty && AppDelegate.shared?.session?.isOpen == true
+                         ? "No collections in the current library."
+                         : "Open a library to configure per-collection publishing.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Excluded collections are not served or listed in OPML:")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    ForEach(rssCollections, id: \.id) { col in
+                        Toggle(col.name, isOn: Binding(
+                            get: { !prefs.feedServerExcludedCollectionIDs.contains(col.id) },
+                            set: { enabled in
+                                if enabled {
+                                    prefs.feedServerExcludedCollectionIDs.remove(col.id)
+                                } else {
+                                    prefs.feedServerExcludedCollectionIDs.insert(col.id)
+                                }
+                            }
+                        ))
+                    }
+                }
+            } header: {
+                Label("RSS Feeds", systemImage: "dot.radiowaves.left.and.right").font(.headline)
+            } footer: {
+                Text("Daily Story serves one random book per day. Excluded collections return 404 to feed readers.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
+        .formStyle(.grouped)
+        .padding(.bottom, 8)
         .onAppear {
             reloadKnownLibraries()
             tagSeedConfig.refreshValidation()
             loadAvailableColumns()
+            loadRSSCollections()
         }
     }
 
@@ -1004,6 +1033,14 @@ private struct DataTab: View {
         availableColumns = library.customColumns().map(\.label).sorted()
         wordCountLabel = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
         kudosLabel = CustomColumnConfig.shared.kudosLabel ?? "(none)"
+    }
+
+    private func loadRSSCollections() {
+        guard let store = AppDelegate.shared?.session?.collectionStore else { return }
+        Task { @MainActor in
+            let rows = (try? await store.collections()) ?? []
+            rssCollections = rows.map { ($0.id, $0.name) }
+        }
     }
 
     private func confirmReextract() {

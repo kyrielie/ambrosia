@@ -129,6 +129,25 @@ final class ReaderPreferences: ObservableObject {
         didSet { UserDefaults.standard.set(emailPillsShowCollections, forKey: Keys.emailPillsShowCollections) }
     }
 
+    // MARK: - Feed server
+
+    /// Whether the random daily-story feed (/feed/random-daily.xml) is enabled.
+    /// Off by default, consistent with the architecture doc's "off by default" posture.
+    @Published var feedServerEnableDailyStory: Bool {
+        didSet { UserDefaults.standard.set(feedServerEnableDailyStory, forKey: Keys.feedServerEnableDailyStory) }
+    }
+
+    /// Collection IDs excluded from the RSS feed server. Stored as a
+    /// comma-delimited string to match the pattern used by other multi-value prefs.
+    @Published var feedServerExcludedCollectionIDs: Set<String> {
+        didSet {
+            UserDefaults.standard.set(
+                feedServerExcludedCollectionIDs.sorted().joined(separator: ","),
+                forKey: Keys.feedServerExcludedCollectionIDs
+            )
+        }
+    }
+
     // MARK: - Derived: resolved library colour for current appearance
 
     /// Returns the effective library background hex string given whether the
@@ -252,6 +271,8 @@ final class ReaderPreferences: ObservableObject {
         static let correctCalibreAmpEntities   = "rp.correctCalibreAmpEntities"
         static let hideNonAO3PublisherBooks    = "rp.hideNonAO3PublisherBooks"
         static let emailPillsShowCollections   = "rp.emailPillsShowCollections"
+        static let feedServerEnableDailyStory  = "rp.feedServerEnableDailyStory"
+        static let feedServerExcludedCollectionIDs = "rp.feedServerExcludedCollectionIDs"
         static let useScreenFraction           = "pref.useScreenFraction"
         static let defaultWindowWidth          = "pref.windowWidth"
         static let defaultWindowHeight         = "pref.windowHeight"
@@ -318,6 +339,14 @@ final class ReaderPreferences: ObservableObject {
         emailPillsShowCollections = ud.object(forKey: Keys.emailPillsShowCollections) != nil
             ? ud.bool(forKey: Keys.emailPillsShowCollections)
             : Defaults.emailPillsShowCollections
+
+        feedServerEnableDailyStory = ud.object(forKey: Keys.feedServerEnableDailyStory) != nil
+            ? ud.bool(forKey: Keys.feedServerEnableDailyStory)
+            : false
+        let excludedRaw = ud.string(forKey: Keys.feedServerExcludedCollectionIDs) ?? ""
+        feedServerExcludedCollectionIDs = excludedRaw.isEmpty
+            ? []
+            : Set(excludedRaw.split(separator: ",").map(String.init))
 
         if ud.object(forKey: Keys.useScreenFraction) != nil {
             useScreenFraction = ud.bool(forKey: Keys.useScreenFraction)
