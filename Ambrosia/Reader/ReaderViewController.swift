@@ -298,7 +298,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         let libraryRoot = URL(fileURLWithPath: pathStr)
         do {
             let record = await fetchAO3Record()
-            let loaded = try loadHTML(for: target, libraryRoot: libraryRoot, ao3Record: record)
+            let loaded = try await loadHTML(for: target, libraryRoot: libraryRoot, ao3Record: record)
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
@@ -320,7 +320,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         return map[id]
     }
 
-    private func loadHTML(for target: ReadingTarget, libraryRoot: URL, ao3Record: AO3MetadataRecord?) throws -> (parser: EPUBParser?, imageBaseURL: URL?, html: String) {
+    private func loadHTML(for target: ReadingTarget, libraryRoot: URL, ao3Record: AO3MetadataRecord?) async throws -> (parser: EPUBParser?, imageBaseURL: URL?, html: String) {
         switch target {
         case .singleBook(let book):
             guard let epubURL = book.epubURL(libraryRoot: libraryRoot),
@@ -334,6 +334,11 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             return (p, imgBase, html)
 
         case .series(let series):
+            // Batch-fetch ao3 records for all works so each gets its own endmatter.
+            let allIDs = series.works.map(\.id)
+            let metaDB = await MainActor.run { AppDelegate.shared?.session.metaDB }
+            let recordMap = (try? await metaDB?.ao3Metadata(for: allIDs)) ?? [:]
+
             var firstParser: EPUBParser?
             var firstImageBaseURL: URL?
             var parts: [String] = []
@@ -353,9 +358,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 let breakHTML = """
                 <div class="ambrosia-series-break"><h2>Work \(displayIndex): \(Self.escapeHTML(work.displayTitle))</h2></div>
                 """
-                // Endmatter is only appended for the primary book's parser elsewhere;
-                // series reading currently has no per-work record threading.
-                let workHTML = try parser.mergedHTML(userCSS: ReaderPreferences.shared.css)
+                let workHTML = try parser.mergedHTML(userCSS: ReaderPreferences.shared.css, ao3Record: recordMap[work.id])
                 parts.append(breakHTML + workHTML)
             }
             return (firstParser, firstImageBaseURL, parts.joined(separator: "\n"))

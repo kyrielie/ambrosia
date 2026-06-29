@@ -728,37 +728,34 @@ private struct ColumnsTab: View {
     @State private var availableColumns: [String] = []
 
     var body: some View {
-        ScrollView {
-            Form {
-                Section {
-                    if availableColumns.isEmpty {
-                        Text("Open a Calibre library to see available custom columns.")
-                            .font(.callout).foregroundStyle(.secondary)
-                    } else {
-                        let opts = ["(none)"] + availableColumns
-                        Picker("Word count column", selection: $wordCountLabel) {
-                            ForEach(opts, id: \.self) { Text($0).tag($0) }
-                        }
-                        .onChange(of: wordCountLabel) { _, v in
-                            CustomColumnConfig.shared.wordCountLabel = v == "(none)" ? nil : v
-                        }
-                        Picker("Kudos column", selection: $kudosLabel) {
-                            ForEach(opts, id: \.self) { Text($0).tag($0) }
-                        }
-                        .onChange(of: kudosLabel) { _, v in
-                            CustomColumnConfig.shared.kudosLabel = v == "(none)" ? nil : v
-                        }
+        Form {
+            Section {
+                if availableColumns.isEmpty {
+                    Text("Open a Calibre library to see available custom columns.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    let opts = ["(none)"] + availableColumns
+                    Picker("Word count column", selection: $wordCountLabel) {
+                        ForEach(opts, id: \.self) { Text($0).tag($0) }
                     }
-                } header: {
-                    Label("Calibre Custom Columns", systemImage: "tablecells").font(.headline)
-                } footer: {
-                    Text("Maps Calibre custom column labels to word count and kudos. Labels are case-sensitive.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    .onChange(of: wordCountLabel) { _, v in
+                        CustomColumnConfig.shared.wordCountLabel = v == "(none)" ? nil : v
+                    }
+                    Picker("Kudos column", selection: $kudosLabel) {
+                        ForEach(opts, id: \.self) { Text($0).tag($0) }
+                    }
+                    .onChange(of: kudosLabel) { _, v in
+                        CustomColumnConfig.shared.kudosLabel = v == "(none)" ? nil : v
+                    }
                 }
+            } header: {
+                Label("Calibre Custom Columns", systemImage: "tablecells").font(.headline)
+            } footer: {
+                Text("Maps Calibre custom column labels to word count and kudos. Labels are case-sensitive.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            .formStyle(.grouped)
-            .padding(.bottom, 8)
         }
+        .formStyle(.grouped)
         .onAppear { loadAvailableColumns() }
     }
 
