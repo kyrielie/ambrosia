@@ -97,12 +97,17 @@ enum PaginationJS {
     // Called by Swift once after didFinish navigation, before any scroll calls.
     // colSize and gap are computed in Swift from the view's actual bounds.
 
-    window.ambrosiaSetup = function (colSize, gap, colsPerScreen) {
+    window.ambrosiaSetup = function (colSize, gap, colsPerScreen, marginH) {
         _colSize       = colSize;
         _gap           = gap;
         _colAndGap     = colSize + gap;
         _colsPerScreen = colsPerScreen;
         _ready         = true;
+
+        // Content width: the total width occupied by colsPerScreen columns and
+        // the gaps between them. This is narrower than window.innerWidth by
+        // 2 * marginH — the page's left/right margin, applied as body padding.
+        var contentWidth = colSize * colsPerScreen + gap * (colsPerScreen - 1);
 
         // Apply multi-column layout to body.
         // column-fill: auto  → columns fill top-to-bottom before starting a new one.
@@ -136,8 +141,13 @@ enum PaginationJS {
         b.style.setProperty('margin',        '0',             'important');
         b.style.setProperty('padding',       '0',             'important');
         b.style.setProperty('box-sizing',    'content-box',   'important');
-        b.style.setProperty('width',         window.innerWidth + 'px', 'important');
+        b.style.setProperty('width',         contentWidth + 'px', 'important');
         b.style.setProperty('max-width',     'none',          'important');
+
+        // Page edge margins, distinct from the inter-column gap above. Applied
+        // after the 'padding' shorthand reset so these longhands win.
+        b.style.setProperty('padding-left',  marginH + 'px',  'important');
+        b.style.setProperty('padding-right', marginH + 'px',  'important');
 
         // Hide WebKit scrollbar — requires a stylesheet rule, not inline style.
         var styleId = '__ambrosia_col_style__';
