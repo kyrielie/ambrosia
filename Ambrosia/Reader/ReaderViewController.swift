@@ -187,10 +187,6 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         paginationEngine = engine
         webView.translatesAutoresizingMaskIntoConstraints = false
 
-        // Disable bounce scroll — in paginated mode horizontal bounce looks wrong
-        webView.enclosingScrollView?.horizontalScrollElasticity = .none
-        webView.enclosingScrollView?.verticalScrollElasticity   = .none
-
         container.addSubview(webView)
         NSLayoutConstraint.activate([
             webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -198,6 +194,13 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             webView.topAnchor.constraint(equalTo: container.topAnchor),
             webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
+
+        // Disable bounce scroll — in paginated mode horizontal bounce looks wrong.
+        // Must run after addSubview: enclosingScrollView is nil until the web
+        // view is actually part of a view hierarchy.
+        webView.enclosingScrollView?.horizontalScrollElasticity = .none
+        webView.enclosingScrollView?.verticalScrollElasticity   = .none
+
         view = container
     }
 
@@ -217,6 +220,13 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         super.viewDidAppear()
         startReadingHistoryIfNeeded()
         installScrollWheelMonitor()
+        // Without this, AppKit's default first responder (the window itself,
+        // or whatever WKWebView's internal scrolling machinery claims) handles
+        // arrow keys as raw scroll offsets into the web view's internal
+        // NSScrollView, bypassing ReaderMenuWebView.keyDown entirely. That
+        // internal scroll is not paging-aware, which is what let horizontal
+        // drag/arrow input reveal CSS columns to the right uncontrolled.
+        view.window?.makeFirstResponder(webView)
     }
 
     deinit {
@@ -1621,6 +1631,12 @@ private extension String {
 private class ReaderMenuWebView: WKWebView {
 
     weak var viewController: ReaderViewController?
+
+    // NSView.acceptsFirstResponder is false by default. Without this override,
+    // ReaderViewController.viewDidAppear's call to
+    // view.window?.makeFirstResponder(webView) silently fails and keyDown
+    // below never fires for arrow/space presses.
+    override var acceptsFirstResponder: Bool { true }
 
     // Arrow keys and spacebar are consumed by WKWebView for its own scrolling
     // before keyDown ever reaches the view controller. In paginated mode we want

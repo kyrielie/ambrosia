@@ -132,6 +132,17 @@ final class EmailLibraryViewController: NSViewController {
         toolbarState.isEmailReaderSidebarVisible = false
         buildSplitView()
         addFilterSheetHost()
+        // §switch-flicker fix: seed visibility snapshots from the session cache so the
+        // first loadPage/applyFilterRules call below sees correct data and doesn't flash
+        // all books before the async refreshCollectionSnapshots completes.
+        // LibraryRootView writes these caches back after every refresh; they are cleared
+        // on library open/close. If the cache is empty (first launch, library just opened)
+        // the initial render is the same as before and refreshCollectionSnapshots corrects it.
+        seriesOrMergedIDs = session.cachedSeriesOrMergedIDs
+        skippedIDs        = session.cachedSkippedIDs
+        likedIDs          = session.cachedLikedIDs
+        ao3PublisherIDs   = session.cachedAO3PublisherIDs
+        readLaterIDs      = session.cachedReadLaterIDs
         refreshBookStates()
         refreshCollections()
         if toolbarState.filterExpression.hasCompleteRules {
@@ -1129,12 +1140,18 @@ final class EmailLibraryViewController: NSViewController {
                 )
             }
 
+            // Build collapsedIDs so books subsumed into an emitted series row are not
+            // also emitted as standalone .book rows. Mirrors rebuildItems in LibraryRootView.
+            let collapsedIDs = Set(groups.values.flatMap { $0.works.map(\.id) })
             var nextItems: [LibraryItem] = []
+            var emittedSeries = Set<String>()
             for book in pageBooks {
                 if let entry = entries.first(where: { $0.calibreID == book.id && !$0.isAnthology }),
-                   let group = groups[entry.seriesKey] {
+                   let group = groups[entry.seriesKey],
+                   !emittedSeries.contains(entry.seriesKey) {
                     nextItems.append(.series(group))
-                } else {
+                    emittedSeries.insert(entry.seriesKey)
+                } else if !collapsedIDs.contains(book.id) {
                     nextItems.append(.book(book))
                 }
             }
@@ -1166,9 +1183,15 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func visibleIDs(_ ids: [Int]) -> [Int] {
-        ids.filter { id in
+        // Only suppress seriesOrMergedIDs members when a SeriesGroup row is actually
+        // being shown for them. Without grouping the suppression silently deletes books
+        // that are rn>1 in one series but rn=1 (representative) in another — e.g. all
+        // works in "Star Wars Drabbles" become invisible because they are also members
+        // of "100 Star Wars Women Drabbles".
+        let grouping = toolbarState.filterExpression.hasSeriesOrMergedEqualsRule
+        return ids.filter { id in
             (ReaderPreferences.shared.showSkippedCollection || !skippedIDs.contains(id)) &&
-            !seriesOrMergedIDs.contains(id) &&
+            (!grouping || !seriesOrMergedIDs.contains(id)) &&
             (!ReaderPreferences.shared.hideNonAO3PublisherBooks || ao3PublisherIDs.contains(id))
         }
     }
@@ -1180,9 +1203,10 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func visibleBooks(_ raw: [CalibreBook]) -> [CalibreBook] {
-        raw.filter { book in
+        let grouping = toolbarState.filterExpression.hasSeriesOrMergedEqualsRule
+        return raw.filter { book in
             (ReaderPreferences.shared.showSkippedCollection || !skippedIDs.contains(book.id)) &&
-            !seriesOrMergedIDs.contains(book.id) &&
+            (!grouping || !seriesOrMergedIDs.contains(book.id)) &&
             (!ReaderPreferences.shared.hideNonAO3PublisherBooks || book.isAO3PublisherBook) &&
             !book.isDescriptionAnthology
         }
