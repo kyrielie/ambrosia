@@ -698,9 +698,14 @@ struct LibraryRootView: View {
     }
 
     private func visibleIDs(_ ids: [Int]) -> [Int] {
+        // Only suppress seriesOrMergedIDs members when series grouping is active and a
+        // SeriesGroup row is being shown to represent them. Without grouping, this filter
+        // silently drops books that are rn>1 in one series but rn=1 in another — the
+        // multi-series-membership case (e.g. "Star Wars Drabbles" + "100 Star Wars Women
+        // Drabbles") causes all works in a series to vanish from a bare series: search.
         ids.filter { id in
             (prefs.showSkippedCollection || !skippedIDs.contains(id)) &&
-            !seriesOrMergedIDs.contains(id) &&
+            (!shouldGroupSeriesRows || !seriesOrMergedIDs.contains(id)) &&
             (!prefs.hideNonAO3PublisherBooks || ao3PublisherIDs.contains(id))
         }
     }
@@ -714,7 +719,7 @@ struct LibraryRootView: View {
     private func visibleBooks(_ raw: [CalibreBook]) -> [CalibreBook] {
         raw.filter { book in
             (prefs.showSkippedCollection || !skippedIDs.contains(book.id)) &&
-            !seriesOrMergedIDs.contains(book.id) &&
+            (!shouldGroupSeriesRows || !seriesOrMergedIDs.contains(book.id)) &&
             (!prefs.hideNonAO3PublisherBooks || book.isAO3PublisherBook) &&
             !isAnthology(book)
         }
