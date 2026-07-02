@@ -369,8 +369,9 @@ final class ReaderPreferences: ObservableObject {
     }
 
     /// - Parameter paginated: When true, omits body padding — paginated mode
-    ///   applies its own page-margin padding via PaginationJS's ambrosiaSetup,
-    ///   and would otherwise fight with this rule for the same property.
+    ///   applies its own page-margin padding via `paginatedColumnCSS`'s body
+    ///   rule (with `!important`), and would otherwise fight with this rule
+    ///   for the same property.
     func css(paginated: Bool) -> String {
         let linkPointerEvents = allowReaderLinkClicks ? "auto" : "none"
         let bodyPadding = paginated ? "0" : "\(paddingV)px \(paddingH)px"
@@ -415,6 +416,130 @@ final class ReaderPreferences: ObservableObject {
         div, section, article { float: none !important; position: static !important; }
         nav[epub\\:type="toc"], nav[epub\\:type="landmarks"] { display: none; }
         \(paragraphIndentCSS)
+        """
+    }
+
+    // MARK: - Paginated column CSS
+    //
+    // Column layout CSS injected into the HTML string BEFORE loadHTMLString is
+    // called (see ReaderViewController.loadSpineItem), never via evaluateJavaScript
+    // after load. This is what eliminates the scroll-mode flash and the race with
+    // BaseStyles.css. See build plan invariant 2.
+    //
+    // Columns are placed on :root (`html`), not `body`: `html` is simultaneously
+    // the column container and the scroll container, so window.scrollX maps
+    // directly to column position with no overflow propagation through ancestors.
+    // `body` is a plain child with `max-width: none`, which defeats the maxWidth
+    // cap from `css(paginated:)` that would otherwise clip columns to a narrow
+    // centred strip. See build plan invariant 3.
+    func paginatedColumnCSS(viewportWidth: CGFloat, viewportHeight: CGFloat) -> String {
+        let colsPerScreen = self.colsPerScreen.rawValue
+        let marginH = CGFloat(paddingH)     // page left/right margin
+        let marginV = CGFloat(paddingV)     // top/bottom padding inside body
+
+        let vw = Int(viewportWidth.rounded())
+        let vh = Int(viewportHeight.rounded())
+        let marginHInt = Int(marginH.rounded())
+
+        // colWidth/colGap used to be computed by dividing `vw` (the full
+        // viewport) directly. That was the actual bug behind the "page 2's
+        // left margin looks 2x" symptom: the horizontal margin was applied
+        // as body's own padding-left/right, but body is the block that gets
+        // FRAGMENTED into columns, and a fragmented block's own padding at
+        // internal column breaks is exactly the kind of thing WebKit doesn't
+        // handle the way naive CSS-fragmentation-spec reading suggests —
+        // empirically it does not cleanly apply body's padding once at the
+        // true start/end of the whole flow; interior column boundaries pick
+        // up extra inset from it. Top/bottom padding didn't show this because
+        // it's orthogonal to the fragmentation axis (every column shares the
+        // same vertical span within the row), which is exactly why the
+        // vertical margins were fine while only the horizontal ones drifted.
+        //
+        // Fix: move the horizontal margin OFF body entirely and onto `html`
+        // (the multicol container) instead. Container-level padding is
+        // unambiguous — it only ever shows at the true first column's left
+        // edge and the true last column's right edge, never at interior
+        // column breaks. All interior spacing then comes purely from
+        // column-gap (blank space, no box involved, so nothing to be
+        // ambiguous about). Because html's own padding reduces its CONTENT
+        // box once (not per screen), colWidth/colGap must divide
+        // `vw - 2*marginH` (html's content box), not `vw` directly — dividing
+        // `vw` itself here would double-subtract the margin.
+        let availableWidth = vw - 2 * marginHInt
+
+        var colGap = max(1, Int((marginH * 2).rounded()))
+        let colWidth: Int
+        if colsPerScreen <= 1 {
+            colWidth = availableWidth
+        } else {
+            let raw = availableWidth + colGap
+            let overhang = raw % colsPerScreen
+            if overhang != 0 { colGap += colsPerScreen - overhang }
+            colWidth = (availableWidth + colGap) / colsPerScreen - colGap
+        }
+
+        #if DEBUG
+        print("[Pagination] requested: vw=\(vw) vh=\(vh) marginH=\(marginHInt) availableWidth=\(availableWidth) colsPerScreen=\(colsPerScreen) colWidth=\(colWidth) colGap=\(colGap) colTotal=\(colWidth * colsPerScreen + colGap * (colsPerScreen - 1)) pitch=\(colWidth + colGap)")
+        #endif
+
+        return """
+        /* === Ambrosia paginated layout === */
+        html {
+            /* :root is the column container and the scroll container.
+               Horizontal margin lives here (container-level padding — applies
+               once, at the true first/last column edge only). */
+            width: \(vw)px !important;
+            height: \(vh)px !important;
+            max-width: \(vw)px !important;
+            max-height: \(vh)px !important;
+            min-width: \(vw)px !important;
+            min-height: \(vh)px !important;
+            padding-left: \(marginHInt)px !important;
+            padding-right: \(marginHInt)px !important;
+            column-width: \(colWidth)px !important;
+            column-gap: \(colGap)px !important;
+            column-fill: auto !important;
+            overflow-x: scroll !important;
+            overflow-y: hidden !important;
+            scrollbar-width: none !important;
+            box-sizing: border-box !important;
+        }
+        html::-webkit-scrollbar { display: none !important; }
+        body {
+            /* body is a normal child; it must NOT be the column container,
+               and must NOT carry horizontal padding — see comment above. */
+            width: 100% !important;
+            max-width: none !important;
+            margin: 0 !important;
+            padding: \(Int(marginV))px 0 !important;
+            height: auto !important;
+            overflow: visible !important;
+            box-sizing: border-box !important;
+        }
+        /* Prevent the first element from creating a blank leading column */
+        body > *:first-child,
+        body > div:first-child > *:first-child {
+            break-before: avoid !important;
+        }
+        /* AO3 preface metadata (tag lists, "Additional Tags" runs, dl/dd blocks,
+           and tables) can contain long comma-separated inline content. CSS
+           multi-column columns are only as wide as column-width *requests* —
+           an unbreakable run of content wider than that forces the browser to
+           widen just that one column to fit it, which throws off every column
+           boundary after it (JS assumes a uniform pitch). Force wrapping
+           everywhere so no element can be wider than its column. */
+        * {
+            max-width: 100% !important;
+            overflow-wrap: break-word !important;
+            word-break: break-word !important;
+        }
+        *:not(pre):not(code) {
+            white-space: normal !important;
+        }
+        table {
+            table-layout: fixed !important;
+            width: 100% !important;
+        }
         """
     }
 

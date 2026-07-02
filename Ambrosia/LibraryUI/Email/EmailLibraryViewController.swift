@@ -51,7 +51,19 @@ final class EmailLibraryViewController: NSViewController {
     private var collectionMembership: [String: Set<Int>] = [:]
     private var pendingCollectionSeedIDs: [Int] = []
     private var currentPage = 0
+    /// Raw SQL row offset for the current load, used instead of currentPage * pageSize
+    /// when grouping is on — see LibraryRootView.rawSQLOffset for full rationale.
+    private var rawSQLOffset = 0
+    /// History of prior rawSQLOffset values. The email view only paginates forward
+    /// (infinite scroll, no Previous button), so this exists purely for symmetry with
+    /// LibraryRootView and is cleared on every reset; nothing currently pops it.
+    private var rawSQLOffsetHistory: [Int] = []
     private var hasNextPage = false
+    /// Overflow from the group-aware drain loop in loadPage: the loop stops once it
+    /// has >= pageSize visible rows, which can overshoot by up to pageFetchLimit - 1.
+    /// The excess is buffered here and prepended to the next page instead of being
+    /// re-fetched (rawSQLOffset has already moved past it) or silently dropped.
+    private var groupAwareOverflow: [CalibreBook] = []
     private let pageSize    = 25
     private var pageFetchLimit: Int { (pageSize * 3) + 1 }
 
@@ -73,6 +85,7 @@ final class EmailLibraryViewController: NSViewController {
     private var lastSidebarToggle: Bool  = false
     private var lastReaderSidebarToggle: Bool = false
     private var lastReshuffleToken: Bool = false
+    private var lastGroupBySeries: Bool = false
 
     /// §switch-flicker fix: set true by `stopObserving()` when this controller is
     /// removed from the view hierarchy (see LibraryViewController.applyViewMode).
@@ -100,6 +113,7 @@ final class EmailLibraryViewController: NSViewController {
     private let debouncer = DebounceTimer(delay: 0.4)
     private var fullTextTask: Task<Void, Never>?
     private var filterCountTask: Task<Void, Never>?
+    private var rebuildSidebarTask: Task<Void, Never>?
 
     private var selectedBook: CalibreBook?
     private weak var currentReaderVC: ReaderViewController?
@@ -143,6 +157,7 @@ final class EmailLibraryViewController: NSViewController {
         likedIDs          = session.cachedLikedIDs
         ao3PublisherIDs   = session.cachedAO3PublisherIDs
         readLaterIDs      = session.cachedReadLaterIDs
+        lastGroupBySeries = toolbarState.groupBySeries
         refreshBookStates()
         refreshCollections()
         if toolbarState.filterExpression.hasCompleteRules {
@@ -433,6 +448,7 @@ final class EmailLibraryViewController: NSViewController {
             _ = ts.toggleEmailSidebar
             _ = ts.toggleEmailReaderSidebar
             _ = ts.reshuffleToken
+            _ = ts.groupBySeries
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 guard let self, !self.isTornDown else { return }
@@ -457,10 +473,22 @@ final class EmailLibraryViewController: NSViewController {
                 loadPage(reset: true)
             }
         }
+        if toolbarState.groupBySeries != lastGroupBySeries {
+            lastGroupBySeries = toolbarState.groupBySeries
+            loadPage(reset: true)
+        }
         let newSearch    = toolbarState.searchText
         let newSort      = toolbarState.sortField
         let newAscending = toolbarState.ascending
         let newFilterToken = toolbarState.activeFilterResult?.reloadToken
+
+        if newFilterToken != lastFilterToken {
+            LibraryFilterDebug.log("toolbarState.filterTokenChanged", [
+                "surface": "email",
+                "old": lastFilterToken ?? "nil",
+                "new": newFilterToken ?? "nil"
+            ])
+        }
 
         let changed = newSearch    != lastSearch
                    || newSort      != lastSort
@@ -606,7 +634,7 @@ final class EmailLibraryViewController: NSViewController {
                     statusMap[status] = (try? await metaDB.ao3CompletionStatusIDs(status)) ?? []
                 }
                 if needsCollection && expression.referencesSeriesOrMergedCollection {
-                    collectionMap[SystemCollectionID.seriesOrMergedName] = (try? await metaDB.collapsedSeriesRepresentativeIDs()) ?? []
+                    collectionMap[SystemCollectionID.seriesOrMergedName] = (try? await metaDB.leadsAtLeastOneSeriesIDs()) ?? []
                 }
             }
             let fulltextMap = Dictionary(uniqueKeysWithValues: fulltextRules.map { rule in
@@ -862,11 +890,34 @@ final class EmailLibraryViewController: NSViewController {
             return
         }
 
-        if reset { currentPage = 0; books = [] }
+        if reset {
+            currentPage = 0
+            rawSQLOffset = 0
+            rawSQLOffsetHistory = []
+            groupAwareOverflow = []
+            books = []
+            // §grouping-flash fix: clear items immediately on a fresh query so the
+            // sidebar shows nothing rather than the previous query's stale rows while
+            // rebuildSidebarItems' async Task (when grouping) is in flight. Mirrors
+            // LibraryRootView's loadPage clearing items before rebuildItems().
+            if shouldGroupSidebarRows {
+                items = []
+                sidebarVC?.items = []
+            }
+        }
 
         let raw: [CalibreBook]
         var wordCountPage: [CalibreBook]? = nil
         var wordCountHasMore = false
+        // §grouping-pagination fix: when shouldGroupSidebarRows is true, the
+        // sqlPagedDeferredCount and unfiltered branches below populate this directly
+        // via a group-aware drain loop instead of relying on the shared raw/visibleBooks
+        // computation after the if/else chain, which assumed pageFetchLimit raw rows
+        // collapse to roughly pageSize visible rows — false once series grouping strips
+        // most rows. nil means "use the shared raw-based path below" (ungrouped, or a
+        // branch — explicitIDs, emptyExplicitIDs, random, wordCount — that already
+        // computes its own page).
+        var groupAwareVisible: [CalibreBook]? = nil
         if toolbarState.sortField == .random {
             let restrictIDs: [Int]?
             let filterForSQL: FilterExpression?
@@ -955,13 +1006,52 @@ final class EmailLibraryViewController: NSViewController {
                 "query": LibraryFilterDebug.summary(query: query),
                 "filter": LibraryFilterDebug.summary(expression: toolbarState.filterExpression)
             ])
-            raw = library.books(
-                offset: currentPage * pageSize, limit: pageFetchLimit,
-                sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                query: query,
-                filter: toolbarState.filterExpression,
-                filterTagExpansions: cachedFilterTagExpansions
-            )
+            if shouldGroupSidebarRows {
+                var visible: [CalibreBook] = reset ? [] : groupAwareOverflow
+                if !reset { groupAwareOverflow = [] }
+                var offset = rawSQLOffset
+                var exhausted = false
+                var totalRawFetched = 0
+                var iterations = 0
+                let maxIterations = 40
+                while visible.count < pageSize && iterations < maxIterations {
+                    iterations += 1
+                    let rawChunk = library.books(
+                        offset: offset, limit: pageFetchLimit,
+                        sort: toolbarState.sortField, ascending: toolbarState.ascending,
+                        query: query,
+                        filter: toolbarState.filterExpression,
+                        filterTagExpansions: cachedFilterTagExpansions
+                    )
+                    LibraryFilterDebug.log("visibleBooks.fetch", [
+                        "surface": "email", "offset": offset, "raw": rawChunk.count
+                    ])
+                    totalRawFetched += rawChunk.count
+                    offset += rawChunk.count
+                    visible.append(contentsOf: visibleBooks(rawChunk))
+                    if rawChunk.count < pageFetchLimit { exhausted = true; break }
+                }
+                rawSQLOffsetHistory.append(rawSQLOffset)
+                rawSQLOffset = offset
+                groupAwareVisible = visible
+                hasNextPage = !exhausted || visible.count > pageSize
+                LibraryFilterDebug.log("visibleBooks.end", [
+                    "surface": "email",
+                    "rawFetched": totalRawFetched,
+                    "visibleAfterFilter": visible.count,
+                    "shouldGroup": true,
+                    "exhausted": exhausted
+                ])
+                raw = []
+            } else {
+                raw = library.books(
+                    offset: currentPage * pageSize, limit: pageFetchLimit,
+                    sort: toolbarState.sortField, ascending: toolbarState.ascending,
+                    query: query,
+                    filter: toolbarState.filterExpression,
+                    filterTagExpansions: cachedFilterTagExpansions
+                )
+            }
             scheduleDeferredSQLFilterCount(query: query)
         } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
             LibraryFilterDebug.log("loadPage.start", [
@@ -992,21 +1082,76 @@ final class EmailLibraryViewController: NSViewController {
                 "page": currentPage,
                 "query": LibraryFilterDebug.summary(query: query)
             ])
-            raw = library.books(
-                offset: currentPage * pageSize, limit: pageFetchLimit,
-                sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                query: query
-            )
+            if shouldGroupSidebarRows {
+                var visible: [CalibreBook] = reset ? [] : groupAwareOverflow
+                if !reset { groupAwareOverflow = [] }
+                var offset = rawSQLOffset
+                var exhausted = false
+                var totalRawFetched = 0
+                var iterations = 0
+                let maxIterations = 40
+                while visible.count < pageSize && iterations < maxIterations {
+                    iterations += 1
+                    let rawChunk = library.books(
+                        offset: offset, limit: pageFetchLimit,
+                        sort: toolbarState.sortField, ascending: toolbarState.ascending,
+                        query: query
+                    )
+                    LibraryFilterDebug.log("visibleBooks.fetch", [
+                        "surface": "email", "offset": offset, "raw": rawChunk.count
+                    ])
+                    totalRawFetched += rawChunk.count
+                    offset += rawChunk.count
+                    visible.append(contentsOf: visibleBooks(rawChunk))
+                    if rawChunk.count < pageFetchLimit { exhausted = true; break }
+                }
+                rawSQLOffsetHistory.append(rawSQLOffset)
+                rawSQLOffset = offset
+                groupAwareVisible = visible
+                hasNextPage = !exhausted || visible.count > pageSize
+                LibraryFilterDebug.log("visibleBooks.end", [
+                    "surface": "email",
+                    "rawFetched": totalRawFetched,
+                    "visibleAfterFilter": visible.count,
+                    "shouldGroup": true,
+                    "exhausted": exhausted
+                ])
+                raw = []
+            } else {
+                raw = library.books(
+                    offset: currentPage * pageSize, limit: pageFetchLimit,
+                    sort: toolbarState.sortField, ascending: toolbarState.ascending,
+                    query: query
+                )
+            }
         }
 
         let page: [CalibreBook]
         if let wordCountPage {
             hasNextPage = wordCountHasMore
             page = wordCountPage
+        } else if let groupAwareVisible {
+            // hasNextPage was already set by the group-aware drain loop above.
+            page = Array(groupAwareVisible.prefix(pageSize))
+            groupAwareOverflow = Array(groupAwareVisible.dropFirst(pageSize))
+            LibraryFilterDebug.log("visibleBooks.pagePrefix", [
+                "surface": "email",
+                "visible": groupAwareVisible.count,
+                "page": page.count,
+                "overflow": groupAwareOverflow.count
+            ])
         } else {
             let visible = visibleBooks(raw)
             hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
             page = Array(visible.prefix(pageSize))
+            LibraryFilterDebug.log("visibleBooks.end", [
+                "surface": "email",
+                "raw": raw.count,
+                "visibleAfterFilter": visible.count,
+                "page": page.count,
+                "seriesOrMergedStripped": raw.count - visible.count,
+                "shouldGroup": false
+            ])
         }
         if reset { books = page } else { books.append(contentsOf: page) }
 
@@ -1071,31 +1216,60 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func rebuildSidebarItems() {
-        guard toolbarState.filterExpression.hasSeriesOrMergedEqualsRule,
+        guard shouldGroupSidebarRows,
               let metaDB = session.metaDB,
               let library = session.library else {
+            LibraryFilterDebug.log("rebuildSidebarItems.ungrouped", [
+                "surface": "email",
+                "books": books.count,
+                "reason": shouldGroupSidebarRows ? "noMetaDB" : "groupingOff"
+            ])
             items = books.map { .book($0) }
             sidebarVC?.items = items
             return
         }
 
+        // §grouping-flash fix: do NOT pre-assign items = books.map(.book) here — see
+        // the matching comment in LibraryRootView.rebuildItems. loadPage(reset:) clears
+        // items to [] on a fresh query so ungrouped works are never shown.
         let pageBooks = books
-        Task {
+        LibraryFilterDebug.log("rebuildSidebarItems.start", [
+            "surface": "email",
+            "pageBooks": pageBooks.count
+        ])
+        // Cancel any in-flight task for the same reason as LibraryRootView.rebuildItems:
+        // concurrent calls to library.booksForIDs on the same CalibreLibrary.db
+        // Connection cause SQLITE_LOCKED, which SQLite.swift surfaces as a `try!` crash.
+        rebuildSidebarTask?.cancel()
+        rebuildSidebarTask = Task {
             let pageIDs = pageBooks.map(\.id)
+            guard !Task.isCancelled else { return }
             let entries = (try? await metaDB.seriesEntries(for: pageIDs)) ?? []
             let groupedEntries = Dictionary(grouping: entries.filter { !$0.isAnthology }, by: \.seriesKey)
             let seriesKeys = groupedEntries.keys.sorted()
+            guard !Task.isCancelled else { return }
             let allEntries = (try? await metaDB.seriesEntries(keys: seriesKeys)) ?? []
             let allIDs = Array(Set(allEntries.map(\.calibreID)))
-            let allBooks = library.booksForIDs(allIDs)
+            guard !Task.isCancelled else { return }
+            // MainActor.run: see the matching comment in LibraryRootView.rebuildItems.
+            // This Task does not inherit MainActor isolation, so library.booksForIDs
+            // would otherwise run concurrently with loadPage(reset:)'s synchronous
+            // library.books() calls on the main thread against the same non-thread-
+            // safe CalibreLibrary.db Connection — the actual cause of the SQLITE_BUSY
+            // ("database is locked") crash. Task cancellation above cannot stop a
+            // call already in flight on another thread, so it does not substitute
+            // for this hop.
+            let allBooks = await MainActor.run { library.booksForIDs(allIDs) }
+            guard !Task.isCancelled else { return }
             let metadata = (try? await metaDB.ao3Metadata(for: allIDs)) ?? [:]
+            guard !Task.isCancelled else { return }
             let placeholders = (try? await metaDB.placeholders(for: seriesKeys)) ?? [:]
             let byID = Dictionary(uniqueKeysWithValues: allBooks.map { ($0.id, $0) })
             let entriesBySeries = Dictionary(grouping: allEntries.filter { !$0.isAnthology }, by: \.seriesKey)
             var groups: [String: SeriesGroup] = [:]
 
             for (seriesKey, entries) in entriesBySeries {
-                let sortedEntries = entries.sorted { $0.seriesIndex < $1.seriesIndex }
+                let sortedEntries = sortedSeriesEntries(entries)
                 let works = sortedEntries.compactMap { byID[$0.calibreID] }
                 guard works.count > 1, works.allSatisfy({ !($0.isDescriptionAnthology) }) else { continue }
                 let seriesMetadata = works.compactMap { metadata[$0.id] }
@@ -1113,10 +1287,7 @@ final class EmailLibraryViewController: NSViewController {
                     id: seriesKey,
                     seriesKey: seriesKey,
                     seriesName: sortedEntries.first?.seriesName ?? seriesKey,
-                    works: works.sorted { left, right in
-                        (sortedEntries.first { $0.calibreID == left.id }?.seriesIndex ?? 0) <
-                        (sortedEntries.first { $0.calibreID == right.id }?.seriesIndex ?? 0)
-                    },
+                    works: sortedSeriesWorks(works, using: sortedEntries),
                     allFandoms: fandoms,
                     allRelationships: relationships,
                     allCharacters: characters,
@@ -1143,22 +1314,32 @@ final class EmailLibraryViewController: NSViewController {
             // Build collapsedIDs so books subsumed into an emitted series row are not
             // also emitted as standalone .book rows. Mirrors rebuildItems in LibraryRootView.
             let collapsedIDs = Set(groups.values.flatMap { $0.works.map(\.id) })
-            var nextItems: [LibraryItem] = []
-            var emittedSeries = Set<String>()
-            for book in pageBooks {
-                if let entry = entries.first(where: { $0.calibreID == book.id && !$0.isAnthology }),
-                   let group = groups[entry.seriesKey],
-                   !emittedSeries.contains(entry.seriesKey) {
-                    nextItems.append(.series(group))
-                    emittedSeries.insert(entry.seriesKey)
-                } else if !collapsedIDs.contains(book.id) {
-                    nextItems.append(.book(book))
-                }
-            }
+            let nextItems = assignSeriesItems(
+                pageBooks: pageBooks,
+                entries: entries,
+                seriesByKey: groups,
+                collapsedIDs: collapsedIDs
+            )
             await MainActor.run {
-                guard self.books.map(\.id) == pageBooks.map(\.id) else { return }
+                guard self.books.map(\.id) == pageBooks.map(\.id) else {
+                    LibraryFilterDebug.log("rebuildSidebarItems.stale", [
+                        "surface": "email",
+                        "pageBooks": pageBooks.count,
+                        "currentBooks": self.books.count
+                    ])
+                    return
+                }
                 self.items = nextItems
                 self.sidebarVC?.items = nextItems
+                LibraryFilterDebug.log("rebuildSidebarItems.end", [
+                    "surface": "email",
+                    "pageBooks": pageBooks.count,
+                    "groups": groups.count,
+                    "collapsedIDs": collapsedIDs.count,
+                    "items": nextItems.count,
+                    "series": nextItems.filter { if case .series = $0 { return true }; return false }.count,
+                    "singletons": nextItems.filter { if case .book = $0 { return true }; return false }.count
+                ])
             }
         }
     }
@@ -1182,16 +1363,22 @@ final class EmailLibraryViewController: NSViewController {
         }
     }
 
+    /// Mirrors LibraryRootView.shouldGroupSeriesRows: grouping is active either because
+    /// the user has the groupBySeries toggle on, or because a "Series or Merged" filter
+    /// rule is committed (which always implies grouping regardless of the toggle).
+    private var shouldGroupSidebarRows: Bool {
+        toolbarState.groupBySeries || toolbarState.filterExpression.hasSeriesOrMergedEqualsRule
+    }
+
     private func visibleIDs(_ ids: [Int]) -> [Int] {
-        // Only suppress seriesOrMergedIDs members when a SeriesGroup row is actually
-        // being shown for them. Without grouping the suppression silently deletes books
-        // that are rn>1 in one series but rn=1 (representative) in another — e.g. all
-        // works in "Star Wars Drabbles" become invisible because they are also members
-        // of "100 Star Wars Women Drabbles".
-        let grouping = toolbarState.filterExpression.hasSeriesOrMergedEqualsRule
-        return ids.filter { id in
+        // Only suppress seriesOrMergedIDs members when series grouping is active and a
+        // SeriesGroup row is being shown for them. Without grouping the suppression
+        // silently deletes books that are rn>1 in one series but rn=1 (representative)
+        // in another — e.g. all works in "Star Wars Drabbles" become invisible because
+        // they are also members of "100 Star Wars Women Drabbles".
+        ids.filter { id in
             (ReaderPreferences.shared.showSkippedCollection || !skippedIDs.contains(id)) &&
-            (!grouping || !seriesOrMergedIDs.contains(id)) &&
+            (!shouldGroupSidebarRows || !seriesOrMergedIDs.contains(id)) &&
             (!ReaderPreferences.shared.hideNonAO3PublisherBooks || ao3PublisherIDs.contains(id))
         }
     }
@@ -1203,10 +1390,9 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func visibleBooks(_ raw: [CalibreBook]) -> [CalibreBook] {
-        let grouping = toolbarState.filterExpression.hasSeriesOrMergedEqualsRule
-        return raw.filter { book in
+        raw.filter { book in
             (ReaderPreferences.shared.showSkippedCollection || !skippedIDs.contains(book.id)) &&
-            (!grouping || !seriesOrMergedIDs.contains(book.id)) &&
+            (!shouldGroupSidebarRows || !seriesOrMergedIDs.contains(book.id)) &&
             (!ReaderPreferences.shared.hideNonAO3PublisherBooks || book.isAO3PublisherBook) &&
             !book.isDescriptionAnthology
         }

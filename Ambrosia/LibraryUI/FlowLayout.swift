@@ -102,6 +102,82 @@ func parseISODate(_ value: String?) -> Date? {
     return formatter.date(from: value)
 }
 
+// MARK: - Series leadership helpers
+//
+// Shared between LibraryRootView.rebuildItems and
+// EmailLibraryViewController.rebuildSidebarItems. Both surfaces must agree on
+// which work anchors a multi-work series row, and that notion must also match
+// AmbrosiaMetaDB.seriesLeadershipCTE's SQL-side ranking (series_index ASC,
+// calibre_id ASC) — otherwise a book could be treated as the database-side
+// leader (kept visible, not stripped into "Series or Merged") while a
+// different book is treated as the UI-side leader (the one that actually
+// anchors the rendered row), silently dropping the true leader from view.
+
+/// Sorts series_cache entries by `series_index ASC, calibreID ASC`. This tie-break
+/// must stay identical to the `ORDER BY` in `AmbrosiaMetaDB.seriesLeadershipCTE`.
+func sortedSeriesEntries(_ entries: [SeriesCacheEntry]) -> [SeriesCacheEntry] {
+    entries.sorted {
+        $0.seriesIndex != $1.seriesIndex ? $0.seriesIndex < $1.seriesIndex : $0.calibreID < $1.calibreID
+    }
+}
+
+/// Sorts a series' works into display/leadership order using the same
+/// `series_index ASC, calibreID ASC` tie-break as `sortedSeriesEntries`, keyed by
+/// the corresponding series_cache entries since `CalibreBook` itself carries no
+/// series_index. `works.first` after this sort is, by construction, the same book
+/// `AmbrosiaMetaDB.seriesLeadershipCTE` would compute as `rn = 1` for this series.
+func sortedSeriesWorks(_ works: [CalibreBook], using sortedEntries: [SeriesCacheEntry]) -> [CalibreBook] {
+    works.sorted { left, right in
+        let leftIndex = sortedEntries.first { $0.calibreID == left.id }?.seriesIndex ?? 0
+        let rightIndex = sortedEntries.first { $0.calibreID == right.id }?.seriesIndex ?? 0
+        if leftIndex != rightIndex { return leftIndex < rightIndex }
+        return left.id < right.id
+    }
+}
+
+/// Assigns each page-resident book to the grouped series row(s) it leads, or to a
+/// standalone `.book` row if it leads none of its series and isn't subsumed into
+/// someone else's group as a non-leading member.
+///
+/// A book that leads more than one of its series (e.g. an AO3 work that opens both
+/// a tight subseries and a larger umbrella series) legitimately anchors more than
+/// one row here — this intentionally does not collapse a book down to a single
+/// "canonical" series. A book that is a member of a series but does not lead it is
+/// never emitted directly; it only surfaces inside the `works` array of whichever
+/// group(s) it belongs to.
+///
+/// Leadership is read off `group.works.first?.id == book.id`, so `seriesByKey` must
+/// have been built with `SeriesGroup.works` populated via `sortedSeriesWorks`, or
+/// this will not agree with the database's notion of leadership.
+func assignSeriesItems(
+    pageBooks: [CalibreBook],
+    entries: [SeriesCacheEntry],
+    seriesByKey: [String: SeriesGroup],
+    collapsedIDs: Set<Int>
+) -> [LibraryItem] {
+    var nextItems: [LibraryItem] = []
+    var emittedSeries = Set<String>()
+    for book in pageBooks {
+        let bookEntries = entries
+            .filter { $0.calibreID == book.id && !$0.isAnthology }
+            .sorted { $0.seriesKey < $1.seriesKey }
+        var emittedAny = false
+        for entry in bookEntries {
+            guard let group = seriesByKey[entry.seriesKey],
+                  !emittedSeries.contains(entry.seriesKey),
+                  group.works.first?.id == book.id
+            else { continue }
+            nextItems.append(.series(group))
+            emittedSeries.insert(entry.seriesKey)
+            emittedAny = true
+        }
+        if !emittedAny && !collapsedIDs.contains(book.id) {
+            nextItems.append(.book(book))
+        }
+    }
+    return nextItems
+}
+
 func logMissingVisibleWorkMetadata(
     book: CalibreBook,
     ao3Metadata: AO3MetadataRecord?,

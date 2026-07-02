@@ -45,6 +45,18 @@ struct LibraryRootView: View {
     @State private var items: [LibraryItem] = []
     @State private var hasNextPage  = false
     @State private var currentPage  = 0
+    /// Raw SQL row offset for the current page. When grouping is on, `visibleBooks`
+    /// strips most rows, so `currentPage * pageSize` drifts far behind the actual SQL
+    /// position. This tracks the true SQL offset independently.
+    @State private var rawSQLOffset = 0
+    /// Stack of prior rawSQLOffset values, one push per forward page, so "Previous"
+    /// can pop back to the exact offset instead of guessing currentPage * pageSize.
+    @State private var rawSQLOffsetHistory: [Int] = []
+    /// Overflow from the group-aware drain loop in loadPage: the loop stops once it
+    /// has >= pageSize visible rows, which can overshoot by up to pageFetchLimit - 1.
+    /// The excess is buffered here and prepended to the next forward page instead of
+    /// being re-fetched (rawSQLOffset has already moved past it) or silently dropped.
+    @State private var rawSQLOffsetOverflow: [CalibreBook] = []
     @State private var filteredCount: Int? = nil
 
     @State private var bookStates: [Int: BookState] = [:]
@@ -61,6 +73,7 @@ struct LibraryRootView: View {
     @State private var selectedIDs: Set<Int> = []
     @State private var fullTextTask: Task<Void, Never>? = nil
     @State private var filterCountTask: Task<Void, Never>? = nil
+    @State private var rebuildTask: Task<Void, Never>? = nil
     // §perf: prevents the onChange(reloadToken) handler from firing a duplicate
     // loadPage() when applyFilterRules() has already called it synchronously.
     @State private var suppressNextReloadToken = false
@@ -105,13 +118,16 @@ struct LibraryRootView: View {
     private func attachDataHandlers<V: View>(to view: V) -> some View {
         view
             .onChange(of: currentPage)                { loadPage() }
-            .onChange(of: toolbarState.sortField)     { selectedIDs.removeAll(); currentPage = 0; loadPage() }
-            .onChange(of: toolbarState.ascending)     { selectedIDs.removeAll(); currentPage = 0; loadPage() }
+            .onChange(of: toolbarState.sortField)     { selectedIDs.removeAll(); currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; loadPage() }
+            .onChange(of: toolbarState.ascending)     { selectedIDs.removeAll(); currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; loadPage() }
             .onChange(of: toolbarState.reshuffleToken)   { loadPage() }
-            .onChange(of: toolbarState.groupBySeries) { selectedIDs.removeAll(); currentPage = 0; loadPage() }
+            .onChange(of: toolbarState.groupBySeries) { selectedIDs.removeAll(); currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; loadPage() }
             .onChange(of: toolbarState.searchText) {
                 selectedIDs.removeAll()
                 currentPage = 0
+                rawSQLOffset = 0
+                rawSQLOffsetHistory = []
+                rawSQLOffsetOverflow = []
                 if toolbarState.consumeSearchTextReloadSuppression() {
                     LibraryFilterDebug.log("searchText.suppressed", [
                         "surface": "list",
@@ -155,7 +171,7 @@ struct LibraryRootView: View {
             .onChange(of: toolbarState.activeFilterResult?.reloadToken) {
                 if suppressNextReloadToken { suppressNextReloadToken = false; return }
                 selectedIDs.removeAll()
-                currentPage = 0; loadPage()
+                currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; loadPage()
             }
     }
 
@@ -167,6 +183,9 @@ struct LibraryRootView: View {
             }
             .onChange(of: prefs.showSkippedCollection) {
                 currentPage = 0
+                rawSQLOffset = 0
+                rawSQLOffsetHistory = []
+                rawSQLOffsetOverflow = []
                 if toolbarState.filterExpression.hasCompleteRules {
                     applyFilterRules()
                 } else {
@@ -182,6 +201,9 @@ struct LibraryRootView: View {
                     toolbarState.groupBySeries = persisted
                     selectedIDs.removeAll()
                     currentPage = 0
+                    rawSQLOffset = 0
+                    rawSQLOffsetHistory = []
+                    rawSQLOffsetOverflow = []
                     loadPage()
                 }
             }
@@ -192,6 +214,9 @@ struct LibraryRootView: View {
                 if session.isOpen {
                     selectedIDs.removeAll()
                     currentPage = 0
+                    rawSQLOffset = 0
+                    rawSQLOffsetHistory = []
+                    rawSQLOffsetOverflow = []
                     toolbarState.searchText = ""
                     toolbarState.activeFilterResult = nil
                     toolbarState.cancelLibraryFilterApplication()
@@ -248,7 +273,7 @@ struct LibraryRootView: View {
                         toolbarState.filterExpression = FilterExpression()
                         toolbarState.activeFilterResult = nil
                         toolbarState.cancelLibraryFilterApplication()
-                        currentPage = 0; loadPage()
+                        currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; loadPage()
                     }
                 )
                 .preferredColorScheme(prefs.resolvedLibraryColorScheme)
@@ -473,16 +498,72 @@ struct LibraryRootView: View {
                 "query": LibraryFilterDebug.summary(query: query),
                 "filter": LibraryFilterDebug.summary(expression: toolbarState.filterExpression)
             ])
-            let raw = library.books(
-                offset: currentPage * pageSize, limit: pageFetchLimit,
-                sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                query: query,
-                filter: toolbarState.filterExpression,
-                filterTagExpansions: cachedFilterTagExpansions
-            )
-            let visible = visibleBooks(raw)
-            hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
-            books = Array(visible.prefix(pageSize))
+            if shouldGroupSeriesRows {
+                // Group-aware fetch: visibleBooks strips non-representative series
+                // members, so a single pageFetchLimit-sized SQL window can collapse to
+                // far fewer than pageSize visible rows. Drain forward from rawSQLOffset,
+                // accumulating visible rows until we have a full page or SQL is exhausted.
+                // rawSQLOffsetOverflow carries forward any extra visible rows the
+                // previous page's drain loop fetched but didn't display, so they are
+                // shown on this page instead of being silently dropped.
+                var visible: [CalibreBook] = rawSQLOffsetOverflow
+                rawSQLOffsetOverflow = []
+                var offset = rawSQLOffset
+                var exhausted = false
+                var totalRawFetched = 0
+                var iterations = 0
+                let maxIterations = 40 // safety cap: 40 * pageFetchLimit (76) = ~3040 raw rows max per page load
+                while visible.count < pageSize && iterations < maxIterations {
+                    iterations += 1
+                    let raw = library.books(
+                        offset: offset, limit: pageFetchLimit,
+                        sort: toolbarState.sortField, ascending: toolbarState.ascending,
+                        query: query,
+                        filter: toolbarState.filterExpression,
+                        filterTagExpansions: cachedFilterTagExpansions
+                    )
+                    LibraryFilterDebug.log("visibleBooks.fetch", [
+                        "surface": "list", "offset": offset, "raw": raw.count
+                    ])
+                    totalRawFetched += raw.count
+                    offset += raw.count
+                    visible.append(contentsOf: visibleBooks(raw))
+                    if raw.count < pageFetchLimit { exhausted = true; break }
+                }
+                rawSQLOffsetHistory.append(rawSQLOffset)
+                rawSQLOffset = offset
+                hasNextPage = !exhausted || visible.count > pageSize
+                books = Array(visible.prefix(pageSize))
+                rawSQLOffsetOverflow = Array(visible.dropFirst(pageSize))
+                LibraryFilterDebug.log("visibleBooks.end", [
+                    "surface": "list",
+                    "rawFetched": totalRawFetched,
+                    "visibleAfterFilter": visible.count,
+                    "books": books.count,
+                    "overflow": rawSQLOffsetOverflow.count,
+                    "shouldGroup": true,
+                    "exhausted": exhausted
+                ])
+            } else {
+                let raw = library.books(
+                    offset: currentPage * pageSize, limit: pageFetchLimit,
+                    sort: toolbarState.sortField, ascending: toolbarState.ascending,
+                    query: query,
+                    filter: toolbarState.filterExpression,
+                    filterTagExpansions: cachedFilterTagExpansions
+                )
+                let visible = visibleBooks(raw)
+                hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
+                books = Array(visible.prefix(pageSize))
+                LibraryFilterDebug.log("visibleBooks.end", [
+                    "surface": "list",
+                    "raw": raw.count,
+                    "visibleAfterFilter": visible.count,
+                    "books": books.count,
+                    "seriesOrMergedStripped": raw.count - visible.count,
+                    "shouldGroup": false
+                ])
+            }
             scheduleDeferredSQLFilterCount(query: query)
         } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
             LibraryFilterDebug.log("loadPage.start", [
@@ -515,14 +596,67 @@ struct LibraryRootView: View {
                 "page": currentPage,
                 "query": LibraryFilterDebug.summary(query: query)
             ])
-            let raw = library.books(
-                offset: currentPage * pageSize, limit: pageFetchLimit,
-                sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                query: query
-            )
-            let visible = visibleBooks(raw)
-            hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
-            books = Array(visible.prefix(pageSize))
+            if shouldGroupSeriesRows {
+                var visible: [CalibreBook] = rawSQLOffsetOverflow
+                rawSQLOffsetOverflow = []
+                var offset = rawSQLOffset
+                var exhausted = false
+                var totalRawFetched = 0
+                var iterations = 0
+                let maxIterations = 40
+                while visible.count < pageSize && iterations < maxIterations {
+                    iterations += 1
+                    let raw = library.books(
+                        offset: offset, limit: pageFetchLimit,
+                        sort: toolbarState.sortField, ascending: toolbarState.ascending,
+                        query: query
+                    )
+                    LibraryFilterDebug.log("visibleBooks.fetch", [
+                        "surface": "list", "offset": offset, "raw": raw.count
+                    ])
+                    totalRawFetched += raw.count
+                    offset += raw.count
+                    visible.append(contentsOf: visibleBooks(raw))
+                    if raw.count < pageFetchLimit { exhausted = true; break }
+                }
+                rawSQLOffsetHistory.append(rawSQLOffset)
+                rawSQLOffset = offset
+                hasNextPage = !exhausted || visible.count > pageSize
+                books = Array(visible.prefix(pageSize))
+                rawSQLOffsetOverflow = Array(visible.dropFirst(pageSize))
+                LibraryFilterDebug.log("visibleBooks.end", [
+                    "surface": "list",
+                    "rawFetched": totalRawFetched,
+                    "visibleAfterFilter": visible.count,
+                    "books": books.count,
+                    "overflow": rawSQLOffsetOverflow.count,
+                    "shouldGroup": true,
+                    "exhausted": exhausted
+                ])
+            } else {
+                let raw = library.books(
+                    offset: currentPage * pageSize, limit: pageFetchLimit,
+                    sort: toolbarState.sortField, ascending: toolbarState.ascending,
+                    query: query
+                )
+                let visible = visibleBooks(raw)
+                hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
+                books = Array(visible.prefix(pageSize))
+                LibraryFilterDebug.log("visibleBooks.end", [
+                    "surface": "list",
+                    "raw": raw.count,
+                    "visibleAfterFilter": visible.count,
+                    "books": books.count,
+                    "seriesOrMergedStripped": raw.count - visible.count,
+                    "shouldGroup": false
+                ])
+            }
+        }
+        // §grouping-flash fix: on a fresh query (page 0) clear items immediately so
+        // the list shows nothing rather than the previous query's stale rows while
+        // rebuildItems' async Task (when grouping) is in flight.
+        if currentPage == 0 && shouldGroupSeriesRows {
+            items = []
         }
         rebuildItems()
         loadAO3MetadataForCurrentPage()
@@ -553,38 +687,83 @@ struct LibraryRootView: View {
 
     private func rebuildItems() {
         guard shouldGroupSeriesRows, let metaDB = session.metaDB, let library = session.library else {
+            LibraryFilterDebug.log("rebuildItems.sync", [
+                "surface": "list",
+                "books": books.count,
+                "shouldGroup": shouldGroupSeriesRows,
+                "reason": shouldGroupSeriesRows ? "noMetaDB" : "groupingOff"
+            ])
             items = books.map { .book($0) }
             return
         }
+        // §grouping-flash fix: do NOT pre-assign items = books.map(.book) here. That
+        // would briefly render ungrouped individual rows before this async Task
+        // completes and overwrites them with collapsed SeriesGroup rows. Leave the
+        // previous page's items in place (loadPage clears items to [] on reset) so
+        // ungrouped works are never shown at any point while grouping is on.
         let pageBooks = books
-        Task {
+        LibraryFilterDebug.log("rebuildItems.asyncStart", [
+            "surface": "list",
+            "pageBooks": pageBooks.count,
+            "pageBookIDs": pageBooks.map(\.id).map(String.init).joined(separator: ","),
+            "pageBookTitles": pageBooks.map(\.title).joined(separator: " | "),
+            "pageBookCalibreSeries": pageBooks.map { $0.series ?? "none" }.joined(separator: " | ")
+        ])
+        // Cancel any in-flight task before starting a new one. Without this,
+        // rapid search changes can leave two tasks simultaneously calling
+        // library.booksForIDs on the same CalibreLibrary.db Connection, which
+        // is not thread-safe. SQLite.swift surfaces the resulting SQLITE_LOCKED
+        // (code 5) error via `try!` in FailableIterator.next(), crashing the app.
+        rebuildTask?.cancel()
+        rebuildTask = Task {
             let pageIDs = pageBooks.map(\.id)
             let pageMetadata: [Int: AO3MetadataRecord]
             let pageDiagnostics: [Int: AO3ExtractionDiagnostic]
             let entries: [SeriesCacheEntry]
+            guard !Task.isCancelled else { return }
             do { pageMetadata   = try await metaDB.ao3Metadata(for: pageIDs) }
             catch { pageMetadata = [:]; print("[LibraryRootView] rebuildItems: ao3Metadata(page) failed: \(error)") }
+            guard !Task.isCancelled else { return }
             do { pageDiagnostics = try await metaDB.ao3ExtractionDiagnostics(for: pageIDs) }
             catch { pageDiagnostics = [:]; print("[LibraryRootView] rebuildItems: ao3ExtractionDiagnostics(page) failed: \(error)") }
+            guard !Task.isCancelled else { return }
             do { entries = try await metaDB.seriesEntries(for: pageIDs) }
             catch { entries = []; print("[LibraryRootView] rebuildItems: seriesEntries(page) failed: \(error)") }
             let groupedEntries = Dictionary(grouping: entries.filter { !$0.isAnthology }, by: \.seriesKey)
             let seriesKeys = groupedEntries.keys.sorted()
             let allEntries: [SeriesCacheEntry]
+            guard !Task.isCancelled else { return }
             do { allEntries = try await metaDB.seriesEntries(keys: seriesKeys) }
             catch { allEntries = []; print("[LibraryRootView] rebuildItems: seriesEntries(keys) failed: \(error)") }
             let allIDs = Array(Set(allEntries.map(\.calibreID)))
-            let allBooks = library.booksForIDs(allIDs)
+            guard !Task.isCancelled else { return }
+            // MainActor.run: this Task is unstructured and does not inherit MainActor
+            // isolation, so without this hop `library.booksForIDs` would run on a
+            // background thread of the concurrency pool. CalibreLibrary's `db` is a
+            // single, non-thread-safe SQLite.swift Connection also read synchronously
+            // from loadPage() on the main thread (including the series-grouping
+            // drain loop, which issues up to ~40 sequential `library.books()` calls
+            // per page). Two threads touching that Connection at once surfaces as
+            // SQLITE_BUSY ("database is locked") in SQLite.swift's `try!`-based
+            // FailableIterator, which is a fatal crash, not a catchable error.
+            // Cancellation above is a best-effort optimization only — it cannot
+            // interrupt a synchronous call already in flight on another thread — so
+            // this MainActor hop is what actually prevents the race, not the guard.
+            let allBooks = await MainActor.run { library.booksForIDs(allIDs) }
             let seriesMetadata: [Int: AO3MetadataRecord]
             let seriesDiagnostics: [Int: AO3ExtractionDiagnostic]
             let singletonWarnings: [Int: SingletonSeriesWarning]
             let placeholders: [String: [SeriesPlaceholder]]
+            guard !Task.isCancelled else { return }
             do { seriesMetadata   = try await metaDB.ao3Metadata(for: allIDs) }
             catch { seriesMetadata = [:]; print("[LibraryRootView] rebuildItems: ao3Metadata(series) failed: \(error)") }
+            guard !Task.isCancelled else { return }
             do { seriesDiagnostics = try await metaDB.ao3ExtractionDiagnostics(for: allIDs) }
             catch { seriesDiagnostics = [:]; print("[LibraryRootView] rebuildItems: ao3ExtractionDiagnostics(series) failed: \(error)") }
+            guard !Task.isCancelled else { return }
             do { singletonWarnings = try await metaDB.singletonNonLeadingSeriesEntries(for: pageIDs) }
             catch { singletonWarnings = [:]; print("[LibraryRootView] rebuildItems: singletonNonLeadingSeriesEntries failed: \(error)") }
+            guard !Task.isCancelled else { return }
             do { placeholders = try await metaDB.placeholders(for: seriesKeys) }
             catch { placeholders = [:]; print("[LibraryRootView] rebuildItems: placeholders failed: \(error)") }
             let warnings = enrichWarnings(singletonWarnings, books: pageBooks)
@@ -594,7 +773,7 @@ struct LibraryRootView: View {
             var seriesByKey: [String: SeriesGroup] = [:]
 
             for (seriesKey, entries) in entriesBySeries {
-                let sortedEntries = entries.sorted { $0.seriesIndex < $1.seriesIndex }
+                let sortedEntries = sortedSeriesEntries(entries)
                 let works = sortedEntries.compactMap { byID[$0.calibreID] }
                 guard works.count > 1 else { continue }
                 guard works.allSatisfy({ !isAnthology($0) }) else { continue }
@@ -623,10 +802,7 @@ struct LibraryRootView: View {
                     id: seriesKey,
                     seriesKey: seriesKey,
                     seriesName: sortedEntries.first?.seriesName ?? seriesKey,
-                    works: works.sorted { left, right in
-                        (sortedEntries.first { $0.calibreID == left.id }?.seriesIndex ?? 0) <
-                        (sortedEntries.first { $0.calibreID == right.id }?.seriesIndex ?? 0)
-                    },
+                    works: sortedSeriesWorks(works, using: sortedEntries),
                     allFandoms: fandoms,
                     allRelationships: relationships,
                     allCharacters: characters,
@@ -652,23 +828,38 @@ struct LibraryRootView: View {
                 )
             }
 
-            var nextItems: [LibraryItem] = []
-            var emittedSeries = Set<String>()
-            for book in pageBooks {
-                if let entry = entries.first(where: { $0.calibreID == book.id && !$0.isAnthology }),
-                   let group = seriesByKey[entry.seriesKey],
-                   !emittedSeries.contains(entry.seriesKey) {
-                    nextItems.append(.series(group))
-                    emittedSeries.insert(entry.seriesKey)
-                } else if !collapsedIDs.contains(book.id) {
-                    nextItems.append(.book(book))
-                }
-            }
+            let nextItems = assignSeriesItems(
+                pageBooks: pageBooks,
+                entries: entries,
+                seriesByKey: seriesByKey,
+                collapsedIDs: collapsedIDs
+            )
             await MainActor.run {
+                // Staleness guard: if loadPage() ran again while this Task was in
+                // flight, books has changed and these results are stale — discard
+                // them rather than overwriting newer state. Mirrors the equivalent
+                // guard in EmailLibraryViewController.rebuildSidebarItems.
+                guard self.books.map(\.id) == pageBooks.map(\.id) else {
+                    LibraryFilterDebug.log("rebuildItems.stale", [
+                        "surface": "list",
+                        "pageBooks": pageBooks.count,
+                        "currentBooks": self.books.count
+                    ])
+                    return
+                }
                 items = nextItems
                 ao3Metadata = pageMetadata
                 ao3ExtractionDiagnostics = pageDiagnostics
                 singletonSeriesWarnings = warnings
+                LibraryFilterDebug.log("rebuildItems.end", [
+                    "surface": "list",
+                    "pageBooks": pageBooks.count,
+                    "seriesKeys": seriesByKey.count,
+                    "collapsedIDs": collapsedIDs.count,
+                    "items": nextItems.count,
+                    "series": nextItems.filter { if case .series = $0 { return true }; return false }.count,
+                    "singletons": nextItems.filter { if case .book = $0 { return true }; return false }.count
+                ])
             }
         }
     }
@@ -717,7 +908,25 @@ struct LibraryRootView: View {
     }
 
     private func visibleBooks(_ raw: [CalibreBook]) -> [CalibreBook] {
-        raw.filter { book in
+        #if DEBUG
+        if shouldGroupSeriesRows && !raw.isEmpty {
+            let strippedBySkipped = raw.filter { !prefs.showSkippedCollection && skippedIDs.contains($0.id) }.count
+            let strippedBySeriesOrMerged = raw.filter { seriesOrMergedIDs.contains($0.id) }.count
+            let strippedByPublisher = raw.filter { prefs.hideNonAO3PublisherBooks && !$0.isAO3PublisherBook }.count
+            let strippedByAnthology = raw.filter { isAnthology($0) }.count
+            LibraryFilterDebug.log("visibleBooks.breakdown", [
+                "surface": "list",
+                "raw": raw.count,
+                "seriesOrMergedIDsSize": seriesOrMergedIDs.count,
+                "strippedBySkipped": strippedBySkipped,
+                "strippedBySeriesOrMerged": strippedBySeriesOrMerged,
+                "strippedByPublisher": strippedByPublisher,
+                "strippedByAnthology": strippedByAnthology,
+                "sampleStrippedIDs": raw.filter { seriesOrMergedIDs.contains($0.id) }.prefix(5).map(\.id).map(String.init).joined(separator: ",")
+            ])
+        }
+        #endif
+        return raw.filter { book in
             (prefs.showSkippedCollection || !skippedIDs.contains(book.id)) &&
             (!shouldGroupSeriesRows || !seriesOrMergedIDs.contains(book.id)) &&
             (!prefs.hideNonAO3PublisherBooks || book.isAO3PublisherBook) &&
@@ -727,7 +936,7 @@ struct LibraryRootView: View {
 
     private func refreshVisibilitySnapshots(resetPage: Bool = true) {
         ao3PublisherIDs = session.library?.ao3PublisherBookIDs() ?? []
-        if resetPage { currentPage = 0 }
+        if resetPage { currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = [] }
         if toolbarState.filterExpression.hasCompleteRules {
             applyFilterRules()
         } else {
@@ -766,11 +975,22 @@ struct LibraryRootView: View {
             session.cachedAO3PublisherIDs = currentAO3PublisherIDs
             pruneSelection()
             currentPage = 0
+            rawSQLOffset = 0
+            rawSQLOffsetHistory = []
+            rawSQLOffsetOverflow = []
             loadPage()
             }
         }
     }
 
+    /// KNOWN LIMITATION: this count is the raw SQL row count (every book matching the
+    /// filter, including every non-representative series member). When shouldGroupSeriesRows
+    /// is true, the displayed count therefore overstates the number of rows the user will
+    /// actually see (series rows + singletons). Making this group-aware requires either a
+    /// second COUNT query joined against seriesOrMergedIDs (NOT IN clause) or counting
+    /// representatives only — out of scope for this pass; the footer hides the now-known-
+    /// wrong "X-Y of N" display when grouping is on (see footer) rather than show a
+    /// misleading number.
     private func scheduleDeferredSQLFilterCount(query: SearchQuery) {
         guard let library = session.library,
               let result = toolbarState.activeFilterResult,
@@ -829,7 +1049,7 @@ struct LibraryRootView: View {
         guard toolbarState.filterExpression.hasCompleteRules else {
             toolbarState.activeFilterResult = nil
             toolbarState.cancelLibraryFilterApplication()
-            currentPage = 0; loadPage(); return
+            currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; loadPage(); return
         }
         let expression = toolbarState.filterExpression
         LibraryFilterDebug.log("applyFilter.start", [
@@ -844,6 +1064,9 @@ struct LibraryRootView: View {
             toolbarState.cancelLibraryFilterApplication()
             selectedIDs.removeAll()
             currentPage = 0
+            rawSQLOffset = 0
+            rawSQLOffsetHistory = []
+            rawSQLOffsetOverflow = []
             loadPage()
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "list",
@@ -859,6 +1082,9 @@ struct LibraryRootView: View {
             toolbarState.cancelLibraryFilterApplication()
             selectedIDs.removeAll()
             currentPage = 0
+            rawSQLOffset = 0
+            rawSQLOffsetHistory = []
+            rawSQLOffsetOverflow = []
             suppressNextReloadToken = true   // §perf: we call loadPage() below; skip onChange duplicate
             loadPage()
             LibraryFilterDebug.log("applyFilter.end", [
@@ -891,7 +1117,7 @@ struct LibraryRootView: View {
                     statusMap[status] = (try? await metaDB.ao3CompletionStatusIDs(status)) ?? []
                 }
                 if needsCollection && expression.referencesSeriesOrMergedCollection {
-                    collectionMap[SystemCollectionID.seriesOrMergedName] = (try? await metaDB.collapsedSeriesRepresentativeIDs()) ?? []
+                    collectionMap[SystemCollectionID.seriesOrMergedName] = (try? await metaDB.leadsAtLeastOneSeriesIDs()) ?? []
                 }
             }
             let fulltextMap = Dictionary(uniqueKeysWithValues: fulltextRules.map { rule in
@@ -1026,7 +1252,7 @@ struct LibraryRootView: View {
             seriesOrMergedIDs = currentSeriesOrMerged
             selectedIDs.removeAll()
             suppressNextReloadToken = true   // §perf: we call loadPage() below; skip onChange duplicate
-            currentPage = 0; loadPage()
+            currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; loadPage()
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "list",
                 "mode": "explicitIDs",
@@ -1111,6 +1337,9 @@ struct LibraryRootView: View {
         toolbarState.clearPendingFullTextSearch()
         filteredCount = ids.count
         currentPage = 0
+        rawSQLOffset = 0
+        rawSQLOffsetHistory = []
+        rawSQLOffsetOverflow = []
         loadPage()
     }
 
@@ -1179,7 +1408,7 @@ struct LibraryRootView: View {
                     toolbarState.filterExpression = FilterExpression()
                     toolbarState.activeFilterResult = nil
                     toolbarState.cancelLibraryFilterApplication()
-                    currentPage = 0; loadPage()
+                    currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; loadPage()
                 } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
@@ -1503,12 +1732,29 @@ struct LibraryRootView: View {
 
     private var footer: some View {
         HStack(spacing: 16) {
-            Button("← Previous") { currentPage -= 1 }.disabled(currentPage == 0).buttonStyle(.borderless)
+            Button("← Previous") {
+                if shouldGroupSeriesRows, let previousOffset = rawSQLOffsetHistory.popLast() {
+                    rawSQLOffset = previousOffset
+                    rawSQLOffsetOverflow = []
+                }
+                currentPage -= 1
+            }.disabled(currentPage == 0).buttonStyle(.borderless)
             Spacer()
             if session.isOpen {
-                let start = books.isEmpty ? 0 : currentPage * pageSize + 1
-                let end   = currentPage * pageSize + books.count
-                Text("\(start)–\(end) of \(displayCount)").font(.callout).foregroundStyle(.secondary)
+                if shouldGroupSeriesRows {
+                    // currentPage * pageSize no longer corresponds to a real SQL offset
+                    // once grouping drains a variable number of raw rows per page, and
+                    // displayCount is the raw SQL row count (not the collapsed item
+                    // count) until the count query itself is made group-aware. Showing
+                    // "X-Y of N" with stale arithmetic would be misleading, so show just
+                    // the current page's item count instead.
+                    Text("\(items.count) item\(items.count == 1 ? "" : "s") on this page")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    let start = books.isEmpty ? 0 : currentPage * pageSize + 1
+                    let end   = currentPage * pageSize + books.count
+                    Text("\(start)–\(end) of \(displayCount)").font(.callout).foregroundStyle(.secondary)
+                }
             }
             Spacer()
             Button("Next →") { currentPage += 1 }.disabled(!hasNextPage).buttonStyle(.borderless)

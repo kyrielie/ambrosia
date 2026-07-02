@@ -485,7 +485,10 @@ final class LibrarySession {
     private func seedCalibreSeriesCache() {
         guard let library, let metaDB else { return }
         Task.detached(priority: .background) { [weak self, library, metaDB] in
-            let entries = library.allCalibreSeriesEntries()
+            // allCalibreSeriesEntries does a full-library SQL scan on CalibreLibrary.db.
+            // CalibreLibrary has no thread safety; run on the MainActor to serialize
+            // with page fetches and rebuildItems tasks that also access the same connection.
+            let entries = await MainActor.run { library.allCalibreSeriesEntries() }
             do {
                 try await metaDB.insertCalibreSeriesFallback(entries)
                 await self?.syncSeriesOrMergedCollection()
@@ -498,9 +501,35 @@ final class LibrarySession {
     func syncSeriesOrMergedCollection() async {
         guard let library, let metaDB, let collectionStore else { return }
         do {
-            var ids = try await metaDB.collapsedSeriesMemberIDs()
-            ids.formUnion(library.anthologyBookIDs())
+            let neverLeadsIDs = try await metaDB.neverLeadsSeriesIDs()
+            // anthologyBookIDs() and bookCount() are synchronous CalibreLibrary.db
+            // queries. CalibreLibrary has no thread safety; calling them off the
+            // MainActor from a detached background task (the callers of this function)
+            // can overlap with rebuildItems tasks and initial page fetches that also
+            // access the same Connection on the main thread → SQLITE_LOCKED crash.
+            // Running them on the MainActor serializes all CalibreLibrary access through
+            // one thread, matching the ownership model: CalibreLibrary is held by
+            // LibrarySession which is @MainActor.
+            let (anthologyIDs, totalLibraryBooks) = await MainActor.run {
+                (library.anthologyBookIDs(), library.bookCount())
+            }
+            var ids = neverLeadsIDs
+            ids.formUnion(anthologyIDs)
+            LibraryFilterDebug.log("syncSeriesOrMerged.compute", [
+                "neverLeadsSeriesIDs": neverLeadsIDs.count,
+                "anthologyBookIDs": anthologyIDs.count,
+                "unionTotal": ids.count,
+                "totalLibraryBooks": totalLibraryBooks,
+                "fractionOfLibrary": totalLibraryBooks > 0
+                    ? String(format: "%.1f%%", Double(ids.count) / Double(totalLibraryBooks) * 100)
+                    : "n/a"
+            ])
             try await collectionStore.replaceMembers(of: SystemCollectionID.seriesOrMerged, with: ids)
+            let verifyMembers = try await collectionStore.members(of: SystemCollectionID.seriesOrMerged)
+            LibraryFilterDebug.log("syncSeriesOrMerged.persisted", [
+                "writtenCount": ids.count,
+                "readBackCount": verifyMembers.count
+            ])
             await MainActor.run {
                 NotificationCenter.default.post(name: .seriesOrMergedCollectionDidChange, object: nil)
             }
