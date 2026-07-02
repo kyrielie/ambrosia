@@ -42,6 +42,13 @@ struct EPUBParser {
     private(set) var title: String = ""
     private(set) var opfBasePath: String = ""   // e.g. "OEBPS"
 
+    /// Set once by the caller after parse() and before any html(for:)/mergedHTML
+    /// calls (architecture.md invariant 17: configure-once state, not a parameter
+    /// threaded through every call). Used by html(for:) to strip the redundant
+    /// preface heading and append AO3 endmatter on the last spine item, matching
+    /// what mergedHTML already does for scroll mode.
+    var ao3Record: AO3MetadataRecord?
+
     // MARK: - Errors
 
     enum EPUBError: Error, LocalizedError {
@@ -116,7 +123,28 @@ struct EPUBParser {
         let raw = String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .isoLatin1)
                 ?? ""
-        return Self.sanitise(raw, userCSS: userCSS, spineIndex: item.index)
+        var s = Self.sanitise(raw, userCSS: userCSS, spineIndex: item.index)
+
+        // Match mergedHTML's per-item behaviour: strip the redundant "Preface"
+        // heading on the first spine item (unconditional, not gated on
+        // ao3Record — the heading is in the raw EPUB regardless of whether
+        // Ambrosia extracted structured AO3 metadata for it).
+        if item.index == 0 {
+            s = Self.stripPrefaceHeading(s)
+        }
+
+        // Append AO3 endmatter on the last spine item, when available.
+        if item.index == spine.count - 1,
+           let record = ao3Record, let workURL = record.storyURL {
+            let endmatter = Self.buildAO3Endmatter(record: record, workURL: workURL)
+            if let bodyClose = s.range(of: "</body>", options: .caseInsensitive) {
+                s.insert(contentsOf: endmatter, at: bodyClose.lowerBound)
+            } else {
+                s += endmatter
+            }
+        }
+
+        return s
     }
 
     // MARK: - mergedHTML(userCSS:)
@@ -319,15 +347,22 @@ struct EPUBParser {
 
         // AO3 EPUBs emit a redundant "Preface" heading on the first spine item;
         // the spine item is the preface by definition once rendered in Ambrosia.
-        // AO3 uses <h2 class="toc-heading"> in practice, but the level varies;
-        // match h1-h6 with a backreference so only the matching close tag is eaten.
         if isFirstSpineItem {
-            body = body.replacingOccurrences(
-                of: #"<(h[1-6])[^>]*>\s*[Pp]reface\s*</\1>"#,
-                with: "", options: .regularExpression)
+            body = stripPrefaceHeading(body)
         }
 
         return body
+    }
+
+    /// Strips a redundant "Preface" heading (AO3 uses <h2 class="toc-heading">
+    /// in practice, but the level varies; match h1-h6 with a backreference so
+    /// only the matching close tag is eaten). Shared by extractBodyContent
+    /// (scroll mode) and html(for:) (paginated mode) so there is a single copy
+    /// of this regex — see architecture.md incident notes on drift between files.
+    private static func stripPrefaceHeading(_ html: String) -> String {
+        html.replacingOccurrences(
+            of: #"<(h[1-6])[^>]*>\s*[Pp]reface\s*</\1>"#,
+            with: "", options: .regularExpression)
     }
 
     /// Builds the end-of-book AO3 endmatter: work URL, comment link, series links.

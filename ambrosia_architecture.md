@@ -48,7 +48,7 @@ Important schema facts:
 
 `CalibreLibrary.books(...)` fetches a page of rows, then bulk-loads authors, tags, and comments with page-level JOIN queries. The `comments` join on the main fetch is omitted unless a filter rule references the comment field (performance optimization: comment blobs are large).
 
-**Known violation requiring fix:** `CalibreLibrary` also holds a second private `Connection` to `ambrosia_meta.db` (separate from the one managed by `AmbrosiaMetaDB`) for three query methods: `ao3WordCounts(ids:)`, `ao3Dates(ids:)`, and `crossoverBookIDs()`. This violates the ownership boundary described in the `AmbrosiaMetaDB` section below. These three methods must be moved to `AmbrosiaMetaDB` as actor-isolated reads; `CalibreLibrary` should receive results via the caller rather than opening its own connection. See the Invariants section.
+**Fixed.** `CalibreLibrary` no longer holds its own `Connection` to `ambrosia_meta.db`. `ao3WordCounts(ids:)`, `ao3Dates(ids:)`, and `crossoverBookIDs()` now read from in-memory caches (`ao3WordCountCache`, `ao3DateCache`, `crossoverIDCache`) populated by `CalibreLibrary.updateAO3MetaCaches(...)`, which `LibrarySession.refreshAO3MetaCaches()` calls after bulk-fetching from `AmbrosiaMetaDB` on open and after each AO3 extraction batch. `AmbrosiaMetaDB` remains the sole connection owner; `CalibreLibrary` only ever sees pushed-in results.
 
 ### SwiftData
 
@@ -70,7 +70,7 @@ On SwiftData store init failure, the app shows an alert and falls back to in-mem
 - `ao3_metadata`, `ao3_extraction_diagnostics`.
 - `series_cache`, `series_placeholders`.
 - `canonical_tags`, `tag_synonyms`, `tag_parent_links`, `tag_subtag_sections`.
-- `reading_history`, `book_opens` (schema present; write path not yet wired up).
+- `reading_history`, `book_opens` (write path wired up: `startReadingSession`, `updateReadingSession`, `closeZombieReadingSessions` are called from the reader session lifecycle).
 
 `CollectionStore` wraps collection operations. Bootstrapped system collections:
 
@@ -84,7 +84,7 @@ On SwiftData store init failure, the app shows an alert and falls back to in-mem
 
 Annotation inserts/deletes maintain `Has Annotations` membership. Series/anthology sync maintains `Series or Merged` membership for collapsed non-leading series members and anthology-style merged works.
 
-**Migration note:** `ambrosia_meta.db` uses no `user_version` versioning. All migrations in `runMigrations` are gated with `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN` wrapped in `try?`. The `series_placeholders` migration in `createAO3Metadata` runs a DROP + RENAME cycle on every launch; on a fully-migrated database this is a copy-drop-rename of the live table on every cold start. Data survives because the copy precedes the drop, but this is fragile and wasteful. The migration strategy must be replaced with `PRAGMA user_version` gating before any further destructive schema changes are added.
+**Migration note:** Most migrations in `runMigrations` are still gated with `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN` wrapped in `try?`, which is fine for additive, idempotent changes. The destructive `series_placeholders` -> `series_placeholders_keyed` migration in `createAO3Metadata` is now gated on `PRAGMA user_version` and wrapped in a transaction, so it runs exactly once and a crash mid-migration can't strand the table. Use this migration as the template for any future destructive schema change; do not revert to `IF NOT EXISTS`-only gating for anything that drops or renames a table.
 
 ### Registry and Preferences
 
@@ -117,7 +117,7 @@ On library open it:
 6. Starts background AO3 metadata extraction from EPUB prefaces.
 7. Seeds Calibre series fallback data and syncs `Series or Merged`.
 
-Collection membership sets (`cachedLikedIDs`, `cachedSkippedIDs`, `cachedSeriesOrMergedIDs`, `cachedAO3PublisherIDs`, `cachedReadLaterIDs`) are cleared on open and must all be cleared on close. Currently `close()` omits `cachedReadLaterIDs`; this is a bug.
+Collection membership sets (`cachedLikedIDs`, `cachedSkippedIDs`, `cachedSeriesOrMergedIDs`, `cachedAO3PublisherIDs`, `cachedReadLaterIDs`) are cleared on open and on close. `close()` now resets all five, including `cachedReadLaterIDs`.
 
 ---
 
@@ -183,11 +183,11 @@ Series metadata is cached in `series_cache`; Calibre series data is inserted as 
 
 Configured AO3 tag seed databases can be imported into `canonical_tags`, `tag_synonyms`, `tag_parent_links`, and `tag_subtag_sections`. Synonym expansion is present at the storage layer but UI coverage is incomplete.
 
-**Known violation requiring fix:** `AO3TagSearchResolver` in `CalibreLibrarySearch.swift` opens a fresh `Connection` to `ambrosia_meta.db` on every call to `canonicalTerm(for:)` and `expandedTerms(for:)`, which fire on every keystroke. It bypasses `AmbrosiaMetaDB` and `LibrarySession` entirely. This must be fixed by either caching a single read-only connection or routing through `LibrarySession.metaDB`.
+**Fixed.** `AO3TagSearchResolver` has been removed. `canonicalTerm(for:)` and `expandedTerms(for:)` are now actor-isolated methods on `AmbrosiaMetaDB` itself, called through `LibrarySession.metaDB` from the search and filter pipeline. No code path opens an independent connection to `ambrosia_meta.db` for tag resolution anymore.
 
 ---
 
-## EPUB Parser
+
 
 `EPUBParser`:
 
@@ -243,7 +243,7 @@ Annotations are persisted in `AmbrosiaMetaDB.annotations`, not SwiftData. JS sel
 - CSV export of library books through `ExportManager`.
 - Preferences window (Reader, Library, Window, Data tabs) for reader defaults, library appearance, custom Calibre column labels, AO3 extraction, and tag seed configuration.
 - Optional FTS search through Calibre's `full-text-search.db`.
-- Local RSS feed server via FlyingFox (`LocalFeedServer`), off by default.
+- Local RSS feed server via FlyingFox (`LocalFeedServer`), off by default, loopback-bound by default. Serves `GET /` (HTML index of available feeds), `GET /feed/collection/<id>.xml` (one item per collection member), `GET /feed/search.xml` (last-published current-search snapshot, persisted as `CurrentSearchSnapshot` in `UserDefaults`), `GET /feed/random-daily.xml` (one seeded-random book per UTC day, opt-in), and `GET /feeds.opml` (OPML 2.0 export of every non-excluded collection feed plus the daily and search feeds). `RSSPublishView` is the SwiftUI publish sheet (searchable collection list, current-search/single-collection target selection, Publish / Copy Feed URL / Export OPML actions) presented as a sheet from `LibraryWindowController`. All routes are GET-only and read-only; there is no write-back path from a feed reader into Ambrosia yet (see Not Yet Built).
 - Seeded random sort with Xorshift64 (`SeededRNG`), stable within a session.
 
 ---
@@ -259,7 +259,6 @@ Annotations are persisted in `AmbrosiaMetaDB.annotations`, not SwiftData. JS sel
 - Annotation export/sharing.
 - Standalone mode without Calibre.
 - Music integration.
-- `reading_history` / `book_opens` write path (tables and schema exist; `startReadingSession`, `updateReadingSession`, `closeZombieReadingSessions` have no callers).
 
 ---
 
@@ -289,7 +288,7 @@ The split of `LibraryRootView`'s row rendering into `BookListRow.swift`, `Series
 
 9. Full-pane `NSHostingView` instances whose frame is controlled by an external Auto Layout constraint (full-pane, sidebar fill, split-view pane) must set `sizingOptions = []`. `NSHostingView` instances in intrinsic-size contexts (preferences windows, popups, sheets) must not set it.
 
-10. `AmbrosiaMetaDB` is the sole owner of `ambrosia_meta.db`. All reads and writes go through the actor, accessed via `LibrarySession.metaDB`. Opening independent `Connection` objects to the same file from other types (`CalibreLibrary`, `AO3TagSearchResolver`) violates write-lock coordination and is a known bug to be fixed.
+10. `AmbrosiaMetaDB` is the sole owner of `ambrosia_meta.db`. All reads and writes go through the actor, accessed via `LibrarySession.metaDB`. `CalibreLibrary` and the former `AO3TagSearchResolver` previously opened independent `Connection` objects to the same file, violating write-lock coordination; both have been fixed (`CalibreLibrary` now reads from caches pushed in via `updateAO3MetaCaches`, and tag resolution moved onto the `AmbrosiaMetaDB` actor). Do not reintroduce a third connection to this file.
 
 11. All destructive schema migrations (DROP, ALTER with data movement) must be wrapped in `db.transaction` and gated on `PRAGMA user_version`, not on table existence. `IF NOT EXISTS` guards cannot prevent a migration from re-running on subsequent launches.
 

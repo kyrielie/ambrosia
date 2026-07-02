@@ -40,10 +40,38 @@ enum SortField: String, CaseIterable, Identifiable {
 /// Read-only query layer over Calibre's metadata.db.
 /// All queries are synchronous — SQLite on a local file returns in <1ms.
 /// One instance per open library; replaced wholesale when the user switches libraries.
+///
+/// THREADING: `db` is a single SQLite.swift `Connection` with no internal
+/// synchronization. Every method on this class must be called from the main
+/// thread only — there is no actor isolation or locking here, by design,
+/// because the overwhelming majority of call sites are already synchronous
+/// SwiftUI/AppKit code running on the main thread. Any code that calls into
+/// this class from an unstructured `Task { }` (which does NOT inherit
+/// MainActor isolation from its creating context) must explicitly hop back
+/// with `await MainActor.run { library.someCall() }`. Calling from a
+/// background thread while the main thread is also mid-query on this same
+/// Connection surfaces as SQLITE_BUSY ("database is locked"), which
+/// SQLite.swift's `try!`-based FailableIterator turns into an uncatchable
+/// fatal crash rather than a throwable error. This bit the series-grouping
+/// feature once already (see `assertMainThread()` calls below) — do not
+/// remove them without replacing this class with an actor or adding a real
+/// serialization mechanism around `db`.
 final class CalibreLibrary {
 
     let root: URL                   // absolute path to the Calibre library folder
     internal let db: Connection
+
+    /// DEBUG-only tripwire for the threading contract documented above. This
+    /// intentionally does nothing in release builds (per Invariant 13's rule
+    /// that diagnostics never ship in release) — it exists purely to turn a
+    /// silent, hard-to-reproduce cross-thread race into an immediate, loud
+    /// assertion failure during development and testing, before it can reach
+    /// a customer as a launch-time crash.
+    private func assertMainThread(_ function: StaticString = #function) {
+        #if DEBUG
+        assert(Thread.isMainThread, "CalibreLibrary.\(function) called off the main thread — see threading note on CalibreLibrary")
+        #endif
+    }
 
     // MARK: - AO3 metadata caches
     //
@@ -88,6 +116,7 @@ final class CalibreLibrary {
 
     /// Total books. Called once on open and refreshed after debounced search.
     func bookCount() -> Int {
+        assertMainThread()
         let rows = (try? db.prepare("SELECT COUNT(*) FROM books").map { $0 }) ?? []
         return (rows.first?.first as? Int64).map(Int.init) ?? 0
     }
@@ -101,6 +130,7 @@ final class CalibreLibrary {
     }
 
     func allCalibreSeriesEntries() -> [SeriesCacheEntry] {
+        assertMainThread()
         let sql = """
         SELECT b.id, s.name, b.series_index
         FROM books b
@@ -132,6 +162,7 @@ final class CalibreLibrary {
     }
 
     func anthologyBookIDs() -> Set<Int> {
+        assertMainThread()
         let rows = (try? db.prepare(
             """
             SELECT book
@@ -472,6 +503,7 @@ final class CalibreLibrary {
         filter: FilterExpression? = nil,
         filterTagExpansions: [String: [String]] = [:]
     ) -> [CalibreBook] {
+        assertMainThread()
         let start = LibraryFilterDebug.now()
         do {
             let rows = try _fetchBooks(
@@ -616,6 +648,7 @@ final class CalibreLibrary {
         ascending: Bool,
         query: SearchQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
     ) -> [CalibreBook] {
+        assertMainThread()
         let start = LibraryFilterDebug.now()
         do {
             let rows = try _fetchBooksQueryIDs(
@@ -657,6 +690,7 @@ final class CalibreLibrary {
     }
 
     func booksForIDs(_ ids: [Int]) -> [CalibreBook] {
+        assertMainThread()
         guard !ids.isEmpty else { return [] }
         do {
             let rows = try _fetchBooksQueryIDs(
@@ -704,54 +738,69 @@ final class CalibreLibrary {
 
     internal func _authors(for ids: [Int]) throws -> [Int: [String]] {
         guard !ids.isEmpty else { return [:] }
-        let placeholders = ids.map { _ in "?" }.joined(separator: ",")
-        let sql = """
-            SELECT bal.book, a.name FROM books_authors_link bal
-            JOIN authors a ON a.id = bal.author
-            WHERE bal.book IN (\(placeholders))
-            ORDER BY bal.book, a.id
-            """
-        let args = ids.map { $0 as Binding? }
         var result: [Int: [String]] = [:]
-        for row in try db.prepare(sql, args).map({ $0 }) {
-            guard let cidBind = row[0] as? Int64,
-                  let name   = row[1] as? String else { continue }
-            let cid = Int(cidBind)
-            result[cid, default: []].append(name)
+        // SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 999. Exceeding it while
+        // iterating results crashes via `try!` in SQLite.swift's FailableIterator.
+        // Chunk to stay safely under that limit regardless of how many IDs arrive.
+        let chunkSize = 900
+        for chunkStart in stride(from: 0, to: ids.count, by: chunkSize) {
+            let chunk = Array(ids[chunkStart..<min(chunkStart + chunkSize, ids.count)])
+            let placeholders = chunk.map { _ in "?" }.joined(separator: ",")
+            let sql = """
+                SELECT bal.book, a.name FROM books_authors_link bal
+                JOIN authors a ON a.id = bal.author
+                WHERE bal.book IN (\(placeholders))
+                ORDER BY bal.book, a.id
+                """
+            let args = chunk.map { $0 as Binding? }
+            for row in try db.prepare(sql, args).map({ $0 }) {
+                guard let cidBind = row[0] as? Int64,
+                      let name   = row[1] as? String else { continue }
+                let cid = Int(cidBind)
+                result[cid, default: []].append(name)
+            }
         }
         return result
     }
 
     internal func _tags(for ids: [Int]) throws -> [Int: [String]] {
         guard !ids.isEmpty else { return [:] }
-        let placeholders = ids.map { _ in "?" }.joined(separator: ",")
-        let sql = """
-            SELECT btl.book, t.name FROM books_tags_link btl
-            JOIN tags t ON t.id = btl.tag
-            WHERE btl.book IN (\(placeholders))
-            ORDER BY btl.book, t.name
-            """
-        let args = ids.map { $0 as Binding? }
         var result: [Int: [String]] = [:]
-        for row in try db.prepare(sql, args).map({ $0 }) {
-            guard let cidBind = row[0] as? Int64,
-                  let name   = row[1] as? String else { continue }
-            let cid = Int(cidBind)
-            result[cid, default: []].append(name)
+        let chunkSize = 900
+        for chunkStart in stride(from: 0, to: ids.count, by: chunkSize) {
+            let chunk = Array(ids[chunkStart..<min(chunkStart + chunkSize, ids.count)])
+            let placeholders = chunk.map { _ in "?" }.joined(separator: ",")
+            let sql = """
+                SELECT btl.book, t.name FROM books_tags_link btl
+                JOIN tags t ON t.id = btl.tag
+                WHERE btl.book IN (\(placeholders))
+                ORDER BY btl.book, t.name
+                """
+            let args = chunk.map { $0 as Binding? }
+            for row in try db.prepare(sql, args).map({ $0 }) {
+                guard let cidBind = row[0] as? Int64,
+                      let name   = row[1] as? String else { continue }
+                let cid = Int(cidBind)
+                result[cid, default: []].append(name)
+            }
         }
         return result
     }
 
     internal func _comments(for ids: [Int]) throws -> [Int: String] {
         guard !ids.isEmpty else { return [:] }
-        let placeholders = ids.map { _ in "?" }.joined(separator: ",")
-        let sql = "SELECT book, text FROM comments WHERE book IN (\(placeholders))"
-        let args = ids.map { $0 as Binding? }
         var result: [Int: String] = [:]
-        for row in try db.prepare(sql, args).map({ $0 }) {
-            guard let cidBind = row[0] as? Int64,
-                  let text   = row[1] as? String else { continue }
-            result[Int(cidBind)] = text
+        let chunkSize = 900
+        for chunkStart in stride(from: 0, to: ids.count, by: chunkSize) {
+            let chunk = Array(ids[chunkStart..<min(chunkStart + chunkSize, ids.count)])
+            let placeholders = chunk.map { _ in "?" }.joined(separator: ",")
+            let sql = "SELECT book, text FROM comments WHERE book IN (\(placeholders))"
+            let args = chunk.map { $0 as Binding? }
+            for row in try db.prepare(sql, args).map({ $0 }) {
+                guard let cidBind = row[0] as? Int64,
+                      let text   = row[1] as? String else { continue }
+                result[Int(cidBind)] = text
+            }
         }
         return result
     }

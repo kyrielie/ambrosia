@@ -64,6 +64,7 @@ actor AmbrosiaMetaDB {
         try createReadingHistory(db: db)
         try createAO3Metadata(db: db)
         try migrateSeriesPlaceholdersToKeyedIfNeeded(db: db)
+        try dedupeSeriesCacheIfNeeded(db: db)
         try createAO3TagSynonyms(db: db)
         try bootstrapSystemCollections(db: db)
     }
@@ -254,6 +255,32 @@ actor AmbrosiaMetaDB {
             CREATE INDEX IF NOT EXISTS idx_series_placeholders_key ON series_placeholders(series_key);
             """)
             try db.run("PRAGMA user_version = \(seriesPlaceholdersKeyedMigrationVersion)")
+        }
+    }
+
+    /// One-time data repair: prior to the `insertCalibreSeriesFallback` fix
+    /// above, a book could accumulate both a real AO3-derived `series_cache`
+    /// row and a spurious Calibre-fallback row under an unrelated series_key.
+    /// The spurious row pulls the book into whatever Calibre series shares
+    /// that name across the whole library, which can be a huge, meaningless
+    /// group. This deletes any Calibre-fallback row (`ao3_series_id IS NULL`)
+    /// for a `calibre_id` that also has a genuine AO3 row (`ao3_series_id IS
+    /// NOT NULL`), leaving only the genuine AO3 series membership. Gated on
+    /// `PRAGMA user_version` per Invariant 11 so it runs exactly once.
+    private static let dedupeSeriesCacheMigrationVersion: Int64 = 2
+
+    private static func dedupeSeriesCacheIfNeeded(db: Connection) throws {
+        let version = (try? db.scalar("PRAGMA user_version")) as? Int64 ?? 0
+        guard version < dedupeSeriesCacheMigrationVersion else { return }
+        try db.transaction {
+            try db.run("""
+                DELETE FROM series_cache
+                WHERE ao3_series_id IS NULL
+                  AND calibre_id IN (
+                      SELECT calibre_id FROM series_cache WHERE ao3_series_id IS NOT NULL
+                  )
+                """)
+            try db.run("PRAGMA user_version = \(dedupeSeriesCacheMigrationVersion)")
         }
     }
 
@@ -1030,15 +1057,31 @@ actor AmbrosiaMetaDB {
         )
     }
 
+    /// Inserts Calibre-derived series fallback entries, but only for books that
+    /// have no `series_cache` row at all yet. `INSERT OR IGNORE` alone is not
+    /// sufficient here: the table's primary key is `(calibre_id, series_name)`,
+    /// and a Calibre series name is almost never identical to the AO3-extracted
+    /// series name for the same book, so a plain `INSERT OR IGNORE` does not
+    /// collide with an existing AO3 row — it silently adds a second, spurious
+    /// row for that `calibre_id` under an unrelated `series_key`. That row then
+    /// pulls the book into whatever (often much larger, cross-author) group
+    /// shares that Calibre series name, breaking series-or-merged stripping
+    /// and grouped display for every book affected. The `WHERE NOT EXISTS`
+    /// guard below ensures Calibre fallback data is only ever written for a
+    /// book that has no series_cache membership yet (i.e. AO3 extraction
+    /// either hasn't run for it or found no series).
     func insertCalibreSeriesFallback(_ entries: [SeriesCacheEntry]) throws {
         guard !entries.isEmpty else { return }
         try transaction {
             for entry in entries {
                 try run(
                     """
-                    INSERT OR IGNORE INTO series_cache
+                    INSERT INTO series_cache
                     (calibre_id, series_name, series_index, ao3_series_id, is_anthology)
-                    VALUES (?, ?, ?, ?, ?)
+                    SELECT ?, ?, ?, ?, ?
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM series_cache WHERE calibre_id = ?
+                    )
                     """,
                     [
                         entry.calibreID,
@@ -1046,61 +1089,112 @@ actor AmbrosiaMetaDB {
                         entry.seriesIndex,
                         entry.ao3SeriesID,
                         entry.isAnthology ? 1 : 0,
+                        entry.calibreID,
                     ]
                 )
             }
         }
     }
 
-    func collapsedSeriesMemberIDs() throws -> Set<Int> {
-        let sql = """
-        WITH ordered AS (
-            SELECT calibre_id,
-                   COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name) AS series_key,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
-                       ORDER BY series_index ASC, calibre_id ASC
-                   ) AS rn,
-                   COUNT(*) OVER (
-                       PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
-                   ) AS series_count,
-                   MAX(is_anthology) OVER (
-                       PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
-                   ) AS anthology
+    /// Books that do not lead *any* series they belong to. Used to populate
+    /// the "Series or Merged" strip set.
+    ///
+    /// This must be based on whether a book leads at least one of its series,
+    /// not on a single series_key in isolation: a book that leads Series A but
+    /// is a non-leading member of Series B needs to remain visible (it anchors
+    /// A's grouped row), so it must not appear here just because it is rn > 1
+    /// within B's partition. The `leadership` CTE collapses each book down to
+    /// its best (lowest) rn across every series it qualifies in before this
+    /// function decides whether to strip it.
+    func neverLeadsSeriesIDs() throws -> Set<Int> {
+        // Diagnostic: raw series_cache composition before collapsing, to catch
+        // pathological cases (e.g. a single series_key absorbing most of the library,
+        // which would indicate a COALESCE key collision rather than real series data).
+        #if DEBUG
+        let diagSQL = """
+        SELECT COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name) AS series_key,
+               COUNT(*) AS member_count
+        FROM series_cache
+        GROUP BY series_key
+        ORDER BY member_count DESC
+        LIMIT 5
+        """
+        let totalRows: Int? = (try? prepare("SELECT COUNT(*) FROM series_cache").first)?.int(at: 0)
+        let distinctKeys: Int? = (try? prepare("""
+            SELECT COUNT(DISTINCT COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name))
             FROM series_cache
-        )
-        SELECT calibre_id
-        FROM ordered
-        WHERE series_count > 1 AND anthology = 0 AND rn > 1
+            """).first)?.int(at: 0)
+        let topSeries = (try? prepare(diagSQL).map { row -> (String, Int) in
+            let key = (row[safe: 0] as? String) ?? "?"
+            let count = row.int(at: 1) ?? 0
+            return (key, count)
+        }) ?? []
+        LibraryFilterDebug.log("neverLeadsSeriesIDs.diagnostic", [
+            "seriesCacheTotalRows": totalRows ?? -1,
+            "distinctSeriesKeys": distinctKeys ?? -1,
+            "top5SeriesByMemberCount": topSeries.map { "\($0.0)=\($0.1)" }.joined(separator: ", ")
+        ])
+        #endif
+        let sql = """
+        \(Self.seriesLeadershipCTE)
+        SELECT calibre_id FROM leadership WHERE best_rn > 1
+        """
+        let rows = try prepare(sql)
+        let result = Set(rows.compactMap { $0.int(at: 0) })
+        LibraryFilterDebug.log("neverLeadsSeriesIDs.result", [
+            "neverLeadsCount": result.count
+        ])
+        return result
+    }
+
+    /// Books that lead at least one of the series they belong to. Used by the
+    /// explicit "Series or Merged" filter rule. Complementary to
+    /// `neverLeadsSeriesIDs()` by construction — every qualifying book is in
+    /// exactly one of the two sets, never both.
+    func leadsAtLeastOneSeriesIDs() throws -> Set<Int> {
+        let sql = """
+        \(Self.seriesLeadershipCTE)
+        SELECT calibre_id FROM leadership WHERE best_rn = 1
         """
         let rows = try prepare(sql)
         return Set(rows.compactMap { $0.int(at: 0) })
     }
 
-    func collapsedSeriesRepresentativeIDs() throws -> Set<Int> {
-        let sql = """
-        WITH ordered AS (
-            SELECT calibre_id,
-                   COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name) AS series_key,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
-                       ORDER BY series_index ASC, calibre_id ASC
-                   ) AS rn,
-                   COUNT(*) OVER (
-                       PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
-                   ) AS series_count,
-                   MAX(is_anthology) OVER (
-                       PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
-                   ) AS anthology
-            FROM series_cache
-        )
-        SELECT calibre_id
-        FROM ordered
-        WHERE series_count > 1 AND anthology = 0 AND rn = 1
-        """
-        let rows = try prepare(sql)
-        return Set(rows.compactMap { $0.int(at: 0) })
-    }
+    /// Shared leadership computation for `neverLeadsSeriesIDs()` and
+    /// `leadsAtLeastOneSeriesIDs()`. `ordered` ranks every series_cache row
+    /// within its series_key partition (excluding anthology-flagged series and
+    /// singleton "series" of one book). `qualifying` keeps only rows that
+    /// belong to a real multi-member, non-anthology series. `leadership`
+    /// collapses each calibre_id down to its single best (lowest) rn across
+    /// every series it qualifies in, so a book's overall leadership status is
+    /// decided once, consistently, regardless of how many series it belongs
+    /// to. The tie-break (`series_index ASC, calibre_id ASC`) must match the
+    /// in-memory sort used when building `SeriesGroup.works` in
+    /// `LibraryRootView.rebuildItems` exactly, or the two layers can disagree
+    /// about which book is the leader of a given series.
+    private static let seriesLeadershipCTE = """
+    WITH ordered AS (
+        SELECT calibre_id,
+               COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name) AS series_key,
+               ROW_NUMBER() OVER (
+                   PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
+                   ORDER BY series_index ASC, calibre_id ASC
+               ) AS rn,
+               COUNT(*) OVER (
+                   PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
+               ) AS series_count,
+               MAX(is_anthology) OVER (
+                   PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
+               ) AS anthology
+        FROM series_cache
+    ),
+    qualifying AS (
+        SELECT calibre_id, rn FROM ordered WHERE series_count > 1 AND anthology = 0
+    ),
+    leadership AS (
+        SELECT calibre_id, MIN(rn) AS best_rn FROM qualifying GROUP BY calibre_id
+    )
+    """
 
     // MARK: - Bulk AO3 metadata reads
     //
