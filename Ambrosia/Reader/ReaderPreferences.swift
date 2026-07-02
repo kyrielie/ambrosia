@@ -478,8 +478,23 @@ final class ReaderPreferences: ObservableObject {
             colWidth = (availableWidth + colGap) / colsPerScreen - colGap
         }
 
+        // maxWidth in single-column mode: cap and center the rendered text
+        // within the (unchanged) column box via body's own max-width + auto
+        // margin, rather than touching html's column-width/padding. `html`
+        // remains the column container and keeps exactly the geometry it had
+        // before (colWidth == availableWidth, same padding), so the
+        // scrollWidth/colAndGap math in ambrosiaColumnCount/ambrosiaCurrentColumn
+        // (Task 1) is completely unaffected — this only changes how content
+        // renders inside each already-correctly-sized column. Multi-column
+        // screens are never capped: the point there is filling the screen
+        // with multiple reading columns, not narrow centered text.
+        let capSingleColumn = colsPerScreen <= 1 && maxWidth < availableWidth
+        let bodyWidthCSS = capSingleColumn
+            ? "max-width: \(maxWidth)px !important; margin: 0 auto !important;"
+            : "max-width: none !important; margin: 0 !important;"
+
         #if DEBUG
-        print("[Pagination] requested: vw=\(vw) vh=\(vh) marginH=\(marginHInt) availableWidth=\(availableWidth) colsPerScreen=\(colsPerScreen) colWidth=\(colWidth) colGap=\(colGap) colTotal=\(colWidth * colsPerScreen + colGap * (colsPerScreen - 1)) pitch=\(colWidth + colGap)")
+        print("[Pagination] requested: vw=\(vw) vh=\(vh) marginH=\(marginHInt) availableWidth=\(availableWidth) colsPerScreen=\(colsPerScreen) colWidth=\(colWidth) colGap=\(colGap) colTotal=\(colWidth * colsPerScreen + colGap * (colsPerScreen - 1)) pitch=\(colWidth + colGap) capSingleColumn=\(capSingleColumn) maxWidth=\(maxWidth)")
         #endif
 
         return """
@@ -496,6 +511,8 @@ final class ReaderPreferences: ObservableObject {
             min-height: \(vh)px !important;
             padding-left: \(marginHInt)px !important;
             padding-right: \(marginHInt)px !important;
+            padding-top: \(Int(marginV))px !important;
+            padding-bottom: \(Int(marginV))px !important;
             column-width: \(colWidth)px !important;
             column-gap: \(colGap)px !important;
             column-fill: auto !important;
@@ -507,11 +524,16 @@ final class ReaderPreferences: ObservableObject {
         html::-webkit-scrollbar { display: none !important; }
         body {
             /* body is a normal child; it must NOT be the column container,
-               and must NOT carry horizontal padding — see comment above. */
+               and must NOT carry padding on either axis — see comments above.
+               Horizontal margin comes from column-gap + html's padding;
+               vertical margin comes from html's padding-top/bottom, which
+               (unlike body's) is not subject to box-decoration-break:slice
+               dropping it from interior pages, since html itself is the
+               container, not a fragmented box. Its own max-width/margin
+               (bodyWidthCSS) only crops/centers the rendered text within
+               each already-sized column; it does not change column geometry. */
             width: 100% !important;
-            max-width: none !important;
-            margin: 0 !important;
-            padding: \(Int(marginV))px 0 !important;
+            \(bodyWidthCSS)
             height: auto !important;
             overflow: visible !important;
             box-sizing: border-box !important;
