@@ -84,6 +84,7 @@ final class EmailLibraryViewController: NSViewController {
     private var lastFilterToken: String? = nil
     private var lastSidebarToggle: Bool  = false
     private var lastReaderSidebarToggle: Bool = false
+    private var lastShowReaderSidebarToggle: Bool = false
     private var lastReshuffleToken: Bool = false
     private var lastGroupBySeries: Bool = false
 
@@ -163,7 +164,7 @@ final class EmailLibraryViewController: NSViewController {
         if toolbarState.filterExpression.hasCompleteRules {
             applyFilterRules()
         } else {
-            loadPage(reset: true)
+            Task { await loadPage(reset: true) }
         }
         startObservingToolbarState()
         startObservingPreferences()
@@ -186,7 +187,7 @@ final class EmailLibraryViewController: NSViewController {
                 if toolbarState.filterExpression.hasCompleteRules {
                     applyFilterRules()
                 } else {
-                    loadPage(reset: true)
+                    Task { await self.loadPage(reset: true) }
                 }
             }
 
@@ -246,7 +247,7 @@ final class EmailLibraryViewController: NSViewController {
             toolbarState.filterExpression   = FilterExpression()
             toolbarState.activeFilterResult = nil
             toolbarState.cancelLibraryFilterApplication()
-            loadPage(reset: true)
+            Task { await self.loadPage(reset: true) }
         }
         sidebarVC.onContextMenuOpen = { [weak self] books in
             guard let self else { return }
@@ -447,6 +448,7 @@ final class EmailLibraryViewController: NSViewController {
             _ = ts.pendingFullTextSearch
             _ = ts.toggleEmailSidebar
             _ = ts.toggleEmailReaderSidebar
+            _ = ts.showEmailReaderSidebar
             _ = ts.reshuffleToken
             _ = ts.groupBySeries
         } onChange: { [weak self] in
@@ -467,15 +469,22 @@ final class EmailLibraryViewController: NSViewController {
             lastReaderSidebarToggle = toolbarState.toggleEmailReaderSidebar
             performReaderSidebarToggle()
         }
+        if toolbarState.showEmailReaderSidebar != lastShowReaderSidebarToggle {
+            lastShowReaderSidebarToggle = toolbarState.showEmailReaderSidebar
+            switch toolbarState.emailReaderSidebarMode {
+            case .annotations:      showEmailAnnotationSidebar(nil)
+            case .tableOfContents:  showTOCInEmailSidebar(nil)
+            }
+        }
         if toolbarState.reshuffleToken != lastReshuffleToken {
             lastReshuffleToken = toolbarState.reshuffleToken
             if toolbarState.sortField == .random {
-                loadPage(reset: true)
+                Task { await loadPage(reset: true) }
             }
         }
         if toolbarState.groupBySeries != lastGroupBySeries {
             lastGroupBySeries = toolbarState.groupBySeries
-            loadPage(reset: true)
+            Task { await loadPage(reset: true) }
         }
         let newSearch    = toolbarState.searchText
         let newSort      = toolbarState.sortField
@@ -532,13 +541,15 @@ final class EmailLibraryViewController: NSViewController {
                         self.resolveTagExpansionsIfNeeded(terms: tagTerms)
                     }
                     let token = self.toolbarState.beginLibraryFilterApplication()
-                    self.loadPage(reset: true)
-                    self.toolbarState.finishLibraryFilterApplication(token: token)
+                    Task {
+                        await self.loadPage(reset: true)
+                        self.toolbarState.finishLibraryFilterApplication(token: token)
+                    }
                 }
             }
         } else {
             applyFullTextPhraseToLocalFind()
-            loadPage(reset: true)
+            Task { await loadPage(reset: true) }
         }
     }
 
@@ -574,7 +585,7 @@ final class EmailLibraryViewController: NSViewController {
         guard toolbarState.filterExpression.hasCompleteRules else {
             toolbarState.activeFilterResult = nil
             toolbarState.cancelLibraryFilterApplication()
-            loadPage(reset: true)
+            Task { await loadPage(reset: true) }
             return
         }
         let expression = toolbarState.filterExpression
@@ -587,7 +598,7 @@ final class EmailLibraryViewController: NSViewController {
             toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
-            loadPage(reset: true)
+            Task { await loadPage(reset: true) }
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "email",
                 "mode": "sqlPagedDeferredCount",
@@ -600,7 +611,7 @@ final class EmailLibraryViewController: NSViewController {
             toolbarState.activeFilterResult = cached
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
-            loadPage(reset: true)
+            Task { await loadPage(reset: true) }
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "email",
                 "mode": "cached",
@@ -647,9 +658,7 @@ final class EmailLibraryViewController: NSViewController {
             var crossoverMap: Set<Int> = []
             let needsCrossover = expression.groups.flatMap(\.rules).contains { $0.field == .crossover }
             if needsCrossover {
-                crossoverMap = await Task.detached(priority: .userInitiated) {
-                    library.crossoverBookIDs()
-                }.value
+                crossoverMap = await library.crossoverBookIDs()
             }
             // §perf Fix 6: Two-pass word-count filter (mirrors BookGridItem).
             let needsWordCount = expression.groups.flatMap(\.rules).contains {
@@ -669,15 +678,9 @@ final class EmailLibraryViewController: NSViewController {
                 return stripped
             }() : expression
 
-            var filterTagExpansions: [String: [String]] = [:]
-            if let metaDB = session.metaDB {
-                let tagValues = Set(expression.groups.flatMap(\.rules)
-                    .filter { $0.field == .tag && $0.isComplete }
-                    .map(\.value))
-                for value in tagValues {
-                    filterTagExpansions[value] = await metaDB.expandedTerms(for: value)
-                }
-            }
+            let filterTagExpansions = await TagExpansionResolver.filterTagExpansions(
+                for: expression, metaDB: session.metaDB
+            )
             cachedFilterTagExpansions = filterTagExpansions
             let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary,
                                         tagExpansions: filterTagExpansions)
@@ -695,9 +698,7 @@ final class EmailLibraryViewController: NSViewController {
             var result: FilterResult
             if needsWordCountFallback {
                 let candidateIDs = pass1Result.calibreIDs
-                let fallbackMap = await Task.detached(priority: .userInitiated) {
-                    library.ao3WordCounts(ids: candidateIDs)
-                }.value
+                let fallbackMap = await library.ao3WordCounts(ids: candidateIDs)
                 var wcOnlyExpression = FilterExpression()
                 wcOnlyExpression.groups = expression.groups.compactMap { group in
                     let rules = group.rules.filter {
@@ -728,7 +729,7 @@ final class EmailLibraryViewController: NSViewController {
             }
             let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
             let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
-            let currentAO3PublisherIDs = library.ao3PublisherBookIDs()
+            let currentAO3PublisherIDs = await library.ao3PublisherBookIDs()
             let filteredIDs = ReaderPreferences.shared.showSkippedCollection
                 ? result.calibreIDs
                 : result.calibreIDs.filter { !currentSkipped.contains($0) }
@@ -748,7 +749,7 @@ final class EmailLibraryViewController: NSViewController {
             skippedIDs = currentSkipped
             seriesOrMergedIDs = currentSeriesOrMerged
             ao3PublisherIDs = currentAO3PublisherIDs
-            loadPage(reset: true)
+            await loadPage(reset: true)
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "email",
                 "mode": "explicitIDs",
@@ -813,7 +814,7 @@ final class EmailLibraryViewController: NSViewController {
         guard activeFullTextPhrase()?.trimmingCharacters(in: .whitespacesAndNewlines) == phrase else { return }
         toolbarState.activeFilterResult = FilterResult(calibreIDs: ids, totalCount: ids.count)
         toolbarState.clearPendingFullTextSearch()
-        loadPage(reset: true)
+        Task { await loadPage(reset: true) }
     }
 
     private func scheduleDeferredSQLFilterCount(query: SearchQuery) {
@@ -833,8 +834,9 @@ final class EmailLibraryViewController: NSViewController {
         ])
         filterCountTask = Task { [weak self] in
             let tagExpansions = self?.cachedFilterTagExpansions ?? [:]
-            let count = library.bookCount(query: query, filter: expression,
+            let count = await library.bookCount(query: query, filter: expression,
                                           filterTagExpansions: tagExpansions)
+            await self?.session.refreshLastSearchError()
             await MainActor.run {
                 guard let self,
                       !Task.isCancelled,
@@ -866,7 +868,8 @@ final class EmailLibraryViewController: NSViewController {
 
     // MARK: - Data loading (uses SearchQuery path — mirrors BookGridItem exactly)
 
-    func loadPage(reset: Bool) {
+    @MainActor
+    func loadPage(reset: Bool) async {
         let loadStart = LibraryFilterDebug.now()
         guard let library = session.library else {
             books = []
@@ -946,7 +949,7 @@ final class EmailLibraryViewController: NSViewController {
                 sidebarVC?.likedIDs = likedIDs
                 return
             }
-            let (page, hasMore) = library.randomSortedPage(
+            let (page, hasMore) = await library.randomSortedPage(
                 offset: currentPage * pageSize, limit: pageSize,
                 query: query, filter: filterForSQL, restrictIDs: restrictIDs,
                 filterTagExpansions: cachedFilterTagExpansions
@@ -989,7 +992,7 @@ final class EmailLibraryViewController: NSViewController {
                 wordCountPage = []
                 wordCountHasMore = false
             } else {
-                let (page, hasMore) = library.wordCountSortedPage(
+                let (page, hasMore) = await library.wordCountSortedPage(
                     offset: currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
                     query: query, filter: filterForSQL, restrictIDs: restrictIDs,
                     filterTagExpansions: cachedFilterTagExpansions
@@ -1016,7 +1019,7 @@ final class EmailLibraryViewController: NSViewController {
                 let maxIterations = 40
                 while visible.count < pageSize && iterations < maxIterations {
                     iterations += 1
-                    let rawChunk = library.books(
+                    let rawChunk = await library.books(
                         offset: offset, limit: pageFetchLimit,
                         sort: toolbarState.sortField, ascending: toolbarState.ascending,
                         query: query,
@@ -1044,7 +1047,7 @@ final class EmailLibraryViewController: NSViewController {
                 ])
                 raw = []
             } else {
-                raw = library.books(
+                raw = await library.books(
                     offset: currentPage * pageSize, limit: pageFetchLimit,
                     sort: toolbarState.sortField, ascending: toolbarState.ascending,
                     query: query,
@@ -1062,7 +1065,7 @@ final class EmailLibraryViewController: NSViewController {
                 "query": LibraryFilterDebug.summary(query: query)
             ])
             let ids = visibleIDs(intersect(result.calibreIDs, with: query.ftsMatchedIDs))
-            raw = library.books(
+            raw = await library.books(
                 ids: ids,
                 offset: currentPage * pageSize, limit: pageSize + 1,
                 sort: toolbarState.sortField, ascending: toolbarState.ascending,
@@ -1092,7 +1095,7 @@ final class EmailLibraryViewController: NSViewController {
                 let maxIterations = 40
                 while visible.count < pageSize && iterations < maxIterations {
                     iterations += 1
-                    let rawChunk = library.books(
+                    let rawChunk = await library.books(
                         offset: offset, limit: pageFetchLimit,
                         sort: toolbarState.sortField, ascending: toolbarState.ascending,
                         query: query
@@ -1118,7 +1121,7 @@ final class EmailLibraryViewController: NSViewController {
                 ])
                 raw = []
             } else {
-                raw = library.books(
+                raw = await library.books(
                     offset: currentPage * pageSize, limit: pageFetchLimit,
                     sort: toolbarState.sortField, ascending: toolbarState.ascending,
                     query: query
@@ -1206,12 +1209,9 @@ final class EmailLibraryViewController: NSViewController {
         }
         Task { @MainActor [weak self] in
             guard let self, !self.isTornDown else { return }
-            var resolved: [String: [String]] = [:]
-            for term in terms {
-                resolved[term] = await metaDB.expandedTerms(for: term)
-            }
+            let resolved = await TagExpansionResolver.resolvedTagExpansions(for: terms, metaDB: metaDB)
             self.resolvedTagExpansions = resolved
-            self.loadPage(reset: false)
+            await self.loadPage(reset: false)
         }
     }
 
@@ -1237,9 +1237,11 @@ final class EmailLibraryViewController: NSViewController {
             "surface": "email",
             "pageBooks": pageBooks.count
         ])
-        // Cancel any in-flight task for the same reason as LibraryRootView.rebuildItems:
-        // concurrent calls to library.booksForIDs on the same CalibreLibrary.db
-        // Connection cause SQLITE_LOCKED, which SQLite.swift surfaces as a `try!` crash.
+        // Cancel any in-flight task before starting a new one. CalibreLibrary is
+        // actor-isolated, so overlapping calls to library.booksForIDs from rapid
+        // search changes now serialize safely rather than crash — but without this
+        // cancellation, a slow stale task could still finish after a newer one and
+        // overwrite `items` with out-of-date results.
         rebuildSidebarTask?.cancel()
         rebuildSidebarTask = Task {
             let pageIDs = pageBooks.map(\.id)
@@ -1251,15 +1253,13 @@ final class EmailLibraryViewController: NSViewController {
             let allEntries = (try? await metaDB.seriesEntries(keys: seriesKeys)) ?? []
             let allIDs = Array(Set(allEntries.map(\.calibreID)))
             guard !Task.isCancelled else { return }
-            // MainActor.run: see the matching comment in LibraryRootView.rebuildItems.
-            // This Task does not inherit MainActor isolation, so library.booksForIDs
-            // would otherwise run concurrently with loadPage(reset:)'s synchronous
-            // library.books() calls on the main thread against the same non-thread-
-            // safe CalibreLibrary.db Connection — the actual cause of the SQLITE_BUSY
-            // ("database is locked") crash. Task cancellation above cannot stop a
-            // call already in flight on another thread, so it does not substitute
-            // for this hop.
-            let allBooks = await MainActor.run { library.booksForIDs(allIDs) }
+            // CalibreLibrary is actor-isolated now: this await serializes automatically
+            // with loadPage(reset:)'s page-fetch calls and any other in-flight query
+            // against the same library. The SQLITE_BUSY race this MainActor hop used
+            // to guard against is no longer possible — the actor itself is
+            // CalibreLibrary.db's only access path. See the matching fix in
+            // LibraryRootView.rebuildItems.
+            let allBooks = await library.booksForIDs(allIDs)
             guard !Task.isCancelled else { return }
             let metadata = (try? await metaDB.ao3Metadata(for: allIDs)) ?? [:]
             guard !Task.isCancelled else { return }
@@ -1401,7 +1401,7 @@ final class EmailLibraryViewController: NSViewController {
     private func loadNextPageIfAvailable() {
         guard hasNextPage else { return }
         currentPage += 1
-        loadPage(reset: false)
+        Task { await loadPage(reset: false) }
     }
 
     func refreshBookStates() {
@@ -1459,7 +1459,7 @@ final class EmailLibraryViewController: NSViewController {
             }
             session.bumpMembershipVersion()  // §7
             refreshBookStates()
-            loadPage(reset: true)
+            await loadPage(reset: true)
         }
     }
 
@@ -1487,7 +1487,7 @@ final class EmailLibraryViewController: NSViewController {
             }
             session.bumpMembershipVersion()  // §7
             refreshBookStates()
-            loadPage(reset: true)
+            await loadPage(reset: true)
         }
     }
 
@@ -1509,7 +1509,7 @@ final class EmailLibraryViewController: NSViewController {
         let membershipByID = (try? await session.collectionStore?.membershipByCollectionID()) ?? [:]
         let currentSkipped = membershipByID[SystemCollectionID.skipped] ?? []
         let currentSeriesOrMerged = membershipByID[SystemCollectionID.seriesOrMerged] ?? []
-        let currentAO3PublisherIDs = session.library?.ao3PublisherBookIDs() ?? []
+        let currentAO3PublisherIDs = await session.library?.ao3PublisherBookIDs() ?? []
         collectionMembership = Dictionary(uniqueKeysWithValues: collections.map { collection in
             return (collection.name, membershipByID[collection.id] ?? [])
         })
@@ -1523,7 +1523,7 @@ final class EmailLibraryViewController: NSViewController {
         sidebarVC?.likedIDs = likedIDs
         sidebarVC?.readLaterIDs = readLaterIDs
         if shouldReloadPage {
-            loadPage(reset: true)
+            await loadPage(reset: true)
         }
     }
 
@@ -1625,6 +1625,8 @@ final class EmailLibraryViewController: NSViewController {
         restoreSidebarThickness(sidebarThickness)
     }
 
+    private var readerSidebarMode: EmailReaderSidebarMode = .annotations
+
     private func makeReaderSidebarVC() -> NSViewController {
         let vc = NSHostingController(rootView: makeReaderSidebarView())
         readerSidebarHostingVC = vc
@@ -1633,12 +1635,18 @@ final class EmailLibraryViewController: NSViewController {
 
     private func makeReaderSidebarView() -> EmailReaderSidebarView {
         EmailReaderSidebarView(
+            mode: readerSidebarMode,
             annotations: readerAnnotations,
             onJumpToAnnotation: { [weak self] annotation in
                 self?.currentReaderVC?.jumpToAnnotation(annotation)
             },
             onDeleteAnnotation: { [weak self] id in
                 self?.currentReaderVC?.deleteAnnotationFromSidebar(id: id)
+            },
+            tocEntries: currentReaderVC?.globalTOCEntries ?? [],
+            currentSpineIndex: currentReaderVC?.currentSpineIndexValue ?? 0,
+            onJumpToTOCEntry: { [weak self] entry in
+                self?.currentReaderVC?.jumpToTOCEntry(entry)
             }
         )
     }
@@ -1689,14 +1697,30 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     @objc func performReaderSidebarToggle() {
+        setReaderSidebarVisible(!(annotationsSidebarItem?.isCollapsed ?? true))
+    }
+
+    private func setReaderSidebarVisible(_ visible: Bool) {
         guard let item = annotationsSidebarItem else { return }
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.2
-            item.isCollapsed.toggle()
+            item.isCollapsed = !visible
             splitVC.splitView.layoutSubtreeIfNeeded()
         }
         repairReaderSplitItems()
-        toolbarState.isEmailReaderSidebarVisible = !item.isCollapsed
+        toolbarState.isEmailReaderSidebarVisible = visible
+    }
+
+    @objc func showEmailAnnotationSidebar(_ sender: Any?) {
+        readerSidebarMode = .annotations
+        refreshReaderSidebar()
+        setReaderSidebarVisible(true)
+    }
+
+    @objc func showTOCInEmailSidebar(_ sender: Any?) {
+        readerSidebarMode = .tableOfContents
+        refreshReaderSidebar()
+        setReaderSidebarVisible(true)
     }
 
     private func currentSidebarThickness() -> CGFloat {
@@ -1784,7 +1808,7 @@ struct FilterSheetCarrier: View {
                         toolbarState.filterExpression   = FilterExpression()
                         toolbarState.activeFilterResult = nil
                         toolbarState.cancelLibraryFilterApplication()
-                        emailVC?.loadPage(reset: true)
+                        Task { await emailVC?.loadPage(reset: true) }
                     }
                 )
                 .environment(toolbarState)

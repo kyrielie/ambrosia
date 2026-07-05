@@ -3,7 +3,12 @@ import Foundation
 /// User-configurable mapping from semantic role → Calibre custom column label.
 /// Persisted in UserDefaults. Populated from the Preferences window (Phase 7)
 /// or auto-detected on first open.
-final class CustomColumnConfig {
+///
+/// `@unchecked Sendable`: this type has no mutable stored properties — all state
+/// is proxied through UserDefaults, which is itself thread-safe. It is read from
+/// both the MainActor (Preferences window) and the CalibreLibrary actor (query
+/// helpers), so it must be safe to reference across isolation domains.
+final class CustomColumnConfig: @unchecked Sendable {
 
     static let shared = CustomColumnConfig()
     private init() {}
@@ -28,8 +33,8 @@ final class CustomColumnConfig {
 
     /// Tries common label names in the library's custom_columns table.
     /// Only writes if the key is not already set.
-    func autoDetect(using library: CalibreLibrary) {
-        let cols = library.customColumns()
+    func autoDetect(using library: CalibreLibrary) async {
+        let cols = await library.customColumns()
         let labels = cols.map { $0.label }   // already lowercased
 
         if wordCountLabel == nil {

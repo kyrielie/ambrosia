@@ -95,6 +95,14 @@ actor CollectionStore {
         }
     }
 
+    func setReadLater(calibreIDs: [Int], inReadLater: Bool) async throws {
+        if inReadLater {
+            try await bulkAdd(calibreIDs: calibreIDs, to: SystemCollectionID.readLater)
+        } else {
+            try await bulkRemove(calibreIDs: calibreIDs, from: SystemCollectionID.readLater)
+        }
+    }
+
     func bulkAdd(calibreIDs: [Int], to collectionID: String) async throws {
         guard !calibreIDs.isEmpty else { return }
         let now = ISO8601DateFormatter().string(from: Date())

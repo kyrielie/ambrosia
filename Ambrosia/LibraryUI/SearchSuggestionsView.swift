@@ -183,10 +183,14 @@ struct SuggestionSection: Identifiable {
 /// fully transparent — the same approach used by Spotlight and Xcode Quick Open.
 struct SearchSuggestionsView: View {
     let sections:  [SuggestionSection]
+    let showsTrailingPrefixWarning: Bool
     let onSelect:  (SearchSuggestion) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if showsTrailingPrefixWarning {
+                trailingPrefixWarningBanner
+            }
             ForEach(sections) { section in
                 if !section.suggestions.isEmpty {
                     sectionHeader(section.kind)
@@ -209,6 +213,23 @@ struct SearchSuggestionsView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
         )
+    }
+
+    private var trailingPrefixWarningBanner: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                Text("Only the first prefix is used; the rest is treated as plain text.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            Divider()
+        }
     }
 
     private func sectionHeader(_ kind: SuggestionKind) -> some View {
@@ -240,14 +261,14 @@ struct SearchSuggestionsView: View {
 /// Computes sectioned suggestions for the current raw search text.
 /// Detects whether a prefix is active and narrows accordingly.
 func computeSectionedSuggestions(for searchText: String,
-                                  library: CalibreLibrary) -> [SuggestionSection] {
+                                  library: CalibreLibrary) async -> [SuggestionSection] {
     let text = searchText.trimmingCharacters(in: .whitespaces)
     guard !text.isEmpty else { return [] }
 
     // author: prefix → author completions only
     if let prefix = text.activePrefixValue(for: "author:") {
         guard !prefix.isEmpty else { return [] }
-        let suggestions = library.authorSuggestions(prefix: prefix)
+        let suggestions = await library.authorSuggestions(prefix: prefix)
             .map { SearchSuggestion(kind: .author, value: $0) }
         return suggestions.isEmpty ? [] : [SuggestionSection(kind: .author, suggestions: suggestions)]
     }
@@ -255,7 +276,7 @@ func computeSectionedSuggestions(for searchText: String,
     // series: prefix → series completions only
     if let prefix = text.activePrefixValue(for: "series:") {
         guard !prefix.isEmpty else { return [] }
-        let suggestions = library.seriesSuggestions(prefix: prefix)
+        let suggestions = await library.seriesSuggestions(prefix: prefix)
             .map { SearchSuggestion(kind: .series, value: $0) }
         return suggestions.isEmpty ? [] : [SuggestionSection(kind: .series, suggestions: suggestions)]
     }
@@ -263,7 +284,7 @@ func computeSectionedSuggestions(for searchText: String,
     // title: prefix → title completions only
     if let prefix = text.activePrefixValue(for: "title:") {
         guard !prefix.isEmpty else { return [] }
-        let suggestions = library.titleSuggestions(prefix: prefix)
+        let suggestions = await library.titleSuggestions(prefix: prefix)
             .map { SearchSuggestion(kind: .title, value: $0) }
         return suggestions.isEmpty ? [] : [SuggestionSection(kind: .title, suggestions: suggestions)]
     }
@@ -271,7 +292,7 @@ func computeSectionedSuggestions(for searchText: String,
     // tag: prefix → tag completions only
     if let prefix = text.activePrefixValue(for: "tag:") {
         guard !prefix.isEmpty else { return [] }
-        let suggestions = library.tagSuggestions(prefix: prefix)
+        let suggestions = await library.tagSuggestions(prefix: prefix)
             .map { SearchSuggestion(kind: .tag, value: $0) }
         return suggestions.isEmpty ? [] : [SuggestionSection(kind: .tag, suggestions: suggestions)]
     }
@@ -290,13 +311,13 @@ func computeSectionedSuggestions(for searchText: String,
     // Plain text (≥ 2 chars) → multi-section: titles, authors, tags, series
     guard text.count >= 2 else { return [] }
 
-    let titleSugs  = library.titleSuggestions(prefix: text, limit: 3)
+    let titleSugs  = await library.titleSuggestions(prefix: text, limit: 3)
         .map { SearchSuggestion(kind: .title,  value: $0) }
-    let authorSugs = library.authorSuggestions(prefix: text, limit: 3)
+    let authorSugs = await library.authorSuggestions(prefix: text, limit: 3)
         .map { SearchSuggestion(kind: .author, value: $0) }
-    let tagSugs    = library.tagSuggestions(prefix: text, limit: 4)
+    let tagSugs    = await library.tagSuggestions(prefix: text, limit: 4)
         .map { SearchSuggestion(kind: .tag,    value: $0) }
-    let seriesSugs = library.seriesSuggestions(prefix: text, limit: 3)
+    let seriesSugs = await library.seriesSuggestions(prefix: text, limit: 3)
         .map { SearchSuggestion(kind: .series, value: $0) }
     let statusSugs = statusSuggestions(prefix: text)
     let fulltextSugs = [SearchSuggestion(kind: .fulltext, value: text)]

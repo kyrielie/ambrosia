@@ -36,10 +36,13 @@
 		AA000000000000000000SPF2 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000SPM2 /* ZIPFoundation */; };
 		AA000000000000000000SPF3 /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000SPM3 /* SwiftSoup */; };
 		AA1000000000000000000001 /* AmbrosiaMetaDB.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000011 /* AmbrosiaMetaDB.swift */; };
+		AA1000000000000000000005 /* TagExpansionResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000015 /* TagExpansionResolver.swift */; };
 		AA1000000000000000000002 /* LibraryIndexManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000012 /* LibraryIndexManager.swift */; };
 		AA1000000000000000000003 /* SystemCollectionID.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000013 /* SystemCollectionID.swift */; };
 		AA1000000000000000000004 /* CollectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000014 /* CollectionStore.swift */; };
 		AA11223344556677889900AAF /* AnnotationSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677889900AA /* AnnotationSidebarView.swift */; };
+		FC001122334455667788DDF3 /* TOCSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788DDF2 /* TOCSidebarView.swift */; };
+		FC001122334455667788EE02 /* SeriesSpineMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788EE01 /* SeriesSpineMap.swift */; };
 		AA2000000000000000000001 /* AO3MetadataExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000000000000000000011 /* AO3MetadataExtractor.swift */; };
 		AA2000000000000000000002 /* ExtractionProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000000000000000000012 /* ExtractionProgress.swift */; };
 		AA3000000000000000000001 /* AO3TagSeedDatabaseConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA3000000000000000000011 /* AO3TagSeedDatabaseConfig.swift */; };
@@ -101,10 +104,13 @@
 		AA000000000000000000PLIST /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA000000000000000000PROD1 /* Ambrosia.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ambrosia.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA1000000000000000000011 /* AmbrosiaMetaDB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbrosiaMetaDB.swift; sourceTree = "<group>"; };
+		AA1000000000000000000015 /* TagExpansionResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagExpansionResolver.swift; sourceTree = "<group>"; };
 		AA1000000000000000000012 /* LibraryIndexManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryIndexManager.swift; sourceTree = "<group>"; };
 		AA1000000000000000000013 /* SystemCollectionID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemCollectionID.swift; sourceTree = "<group>"; };
 		AA1000000000000000000014 /* CollectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionStore.swift; sourceTree = "<group>"; };
 		AA11223344556677889900AA /* AnnotationSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationSidebarView.swift; sourceTree = "<group>"; };
+		FC001122334455667788DDF2 /* TOCSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TOCSidebarView.swift; sourceTree = "<group>"; };
+		FC001122334455667788EE01 /* SeriesSpineMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeriesSpineMap.swift; sourceTree = "<group>"; };
 		AA2000000000000000000011 /* AO3MetadataExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AO3MetadataExtractor.swift; sourceTree = "<group>"; };
 		AA2000000000000000000012 /* ExtractionProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtractionProgress.swift; sourceTree = "<group>"; };
 		AA3000000000000000000011 /* AO3TagSeedDatabaseConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AO3TagSeedDatabaseConfig.swift; sourceTree = "<group>"; };
@@ -241,6 +247,8 @@
 				9D4E67B889EA4F2999FBE7D4 /* PaginationJS.swift */,
 				C5CF7F5D87034F05895A4539 /* HighlightBridge.swift */,
 				AA11223344556677889900AA /* AnnotationSidebarView.swift */,
+				FC001122334455667788DDF2 /* TOCSidebarView.swift */,
+				FC001122334455667788EE01 /* SeriesSpineMap.swift */,
 				BB99887766554433221100BB /* AnnotationPopover.swift */,
 				CC11223344556677889900CC /* FindBarView.swift */,
 				00D6889E038A44BD866CAB5E /* ReaderPreferences.swift */,
@@ -287,6 +295,7 @@
 				20F1F4AE83FE4391B96B4C08 /* Models */,
 				FB223344556677889900BBCC /* LibraryRegistry.swift */,
 				AA1000000000000000000011 /* AmbrosiaMetaDB.swift */,
+				AA1000000000000000000015 /* TagExpansionResolver.swift */,
 				AA1000000000000000000012 /* LibraryIndexManager.swift */,
 				AA1000000000000000000013 /* SystemCollectionID.swift */,
 				AA1000000000000000000014 /* CollectionStore.swift */,
@@ -425,6 +434,7 @@
 				A3D7F2B891C04E5DA6F3810CF /* FilterValueTextField.swift in Sources */,
 				F1142C6BB8354DB3B488C450F /* ReaderWindowController.swift in Sources */,
 				18225FAA0945438AB71AB285F /* ReaderViewController.swift in Sources */,
+				FC001122334455667788EE02 /* SeriesSpineMap.swift in Sources */,
 				3EF30D6D00BA40B691EA8110F /* EPUBParser.swift in Sources */,
 				14E71F3DACC447CF8B4FF29BF /* PaginationEngine.swift in Sources */,
 				9D4E67B889EA4F2999FBE7D4F /* PaginationJS.swift in Sources */,
@@ -435,6 +445,7 @@
 				FA112233445566778899AABBF /* HTMLStripper.swift in Sources */,
 				FB223344556677889900BBCCF /* LibraryRegistry.swift in Sources */,
 				AA1000000000000000000001 /* AmbrosiaMetaDB.swift in Sources */,
+				AA1000000000000000000005 /* TagExpansionResolver.swift in Sources */,
 				AA1000000000000000000002 /* LibraryIndexManager.swift in Sources */,
 				AA1000000000000000000003 /* SystemCollectionID.swift in Sources */,
 				AA1000000000000000000004 /* CollectionStore.swift in Sources */,
@@ -452,6 +463,7 @@
 				D67DC672B21B9C67E2454465F /* CollectionsView.swift in Sources */,
 				56289C63BFA2118454C7D2C7F /* ReadingGoalView.swift in Sources */,
 				AA11223344556677889900AAF /* AnnotationSidebarView.swift in Sources */,
+				FC001122334455667788DDF3 /* TOCSidebarView.swift in Sources */,
 				BB99887766554433221100BBF /* AnnotationPopover.swift in Sources */,
 				CC11223344556677889900CCF /* FindBarView.swift in Sources */,
 				3752F8ABCEECBBFFEC4065BBF /* PreferencesWindowController.swift in Sources */,

@@ -756,12 +756,12 @@ private struct ColumnsTab: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { loadAvailableColumns() }
+        .onAppear { Task { await loadAvailableColumns() } }
     }
 
-    private func loadAvailableColumns() {
+    private func loadAvailableColumns() async {
         guard let library = AppDelegate.shared?.session?.library else { return }
-        availableColumns = library.customColumns().map(\.label).sorted()
+        availableColumns = await library.customColumns().map(\.label).sorted()
         wordCountLabel   = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
         kudosLabel       = CustomColumnConfig.shared.kudosLabel     ?? "(none)"
     }
@@ -924,7 +924,7 @@ private struct DataTab: View {
         .onAppear {
             reloadKnownLibraries()
             tagSeedConfig.refreshValidation()
-            loadAvailableColumns()
+            Task { await loadAvailableColumns() }
             loadRSSCollections()
         }
     }
@@ -1025,9 +1025,9 @@ private struct DataTab: View {
         }
     }
 
-    private func loadAvailableColumns() {
+    private func loadAvailableColumns() async {
         guard let library = AppDelegate.shared?.session?.library else { return }
-        availableColumns = library.customColumns().map(\.label).sorted()
+        availableColumns = await library.customColumns().map(\.label).sorted()
         wordCountLabel = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
         kudosLabel = CustomColumnConfig.shared.kudosLabel ?? "(none)"
     }

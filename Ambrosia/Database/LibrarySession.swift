@@ -56,6 +56,20 @@ final class LibrarySession {
     /// Error from the last open attempt, shown in the UI if non-nil.
     private(set) var lastError: String?
 
+    /// §6.2: pulls `CalibreLibrary.lastSearchError` (set on a `bookCount` query
+    /// failure) into `lastError` so it's observable in the UI. Cross-actor by
+    /// necessity: `CalibreLibrary` is a separate actor and cannot mutate this
+    /// `@MainActor` property directly, so the caller (a search/count call site)
+    /// awaits this after the count call rather than `CalibreLibrary` reaching
+    /// out on its own. Minimum-viable per Phase 6.2 of the gap closure plan:
+    /// this can overwrite an unrelated `lastError` (e.g. from library open) if
+    /// both happen to be set; a full solution would give search errors their
+    /// own observable property instead of sharing this one.
+    func refreshLastSearchError() async {
+        guard let library, let message = await library.lastSearchError else { return }
+        lastError = message
+    }
+
     private var extractionTask: Task<Void, Never>?
     private var resolvedFulltextCache: [String: [Int]] = [:]
     private let resolvedFulltextCacheLimit = 12
@@ -74,7 +88,7 @@ final class LibrarySession {
     // MARK: - Opening / closing
 
     /// Open a Calibre library at the given URL.
-    func open(url: URL) {
+    func open(url: URL) async {
         lastError = nil
         do {
             let newLibrary = try CalibreLibrary(root: url)
@@ -83,7 +97,7 @@ final class LibrarySession {
             metaDB = newMetaDB
             collectionStore = CollectionStore(db: newMetaDB)
             activePath = url.path
-            totalCount = newLibrary.bookCount()
+            totalCount = await newLibrary.bookCount()
             ftsLibrary = CalibreFTSLibrary(libraryURL: url)
             resolvedFulltextCache.removeAll()
             resolvedFulltextCacheOrder.removeAll()           // §7
@@ -127,14 +141,15 @@ final class LibrarySession {
             let resolvedWordCounts = await wordCounts
             let resolvedDates = await dates
             let resolvedCrossoverIDs = await crossoverIDs
-            await MainActor.run {
-                guard self?.library === library else { return }
-                library.updateAO3MetaCaches(
-                    wordCounts: resolvedWordCounts,
-                    dates: resolvedDates,
-                    crossoverIDs: resolvedCrossoverIDs
-                )
-            }
+            // This Task was created from a MainActor context and is not detached,
+            // so it already runs on the MainActor — no MainActor.run hop needed.
+            // `library` is a separate actor now, so the call into it still needs `await`.
+            guard self?.library === library else { return }
+            await library.updateAO3MetaCaches(
+                wordCounts: resolvedWordCounts,
+                dates: resolvedDates,
+                crossoverIDs: resolvedCrossoverIDs
+            )
         }
     }
 
@@ -168,12 +183,12 @@ final class LibrarySession {
 
     // MARK: - Count refresh
 
-    func refreshCount(query: SearchQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])) {
+    func refreshCount(query: SearchQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])) async {
         guard let library else { return }
         if query.isEmpty {
-            totalCount = library.bookCount()
+            totalCount = await library.bookCount()
         } else {
-            totalCount = library.bookCount(query: query)
+            totalCount = await library.bookCount(query: query)
         }
     }
 
@@ -196,10 +211,8 @@ final class LibrarySession {
             print("[LibrarySession] fulltext search unavailable for phrase=\"\(trimmed)\"")
             return []
         }
-        let limit = max(library?.bookCount() ?? 0, 1)
-        let ids = await Task.detached(priority: .userInitiated) {
-            fts.search(query: trimmed, limit: limit) ?? []
-        }.value
+        let limit = max(await library?.bookCount() ?? 0, 1)
+        let ids = await fts.search(query: trimmed, limit: limit) ?? []
         if ids.isEmpty {
             print("[LibrarySession] fulltext search returned no matches for phrase=\"\(trimmed)\"")
         }
@@ -209,7 +222,7 @@ final class LibrarySession {
 
     /// Attempts FTS resolution for explicit fulltext only.
     /// Shared between list view and email view — single source of truth.
-    func resolvedQuery(_ query: SearchQuery) -> SearchQuery {
+    func resolvedQuery(_ query: SearchQuery) async -> SearchQuery {
         guard let phrase = query.fulltextPhrase?.trimmingCharacters(in: .whitespacesAndNewlines),
               !phrase.isEmpty else {
             return query
@@ -240,7 +253,7 @@ final class LibrarySession {
                 ftsMatchedIDs: []
             )
         }
-        guard let ftsIDs = fts.search(query: phrase), !ftsIDs.isEmpty else {
+        guard let ftsIDs = await fts.search(query: phrase), !ftsIDs.isEmpty else {
             print("[LibrarySession] fulltext search returned no matches for phrase=\"\(phrase)\"")
             rememberResolvedFulltext(ids: [], key: cacheKey)
             return SearchQuery(
@@ -335,7 +348,7 @@ final class LibrarySession {
 
     // MARK: - Re-open saved library on launch
 
-    func reopenIfNeeded() {
+    func reopenIfNeeded() async {
         guard library == nil,
               let path = LibraryRegistry.shared.activePath,
               !path.isEmpty else { return }
@@ -344,7 +357,7 @@ final class LibrarySession {
             print("[LibrarySession] Saved path no longer valid: \(path)")
             return
         }
-        open(url: url)
+        await open(url: url)
     }
 
     func reextractAO3Metadata() {
@@ -372,7 +385,7 @@ final class LibrarySession {
         extractionProgress.isRunning = true
 
         extractionTask = Task(priority: .background) { [weak self, library, metaDB] in
-            let allIDs = library.allBookIDs()
+            let allIDs = await library.allBookIDs()
             let existing = (try? await metaDB.existingAO3MetadataIDs()) ?? []
             let attempted = (try? await metaDB.attemptedAO3ExtractionIDs()) ?? []
             let missing = forceAll ? allIDs : allIDs.filter { !existing.contains($0) && !attempted.contains($0) }
@@ -408,30 +421,36 @@ final class LibrarySession {
             var failureStatus = "skipped"
             var diagnosticEPUB: URL?
             var spineItemsChecked: Int?
-            let metadata = autoreleasepool { () -> AO3MetadataRecord? in
-                guard let epub = library.epubURL(calibreID: id) else {
-                    failureReason = "no EPUB found"
-                    return nil
-                }
+            // epubURL is an actor-isolated (async) CalibreLibrary call now, and
+            // autoreleasepool's closure is synchronous, so resolve it first —
+            // the CPU-bound parse/extract work below never touches `library`.
+            let epub = await library.epubURL(calibreID: id)
+            let metadata: AO3MetadataRecord?
+            if let epub {
                 diagnosticEPUB = epub
-                do {
-                    var parser = EPUBParser(epubURL: epub)
-                    try parser.parse()
-                    let checkedItems = Array(parser.spine.prefix(5))
-                    spineItemsChecked = checkedItems.count
-                    for item in checkedItems {
-                        let html = try parser.html(for: item, userCSS: "")
-                        if let metadata = AO3MetadataExtractor.extract(from: html) {
-                            return metadata
+                metadata = autoreleasepool { () -> AO3MetadataRecord? in
+                    do {
+                        var parser = EPUBParser(epubURL: epub)
+                        try parser.parse()
+                        let checkedItems = Array(parser.spine.prefix(5))
+                        spineItemsChecked = checkedItems.count
+                        for item in checkedItems {
+                            let html = try parser.html(for: item, userCSS: "")
+                            if let metadata = AO3MetadataExtractor.extract(from: html) {
+                                return metadata
+                            }
                         }
+                        failureReason = "no dl.tags AO3 preface metadata in first \(min(parser.spine.count, 5)) spine items"
+                        return nil
+                    } catch {
+                        failureStatus = "failed"
+                        failureReason = error.localizedDescription
+                        return nil
                     }
-                    failureReason = "no dl.tags AO3 preface metadata in first \(min(parser.spine.count, 5)) spine items"
-                    return nil
-                } catch {
-                    failureStatus = "failed"
-                    failureReason = error.localizedDescription
-                    return nil
                 }
+            } else {
+                failureReason = "no EPUB found"
+                metadata = nil
             }
             if let metadata {
                 pendingSuccess.append((metadata, id))
@@ -485,10 +504,10 @@ final class LibrarySession {
     private func seedCalibreSeriesCache() {
         guard let library, let metaDB else { return }
         Task.detached(priority: .background) { [weak self, library, metaDB] in
-            // allCalibreSeriesEntries does a full-library SQL scan on CalibreLibrary.db.
-            // CalibreLibrary has no thread safety; run on the MainActor to serialize
-            // with page fetches and rebuildItems tasks that also access the same connection.
-            let entries = await MainActor.run { library.allCalibreSeriesEntries() }
+            // CalibreLibrary is actor-isolated, so this serializes automatically
+            // with page fetches and rebuildItems tasks that also access it —
+            // no MainActor hop needed.
+            let entries = await library.allCalibreSeriesEntries()
             do {
                 try await metaDB.insertCalibreSeriesFallback(entries)
                 await self?.syncSeriesOrMergedCollection()
@@ -502,17 +521,11 @@ final class LibrarySession {
         guard let library, let metaDB, let collectionStore else { return }
         do {
             let neverLeadsIDs = try await metaDB.neverLeadsSeriesIDs()
-            // anthologyBookIDs() and bookCount() are synchronous CalibreLibrary.db
-            // queries. CalibreLibrary has no thread safety; calling them off the
-            // MainActor from a detached background task (the callers of this function)
-            // can overlap with rebuildItems tasks and initial page fetches that also
-            // access the same Connection on the main thread → SQLITE_LOCKED crash.
-            // Running them on the MainActor serializes all CalibreLibrary access through
-            // one thread, matching the ownership model: CalibreLibrary is held by
-            // LibrarySession which is @MainActor.
-            let (anthologyIDs, totalLibraryBooks) = await MainActor.run {
-                (library.anthologyBookIDs(), library.bookCount())
-            }
+            // CalibreLibrary is actor-isolated, so these calls serialize
+            // automatically with any other in-flight query against it —
+            // no MainActor hop needed.
+            let anthologyIDs = await library.anthologyBookIDs()
+            let totalLibraryBooks = await library.bookCount()
             var ids = neverLeadsIDs
             ids.formUnion(anthologyIDs)
             LibraryFilterDebug.log("syncSeriesOrMerged.compute", [

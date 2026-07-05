@@ -117,11 +117,11 @@ struct LibraryRootView: View {
     /// Pagination, sort, search-text, and filter-result changes.
     private func attachDataHandlers<V: View>(to view: V) -> some View {
         view
-            .onChange(of: currentPage)                { loadPage() }
-            .onChange(of: toolbarState.sortField)     { selectedIDs.removeAll(); currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; loadPage() }
-            .onChange(of: toolbarState.ascending)     { selectedIDs.removeAll(); currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; loadPage() }
-            .onChange(of: toolbarState.reshuffleToken)   { loadPage() }
-            .onChange(of: toolbarState.groupBySeries) { selectedIDs.removeAll(); currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; loadPage() }
+            .onChange(of: currentPage)                { Task { await loadPage() } }
+            .onChange(of: toolbarState.sortField)     { selectedIDs.removeAll(); currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; Task { await loadPage() } }
+            .onChange(of: toolbarState.ascending)     { selectedIDs.removeAll(); currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; Task { await loadPage() } }
+            .onChange(of: toolbarState.reshuffleToken)   { Task { await loadPage() } }
+            .onChange(of: toolbarState.groupBySeries) { selectedIDs.removeAll(); currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; Task { await loadPage() } }
             .onChange(of: toolbarState.searchText) {
                 selectedIDs.removeAll()
                 currentPage = 0
@@ -158,20 +158,23 @@ struct LibraryRootView: View {
                         resolveTagExpansionsIfNeeded(terms: tagTerms)
                     }
                     let token = toolbarState.beginLibraryFilterApplication()
-                    loadPage()
-                    if toolbarState.searchText.isEmpty {
-                        filteredCount = nil
-                    } else {
-                        let query = SearchQueryParser.parse(toolbarState.searchText)
-                        filteredCount = session.library?.bookCount(query: query)
+                    Task {
+                        await loadPage()
+                        if toolbarState.searchText.isEmpty {
+                            filteredCount = nil
+                        } else {
+                            let query = SearchQueryParser.parse(toolbarState.searchText)
+                            filteredCount = await session.library?.bookCount(query: query)
+                            await session.refreshLastSearchError()
+                        }
+                        toolbarState.finishLibraryFilterApplication(token: token)
                     }
-                    toolbarState.finishLibraryFilterApplication(token: token)
                 }
             }
             .onChange(of: toolbarState.activeFilterResult?.reloadToken) {
                 if suppressNextReloadToken { suppressNextReloadToken = false; return }
                 selectedIDs.removeAll()
-                currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; loadPage()
+                currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; Task { await loadPage() }
             }
     }
 
@@ -189,11 +192,11 @@ struct LibraryRootView: View {
                 if toolbarState.filterExpression.hasCompleteRules {
                     applyFilterRules()
                 } else {
-                    loadPage()
+                    Task { await loadPage() }
                 }
             }
             .onChange(of: prefs.hideNonAO3PublisherBooks) {
-                refreshVisibilitySnapshots()
+                Task { await refreshVisibilitySnapshots() }
             }
             .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
                 let persisted = UserDefaults.standard.bool(forKey: "groupBySeries")
@@ -204,7 +207,7 @@ struct LibraryRootView: View {
                     rawSQLOffset = 0
                     rawSQLOffsetHistory = []
                     rawSQLOffsetOverflow = []
-                    loadPage()
+                    Task { await loadPage() }
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .seriesOrMergedCollectionDidChange)) { _ in
@@ -222,9 +225,9 @@ struct LibraryRootView: View {
                     toolbarState.cancelLibraryFilterApplication()
                     toolbarState.filterExpression = FilterExpression()
                     if let lib = session.library {
-                        CustomColumnConfig.shared.autoDetect(using: lib)
+                        Task { await CustomColumnConfig.shared.autoDetect(using: lib) }
                     }
-                    loadPage()
+                    Task { await loadPage() }
                     refreshBookStates()
                 } else {
                     books = []; bookStates = [:]; selectedIDs.removeAll()
@@ -241,7 +244,7 @@ struct LibraryRootView: View {
                     skippedIDs = session.cachedSkippedIDs
                     seriesOrMergedIDs = session.cachedSeriesOrMergedIDs
                     ao3PublisherIDs = session.cachedAO3PublisherIDs
-                    loadPage()
+                    Task { await loadPage() }
                     refreshBookStates()
                 }
                 // Register so LibraryWindowController can deliver committed filter rules
@@ -273,7 +276,7 @@ struct LibraryRootView: View {
                         toolbarState.filterExpression = FilterExpression()
                         toolbarState.activeFilterResult = nil
                         toolbarState.cancelLibraryFilterApplication()
-                        currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; loadPage()
+                        currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; Task { await loadPage() }
                     }
                 )
                 .preferredColorScheme(prefs.resolvedLibraryColorScheme)
@@ -415,7 +418,8 @@ struct LibraryRootView: View {
 
     // MARK: - Data loading
 
-    private func loadPage() {
+    @MainActor
+    private func loadPage() async {
         let loadStart = LibraryFilterDebug.now()
         guard let library = session.library else { books = []; return }
         let rawQuery = toolbarState.searchText.isEmpty
@@ -448,7 +452,7 @@ struct LibraryRootView: View {
                 restrictIDs = nil
                 filterForSQL = nil
             }
-            let (page, hasMore) = library.randomSortedPage(
+            let (page, hasMore) = await library.randomSortedPage(
                 offset: currentPage * pageSize, limit: pageSize,
                 query: query, filter: filterForSQL, restrictIDs: restrictIDs,
                 filterTagExpansions: cachedFilterTagExpansions
@@ -483,7 +487,7 @@ struct LibraryRootView: View {
                 "surface": "list", "mode": "wordCountSorted", "page": currentPage,
                 "query": LibraryFilterDebug.summary(query: query)
             ])
-            let (page, hasMore) = library.wordCountSortedPage(
+            let (page, hasMore) = await library.wordCountSortedPage(
                 offset: currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
                 query: query, filter: filterForSQL, restrictIDs: restrictIDs,
                 filterTagExpansions: cachedFilterTagExpansions
@@ -515,7 +519,7 @@ struct LibraryRootView: View {
                 let maxIterations = 40 // safety cap: 40 * pageFetchLimit (76) = ~3040 raw rows max per page load
                 while visible.count < pageSize && iterations < maxIterations {
                     iterations += 1
-                    let raw = library.books(
+                    let raw = await library.books(
                         offset: offset, limit: pageFetchLimit,
                         sort: toolbarState.sortField, ascending: toolbarState.ascending,
                         query: query,
@@ -545,7 +549,7 @@ struct LibraryRootView: View {
                     "exhausted": exhausted
                 ])
             } else {
-                let raw = library.books(
+                let raw = await library.books(
                     offset: currentPage * pageSize, limit: pageFetchLimit,
                     sort: toolbarState.sortField, ascending: toolbarState.ascending,
                     query: query,
@@ -574,7 +578,7 @@ struct LibraryRootView: View {
                 "query": LibraryFilterDebug.summary(query: query)
             ])
             let ids = visibleIDs(intersect(result.calibreIDs, with: query.ftsMatchedIDs))
-            let raw = library.books(
+            let raw = await library.books(
                 ids: ids,
                 offset: currentPage * pageSize, limit: pageSize + 1,
                 sort: toolbarState.sortField, ascending: toolbarState.ascending,
@@ -606,7 +610,7 @@ struct LibraryRootView: View {
                 let maxIterations = 40
                 while visible.count < pageSize && iterations < maxIterations {
                     iterations += 1
-                    let raw = library.books(
+                    let raw = await library.books(
                         offset: offset, limit: pageFetchLimit,
                         sort: toolbarState.sortField, ascending: toolbarState.ascending,
                         query: query
@@ -634,7 +638,7 @@ struct LibraryRootView: View {
                     "exhausted": exhausted
                 ])
             } else {
-                let raw = library.books(
+                let raw = await library.books(
                     offset: currentPage * pageSize, limit: pageFetchLimit,
                     sort: toolbarState.sortField, ascending: toolbarState.ascending,
                     query: query
@@ -669,19 +673,16 @@ struct LibraryRootView: View {
         ])
 
         // Log to activity feed — only on page 0 (new query), not pagination.
-        // MainActor.assumeIsolated: loadPage() is always invoked from @MainActor
-        // SwiftUI update paths; the explicit annotation satisfies Swift 6 strict
-        // concurrency checking without introducing an async boundary.
+        // loadPage() is @MainActor, so this is already guaranteed to run on
+        // MainActor without an explicit hop.
         if currentPage == 0 {
-            MainActor.assumeIsolated {
-                let expr = toolbarState.filterExpression.hasCompleteRules
-                    ? toolbarState.filterExpression : nil
-                SearchActivityLog.shared.append(
-                    searchText: toolbarState.searchText,
-                    filterExpression: expr,
-                    resultCount: books.count
-                )
-            }
+            let expr = toolbarState.filterExpression.hasCompleteRules
+                ? toolbarState.filterExpression : nil
+            SearchActivityLog.shared.append(
+                searchText: toolbarState.searchText,
+                filterExpression: expr,
+                resultCount: books.count
+            )
         }
     }
 
@@ -709,11 +710,11 @@ struct LibraryRootView: View {
             "pageBookTitles": pageBooks.map(\.title).joined(separator: " | "),
             "pageBookCalibreSeries": pageBooks.map { $0.series ?? "none" }.joined(separator: " | ")
         ])
-        // Cancel any in-flight task before starting a new one. Without this,
-        // rapid search changes can leave two tasks simultaneously calling
-        // library.booksForIDs on the same CalibreLibrary.db Connection, which
-        // is not thread-safe. SQLite.swift surfaces the resulting SQLITE_LOCKED
-        // (code 5) error via `try!` in FailableIterator.next(), crashing the app.
+        // Cancel any in-flight task before starting a new one. CalibreLibrary is
+        // actor-isolated, so overlapping calls to library.booksForIDs from rapid
+        // search changes now serialize safely rather than crash — but without this
+        // cancellation, a slow stale task could still finish after a newer one and
+        // overwrite `items` with out-of-date results.
         rebuildTask?.cancel()
         rebuildTask = Task {
             let pageIDs = pageBooks.map(\.id)
@@ -737,19 +738,12 @@ struct LibraryRootView: View {
             catch { allEntries = []; print("[LibraryRootView] rebuildItems: seriesEntries(keys) failed: \(error)") }
             let allIDs = Array(Set(allEntries.map(\.calibreID)))
             guard !Task.isCancelled else { return }
-            // MainActor.run: this Task is unstructured and does not inherit MainActor
-            // isolation, so without this hop `library.booksForIDs` would run on a
-            // background thread of the concurrency pool. CalibreLibrary's `db` is a
-            // single, non-thread-safe SQLite.swift Connection also read synchronously
-            // from loadPage() on the main thread (including the series-grouping
-            // drain loop, which issues up to ~40 sequential `library.books()` calls
-            // per page). Two threads touching that Connection at once surfaces as
-            // SQLITE_BUSY ("database is locked") in SQLite.swift's `try!`-based
-            // FailableIterator, which is a fatal crash, not a catchable error.
-            // Cancellation above is a best-effort optimization only — it cannot
-            // interrupt a synchronous call already in flight on another thread — so
-            // this MainActor hop is what actually prevents the race, not the guard.
-            let allBooks = await MainActor.run { library.booksForIDs(allIDs) }
+            // CalibreLibrary is actor-isolated now: this await serializes automatically
+            // with loadPage()'s page-fetch calls and any other in-flight query against
+            // the same library, on whatever executor the actor runs on. The SQLITE_BUSY
+            // race this MainActor hop used to guard against is no longer possible —
+            // the actor itself is CalibreLibrary.db's only access path.
+            let allBooks = await library.booksForIDs(allIDs)
             let seriesMetadata: [Int: AO3MetadataRecord]
             let seriesDiagnostics: [Int: AO3ExtractionDiagnostic]
             let singletonWarnings: [Int: SingletonSeriesWarning]
@@ -934,13 +928,14 @@ struct LibraryRootView: View {
         }
     }
 
-    private func refreshVisibilitySnapshots(resetPage: Bool = true) {
-        ao3PublisherIDs = session.library?.ao3PublisherBookIDs() ?? []
+    @MainActor
+    private func refreshVisibilitySnapshots(resetPage: Bool = true) async {
+        ao3PublisherIDs = await session.library?.ao3PublisherBookIDs() ?? []
         if resetPage { currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = [] }
         if toolbarState.filterExpression.hasCompleteRules {
             applyFilterRules()
         } else {
-            loadPage()
+            await loadPage()
         }
     }
 
@@ -953,9 +948,9 @@ struct LibraryRootView: View {
             async let fetchedSkipped = session.collectionStore?.members(of: SystemCollectionID.skipped)
             async let fetchedSeriesOrMerged = session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)
             let capturedLibrary = session.library
-            let currentAO3PublisherIDs = await Task.detached(priority: .userInitiated) {
-                capturedLibrary?.ao3PublisherBookIDs() ?? []
-            }.value
+            // CalibreLibrary is actor-isolated now, so a direct await serializes and
+            // runs off-main on its own — no Task.detached wrapper needed.
+            let currentAO3PublisherIDs = await capturedLibrary?.ao3PublisherBookIDs() ?? []
             let currentLiked = (try? await fetchedLiked) ?? []
             let currentReadLater = Set((try? await fetchedReadLater) ?? [])
             let currentSkipped = Set((try? await fetchedSkipped) ?? [])
@@ -978,8 +973,11 @@ struct LibraryRootView: View {
             rawSQLOffset = 0
             rawSQLOffsetHistory = []
             rawSQLOffsetOverflow = []
-            loadPage()
             }
+            // loadPage() is async now (CalibreLibrary is actor-isolated), so it can't
+            // be called from inside the synchronous MainActor.run closure above — call
+            // it here instead, still sequential within this same Task.
+            await loadPage()
         }
     }
 
@@ -1007,8 +1005,9 @@ struct LibraryRootView: View {
             "filter": filterSignature
         ])
         filterCountTask = Task {
-            let count = library.bookCount(query: query, filter: expression,
+            let count = await library.bookCount(query: query, filter: expression,
                                           filterTagExpansions: cachedFilterTagExpansions)
+            await session.refreshLastSearchError()
             await MainActor.run {
                 guard !Task.isCancelled,
                       toolbarState.activeFilterResult?.isSQLBacked == true,
@@ -1049,7 +1048,7 @@ struct LibraryRootView: View {
         guard toolbarState.filterExpression.hasCompleteRules else {
             toolbarState.activeFilterResult = nil
             toolbarState.cancelLibraryFilterApplication()
-            currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; loadPage(); return
+            currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; Task { await loadPage() }; return
         }
         let expression = toolbarState.filterExpression
         LibraryFilterDebug.log("applyFilter.start", [
@@ -1067,7 +1066,7 @@ struct LibraryRootView: View {
             rawSQLOffset = 0
             rawSQLOffsetHistory = []
             rawSQLOffsetOverflow = []
-            loadPage()
+            Task { await loadPage() }
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "list",
                 "mode": "sqlPagedDeferredCount",
@@ -1086,7 +1085,7 @@ struct LibraryRootView: View {
             rawSQLOffsetHistory = []
             rawSQLOffsetOverflow = []
             suppressNextReloadToken = true   // §perf: we call loadPage() below; skip onChange duplicate
-            loadPage()
+            Task { await loadPage() }
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "list",
                 "mode": "cached",
@@ -1132,15 +1131,14 @@ struct LibraryRootView: View {
             let collectionMapSnapshot = collectionMap
             let statusMapSnapshot = statusMap
             // Run matchingIDs and all post-filter data fetches concurrently and
-            // off the main actor. matchingIDs uses Task.detached internally;
-            // the three membership fetches are actor-isolated but independent.
+            // off the main actor. matchingIDs relies on CalibreLibrary's own actor
+            // isolation for serialization/off-main execution; the three membership
+            // fetches are actor-isolated but independent.
             // §6: Crossover map — IDs with fandoms.count > 1 in ao3_metadata
             var crossoverMap: Set<Int> = []
             let needsCrossover = expression.groups.flatMap(\.rules).contains { $0.field == .crossover }
             if needsCrossover {
-                crossoverMap = await Task.detached(priority: .userInitiated) {
-                    library.crossoverBookIDs()
-                }.value
+                crossoverMap = await library.crossoverBookIDs()
             }
             // §perf Fix 6: Two-pass word-count filter.
             // Pass 1 runs all non-wordcount rules to get candidates; pass 2 fetches
@@ -1163,15 +1161,9 @@ struct LibraryRootView: View {
                 return stripped
             }() : expression
 
-            var filterTagExpansions: [String: [String]] = [:]
-            if let metaDB = session.metaDB {
-                let tagValues = Set(expression.groups.flatMap(\.rules)
-                    .filter { $0.field == .tag && $0.isComplete }
-                    .map(\.value))
-                for value in tagValues {
-                    filterTagExpansions[value] = await metaDB.expandedTerms(for: value)
-                }
-            }
+            let filterTagExpansions = await TagExpansionResolver.filterTagExpansions(
+                for: expression, metaDB: session.metaDB
+            )
             cachedFilterTagExpansions = filterTagExpansions
             let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary,
                                         tagExpansions: filterTagExpansions)
@@ -1191,9 +1183,7 @@ struct LibraryRootView: View {
             var finalResult: FilterResult
             if needsWordCountFallback {
                 let candidateIDs = pass1Result.calibreIDs
-                let fallbackMap = await Task.detached(priority: .userInitiated) {
-                    library.ao3WordCounts(ids: candidateIDs)
-                }.value
+                let fallbackMap = await library.ao3WordCounts(ids: candidateIDs)
 
                 var wcOnlyExpression = FilterExpression()
                 wcOnlyExpression.groups = expression.groups.compactMap { group in
@@ -1230,9 +1220,7 @@ struct LibraryRootView: View {
             let capturedLibrary2 = session.library
             let currentSkipped = Set((try? await fetchedSkipped) ?? [])
             let currentSeriesOrMerged = Set((try? await fetchedSeriesOrMerged) ?? [])
-            let publisherIDs = await Task.detached(priority: .userInitiated) {
-                capturedLibrary2?.ao3PublisherBookIDs() ?? []
-            }.value
+            let publisherIDs = await capturedLibrary2?.ao3PublisherBookIDs() ?? []
             let filteredIDs = prefs.showSkippedCollection
                 ? finalResult.calibreIDs
                 : finalResult.calibreIDs.filter { !currentSkipped.contains($0) }
@@ -1252,7 +1240,7 @@ struct LibraryRootView: View {
             seriesOrMergedIDs = currentSeriesOrMerged
             selectedIDs.removeAll()
             suppressNextReloadToken = true   // §perf: we call loadPage() below; skip onChange duplicate
-            currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; loadPage()
+            currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; await loadPage()
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "list",
                 "mode": "explicitIDs",
@@ -1340,7 +1328,7 @@ struct LibraryRootView: View {
         rawSQLOffset = 0
         rawSQLOffsetHistory = []
         rawSQLOffsetOverflow = []
-        loadPage()
+        Task { await loadPage() }
     }
 
     private func queryWithCachedFullText(_ query: SearchQuery) -> SearchQuery {
@@ -1369,14 +1357,11 @@ struct LibraryRootView: View {
             return
         }
         Task { @MainActor in
-            var resolved: [String: [String]] = [:]
-            for term in terms {
-                resolved[term] = await metaDB.expandedTerms(for: term)
-            }
+            let resolved = await TagExpansionResolver.resolvedTagExpansions(for: terms, metaDB: metaDB)
             resolvedTagExpansions = resolved
             // Re-run loadPage now that expansions are available, so the WHERE
             // clause reflects synonym expansion on the first keystroke delay.
-            loadPage()
+            await loadPage()
         }
     }
 
@@ -1408,7 +1393,7 @@ struct LibraryRootView: View {
                     toolbarState.filterExpression = FilterExpression()
                     toolbarState.activeFilterResult = nil
                     toolbarState.cancelLibraryFilterApplication()
-                    currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; loadPage()
+                    currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; Task { await loadPage() }
                 } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
@@ -1524,7 +1509,7 @@ struct LibraryRootView: View {
             onResetProgress: { resetProgress(selectedBooks(fallback: book)) },
             onCollectionChanged: {
                 session.bumpMembershipVersion()
-                refreshVisibilitySnapshots(resetPage: false)
+                Task { await refreshVisibilitySnapshots(resetPage: false) }
             },
             selectedCount: selectedBooks(fallback: book).count,
             selectedIDs: selectedBookIDs(fallback: book)
@@ -1544,7 +1529,8 @@ struct LibraryRootView: View {
             },
             onLikeToggle: { toggleLike(for: series) },
             onOpen: { AppDelegate.shared?.openReaderWindow(target: .series(series), modelContext: modelContext) },
-            onReadLater:      { addToReadLater(series.works) },
+            isInReadLater: series.works.allSatisfy { readLaterIDs.contains($0.id) },
+            onReadLaterToggle: { toggleReadLater(for: series) },
             onSkip:           { skip(series.works) },
             onMarkRead:       { markRead(series.works) },
             onResetProgress:  { resetProgress(series.works) },
@@ -1597,6 +1583,25 @@ struct LibraryRootView: View {
             } else {
                 try? await session.collectionStore?.bulkAdd(calibreIDs: [book.id], to: SystemCollectionID.readLater)
             }
+            session.bumpMembershipVersion()
+            let refreshed = Set((try? await session.collectionStore?.members(of: SystemCollectionID.readLater)) ?? [])
+            await MainActor.run {
+                readLaterIDs = refreshed
+                session.cachedReadLaterIDs = refreshed
+            }
+        }
+    }
+
+    // "All works satisfy" mirrors isLiked's semantics for series (a series only
+    // shows as read-later once every work is). An incomplete or partially
+    // read-later series shows the outline bookmark until every work is added;
+    // this matches the star's existing behavior. See
+    // ambrosia_series_fix_plan.md Task 1 for the rationale.
+    private func toggleReadLater(for series: SeriesGroup) {
+        let ids = series.works.map(\.id)
+        let shouldAdd = !series.works.allSatisfy { readLaterIDs.contains($0.id) }
+        Task {
+            try? await session.collectionStore?.setReadLater(calibreIDs: ids, inReadLater: shouldAdd)
             session.bumpMembershipVersion()
             let refreshed = Set((try? await session.collectionStore?.members(of: SystemCollectionID.readLater)) ?? [])
             await MainActor.run {

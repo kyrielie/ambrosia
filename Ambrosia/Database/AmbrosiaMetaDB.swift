@@ -1298,6 +1298,90 @@ actor AmbrosiaMetaDB {
         }
         return terms.isEmpty ? [term] : terms
     }
+
+    /// Batched form of `expandedTerms(for:)`. Returns a dictionary keyed by each
+    /// input term (lowercase-preserving the original casing as given) mapping to
+    /// its expanded term list, using the same root/synonym join shape as the
+    /// single-term version but resolved in two queries total instead of one
+    /// query per tag. Falls back to `[term]` per-term when no mapping exists or
+    /// when AO3 tag seeds are disabled, matching `expandedTerms(for:)`.
+    func expandedTermsBatch(for tags: [String]) -> [String: [String]] {
+        guard !tags.isEmpty else { return [:] }
+        guard AO3TagSeedDatabaseConfig.shared.isEnabled,
+              AO3TagSeedDatabaseConfig.shared.validDatabaseURLIfEnabled() != nil else {
+            return Dictionary(uniqueKeysWithValues: tags.map { ($0, [$0]) })
+        }
+
+        let placeholders = tags.map { _ in "?" }.joined(separator: ", ")
+        let lowerBindings: [Binding?] = tags.map { $0.lowercased() as Binding? }
+
+        // Step 1: find each input term's root canonical id, either because the
+        // term IS a canonical name, or because it's a known synonym of one.
+        let rootSQL = """
+            SELECT LOWER(name) AS matched_term, id, name
+            FROM canonical_tags
+            WHERE LOWER(name) IN (\(placeholders))
+            UNION ALL
+            SELECT LOWER(s.synonym) AS matched_term, c.id, c.name
+            FROM tag_synonyms s
+            JOIN canonical_tags c ON c.id = s.canonical_id
+            WHERE LOWER(s.synonym) IN (\(placeholders))
+            """
+        guard let rootRows = try? readDB.prepare(rootSQL, lowerBindings + lowerBindings).map({ $0 }) else {
+            return Dictionary(uniqueKeysWithValues: tags.map { ($0, [$0]) })
+        }
+
+        // matched_term (lowercased input) -> set of root canonical ids
+        var rootIDsByMatchedTerm: [String: Set<Int64>] = [:]
+        // root canonical id -> canonical name
+        var canonicalNameByRootID: [Int64: String] = [:]
+        for row in rootRows {
+            guard let matchedTerm = row[0] as? String,
+                  let rootID = row.int64(at: 1),
+                  let canonicalName = row[2] as? String else { continue }
+            rootIDsByMatchedTerm[matchedTerm, default: []].insert(rootID)
+            canonicalNameByRootID[rootID] = canonicalName
+        }
+
+        let allRootIDs = Array(Set(canonicalNameByRootID.keys))
+        var synonymsByRootID: [Int64: [String]] = [:]
+        if !allRootIDs.isEmpty {
+            let idPlaceholders = allRootIDs.map { _ in "?" }.joined(separator: ", ")
+            let synonymSQL = """
+                SELECT canonical_id, synonym
+                FROM tag_synonyms
+                WHERE canonical_id IN (\(idPlaceholders))
+                """
+            let idBindings: [Binding?] = allRootIDs.map { $0 as Binding? }
+            if let synonymRows = try? readDB.prepare(synonymSQL, idBindings).map({ $0 }) {
+                for row in synonymRows {
+                    guard let rootID = row.int64(at: 0), let synonym = row[1] as? String else { continue }
+                    synonymsByRootID[rootID, default: []].append(synonym)
+                }
+            }
+        }
+
+        var result: [String: [String]] = [:]
+        for tag in tags {
+            let matchedTerm = tag.lowercased()
+            guard let rootIDs = rootIDsByMatchedTerm[matchedTerm], !rootIDs.isEmpty else {
+                result[tag] = [tag]
+                continue
+            }
+            var seen = Set<String>()
+            var terms: [String] = []
+            for rootID in rootIDs {
+                if let name = canonicalNameByRootID[rootID], seen.insert(name.lowercased()).inserted {
+                    terms.append(name)
+                }
+                for synonym in synonymsByRootID[rootID] ?? [] {
+                    if seen.insert(synonym.lowercased()).inserted { terms.append(synonym) }
+                }
+            }
+            result[tag] = terms.isEmpty ? [tag] : terms
+        }
+        return result
+    }
 }
 
 private extension Array {

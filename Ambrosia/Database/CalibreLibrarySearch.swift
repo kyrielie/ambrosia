@@ -88,9 +88,13 @@ extension CalibreLibrary {
 
     func bookCount(query: SearchQuery) -> Int {
         do {
-            return try _bookCount(query: query)
+            let count = try _bookCount(query: query)
+            clearSearchError()
+            return count
         } catch {
-            print("[CalibreLibrary] bookCount(query:) error: \(error)")
+            let message = "bookCount(query:) error: \(error)"
+            print("[CalibreLibrary] \(message)")
+            recordSearchError(message)
             return 0
         }
     }

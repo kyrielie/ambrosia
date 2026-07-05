@@ -14,7 +14,7 @@ import Foundation
 ///   - `search(query:)` returns nil on any error — caller preserves explicit
 ///     fulltext semantics instead of falling back to title search.
 ///   - Never imported or referenced by anything outside LibrarySession + BookGridItem.
-final class CalibreFTSLibrary {
+actor CalibreFTSLibrary {
 
     private let db: Connection
     private let strategy: QueryStrategy
