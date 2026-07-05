@@ -85,6 +85,37 @@ final class LibrarySession {
     // The old implementation used .keys.first which picks an arbitrary hash bucket.
     var resolvedFulltextCacheOrder: [String] = []
 
+    // startAO3Extraction() and seedCalibreSeriesCache() each independently used
+    // to call syncSeriesOrMergedCollection() on completion. Since open() and
+    // reextractAO3Metadata() kick both off concurrently, that meant the
+    // "Series or Merged" membership sync — and the reload/scroll-reset it
+    // triggers in LibraryRootView/EmailLibraryViewController via
+    // .seriesOrMergedCollectionDidChange — ran twice per library open. These
+    // two properties coordinate so only the last of a batch of expected
+    // completions actually performs the sync.
+    private var seriesSyncGeneration = 0
+    private var seriesSyncPending = 0
+
+    /// Call once, on MainActor, before kicking off `count` background tasks
+    /// that will each eventually want `syncSeriesOrMergedCollection()` to run.
+    /// Returns a generation token to pass to `completeCoordinatedSeriesSync`.
+    private func beginCoordinatedSeriesSync(awaiting count: Int) -> Int {
+        seriesSyncGeneration &+= 1
+        seriesSyncPending = count
+        return seriesSyncGeneration
+    }
+
+    /// Call from each of the `count` tasks on completion. Only the call that
+    /// brings the pending count to zero actually runs the sync. A generation
+    /// mismatch means a newer open()/reextractAO3Metadata() superseded this
+    /// batch — in that case this completion is stale and does nothing.
+    private func completeCoordinatedSeriesSync(generation: Int) async {
+        guard generation == seriesSyncGeneration else { return }
+        seriesSyncPending -= 1
+        guard seriesSyncPending <= 0 else { return }
+        await syncSeriesOrMergedCollection()
+    }
+
     // MARK: - Opening / closing
 
     /// Open a Calibre library at the given URL.
@@ -111,8 +142,9 @@ final class LibrarySession {
             LibraryRegistry.shared.register(url)
             LibraryIndexManager.shared.record(url: url)
             importAO3TagSeeds()
-            startAO3Extraction()
-            seedCalibreSeriesCache()
+            let seriesSyncGen = beginCoordinatedSeriesSync(awaiting: 2)
+            startAO3Extraction(seriesSyncGeneration: seriesSyncGen)
+            seedCalibreSeriesCache(seriesSyncGeneration: seriesSyncGen)
             refreshAO3MetaCaches()
             // Load persisted search history for this library.
             SearchActivityLog.shared.load(libraryHash: Ambrosia.libraryHash(for: url))
@@ -367,8 +399,9 @@ final class LibrarySession {
             do {
                 try await metaDB?.clearAO3Metadata()
                 await MainActor.run {
-                    self.seedCalibreSeriesCache()
-                    self.startAO3Extraction(forceAll: true)
+                    let gen = self.beginCoordinatedSeriesSync(awaiting: 2)
+                    self.seedCalibreSeriesCache(seriesSyncGeneration: gen)
+                    self.startAO3Extraction(forceAll: true, seriesSyncGeneration: gen)
                 }
             } catch {
                 print("[LibrarySession] AO3 metadata reset failed: \(error)")
@@ -376,9 +409,13 @@ final class LibrarySession {
         }
     }
 
-    private func startAO3Extraction(forceAll: Bool = false) {
+    private func startAO3Extraction(forceAll: Bool = false, seriesSyncGeneration: Int? = nil) {
         extractionTask?.cancel()
-        guard let library, let metaDB else { return }
+        let generation = seriesSyncGeneration ?? beginCoordinatedSeriesSync(awaiting: 1)
+        guard let library, let metaDB else {
+            Task { await self.completeCoordinatedSeriesSync(generation: generation) }
+            return
+        }
 
         extractionProgress.completed = 0
         extractionProgress.total = 0
@@ -396,7 +433,10 @@ final class LibrarySession {
                 self?.extractionProgress.isRunning = !missing.isEmpty
             }
 
-            guard !missing.isEmpty else { return }
+            guard !missing.isEmpty else {
+                await self?.completeCoordinatedSeriesSync(generation: generation)
+                return
+            }
 
         // Process in batches: parse EPUBs individually (CPU-bound, off-actor),
         // then flush accumulated results to the DB in one transaction per batch.
@@ -482,7 +522,7 @@ final class LibrarySession {
             DispatchQueue.main.async { [weak self] in
                 self?.extractionProgress.isRunning = false
             }
-            await self?.syncSeriesOrMergedCollection()
+            await self?.completeCoordinatedSeriesSync(generation: generation)
             self?.refreshAO3MetaCaches()
         }
     }
@@ -501,8 +541,12 @@ final class LibrarySession {
         }
     }
 
-    private func seedCalibreSeriesCache() {
-        guard let library, let metaDB else { return }
+    private func seedCalibreSeriesCache(seriesSyncGeneration: Int? = nil) {
+        let generation = seriesSyncGeneration ?? beginCoordinatedSeriesSync(awaiting: 1)
+        guard let library, let metaDB else {
+            Task { await self.completeCoordinatedSeriesSync(generation: generation) }
+            return
+        }
         Task.detached(priority: .background) { [weak self, library, metaDB] in
             // CalibreLibrary is actor-isolated, so this serializes automatically
             // with page fetches and rebuildItems tasks that also access it —
@@ -510,10 +554,10 @@ final class LibrarySession {
             let entries = await library.allCalibreSeriesEntries()
             do {
                 try await metaDB.insertCalibreSeriesFallback(entries)
-                await self?.syncSeriesOrMergedCollection()
             } catch {
                 print("[LibrarySession] Calibre series cache seed failed: \(error)")
             }
+            await self?.completeCoordinatedSeriesSync(generation: generation)
         }
     }
 
