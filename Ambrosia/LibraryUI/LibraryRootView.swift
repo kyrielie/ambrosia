@@ -406,6 +406,13 @@ struct LibraryRootView: View {
                 emptyLibraryState
             } else if books.isEmpty && toolbarState.searchText.isEmpty && !toolbarState.hasActiveFilter {
                 loadingState
+            } else if shouldGroupSeriesRows && items.isEmpty && !books.isEmpty {
+                // books has loaded but rebuildItems' async grouping Task hasn't
+                // produced a result yet, and there's no previous list to keep
+                // showing (e.g. the very first grouped load). Show loading
+                // rather than an empty-looking list — never render List(items)
+                // while items is artificially/incidentally empty here.
+                loadingState
             } else if books.isEmpty && (toolbarState.hasActiveFilter || !toolbarState.searchText.isEmpty) {
                 noResultsState
             } else {
@@ -656,12 +663,6 @@ struct LibraryRootView: View {
                 ])
             }
         }
-        // §grouping-flash fix: on a fresh query (page 0) clear items immediately so
-        // the list shows nothing rather than the previous query's stale rows while
-        // rebuildItems' async Task (when grouping) is in flight.
-        if currentPage == 0 && shouldGroupSeriesRows {
-            items = []
-        }
         rebuildItems()
         loadAO3MetadataForCurrentPage()
         pruneSelection()
@@ -700,8 +701,11 @@ struct LibraryRootView: View {
         // §grouping-flash fix: do NOT pre-assign items = books.map(.book) here. That
         // would briefly render ungrouped individual rows before this async Task
         // completes and overwrites them with collapsed SeriesGroup rows. Leave the
-        // previous page's items in place (loadPage clears items to [] on reset) so
-        // ungrouped works are never shown at any point while grouping is on.
+        // previous page's items in place until nextItems is fully computed below,
+        // then swap atomically in one MainActor.run assignment. loadPage() must
+        // never clear `items` ahead of this call — see rootContent's loading-state
+        // branch for how the brand-new-list case (no previous items to show) is
+        // handled instead.
         let pageBooks = books
         LibraryFilterDebug.log("rebuildItems.asyncStart", [
             "surface": "list",
