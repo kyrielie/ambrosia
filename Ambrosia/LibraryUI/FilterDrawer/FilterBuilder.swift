@@ -127,8 +127,9 @@ struct FilterBuilder {
         self.tagExpansions = tagExpansions
     }
 
-    /// Async variant — dispatches all CPU-bound set intersection and sorting work to a
-    /// background priority detached task so the main actor is never blocked.
+    /// Actor isolation on `CalibreLibrary`/`CalibreFTSLibrary` provides serialization
+    /// (and off-main execution, since neither is `@MainActor`-isolated) for every
+    /// query this makes — no manual `Task.detached` dispatch needed anymore.
     func matchingIDs(
         expression: FilterExpression,
         likedIDs: Set<Int>,
@@ -138,31 +139,25 @@ struct FilterBuilder {
         crossoverMap: Set<Int> = [],
         wordCountFallbackMap: [Int: Int]? = nil
     ) async -> FilterResult {
-        let lib      = library
-        let ftLib    = ftsLibrary
-        let expansions = tagExpansions
-        return await Task.detached(priority: .userInitiated) {
-            let builder = FilterBuilder(library: lib, ftsLibrary: ftLib, tagExpansions: expansions)
-            return builder.matchingIDs(
-                expression:          expression,
-                likedIDs:            likedIDs,
-                collectionMap:       collectionMap,
-                statusMap:           statusMap,
-                fulltextMap:         fulltextMap,
-                crossoverMap:        crossoverMap,
-                wordCountFallbackMap: wordCountFallbackMap
-            )
-        }.value
+        await matchingIDsSync(
+            expression:           expression,
+            likedIDs:             likedIDs,
+            collectionMap:        collectionMap,
+            statusMap:            statusMap,
+            fulltextMap:          fulltextMap,
+            crossoverMap:         crossoverMap,
+            wordCountFallbackMap: wordCountFallbackMap
+        )
     }
 
     /// Evaluate a full FilterExpression (multiple groups joined by groupConjunction).
-    func matchingIDs(expression: FilterExpression,
+    private func matchingIDsSync(expression: FilterExpression,
                      likedIDs: Set<Int>,
                      collectionMap: [String: Set<Int>] = [:],
                      statusMap: [AO3CompletionStatus: Set<Int>] = [:],
                      fulltextMap: [String: Set<Int>] = [:],
                      crossoverMap: Set<Int> = [],
-                     wordCountFallbackMap: [Int: Int]? = nil) -> FilterResult {
+                     wordCountFallbackMap: [Int: Int]? = nil) async -> FilterResult {
         let start = LibraryFilterDebug.now()
         LibraryFilterDebug.log("matchingIDs.start", [
             "mode": "explicitIDs",
@@ -170,7 +165,7 @@ struct FilterBuilder {
         ])
         let completeGroups = expression.groups.filter(\.isComplete)
         guard !completeGroups.isEmpty else {
-            let result = FilterResult(calibreIDs: [], totalCount: library.bookCount())
+            let result = FilterResult(calibreIDs: [], totalCount: await library.bookCount())
             LibraryFilterDebug.log("matchingIDs.end", [
                 "mode": "explicitIDs",
                 "ids": result.calibreIDs.count,
@@ -191,18 +186,20 @@ struct FilterBuilder {
             return FilterGroup(rules: rules, conjunction: group.conjunction)
         }
 
-        let groupResults: [Set<Int>] = nonFulltextGroups.map { group in
-            Set(matchingIDsForGroup(group,
+        var groupResults: [Set<Int>] = []
+        for group in nonFulltextGroups {
+            let ids = await matchingIDsForGroup(group,
                                     likedIDs: likedIDs,
                                     collectionMap: collectionMap,
                                     statusMap: statusMap,
                                     crossoverMap: crossoverMap,
-                                    wordCountFallbackMap: wordCountFallbackMap))
+                                    wordCountFallbackMap: wordCountFallbackMap)
+            groupResults.append(Set(ids))
         }
 
         var finalIDSet: Set<Int>
         if groupResults.isEmpty {
-            finalIDSet = Set(library.allCalibreIDs())
+            finalIDSet = Set(await library.allCalibreIDs())
         } else {
             switch expression.groupConjunction {
             case .or:
@@ -214,7 +211,7 @@ struct FilterBuilder {
         }
 
         if !fulltextGroups.isEmpty {
-            finalIDSet = applyFulltextGroupsAsGlobalRefinement(
+            finalIDSet = await applyFulltextGroupsAsGlobalRefinement(
                 fulltextGroups,
                 groupConjunction: expression.groupConjunction,
                 to: finalIDSet,
@@ -238,9 +235,9 @@ struct FilterBuilder {
                                      collectionMap: [String: Set<Int>],
                                      statusMap: [AO3CompletionStatus: Set<Int>],
                                      crossoverMap: Set<Int> = [],
-                                     wordCountFallbackMap: [Int: Int]? = nil) -> [Int] {
+                                     wordCountFallbackMap: [Int: Int]? = nil) async -> [Int] {
         let complete = group.completeRules
-        guard !complete.isEmpty else { return library.allCalibreIDs() }
+        guard !complete.isEmpty else { return await library.allCalibreIDs() }
 
         // Partition into SQL-evaluated vs in-memory-evaluated rules.
         // §6: .crossover is in-memory (backed by ao3_metadata fandoms).
@@ -259,9 +256,9 @@ struct FilterBuilder {
         // signal nil back (by returning nil from sqlFragment) when not — handle below.
         var ids: [Int]
         if sqlRules.isEmpty {
-            ids = library.allCalibreIDs()
+            ids = await library.allCalibreIDs()
         } else {
-            ids = library.calibreIDs(matchingRules: sqlRules,
+            ids = await library.calibreIDs(matchingRules: sqlRules,
                                      conjunction: group.conjunction,
                                      wordCountFallbackMap: wordCountFallbackMap,
                                      tagExpansions: tagExpansions)
@@ -347,20 +344,25 @@ struct FilterBuilder {
         groupConjunction: FilterConjunction,
         to candidateIDs: Set<Int>,
         fulltextMap: [String: Set<Int>]
-    ) -> Set<Int> {
+    ) async -> Set<Int> {
         var fulltextCache: [String: Set<Int>] = [:]
 
-        func cachedFulltextIDs(for rule: FilterRule) -> Set<Int> {
+        func cachedFulltextIDs(for rule: FilterRule) async -> Set<Int> {
             let phrase = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
             let key = phrase.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             if let cached = fulltextCache[key] { return cached }
-            let result = fulltextMap[key] ?? fulltextIDs(for: rule)
+            let result: Set<Int>
+            if let mapped = fulltextMap[key] {
+                result = mapped
+            } else {
+                result = await fulltextIDs(for: rule)
+            }
             fulltextCache[key] = result
             return result
         }
 
-        func apply(_ rule: FilterRule, to ids: Set<Int>) -> Set<Int> {
-            let memberIDs = cachedFulltextIDs(for: rule)
+        func apply(_ rule: FilterRule, to ids: Set<Int>) async -> Set<Int> {
+            let memberIDs = await cachedFulltextIDs(for: rule)
             let before = ids.count
             let result: Set<Int>
             switch rule.op {
@@ -378,14 +380,20 @@ struct FilterBuilder {
             return result
         }
 
-        func evaluateGroup(_ group: (rules: [FilterRule], conjunction: FilterConjunction)) -> Set<Int> {
+        func evaluateGroup(_ group: (rules: [FilterRule], conjunction: FilterConjunction)) async -> Set<Int> {
             switch group.conjunction {
             case .and:
-                return group.rules.reduce(candidateIDs) { apply($1, to: $0) }
-            case .or:
-                return group.rules.reduce(Set<Int>()) { union, rule in
-                    union.union(apply(rule, to: candidateIDs))
+                var acc = candidateIDs
+                for rule in group.rules {
+                    acc = await apply(rule, to: acc)
                 }
+                return acc
+            case .or:
+                var union = Set<Int>()
+                for rule in group.rules {
+                    union.formUnion(await apply(rule, to: candidateIDs))
+                }
+                return union
             }
         }
 
@@ -394,7 +402,10 @@ struct FilterBuilder {
             "rules": groups.flatMap(\.rules).map { "\($0.op.rawValue)=\($0.value)" }.joined(separator: ",")
         ])
 
-        let groupResults = groups.map { evaluateGroup($0) }
+        var groupResults: [Set<Int>] = []
+        for group in groups {
+            groupResults.append(await evaluateGroup(group))
+        }
 
         switch groupConjunction {
         case .or:
@@ -405,20 +416,21 @@ struct FilterBuilder {
         }
     }
 
-    private func fulltextIDs(for rule: FilterRule) -> Set<Int> {
+    private func fulltextIDs(for rule: FilterRule) async -> Set<Int> {
         let phrase = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !phrase.isEmpty, let ftsLibrary else { return [] }
-        return Set(ftsLibrary.search(query: phrase, limit: max(library.bookCount(), 1)) ?? [])
+        let limit = max(await library.bookCount(), 1)
+        return Set(await ftsLibrary.search(query: phrase, limit: limit) ?? [])
     }
 
     // Legacy single-group entry point — used by quick tag/author taps
     func matchingIDs(rules: [FilterRule], conjunction: FilterConjunction,
                      likedIDs: Set<Int>,
                      collectionMap: [String: Set<Int>] = [:],
-                     statusMap: [AO3CompletionStatus: Set<Int>] = [:]) -> FilterResult {
+                     statusMap: [AO3CompletionStatus: Set<Int>] = [:]) async -> FilterResult {
         var expr = FilterExpression()
         expr.groups = [FilterGroup(rules: rules, conjunction: conjunction)]
-        return matchingIDs(expression: expr, likedIDs: likedIDs, collectionMap: collectionMap, statusMap: statusMap)
+        return await matchingIDs(expression: expr, likedIDs: likedIDs, collectionMap: collectionMap, statusMap: statusMap)
     }
 }
 
@@ -462,23 +474,13 @@ extension CalibreLibrary {
             }
         }
 
-        let needsAuthorJoin  = rules.contains { $0.field == .authorName }
         let needsTagJoin     = rules.contains { [.tag, .rating, .warning, .category].contains($0.field) }
-        let needsSeriesJoin  = rules.contains { $0.field == .series }
         let needsCommentJoin = rules.contains { $0.field == .comment }
 
         var joins: [String] = []
-        if needsAuthorJoin {
-            joins.append("LEFT JOIN books_authors_link bal ON bal.book = b.id")
-            joins.append("LEFT JOIN authors a ON a.id = bal.author")
-        }
         if needsTagJoin {
             joins.append("LEFT JOIN books_tags_link btl ON btl.book = b.id")
             joins.append("LEFT JOIN tags t ON t.id = btl.tag")
-        }
-        if needsSeriesJoin {
-            joins.append("LEFT JOIN books_series_link bsl ON bsl.book = b.id")
-            joins.append("LEFT JOIN series s ON s.id = bsl.series")
         }
         if needsCommentJoin {
             joins.append("LEFT JOIN comments c ON c.book = b.id")
@@ -565,9 +567,12 @@ extension CalibreLibrary {
                 "count": count,
                 "elapsedMS": LibraryFilterDebug.elapsedMS(since: start)
             ])
+            clearSearchError()
             return count
         } catch {
-            print("[CalibreLibrary] bookCount(query:filter:) error: \(error)")
+            let message = "bookCount(query:filter:) error: \(error)"
+            print("[CalibreLibrary] \(message)")
+            recordSearchError(message)
             return 0
         }
     }
@@ -595,10 +600,6 @@ extension CalibreLibrary {
         let sql = """
             SELECT COUNT(DISTINCT b.id)
             FROM books b
-            LEFT JOIN books_authors_link bal ON bal.book = b.id
-            LEFT JOIN authors a ON a.id = bal.author
-            LEFT JOIN books_series_link bsl ON bsl.book = b.id
-            LEFT JOIN series s ON s.id = bsl.series
             \(commentJoin)
             \(where_)
             """
@@ -619,15 +620,14 @@ extension CalibreLibrary {
             return textFragment(column: "b.title", op: rule.op, value: v)
 
         case .series:
-            return textFragment(column: "s.name", op: rule.op, value: v,
-                                nullClause: "s.name IS NULL")
+            return seriesFragment(op: rule.op, value: v)
 
         case .comment:
             return textFragment(column: "c.text", op: rule.op, value: v,
                                 nullClause: "c.text IS NULL")
 
         case .authorName:
-            return textFragment(column: "a.name", op: rule.op, value: v)
+            return authorFragment(op: rule.op, value: v)
 
         case .tag:
             return expandedTagFragment(op: rule.op, value: v, tagExpansions: tagExpansions)
@@ -809,6 +809,71 @@ extension CalibreLibrary {
                 args
             )
         }
+    }
+
+    /// §Phase2: authorName is multi-valued per book (books_authors_link is a
+    /// many-to-many join). A correlated EXISTS/NOT EXISTS subquery, evaluated
+    /// independently per rule, is required so that two ANDed authorName rules
+    /// (e.g. "contains Smith" AND "contains Jones") can each match a different
+    /// author row on the same book. A single outer LEFT JOIN alias cannot do
+    /// this — every rule would be forced to test the exact same joined row.
+    private func authorFragment(op: FilterOperator, value: String) -> (String, [Binding?])? {
+        let matcher: String
+        let args: [Binding?]
+        let negated: Bool
+        switch op {
+        case .contains:
+            matcher = "LOWER(a2.name) LIKE ?"; args = ["%\(value.lowercased())%"]; negated = false
+        case .notContains:
+            matcher = "LOWER(a2.name) LIKE ?"; args = ["%\(value.lowercased())%"]; negated = true
+        case .equals:
+            matcher = "LOWER(a2.name) = ?"; args = [value.lowercased()]; negated = false
+        case .notEquals:
+            matcher = "LOWER(a2.name) = ?"; args = [value.lowercased()]; negated = true
+        case .startsWith:
+            matcher = "LOWER(a2.name) LIKE ?"; args = ["\(value.lowercased())%"]; negated = false
+        case .ratingAtMost, .ratingAtLeast:
+            // Not offered for authorName (see FilterRule.availableOperators); no valid SQL shape.
+            return nil
+        }
+        let sub = """
+            SELECT 1 FROM books_authors_link bal2
+            JOIN authors a2 ON a2.id = bal2.author
+            WHERE bal2.book = b.id AND \(matcher)
+            """
+        return (negated ? "NOT EXISTS (\(sub))" : "EXISTS (\(sub))", args)
+    }
+
+    /// §Phase2: same shape as authorFragment — series is also many-to-many via
+    /// books_series_link, so it needs the same correlated-subquery fix. Calibre
+    /// books are usually single-series in practice, but the schema (and the old
+    /// textFragment(column: "s.name", ...) call this replaces) treats it as
+    /// multi-valued, so this stays consistent with that.
+    private func seriesFragment(op: FilterOperator, value: String) -> (String, [Binding?])? {
+        let matcher: String
+        let args: [Binding?]
+        let negated: Bool
+        switch op {
+        case .contains:
+            matcher = "LOWER(s2.name) LIKE ?"; args = ["%\(value.lowercased())%"]; negated = false
+        case .notContains:
+            matcher = "LOWER(s2.name) LIKE ?"; args = ["%\(value.lowercased())%"]; negated = true
+        case .equals:
+            matcher = "LOWER(s2.name) = ?"; args = [value.lowercased()]; negated = false
+        case .notEquals:
+            matcher = "LOWER(s2.name) = ?"; args = [value.lowercased()]; negated = true
+        case .startsWith:
+            matcher = "LOWER(s2.name) LIKE ?"; args = ["\(value.lowercased())%"]; negated = false
+        case .ratingAtMost, .ratingAtLeast:
+            // Not offered for series (see FilterRule.availableOperators); no valid SQL shape.
+            return nil
+        }
+        let sub = """
+            SELECT 1 FROM books_series_link bsl2
+            JOIN series s2 ON s2.id = bsl2.series
+            WHERE bsl2.book = b.id AND \(matcher)
+            """
+        return (negated ? "NOT EXISTS (\(sub))" : "EXISTS (\(sub))", args)
     }
 
     // MARK: - Custom column helpers

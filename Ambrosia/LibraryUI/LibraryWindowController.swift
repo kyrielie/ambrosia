@@ -549,25 +549,28 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
     private func refreshSuggestions(for text: String) {
         guard let library = session?.library else { closeSuggestionPanel(); return }
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let sections = computeSectionedSuggestions(for: text, library: library)
-            DispatchQueue.main.async {
+        let hasTrailingPrefixWarning = SearchQueryParser.parse(text).hasTrailingPrefixWarning
+        Task { [weak self] in
+            let sections = await computeSectionedSuggestions(for: text, library: library)
+            await MainActor.run {
                 guard let self else { return }
-                if sections.allSatisfy({ $0.suggestions.isEmpty }) {
+                if sections.allSatisfy({ $0.suggestions.isEmpty }) && !hasTrailingPrefixWarning {
                     self.closeSuggestionPanel()
                 } else {
-                    self.showSuggestionPanel(sections: sections)
+                    self.showSuggestionPanel(sections: sections, hasTrailingPrefixWarning: hasTrailingPrefixWarning)
                 }
             }
         }
     }
 
-    private func showSuggestionPanel(sections: [SuggestionSection]) {
+    private func showSuggestionPanel(sections: [SuggestionSection], hasTrailingPrefixWarning: Bool = false) {
         guard let searchField = searchToolbarItem?.searchField,
               let parentWindow = window else { return }
 
-        let view = SearchSuggestionsView(sections: sections) { [weak self] suggestion in
+        let view = SearchSuggestionsView(
+            sections: sections,
+            showsTrailingPrefixWarning: hasTrailingPrefixWarning
+        ) { [weak self] suggestion in
             self?.commitSuggestion(suggestion)
         }
 
@@ -739,13 +742,18 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         toolbarState?.showFilterDrawer = true
     }
     @objc private func triggerSidebarToggle(){ toolbarState?.toggleEmailSidebar.toggle() }
-    @objc private func triggerReaderSidebarToggle(){ toolbarState?.toggleEmailReaderSidebar.toggle() }
 
     /// Called by the Show Annotations menu item (⌘B) when the library window is key.
-    /// Routes through the same toggleEmailReaderSidebar path as the menu toggle,
-    /// which drives performReaderSidebarToggle in EmailLibraryViewController.
+    /// Sets the requested mode then flips showEmailReaderSidebar, observed by
+    /// EmailLibraryViewController to ensure-visible in that mode (not a blind
+    /// toggle — repeated clicks shouldn't flip-flop visibility).
     @objc func showEmailAnnotationSidebar(_ sender: Any?) {
-        triggerReaderSidebarToggle()
+        toolbarState?.emailReaderSidebarMode = .annotations
+        toolbarState?.showEmailReaderSidebar.toggle()
+    }
+    @objc func showTOCInEmailSidebar(_ sender: Any?) {
+        toolbarState?.emailReaderSidebarMode = .tableOfContents
+        toolbarState?.showEmailReaderSidebar.toggle()
     }
     @objc private func showCollections()     { toolbarState?.showCollections    = true }
     @objc private func showReadingGoal()     { toolbarState?.showReadingGoal    = true }
@@ -800,7 +808,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
                 hasSearchSnapshot: snapshot != nil,
                 snapshotLabel: snapshot?.label,
                 onPublishSearch: { [weak self] in
-                    self?.publishCurrentSearchSnapshot()
+                    Task { await self?.publishCurrentSearchSnapshot() }
                 },
                 onExportOPML: { [weak self] in
                     self?.exportOPML(feedServer: feedServer)
@@ -830,7 +838,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     /// Builds the calibre IDs and label for the current search, writing a
     /// frozen snapshot to UserDefaults so `/feed/search.xml` serves it.
     /// Called from ManageFeedsView when the user clicks "Publish Current Search".
-    private func publishCurrentSearchSnapshot() {
+    private func publishCurrentSearchSnapshot() async {
         guard let session else { return }
         let label: String
         if let ts = toolbarState, !ts.searchText.isEmpty {
@@ -847,12 +855,12 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             let q = toolbarState?.searchText.isEmpty == false
                 ? SearchQueryParser.parse(toolbarState?.searchText ?? "")
                 : SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
-            ids = session.library?.fetchAllMatchingIDs(query: q, filter: toolbarState?.filterExpression, restrictIDs: nil) ?? []
+            ids = await session.library?.fetchAllMatchingIDs(query: q, filter: toolbarState?.filterExpression, restrictIDs: nil) ?? []
         } else {
             let q = toolbarState?.searchText.isEmpty == false
                 ? SearchQueryParser.parse(toolbarState?.searchText ?? "")
                 : SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
-            ids = session.library?.fetchAllMatchingIDs(query: q, filter: nil, restrictIDs: nil) ?? []
+            ids = await session.library?.fetchAllMatchingIDs(query: q, filter: nil, restrictIDs: nil) ?? []
         }
         CurrentSearchSnapshot.publish(calibreIDs: ids, label: label)
     }
@@ -911,9 +919,11 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     }
 
     @objc private func reshuffleSort() {
-        session?.library?.reshuffleRandom()
-        // Toggle reshuffleToken to trigger reload in both views
-        toolbarState?.reshuffleToken.toggle()
+        Task { @MainActor [weak self] in
+            await self?.session?.library?.reshuffleRandom()
+            // Toggle reshuffleToken to trigger reload in both views
+            self?.toolbarState?.reshuffleToken.toggle()
+        }
     }
 
     @objc private func sortMenuItemSelected(_ sender: NSMenuItem) {

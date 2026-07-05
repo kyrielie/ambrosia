@@ -92,9 +92,9 @@ struct FilterValueTextField: View {
             guard !Task.isCancelled else { return }
             let results: [String]
             switch capturedField {
-            case .tag:        results = library.tagSuggestions(prefix: trimmed, limit: capturedLimit)
-            case .authorName: results = library.authorSuggestions(prefix: trimmed, limit: capturedLimit)
-            case .title:      results = library.titleSuggestions(prefix: trimmed, limit: capturedLimit)
+            case .tag:        results = await library.tagSuggestions(prefix: trimmed, limit: capturedLimit)
+            case .authorName: results = await library.authorSuggestions(prefix: trimmed, limit: capturedLimit)
+            case .title:      results = await library.titleSuggestions(prefix: trimmed, limit: capturedLimit)
             default:          results = []
             }
             guard !Task.isCancelled else { return }

@@ -201,15 +201,13 @@ struct ExportManager {
             return toolbarState?.filterExpression
         }()
 
-        let books = await Task.detached(priority: .userInitiated) {
-            library.fetchAllMatchingBooks(
-                ids: restrictIDs,
-                query: query,
-                filter: activeFilter,
-                sort: sort,
-                ascending: ascending
-            )
-        }.value
+        let books = await library.fetchAllMatchingBooks(
+            ids: restrictIDs,
+            query: query,
+            filter: activeFilter,
+            sort: sort,
+            ascending: ascending
+        )
 
         // §2: Bulk-fetch AO3 metadata and collection membership (not per-book).
         // Sequential awaits on actor-isolated methods; optional-chain async-let
@@ -301,6 +299,11 @@ struct ExportManager {
         }.value
     }
 
+    /// Exports at or above this count trigger a confirmation alert before any
+    /// file I/O begins, since the folder-choice moment is the last point the
+    /// user can cheaply back out before the copy loop runs to completion.
+    static let largeExportThreshold = 1000
+
     /// Present a folder picker and copy all matching EPUBs into the chosen directory.
     /// Files are renamed using exportFilename() (§3). Collisions are resolved with -2, -3, …
     @MainActor
@@ -319,6 +322,17 @@ struct ExportManager {
 
         panel.begin { response in
             guard response == .OK, let destination = panel.url else { return }
+
+            if books.count >= largeExportThreshold {
+                let confirm = NSAlert()
+                confirm.messageText = "Export \(books.count) EPUBs?"
+                confirm.informativeText = "This will copy \(books.count) files to \"\(destination.lastPathComponent)\" and may take a while."
+                confirm.addButton(withTitle: "Export")
+                confirm.addButton(withTitle: "Cancel")
+                confirm.alertStyle = .warning
+                guard confirm.runModal() == .alertFirstButtonReturn else { return }
+            }
+
             Task.detached(priority: .userInitiated) {
                 var copied = 0, skipped: [String] = []
 

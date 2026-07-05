@@ -53,8 +53,27 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     // MARK: - Private: reader state
 
     private var webView: ReaderMenuWebView!
-    private var parser: EPUBParser?
-    private var imageBaseURL: URL?
+    /// One EPUBParser per work in the reading target, in ReadingTarget order.
+    /// A `.singleBook` target has exactly one entry. Populated once by
+    /// loadEPUB(); never mutated after (EPUBParser is a struct, so "the
+    /// active work" is selected by index via `spineMap`, not by swapping a
+    /// class reference). See ambrosia_series_fix_plan.md Task 2a.
+    private var workParsers: [EPUBParser] = []
+    private var workImageBaseURLs: [URL] = []
+    private var workAO3Records: [AO3MetadataRecord?] = []
+    /// Flattens workParsers' spines into one global ordering. Rebuilt once,
+    /// whenever workParsers changes (i.e. in loadEPUB()).
+    private var spineMap = SeriesSpineMap(workIDs: [], spineCounts: [])
+    /// The EPUBParser for whichever work currently owns `currentSpineIndex`
+    /// (paginated mode: the one spine item currently loaded; scroll mode:
+    /// used only for link-navigation lookups against the active work).
+    private var parser: EPUBParser? {
+        guard let ref = spineMap.ref(atGlobalIndex: currentSpineIndex),
+              workParsers.indices.contains(ref.workIndex) else {
+            return workParsers.first
+        }
+        return workParsers[ref.workIndex]
+    }
     /// AO3 metadata for the primary book, fetched asynchronously after the
     /// parser loads. Threaded into mergedHTML for endmatter emission.
     private var ao3Record: AO3MetadataRecord?
@@ -117,6 +136,11 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private var sidebarHostingView: NSHostingView<AnnotationSidebarView>?
     private var sidebarPanelObservers: [NSObjectProtocol] = []
 
+    // Table of contents sidebar
+    private var tocPanel: NSPanel?
+    private var tocHostingView: NSHostingView<TOCSidebarView>?
+    private var tocPanelObservers: [NSObjectProtocol] = []
+
     // Pending annotation captured at mouseup
     private var pendingAnnotation: Annotation?
     private var pendingCursorX: CGFloat = 0
@@ -148,8 +172,47 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         _saveContext = c
         return c
     }
-    private var bookState: BookState?
+    private var bookStates: [Int: BookState] = [:]
+    /// The calibreID of whichever work currently owns `currentSpineIndex`.
+    /// Falls back to the reading target's primary book before spineMap is
+    /// populated (i.e. before loadEPUB() completes).
+    private var activeCalibreID: Int {
+        spineMap.workID(atGlobalIndex: currentSpineIndex) ?? book.id
+    }
+    /// The BookState for the currently active work. Resolved fresh from
+    /// `bookStates` on every access (not cached in a single stored property)
+    /// so that crossing a work boundary in a series transparently retargets
+    /// reads/writes to that work's own row — the per-work-keying design in
+    /// ambrosia_series_fix_plan.md Task 2c. Assigning through this (e.g.
+    /// `bookState?.lastSpineIndex = x`) mutates the same cached class
+    /// instance `bookState(for:)` returns, so this being get-only is fine.
+    private var bookState: BookState? {
+        bookState(for: activeCalibreID)
+    }
+    /// Fetches (or creates) the BookState row for a specific calibreID,
+    /// caching it in `bookStates`. Every work touched during a reading
+    /// session — not just the target's primary book — gets its own row here.
+    private func bookState(for calibreID: Int) -> BookState {
+        if let cached = bookStates[calibreID] { return cached }
+        let all = (try? saveContext.fetch(FetchDescriptor<BookState>())) ?? []
+        let state: BookState
+        if let existing = all.first(where: { $0.calibreID == calibreID }) {
+            state = existing
+        } else {
+            state = BookState(calibreID: calibreID)
+            saveContext.insert(state)
+            try? saveContext.save()
+        }
+        bookStates[calibreID] = state
+        return state
+    }
     private var annotations: [Annotation] = []
+    /// The calibreID that owns each in-memory annotation. Populated by
+    /// restoreAnnotations() and kept in sync on insert/delete. Annotation
+    /// itself carries no calibreID (it's a Codable struct shared with the
+    /// JS bridge and sidebar), so this is tracked alongside it rather than
+    /// added as a field threaded through every call site. See Task 2c step 8.
+    private var annotationCalibreID: [UUID: Int] = [:]
     var onReadingProgressChanged: (() -> Void)?
     var onAnnotationsChanged: (([Annotation]) -> Void)?
     var onLocalFindStateChanged: ((LocalReaderFindState) -> Void)?
@@ -214,9 +277,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         engine.spineDidLoad = { [weak self] totalCols in
             guard let self else { return }
             // Re-inject highlights for the newly loaded spine item.
-            let ranged = self.annotations.filter {
-                !$0.isPointAnnotation && $0.spineIndex == self.currentSpineIndex
-            }
+            let ranged = self.annotations
+                .filter { !$0.isPointAnnotation && self.annotationBelongsToCurrentSpineItem($0) }
             HighlightBridge.restoreHighlights(ranged, into: self.webView)
             self.performPendingAnnotationJumpIfNeeded()
             if let fragment = self.pendingLinkFragment {
@@ -303,7 +365,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 return nil
             default:
                 // Momentum phase, cancelled phase — swallow without acting.
-                return event.momentumPhase == .none ? event : nil
+                return event.momentumPhase.isEmpty ? event : nil
             }
         }
     }
@@ -374,7 +436,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         // but NSSplitView divider drags change the reader pane's screen rect
         // without firing a window resize notification, so we handle them here.
         syncSidebarPanel()
-        guard currentMode == .paginated else { return }
+        syncTOCPanel()
         // Resize is more expensive than a plain reapply: because column CSS is
         // baked into the HTML, a resize requires reloading the spine item, not
         // just re-running JS (invariant 8). Read the current fraction before
@@ -400,6 +462,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         saveTimer = nil
         removeReaderWindowObservers()
         sidebarPanel?.close()
+        tocPanel?.close()
         annotationPopover?.close()
         notePopover?.close()
         hideFindBar()
@@ -408,6 +471,15 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     // MARK: - EPUB loading
 
+    /// Per-work data produced by parsing the reading target's EPUB(s) from
+    /// disk. `workIDs[i]` is the calibreID owning `parsers[i]`.
+    private struct LoadedWorks {
+        let parsers: [EPUBParser]
+        let imageBaseURLs: [URL]
+        let ao3Records: [AO3MetadataRecord?]
+        let workIDs: [Int]
+    }
+
     private func loadEPUB() async {
         guard let pathStr = LibraryRegistry.shared.activePath else {
             await MainActor.run { self.showError("No library open.") }; return
@@ -415,15 +487,24 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         let libraryRoot = URL(fileURLWithPath: pathStr)
         do {
             let record = await fetchAO3Record()
-            let loaded = try await loadHTML(for: target, libraryRoot: libraryRoot, ao3Record: record)
+            let loaded = try await loadWorks(for: target, libraryRoot: libraryRoot, primaryAO3Record: record)
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                self.ao3Record     = record
-                self.parser        = loaded.parser
-                self.imageBaseURL  = loaded.imageBaseURL
-                self.currentHTML   = loaded.html
-                self.loadCurrentHTML()
+                self.ao3Record         = record
+                self.workParsers       = loaded.parsers
+                self.workImageBaseURLs = loaded.imageBaseURLs
+                self.workAO3Records    = loaded.ao3Records
+                self.spineMap = SeriesSpineMap(
+                    workIDs: loaded.workIDs,
+                    spineCounts: loaded.parsers.map { $0.spine.count }
+                )
+                do {
+                    self.currentHTML = try self.buildScrollHTML()
+                    self.loadCurrentHTML()
+                } catch {
+                    self.showError(error.localizedDescription)
+                }
             }
         } catch {
             await MainActor.run { self.showError(error.localizedDescription) }
@@ -437,7 +518,10 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         return map[id]
     }
 
-    private func loadHTML(for target: ReadingTarget, libraryRoot: URL, ao3Record: AO3MetadataRecord?) async throws -> (parser: EPUBParser?, imageBaseURL: URL?, html: String) {
+    /// Parses every work's EPUB from disk and extracts its images. Pure I/O —
+    /// does not touch `self`'s stored properties (those are assigned once,
+    /// on the main actor, by loadEPUB()).
+    private func loadWorks(for target: ReadingTarget, libraryRoot: URL, primaryAO3Record: AO3MetadataRecord?) async throws -> LoadedWorks {
         switch target {
         case .singleBook(let book):
             guard let epubURL = book.epubURL(libraryRoot: libraryRoot),
@@ -446,10 +530,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             }
             var p = EPUBParser(epubURL: epubURL)
             try p.parse()
-            p.ao3Record = ao3Record
+            p.ao3Record = primaryAO3Record
             let imgBase = try EPUBParser.extractImages(from: epubURL, calibreID: book.id)
-            let html = try p.mergedHTML(userCSS: ReaderPreferences.shared.css, ao3Record: ao3Record)
-            return (p, imgBase, html)
+            return LoadedWorks(parsers: [p], imageBaseURLs: [imgBase], ao3Records: [primaryAO3Record], workIDs: [book.id])
 
         case .series(let series):
             // Batch-fetch ao3 records for all works so each gets its own endmatter.
@@ -457,29 +540,24 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             let metaDB = await MainActor.run { AppDelegate.shared?.session.metaDB }
             let recordMap = (try? await metaDB?.ao3Metadata(for: allIDs)) ?? [:]
 
-            var firstParser: EPUBParser?
-            var firstImageBaseURL: URL?
-            var parts: [String] = []
-            for (offset, work) in series.works.enumerated() {
+            var parsers: [EPUBParser] = []
+            var imageBases: [URL] = []
+            var records: [AO3MetadataRecord?] = []
+            for work in series.works {
                 guard let epubURL = work.epubURL(libraryRoot: libraryRoot),
                       FileManager.default.fileExists(atPath: epubURL.path) else {
                     throw NSError(domain: "Ambrosia.Reader", code: 2, userInfo: [NSLocalizedDescriptionKey: "EPUB file not found: \(work.displayTitle)"])
                 }
-                var parser = EPUBParser(epubURL: epubURL)
-                try parser.parse()
+                var p = EPUBParser(epubURL: epubURL)
+                try p.parse()
+                let record = recordMap[work.id]
+                p.ao3Record = record
                 let imageBase = try EPUBParser.extractImages(from: epubURL, calibreID: work.id)
-                if offset == 0 {
-                    firstParser = parser
-                    firstImageBaseURL = imageBase
-                }
-                let displayIndex = series.displayIndex(for: work) ?? offset + 1
-                let breakHTML = """
-                <div class="ambrosia-series-break"><h2>Work \(displayIndex): \(Self.escapeHTML(work.displayTitle))</h2></div>
-                """
-                let workHTML = try parser.mergedHTML(userCSS: ReaderPreferences.shared.css, ao3Record: recordMap[work.id])
-                parts.append(breakHTML + workHTML)
+                parsers.append(p)
+                imageBases.append(imageBase)
+                records.append(record)
             }
-            return (firstParser, firstImageBaseURL, parts.joined(separator: "\n"))
+            return LoadedWorks(parsers: parsers, imageBaseURLs: imageBases, ao3Records: records, workIDs: series.works.map(\.id))
         }
     }
 
@@ -491,13 +569,66 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
+    /// Rebuilds the scroll-mode merged HTML for the current target from the
+    /// already-parsed `workParsers` (no disk re-read). Used both by the
+    /// initial load and by reloadHTML() (style-only preference changes), so
+    /// a series' full multi-work content is rebuilt correctly on every
+    /// preference change instead of only the first work's — the previous
+    /// reloadHTML() went through `parser.mergedHTML(...)` where `parser` was
+    /// only ever the first work, silently dropping the rest of the series on
+    /// any font/color/spacing change. See ambrosia_series_fix_plan.md Task 2c.
+    ///
+    /// Each work's own content is wrapped in a `.ambrosia-work` container
+    /// tagged with its calibreID. This lets scroll-mode JS (HighlightBridge,
+    /// position-save) scope character-offset counting to a single work
+    /// instead of the whole multi-work merge — required so offsets stored
+    /// for a work read as part of a series match what the same work would
+    /// record read standalone (Task 2c's per-work keying design). A
+    /// single-book target's one work isn't wrapped; its content already *is*
+    /// the whole document, so document.body is already the correct scope
+    /// (see HighlightBridge's ambrosiaWorkRootFor fallback).
+    private func buildScrollHTML() throws -> String {
+        guard case .series(let series) = target else {
+            guard let p = workParsers.first else { return "" }
+            return try p.mergedHTML(userCSS: ReaderPreferences.shared.css, ao3Record: workAO3Records.first ?? nil)
+        }
+
+        var parts: [String] = []
+        var spineIndexOffset = 0
+        for (offset, p) in workParsers.enumerated() {
+            guard series.works.indices.contains(offset) else { continue }
+            let work = series.works[offset]
+            let record = workAO3Records.indices.contains(offset) ? workAO3Records[offset] : nil
+            let displayIndex = series.displayIndex(for: work) ?? offset + 1
+            let breakHTML = """
+            <div class="ambrosia-series-break"><h2>Work \(displayIndex): \(Self.escapeHTML(work.displayTitle))</h2></div>
+            """
+            // Running count of spine items already emitted by prior works, so
+            // each work's data-spine-index range is disjoint in the merged
+            // document (Task 2c step 9). imageBaseOverride rewrites this
+            // work's own <img>/<image> references to absolute file:// URLs
+            // under its own extracted-images directory, since a single
+            // relative baseURL on the whole merged document can only ever
+            // resolve one work's images — see EPUBParser.rewriteImageReferences.
+            let workImageBase = workImageBaseURLs.indices.contains(offset) ? workImageBaseURLs[offset] : nil
+            let workHTML = try p.mergedHTML(userCSS: ReaderPreferences.shared.css, ao3Record: record, spineIndexOffset: spineIndexOffset, imageBaseOverride: workImageBase)
+            let wrappedWorkHTML = """
+            <div class="ambrosia-work" data-work-calibre-id="\(work.id)">
+            \(workHTML)
+            </div>
+            """
+            parts.append(breakHTML + wrappedWorkHTML)
+            spineIndexOffset += p.spine.count
+        }
+        return parts.joined(separator: "\n")
+    }
+
     // MARK: - HTML reload
 
     func reloadHTML() {
-        guard let p = parser else { return }
+        guard !workParsers.isEmpty else { return }
         do {
-            let html = try p.mergedHTML(userCSS: ReaderPreferences.shared.css, ao3Record: ao3Record)
-            currentHTML = html
+            currentHTML = try buildScrollHTML()
             loadCurrentHTML()
         } catch {
             print("[ReaderVC] reloadHTML error: \(error)")
@@ -510,30 +641,59 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         if currentMode == .paginated {
             loadPaginatedHTML()
         } else {
-            webView.loadHTMLString(currentHTML, baseURL: imageBaseURL)
+            webView.loadHTMLString(currentHTML, baseURL: workImageBaseURLs.first)
         }
     }
 
     // MARK: - Paginated HTML loading
 
+    /// Determines the global spine index + fraction to resume into for a
+    /// (possibly multi-work) reading target: the first work in series order
+    /// whose own BookState isn't fully read, falling back to the last work
+    /// if every work is already finished. This intentionally introduces no
+    /// new series-level persisted state (per ambrosia_series_fix_plan.md
+    /// Task 2c's per-work recommendation) — it composes entirely from each
+    /// work's own BookState, so reading a work standalone and reading it as
+    /// part of a series share the same progress row.
+    private func resumeSpinePosition() -> (globalIndex: Int, fraction: Double) {
+        guard !spineMap.workIDs.isEmpty else { return (0, 0) }
+        var candidateWorkIndex = spineMap.workIDs.count - 1
+        for (workIndex, calibreID) in spineMap.workIDs.enumerated() {
+            if bookState(for: calibreID).totalReadPercent < 1.0 {
+                candidateWorkIndex = workIndex
+                break
+            }
+        }
+        let calibreID = spineMap.workIDs[candidateWorkIndex]
+        let state = bookState(for: calibreID)
+        let localSpineCount = workParsers.indices.contains(candidateWorkIndex) ? workParsers[candidateWorkIndex].spine.count : 1
+        let localIndex = min(max(0, state.lastSpineIndex), max(0, localSpineCount - 1))
+        let globalIndex = spineMap.globalIndex(workIndex: candidateWorkIndex, localIndex: localIndex) ?? 0
+        return (globalIndex, min(max(state.lastScrollOffset, 0), 1))
+    }
+
     /// Builds the HTML string for paginated mode by prepending a <style> block
     /// containing the column layout CSS, then loads it. The column CSS is sized
     /// to the current webView bounds. If bounds aren't ready yet, defers briefly.
     private func loadPaginatedHTML() {
-        let spineCount = parser?.spine.count ?? 0
-        let savedSpine = min(max(0, bookState?.lastSpineIndex ?? currentSpineIndex), max(0, spineCount - 1))
-        let restorePosition: RestorePosition = .fraction(bookState?.lastScrollOffset ?? 0)
-        loadSpineItem(index: savedSpine, restorePosition: restorePosition)
+        let (globalIndex, fraction) = resumeSpinePosition()
+        loadSpineItem(index: globalIndex, restorePosition: .fraction(fraction))
     }
 
-    /// Loads a single spine item in paginated mode. The column layout CSS is
-    /// computed from the webView's current bounds and injected into the HTML
-    /// string BEFORE loadHTMLString is called, so the browser never renders an
-    /// un-paginated flash (invariant 2). Column geometry is always recomputed
-    /// here — never cached — so a resize-triggered reload picks up the new
-    /// viewport size automatically.
+    /// Loads a single spine item in paginated mode, addressed by its global
+    /// spine index (series-wide; see GlobalSpineRef). Resolves the owning
+    /// work via spineMap, loads that work's own HTML/image base, and updates
+    /// that work's own BookState.lastSpineIndex (local, not global — Task
+    /// 2c). The column layout CSS is computed from the webView's current
+    /// bounds and injected into the HTML string BEFORE loadHTMLString is
+    /// called, so the browser never renders an un-paginated flash (invariant
+    /// 2). Column geometry is always recomputed here — never cached — so a
+    /// resize-triggered reload picks up the new viewport size automatically.
     private func loadSpineItem(index: Int, restorePosition: RestorePosition = .fraction(0)) {
-        guard let parser, index >= 0, index < parser.spine.count else { return }
+        guard let ref = spineMap.ref(atGlobalIndex: index),
+              workParsers.indices.contains(ref.workIndex) else { return }
+        let workParser = workParsers[ref.workIndex]
+        guard ref.localIndex >= 0, ref.localIndex < workParser.spine.count else { return }
 
         guard isLayoutReady, view.window != nil else {
             pendingSpineLoad = (index, restorePosition)
@@ -541,9 +701,10 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
 
         currentSpineIndex = index
-        bookState?.lastSpineIndex = index
+        let calibreID = spineMap.workIDs[ref.workIndex]
+        bookState(for: calibreID).lastSpineIndex = ref.localIndex
 
-        let item = parser.spine[index]
+        let item = workParser.spine[ref.localIndex]
         do {
             let bounds = webView.bounds
             let colCSS = ReaderPreferences.shared.paginatedColumnCSS(
@@ -551,16 +712,17 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 viewportHeight: bounds.height
             )
             #if DEBUG
-            print("[Pagination] loadSpineItem index=\(index) bounds=\(bounds) backingScale=\(view.window?.backingScaleFactor ?? -1) restorePosition=\(restorePosition)")
+            print("[Pagination] loadSpineItem globalIndex=\(index) work=\(ref.workIndex) local=\(ref.localIndex) bounds=\(bounds) backingScale=\(view.window?.backingScaleFactor ?? -1) restorePosition=\(restorePosition)")
             #endif
             let baseCSS = ReaderPreferences.shared.css(paginated: true)
             let combinedCSS = baseCSS + "\n" + colCSS
 
-            let html = try parser.html(for: item, userCSS: combinedCSS)
+            let html = try workParser.html(for: item, userCSS: combinedCSS, globalSpineIndex: index)
             isReaderContentReady = false
             paginationEngine?.setColsPerScreen(ReaderPreferences.shared.colsPerScreen)
             pendingRestorePosition = restorePosition
-            webView.loadHTMLString(html, baseURL: imageBaseURL)
+            let imageBase = workImageBaseURLs.indices.contains(ref.workIndex) ? workImageBaseURLs[ref.workIndex] : nil
+            webView.loadHTMLString(html, baseURL: imageBase)
         } catch {
             showError(error.localizedDescription)
         }
@@ -597,8 +759,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         saveCurrentPositionSync { [weak self] in
             guard let self else { return }
             self.currentMode = .paginated
-            let spineCount = self.parser?.spine.count ?? 0
-            let savedSpine = min(max(0, self.bookState?.lastSpineIndex ?? self.currentSpineIndex), max(0, spineCount - 1))
+            // saveCurrentPositionSync (scroll-mode branch) just updated
+            // self.currentSpineIndex to the fresh global position and wrote
+            // it into the owning work's BookState, so it's safe to resume
+            // from directly here rather than re-deriving via
+            // resumeSpinePosition()'s cross-work heuristic (which is for
+            // the cold-start case, before any position is known).
+            let maxGlobal = max(0, self.spineMap.count - 1)
+            let savedSpine = min(max(0, self.currentSpineIndex), maxGlobal)
             let restorePosition: RestorePosition = .fraction(self.bookState?.lastScrollOffset ?? 0)
             self.loadSpineItem(index: savedSpine, restorePosition: restorePosition)
         }
@@ -663,10 +831,11 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         if url.scheme == "file" {
             // In-book links (a "Table of Contents" chapter linking to other
             // chapters, footnote/endnote cross-references, etc.) resolve
-            // relative to `baseURL`, which is `imageBaseURL` — the temp
-            // directory extracted images live in, NOT the spine XHTML (spine
-            // content is read straight out of the EPUB zip archive and never
-            // written to disk as standalone files). Letting WKWebView
+            // relative to `baseURL`, which is the active work's own entry in
+            // `workImageBaseURLs` — the temp directory extracted images live
+            // in, NOT the spine XHTML (spine content is read straight out of
+            // the EPUB zip archive and never written to disk as standalone
+            // files). Letting WKWebView
             // navigate to that resolved file:// URL directly always fails,
             // since the target chapter file doesn't exist there. Resolve the
             // link against the known spine instead and route it through the
@@ -694,13 +863,18 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     /// the (nonexistent) file:// URL directly. No-ops silently if the link
     /// doesn't match any spine item.
     private func navigateToInternalLink(_ url: URL) {
-        guard let parser else { return }
+        guard let ref = spineMap.ref(atGlobalIndex: currentSpineIndex),
+              workParsers.indices.contains(ref.workIndex) else { return }
+        let workParser = workParsers[ref.workIndex]
         let requestedFilename = url.lastPathComponent
         let fragment = url.fragment
 
-        guard let targetIndex = parser.spine.firstIndex(where: {
+        // A TOC/footnote link inside one EPUB only ever references files
+        // within that same work's own manifest, so the search is scoped to
+        // the currently active work — no cross-work link resolution needed.
+        guard let localTargetIndex = workParser.spine.firstIndex(where: {
             URL(fileURLWithPath: $0.href).lastPathComponent == requestedFilename
-        }) else {
+        }), let targetIndex = spineMap.globalIndex(workIndex: ref.workIndex, localIndex: localTargetIndex) else {
             return
         }
 
@@ -718,6 +892,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 // Prefer the element's own id (ids are preserved from the
                 // original spine content in mergedHTML); fall back to the
                 // wrapping <section data-spine-index> if the id isn't found.
+                // targetIndex here is the global index — matches the
+                // globally-unique data-spine-index values mergedHTML emits
+                // (Task 2c step 9).
                 js = """
                 (function() {
                     var el = document.getElementById(\(Self.jsStringLiteral(fragment)));
@@ -774,17 +951,31 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         fraction = Math.max(0, Math.min(1, fraction));
         return { spineIndex: idx, fraction: fraction };
     }
+    // Scopes character-offset counting to the enclosing .ambrosia-work
+    // container (present only in a merged series read), so offsets stay
+    // local to the owning work instead of cumulative across the whole
+    // series merge. Falls back to document.body for a single-book read.
+    // Mirrors HighlightBridge.selectionListenerJS's copy of this same
+    // function — the two must stay in sync (see Task 2c).
+    function ambrosiaWorkRootFor(el) {
+        var node = el;
+        while (node) {
+            if (node.classList && node.classList.contains('ambrosia-work')) return node;
+            node = node.parentElement;
+        }
+        return document.body;
+    }
     """
 
     private func restoreScrollPosition() {
-        guard let spineIndex = bookState?.lastSpineIndex, spineIndex >= 0 else { return }
-        let fraction = max(0.0, min(1.0, bookState?.lastScrollOffset ?? 0))
+        let (globalIndex, fraction) = resumeSpinePosition()
+        guard globalIndex >= 0 else { return }
+        let clampedFraction = max(0.0, min(1.0, fraction))
         let js = """
         (function() {
-            \(Self.spineFractionJS)
-            var el = document.querySelector('section[data-spine-index="\(spineIndex)"]');
+            var el = document.querySelector('section[data-spine-index="\(globalIndex)"]');
             if (!el) return;
-            var targetY = el.offsetTop + \(fraction) * (el.offsetHeight || 1);
+            var targetY = el.offsetTop + \(clampedFraction) * (el.offsetHeight || 1);
             window.scrollTo(0, targetY);
         })();
         """
@@ -827,7 +1018,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private func performPendingAnnotationJumpIfNeeded() {
         guard let annotation = pendingAnnotationJump,
               currentMode == .paginated,
-              annotation.spineIndex == currentSpineIndex else { return }
+              annotationBelongsToCurrentSpineItem(annotation) else { return }
 
         pendingAnnotationJump = nil
         let offset = annotation.startChar
@@ -837,6 +1028,19 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         """
         webView.evaluateJavaScript(js, completionHandler: nil)
         savePaginatedProgress()
+    }
+
+    /// True if `annotation` belongs to whichever work/local-spine-item
+    /// `currentSpineIndex` currently resolves to — i.e. it's visible on the
+    /// single spine item paginated mode has loaded right now. Resolves via
+    /// annotationCalibreID + spineMap rather than comparing
+    /// annotation.spineIndex (work-local) directly against currentSpineIndex
+    /// (global). See ambrosia_series_fix_plan.md Task 2c.
+    private func annotationBelongsToCurrentSpineItem(_ annotation: Annotation) -> Bool {
+        guard let ref = spineMap.ref(atGlobalIndex: currentSpineIndex),
+              workParsers.indices.contains(ref.workIndex) else { return false }
+        let calibreID = spineMap.workIDs[ref.workIndex]
+        return annotationCalibreID[annotation.id] == calibreID && annotation.spineIndex == ref.localIndex
     }
 
     func goToNextPage() {
@@ -850,15 +1054,34 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     }
 
     private func loadNextSpineItem() {
-        guard let parser, currentSpineIndex + 1 < parser.spine.count else { return }
+        guard currentSpineIndex + 1 < spineMap.count else { return }
         savePaginatedProgress()
+        let crossesWork = spineMap.isLastItemInWork(currentSpineIndex)
         loadSpineItem(index: currentSpineIndex + 1, restorePosition: .start)
+        if crossesWork { announceWorkBoundaryIfNeeded() }
     }
 
     private func loadPreviousSpineItem() {
         guard currentSpineIndex > 0 else { return }
         savePaginatedProgress()
+        let crossesWork = spineMap.isFirstItemInWork(currentSpineIndex)
         loadSpineItem(index: currentSpineIndex - 1, restorePosition: .end)
+        if crossesWork { announceWorkBoundaryIfNeeded() }
+    }
+
+    /// Paged mode has no visible "ambrosia-series-break" marker the way
+    /// scroll mode's merged HTML does (each spine item is loaded as its own
+    /// standalone document, so there's nothing to inject a marker into ahead
+    /// of time) — a HUD toast is the paged-mode equivalent visible boundary
+    /// cue, shown after loadSpineItem has already updated currentSpineIndex
+    /// to the new work. See ambrosia_series_fix_plan.md Task 2b step 5.
+    private func announceWorkBoundaryIfNeeded() {
+        guard case .series(let series) = target,
+              let ref = spineMap.ref(atGlobalIndex: currentSpineIndex),
+              series.works.indices.contains(ref.workIndex) else { return }
+        let work = series.works[ref.workIndex]
+        let index = series.displayIndex(for: work) ?? ref.workIndex + 1
+        showHUD("Now reading Work \(index): \(work.displayTitle)")
     }
 
     private func savePaginatedProgress() {
@@ -868,9 +1091,12 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             // total==1 with col==0 means ambrosiaSetup hasn't run yet — don't
             // write 100% progress from a spurious 1.0 fraction.
             guard total > 1 || col > 0 else { return }
-            self.bookState?.lastSpineIndex = self.currentSpineIndex
-            self.bookState?.lastScrollOffset = fraction
-            self.bookState?.totalReadPercent = fraction
+            guard let ref = self.spineMap.ref(atGlobalIndex: self.currentSpineIndex) else { return }
+            let calibreID = self.spineMap.workIDs[ref.workIndex]
+            let state = self.bookState(for: calibreID)
+            state.lastSpineIndex = ref.localIndex
+            state.lastScrollOffset = fraction
+            state.totalReadPercent = fraction
             self.onReadingProgressChanged?()
         }
     }
@@ -889,7 +1115,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 \(Self.spineFractionJS)
                 var targetY = window.scrollY + 20;
                 var spine = ambrosiaSpineFraction(targetY);
-                var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+                var bestSection = document.querySelector('section[data-spine-index="' + spine.spineIndex + '"]');
+                var workRoot = ambrosiaWorkRootFor(bestSection || document.body);
+                var walker = document.createTreeWalker(workRoot, NodeFilter.SHOW_TEXT, null);
                 var cumulative = 0, node;
                 function bottomFor(n, lo) {
                     var r = document.createRange();
@@ -923,12 +1151,17 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 guard let self, let dict = result as? [String: Any] else {
                     completion(); return
                 }
-                let spineIndex = dict["spineIndex"] as? Int ?? self.currentSpineIndex
+                let globalSpineIndex = dict["spineIndex"] as? Int ?? self.currentSpineIndex
                 let fraction = Self.double(from: dict["fraction"]) ?? 0
                 let charOffset = dict["charOffset"] as? Int ?? 0
-                self.bookState?.lastSpineIndex       = spineIndex
-                self.bookState?.lastScrollOffset     = min(max(fraction, 0), 1)
-                self.bookState?.lastCharacterOffset  = charOffset
+                if let ref = self.spineMap.ref(atGlobalIndex: globalSpineIndex) {
+                    self.currentSpineIndex = globalSpineIndex
+                    let calibreID = self.spineMap.workIDs[ref.workIndex]
+                    let state = self.bookState(for: calibreID)
+                    state.lastSpineIndex      = ref.localIndex
+                    state.lastScrollOffset    = min(max(fraction, 0), 1)
+                    state.lastCharacterOffset = charOffset
+                }
                 completion()
             }
         }
@@ -939,15 +1172,23 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     }
 
     private func ensureBookState() {
-        let cid = book.id
-        let all = (try? saveContext.fetch(FetchDescriptor<BookState>())) ?? []
-        if let existing = all.first(where: { $0.calibreID == cid }) {
-            bookState = existing
-        } else {
-            let state = BookState(calibreID: cid)
-            saveContext.insert(state)
-            try? saveContext.save()
-            bookState = state
+        _ = bookState(for: book.id)
+    }
+
+    /// Writes spine/scroll progress into the correct work's own BookState,
+    /// resolving `globalIndex` (series-wide) to that work's calibreID +
+    /// local spine index via spineMap, and updates `currentSpineIndex` so
+    /// `bookState` (and anything else keyed off "the active work") stays in
+    /// sync with the position just reported. See Task 2c.
+    private func applySpineProgress(globalIndex: Int, fraction: Double, totalPercent: Double?) {
+        guard let ref = spineMap.ref(atGlobalIndex: globalIndex) else { return }
+        currentSpineIndex = globalIndex
+        let calibreID = spineMap.workIDs[ref.workIndex]
+        let state = bookState(for: calibreID)
+        state.lastSpineIndex = ref.localIndex
+        state.lastScrollOffset = min(max(fraction, 0), 1)
+        if let totalPercent {
+            state.totalReadPercent = min(max(totalPercent, 0), 1)
         }
     }
 
@@ -967,7 +1208,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     private func startReadingHistoryIfNeeded() {
         guard readingHistorySessionID == nil else { return }
-        let calibreID = book.id
+        // Uses whichever work is active at session start. If the read later
+        // crosses into a different work (Task 2b), updateReadingHistory
+        // below still reports against bookState.calibreID (the *current*
+        // active work), which will disagree with the calibreID this session
+        // was opened under — reading_history has no notion of "session
+        // spans multiple works." Out of scope for ambrosia_series_fix_plan.md;
+        // noting it here rather than silently accepting a wrong session id.
+        let calibreID = activeCalibreID
         let percentStart = bookState.map { min(max($0.totalReadPercent, 0), 1) }
         Task {
             do {
@@ -1047,20 +1295,15 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             // Paginated mode's own progress tracking posts "fraction" as a
             // whole-book value historically; keep that path untouched. Scroll
             // mode's injectScrollTracker now posts spineIndex/fraction
-            // (spine-relative, matching paginated mode's unit) plus a
+            // (spine-relative, matching paginated mode's unit, and globally
+            // unique across a series merge — Task 2c step 9) plus a
             // separate whole-book "percent" for totalReadPercent/progress UI.
             if json["spineIndex"] != nil, let fraction = Self.double(from: json["fraction"]) {
-                if let spineIndex = json["spineIndex"] as? Int {
-                    bookState?.lastSpineIndex = spineIndex
-                }
-                bookState?.lastScrollOffset = min(max(fraction, 0), 1)
-                if let percent = Self.double(from: json["percent"]) {
-                    bookState?.totalReadPercent = min(max(percent, 0), 1)
+                if let globalSpineIndex = json["spineIndex"] as? Int {
+                    applySpineProgress(globalIndex: globalSpineIndex, fraction: fraction, totalPercent: Self.double(from: json["percent"]))
                 }
             } else if let fraction = Self.double(from: json["fraction"]) {
-                bookState?.lastSpineIndex = currentSpineIndex
-                bookState?.lastScrollOffset = min(max(fraction, 0), 1)
-                bookState?.totalReadPercent = min(max(fraction, 0), 1)
+                applySpineProgress(globalIndex: currentSpineIndex, fraction: fraction, totalPercent: fraction)
             } else if let percent = Self.double(from: json["percent"]) {
                 bookState?.lastScrollOffset = min(max(percent, 0), 1)
                 bookState?.totalReadPercent = min(max(percent, 0), 1)
@@ -1131,6 +1374,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     @objc func addAnnotation(_ sender: Any?) { savePointAnnotationAtCurrentPosition() }
     @objc func showAnnotationSidebar(_ sender: Any?) { toggleAnnotationSidebar() }
+    @objc func showTOCSidebar(_ sender: Any?) { toggleTOCSidebar() }
 
     // MARK: - Point annotations (⌘D)
 
@@ -1138,18 +1382,26 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         guard let state = bookState else { return }
 
         let offset = state.lastCharacterOffset
-        let spineIndex = state.lastSpineIndex
+        let spineIndex = state.lastSpineIndex   // work-local (Task 2c)
+        let calibreID = activeCalibreID
 
         let sentenceJS = """
         (function() {
             var target = Math.max(0, \(offset));
-            var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+            // Scope to the active work's own container, since `offset` is
+            // local to that work, not to the whole (possibly multi-work)
+            // merged document. Falls back to document.body when no such
+            // container exists (single-book read, or paginated mode, where
+            // document.body already contains only the active work's own
+            // spine item). See ambrosia_series_fix_plan.md Task 2c.
+            var workRoot = document.querySelector('[data-work-calibre-id="\(calibreID)"]') || document.body;
+            var walker = document.createTreeWalker(workRoot, NodeFilter.SHOW_TEXT, null);
             var remaining = target;
             var node;
             while ((node = walker.nextNode()) !== null) {
                 if (remaining <= node.length) {
                     var nodes = [];
-                    var bw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+                    var bw = document.createTreeWalker(workRoot, NodeFilter.SHOW_TEXT, null);
                     var n;
                     while ((n = bw.nextNode()) !== null) nodes.push(n);
                     var nodeIdx = nodes.indexOf(node);
@@ -1202,12 +1454,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             var existing = self.annotations
             if !existing.contains(where: {
                 $0.startChar == offset && $0.spineIndex == spineIndex && $0.isPointAnnotation
+                    && self.annotationCalibreID[$0.id] == calibreID
             }) {
                 existing.append(annotation)
                 self.annotations = existing
+                self.annotationCalibreID[annotation.id] = calibreID
                 self.onAnnotationsChanged?(existing)
                 Task { try? await AppDelegate.shared?.session.metaDB?.insertAnnotation(
-                    annotation, calibreID: self.book.id) }
+                    annotation, calibreID: calibreID) }
             }
 
             self.webView.evaluateJavaScript(
@@ -1234,6 +1488,17 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private func presentAnnotationPopover(for pending: Annotation) {
         annotationPopover?.close()
 
+        // pending.spineIndex arrives from JS (selectionListenerJS's
+        // ambrosiaResolveSpineIndex / window.currentSpineIndex) as a GLOBAL
+        // series-wide index; resolve it to the owning work's calibreID and
+        // that work's own LOCAL spine index before storing, per Task 2c's
+        // per-work keying (startChar/endChar are already work-local, since
+        // HighlightBridge's getCharOffset scopes to the enclosing
+        // .ambrosia-work container).
+        let resolvedRef = spineMap.ref(atGlobalIndex: pending.spineIndex)
+        let calibreID = resolvedRef.flatMap { spineMap.workIDs.indices.contains($0.workIndex) ? spineMap.workIDs[$0.workIndex] : nil } ?? book.id
+        let localSpineIndex = resolvedRef?.localIndex ?? pending.spineIndex
+
         let popoverView = AnnotationPopover(
             selectedText: pending.selectedText,
             onSave: { [weak self] note, colorHex in
@@ -1242,24 +1507,25 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 self.annotationPopover = nil
 
                 var final = pending
+                final.spineIndex = localSpineIndex
                 final.note     = note
                 final.colorHex = colorHex
 
                 var existing = self.annotations
                 existing.append(final)
                 self.annotations = existing
+                self.annotationCalibreID[final.id] = calibreID
                 self.onAnnotationsChanged?(existing)
                 Task { try? await AppDelegate.shared?.session.metaDB?.insertAnnotation(
-                    final, calibreID: self.book.id) }
+                    final, calibreID: calibreID) }
                 self.flushPosition()
                 self.refreshSidebarIfVisible()
 
                 if !final.isPointAnnotation {
                     HighlightBridge.clearHighlights(from: self.webView) {
-                        HighlightBridge.restoreHighlights(
-                            existing.filter { !$0.isPointAnnotation },
-                            into: self.webView
-                        )
+                        let ranged = existing
+                            .filter { !$0.isPointAnnotation }
+                        HighlightBridge.restoreHighlights(ranged, into: self.webView)
                     }
                 }
                 self.showHUD("Annotation saved")
@@ -1321,17 +1587,33 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     // MARK: - Restore annotations
 
+    /// Loads and merges annotations from every work in the (possibly
+    /// multi-work) reading target, keeping ownership in `annotationCalibreID`.
+    /// The merged flat list feeds the sidebar exactly as a single-book read
+    /// would — AnnotationSidebarView needs no changes, since it's agnostic
+    /// to which work each entry came from. See ambrosia_series_fix_plan.md
+    /// Task 2c step 8.
     private func restoreAnnotations() {
         Task {
-            let loaded = (try? await AppDelegate.shared?.session.metaDB?.annotations(for: book.id)) ?? []
-            await MainActor.run {
-                annotations = loaded
-                onAnnotationsChanged?(loaded)
-                let ranged = loaded.filter {
-                    !$0.isPointAnnotation && (currentMode != .paginated || $0.spineIndex == currentSpineIndex)
+            let workIDs = spineMap.workIDs.isEmpty ? [book.id] : spineMap.workIDs
+            var merged: [Annotation] = []
+            var owners: [UUID: Int] = [:]
+            for calibreID in workIDs {
+                let loaded = (try? await AppDelegate.shared?.session.metaDB?.annotations(for: calibreID)) ?? []
+                for annotation in loaded {
+                    merged.append(annotation)
+                    owners[annotation.id] = calibreID
                 }
+            }
+            await MainActor.run {
+                annotations = merged
+                annotationCalibreID = owners
+                onAnnotationsChanged?(merged)
+                let ranged = merged
+                    .filter { !$0.isPointAnnotation && (currentMode != .paginated || annotationBelongsToCurrentSpineItem($0)) }
                 HighlightBridge.restoreHighlights(ranged, into: webView)
                 refreshSidebarIfVisible()
+                refreshTOCSidebarIfVisible()
             }
         }
     }
@@ -1346,11 +1628,20 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let offset = annotation.startChar
+            // annotation.spineIndex is work-local; resolve which work owns
+            // it (via annotationCalibreID) to find the corresponding global
+            // spine index for paginated navigation. Falls back to treating
+            // it as already-global if ownership isn't known (shouldn't
+            // normally happen once restoreAnnotations has run).
+            let calibreID = self.annotationCalibreID[annotation.id]
+            let workIndex = calibreID.flatMap { self.spineMap.workIDs.firstIndex(of: $0) }
+            let globalIndex = workIndex.flatMap { self.spineMap.globalIndex(workIndex: $0, localIndex: annotation.spineIndex) }
+                ?? annotation.spineIndex
 
             if self.currentMode == .paginated {
-                if annotation.spineIndex != self.currentSpineIndex {
+                if globalIndex != self.currentSpineIndex {
                     self.pendingAnnotationJump = annotation
-                    self.loadSpineItem(index: annotation.spineIndex, restorePosition: .start)
+                    self.loadSpineItem(index: globalIndex, restorePosition: .start)
                     return
                 }
 
@@ -1364,18 +1655,28 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             }
 
             if offset > 0 || annotation.selectedText.isEmpty {
-                self.scrollToCharOffset(offset)
+                self.scrollToCharOffset(offset, workCalibreID: calibreID)
             } else {
                 self.performFindAndJump(annotation.selectedText)
             }
         }
     }
 
-    private func scrollToCharOffset(_ offset: Int) {
+    /// - Parameter workCalibreID: scopes the treewalker to that work's
+    ///   `.ambrosia-work` container (present only in a series merge), since
+    ///   `offset` is local to the owning work, not the whole merged
+    ///   document. Falls back to document.body when nil or not found
+    ///   (single-book read), reproducing the offset exactly as before this
+    ///   fix. See ambrosia_series_fix_plan.md Task 2c.
+    private func scrollToCharOffset(_ offset: Int, workCalibreID: Int? = nil) {
+        let workRootJS = workCalibreID.map {
+            "document.querySelector('[data-work-calibre-id=\"\($0)\"]') || document.body"
+        } ?? "document.body"
         let js = """
         (function() {
             var target = \(offset);
-            var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+            var workRoot = \(workRootJS);
+            var walker = document.createTreeWalker(workRoot, NodeFilter.SHOW_TEXT, null);
             var remaining = target, node;
             while ((node = walker.nextNode()) !== null) {
                 if (remaining <= node.length) {
@@ -1736,10 +2037,12 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     }
 
     private func deleteAnnotation(id: UUID) {
+        let calibreID = annotationCalibreID[id] ?? book.id
         annotations = annotations.filter { $0.id != id }
+        annotationCalibreID.removeValue(forKey: id)
         onAnnotationsChanged?(annotations)
         Task { try? await AppDelegate.shared?.session.metaDB?.deleteAnnotation(
-            id: id, calibreID: book.id) }
+            id: id, calibreID: calibreID) }
         flushPosition()
         refreshSidebarIfVisible()
         HighlightBridge.removeHighlight(id: id, from: webView)
@@ -1753,6 +2056,146 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         guard let panel = sidebarPanel, panel.isVisible,
               let hosting = sidebarHostingView else { return }
         hosting.rootView = makeAnnotationSidebarView()
+    }
+
+    // MARK: - Table of contents sidebar
+
+    func toggleTOCSidebar() {
+        if let panel = tocPanel, panel.isVisible { panel.close(); return }
+        openTOCSidebar()
+    }
+
+    private func openTOCSidebar() {
+        guard let screenRect = readerScreenRect(), let readerWindow = view.window else { return }
+
+        let sidebar = makeTOCSidebarView()
+        let hosting = NSHostingView(rootView: sidebar)
+        hosting.sizingOptions = []   // Invariant 9 — matches AnnotationSidebarView's own hosting.
+        tocHostingView = hosting
+
+        // Anchored to the left edge, independent of the annotation panel on
+        // the right — both can be open simultaneously in standalone mode.
+        let contentRect = CGRect(
+            x: screenRect.minX - 260,
+            y: screenRect.minY,
+            width: 260,
+            height: screenRect.height
+        )
+
+        let panel = NSPanel(
+            contentRect: contentRect,
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "Contents"
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.contentView = hosting
+        panel.orderFront(nil)
+        tocPanel = panel
+
+        let nc = NotificationCenter.default
+        let move = nc.addObserver(forName: NSWindow.didMoveNotification, object: readerWindow, queue: .main) {
+            [weak self, weak panel] _ in self?.syncTOCPanel(panel)
+        }
+        let resize = nc.addObserver(forName: NSWindow.didResizeNotification, object: readerWindow, queue: .main) {
+            [weak self, weak panel] _ in self?.syncTOCPanel(panel)
+        }
+        let close = nc.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) {
+            [weak self] _ in self?.removeTOCWindowObservers()
+        }
+        tocPanelObservers = [move, resize, close]
+    }
+
+    func syncTOCPanel(_ panel: NSPanel? = nil) {
+        let target = panel ?? tocPanel
+        guard let target, target.isVisible, let screenRect = readerScreenRect() else { return }
+        let contentRect = CGRect(
+            x: screenRect.minX - target.frame.width,
+            y: screenRect.minY,
+            width: target.frame.width,
+            height: screenRect.height
+        )
+        let newFrame = NSPanel.frameRect(forContentRect: contentRect, styleMask: target.styleMask)
+        target.setFrame(newFrame, display: true)
+    }
+
+    private func removeTOCWindowObservers() {
+        tocPanelObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        tocPanelObservers = []
+    }
+
+    private func makeTOCSidebarView() -> TOCSidebarView {
+        TOCSidebarView(
+            entries: globalTOC,
+            currentSpineIndex: currentSpineIndex,
+            onJump: { [weak self] entry in self?.jumpToTOCEntry(entry) }
+        )
+    }
+
+    private func refreshTOCSidebarIfVisible() {
+        guard let panel = tocPanel, panel.isVisible, let hosting = tocHostingView else { return }
+        hosting.rootView = makeTOCSidebarView()
+    }
+
+    /// Flattens every work's own `EPUBParser.toc` (spine-local) into one
+    /// series-wide list of `TOCPanelEntry` (spine-global), via `spineMap` —
+    /// the same GlobalSpineRef mapping used for navigation and BookState/
+    /// annotation resolution (Task 2a/2c). `workTitle` is set to that work's
+    /// display title only on entries belonging to a `.series` target, so
+    /// TOCSidebarView's section-header grouping activates automatically;
+    /// for `.singleBook` every entry's `workTitle` is nil and the sidebar
+    /// renders a flat list, identical to a standalone read.
+    var globalTOC: [TOCPanelEntry] {
+        guard !workParsers.isEmpty else { return [] }
+        var seriesWorks: [CalibreBook]?
+        if case .series(let series) = target { seriesWorks = series.works }
+
+        var result: [TOCPanelEntry] = []
+        for (workIndex, parser) in workParsers.enumerated() {
+            let workTitle = seriesWorks.flatMap { works in
+                works.indices.contains(workIndex) ? works[workIndex].displayTitle : nil
+            }
+            for entry in parser.toc {
+                guard let globalIndex = spineMap.globalIndex(workIndex: workIndex, localIndex: entry.spineIndex) else { continue }
+                result.append(TOCPanelEntry(
+                    id: "\(workIndex)-\(entry.id)",
+                    title: entry.title,
+                    spineIndex: globalIndex,
+                    depth: entry.depth,
+                    workTitle: workTitle
+                ))
+            }
+        }
+        return result
+    }
+
+    /// Exposed for the email-mode split-view sidebar (EmailLibraryViewController),
+    /// which builds its own TOCSidebarView outside of the floating-panel path above.
+    var globalTOCEntries: [TOCPanelEntry] { globalTOC }
+    var currentSpineIndexValue: Int { currentSpineIndex }
+
+    /// `entry.spineIndex` is already global (see `globalTOC`), so this needs
+    /// no further resolution — unlike `jumpToAnnotation`, which has to map a
+    /// work-local `Annotation.spineIndex` back to a global index via
+    /// `annotationCalibreID` first.
+    func jumpToTOCEntry(_ entry: TOCPanelEntry) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if self.currentMode == .paginated {
+                if entry.spineIndex != self.currentSpineIndex {
+                    self.loadSpineItem(index: entry.spineIndex, restorePosition: .start)
+                }
+                return
+            }
+            if entry.spineIndex != self.currentSpineIndex {
+                self.webView.evaluateJavaScript(
+                    "document.querySelector('[data-spine-index=\"\(entry.spineIndex)\"]')?.scrollIntoView({block:'start'});",
+                    completionHandler: nil
+                )
+            }
+        }
     }
 
     // MARK: - Helpers

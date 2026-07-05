@@ -23,7 +23,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Reopen last used library silently on launch
-        session.reopenIfNeeded()
+        Task { await session.reopenIfNeeded() }
 
         libraryWindowController = LibraryWindowController(
             modelContainer: modelContainer,
@@ -127,7 +127,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 alert.runModal()
                 return
             }
-            self.session.open(url: url)
+            Task { await self.session.open(url: url) }
         }
     }
 }

@@ -34,14 +34,14 @@ final class AO3TagSeedDatabaseConfig: ObservableObject {
         static let path = "ao3TagSeedDatabase.path"
     }
 
-    @Published var isEnabled: Bool {
+    @Published var isEnabled: Bool = false {
         didSet {
             UserDefaults.standard.set(isEnabled, forKey: Keys.enabled)
             refreshValidation()
         }
     }
 
-    @Published var databasePath: String? {
+    @Published var databasePath: String? = nil {
         didSet {
             if let databasePath, !databasePath.isEmpty {
                 UserDefaults.standard.set(databasePath, forKey: Keys.path)
@@ -60,14 +60,34 @@ final class AO3TagSeedDatabaseConfig: ObservableObject {
     }
 
     private init() {
+        loadFromDefaults()
+    }
+
+    private func loadFromDefaults() {
         let defaults = UserDefaults.standard
-        if defaults.object(forKey: Keys.enabled) == nil {
-            isEnabled = false
+        let enabledValue: Bool = defaults.object(forKey: Keys.enabled) == nil
+            ? false
+            : defaults.bool(forKey: Keys.enabled)
+        let pathValue = defaults.string(forKey: Keys.path)
+
+        if Thread.isMainThread {
+            isEnabled = enabledValue
+            databasePath = pathValue
+            refreshValidation()
         } else {
-            isEnabled = defaults.bool(forKey: Keys.enabled)
+            // .shared may be first touched from a background actor (e.g.
+            // AmbrosiaMetaDB). @Published setters publish unconditionally,
+            // even during init, so these writes must happen on the main
+            // thread regardless of which thread constructs the singleton.
+            // All stored properties already have inline defaults, so self
+            // is fully initialized by the time this method runs and is
+            // safe to capture in the closure below.
+            DispatchQueue.main.sync {
+                self.isEnabled = enabledValue
+                self.databasePath = pathValue
+                self.refreshValidation()
+            }
         }
-        databasePath = defaults.string(forKey: Keys.path)
-        refreshValidation()
     }
 
     func chooseDatabase(url: URL) {
@@ -81,19 +101,29 @@ final class AO3TagSeedDatabaseConfig: ObservableObject {
     }
 
     func refreshValidation() {
-        guard isEnabled else {
-            validationStatus = .disabled
-            return
+        let newStatus: ValidationStatus
+        if !isEnabled {
+            newStatus = .disabled
+        } else if let databaseURL {
+            do {
+                let counts = try Self.counts(url: databaseURL)
+                newStatus = .valid(counts)
+            } catch {
+                newStatus = .invalid(error.localizedDescription)
+            }
+        } else {
+            newStatus = .notConfigured
         }
-        guard let databaseURL else {
-            validationStatus = .notConfigured
-            return
-        }
-        do {
-            let counts = try Self.counts(url: databaseURL)
-            validationStatus = .valid(counts)
-        } catch {
-            validationStatus = .invalid(error.localizedDescription)
+        setValidationStatus(newStatus)
+    }
+
+    private func setValidationStatus(_ status: ValidationStatus) {
+        if Thread.isMainThread {
+            validationStatus = status
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.validationStatus = status
+            }
         }
     }
 

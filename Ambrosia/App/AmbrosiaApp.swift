@@ -84,6 +84,16 @@ struct AmbrosiaApp: App {
                     }
                 }
                 .keyboardShortcut("b", modifiers: [.command])
+
+                Button("Show Table of Contents") {
+                    if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
+                       libraryWindowController.window?.isKeyWindow == true {
+                        libraryWindowController.showTOCInEmailSidebar(nil)
+                    } else {
+                        NSApp.sendAction(#selector(ReaderViewController.showTOCSidebar(_:)),
+                                         to: nil, from: nil)
+                    }
+                }
             }
         }
     }
@@ -105,7 +115,7 @@ struct RecentLibrariesMenuContent: View {
                 let valid   = LibraryRegistry.shared.isValid(path)
                 Button {
                     guard !isActive else { return }
-                    session.open(url: URL(fileURLWithPath: path))
+                    Task { await session.open(url: URL(fileURLWithPath: path)) }
                 } label: {
                     if isActive {
                         Label(name, systemImage: "checkmark")

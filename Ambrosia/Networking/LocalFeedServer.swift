@@ -342,7 +342,7 @@ actor LocalFeedServer {
         guard let library else {
             return HTTPResponse(statusCode: .serviceUnavailable)
         }
-        let allIDs = library.allBookIDs()
+        let allIDs = await library.allBookIDs()
         guard !allIDs.isEmpty else {
             return HTTPResponse(statusCode: .ok,
                 headers: [.contentType: "application/rss+xml; charset=utf-8"],
@@ -441,7 +441,7 @@ actor LocalFeedServer {
         let ao3Map = (try? await metaDB.ao3Metadata(for: calibreIDs)) ?? [:]
 
         // Fetch book stubs from Calibre (title, series, path) — bulk, not per-book.
-        let books = library.books(ids: calibreIDs, offset: 0, limit: min(calibreIDs.count, 500),
+        let books = await library.books(ids: calibreIDs, offset: 0, limit: min(calibreIDs.count, 500),
                                    sort: .title, ascending: true)
 
         var items: [String] = []

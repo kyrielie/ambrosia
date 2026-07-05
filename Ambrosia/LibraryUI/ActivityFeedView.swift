@@ -218,7 +218,7 @@ struct ActivityFeedView: View {
                     .union(collections.map(\.calibreID))
             )
             let bookMap: [Int: CalibreBook] = Dictionary(
-                uniqueKeysWithValues: library.booksForIDs(allIDs).map { ($0.id, $0) }
+                uniqueKeysWithValues: await library.booksForIDs(allIDs).map { ($0.id, $0) }
             )
 
             var merged: [ActivityFeedEntry] = []

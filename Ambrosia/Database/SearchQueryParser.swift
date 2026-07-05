@@ -35,6 +35,14 @@ struct SearchQuery {
     /// When nil for a given term, `whereClause` falls back to the raw term.
     var expandedTagTerms: [String: [String]] = [:]
 
+    /// True when a single scoped-prefix token's value contains a second known
+    /// prefix token (e.g. "tag:horror author:smith"). Only one prefix is parsed
+    /// per search string — the rest becomes part of the first prefix's literal
+    /// value — so this flags the case where that's probably not what the user
+    /// intended, without changing parsing behavior (see Phase 5 of the gap
+    /// closure plan; multi-token parsing is explicitly out of scope here).
+    var hasTrailingPrefixWarning: Bool = false
+
     var isEmpty: Bool {
         tagTerms.isEmpty && authorTerms.isEmpty &&
         titleTerms.isEmpty && seriesTerms.isEmpty &&
@@ -134,6 +142,10 @@ struct SearchQuery {
 
 // MARK: - SearchQueryParser
 
+// TODO: Multi-token parsing (e.g. "tag:x author:y" -> two rules) is out of
+// scope for the trailing-prefix warning added in the gap closure plan
+// (Phase 5, ambrosia_gap_closure_plan.md). The warning only flags the
+// situation; it does not change parsing behavior.
 struct SearchQueryParser {
 
     /// Parse a raw search string into a `SearchQuery`.
@@ -161,7 +173,12 @@ struct SearchQueryParser {
                 let value = String(trimmed.dropFirst(prefix.count))
                     .trimmingCharacters(in: .whitespaces)
                 if !value.isEmpty {
-                    return builder(value)
+                    var query = builder(value)
+                    let lowerValue = value.lowercased()
+                    query.hasTrailingPrefixWarning = prefixes.contains { otherPrefix, _ in
+                        otherPrefix != prefix && lowerValue.contains(otherPrefix)
+                    }
+                    return query
                 }
             }
         }

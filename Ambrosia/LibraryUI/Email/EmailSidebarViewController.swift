@@ -379,10 +379,7 @@ final class EmailSidebarViewController: NSViewController,
 
 private extension LibraryItem {
     var primaryBook: CalibreBook {
-        switch self {
-        case .book(let book): return book
-        case .series(let series): return series.primaryBook
-        }
+        readingTarget.primaryBook
     }
 
     var contextBooks: [CalibreBook] {
@@ -398,10 +395,6 @@ private extension LibraryItem {
         case .series(let series): return .series(series)
         }
     }
-}
-
-private extension SeriesGroup {
-    var primaryBook: CalibreBook { works.first! }
 }
 
 // MARK: - EmailBookCellView

@@ -8,7 +8,8 @@ struct SeriesListRow: View {
     let onTagTap: (String, FilterField) -> Void
     let onLikeToggle: () -> Void
     let onOpen: () -> Void
-    let onReadLater: () -> Void
+    let isInReadLater: Bool
+    let onReadLaterToggle: () -> Void
     let onSkip: () -> Void
     let onMarkRead: () -> Void
     let onResetProgress: () -> Void
@@ -46,6 +47,12 @@ struct SeriesListRow: View {
                 }
                 .buttonStyle(.borderless)
                 .help(isLiked ? "Unlike Series" : "Like Series")
+                Button(action: onReadLaterToggle) {
+                    Image(systemName: isInReadLater ? "bookmark.fill" : "bookmark")
+                        .foregroundStyle(isInReadLater ? Color.accentColor : Color.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(isInReadLater ? "Remove from Read Later" : "Add to Read Later")
             }
             Text(series.displayAuthors)
                 .font(.subheadline)
@@ -67,7 +74,8 @@ struct SeriesListRow: View {
             Button("Show Individual Works") { showIndex = true }
             Divider()
             Button(isLiked ? "Unlike Series" : "Like Series", action: onLikeToggle)
-            Button("Add Series to Read Later", action: onReadLater)
+            Button(isInReadLater ? "Remove Series from Read Later" : "Add Series to Read Later",
+                   action: onReadLaterToggle)
             Button("Mark Series as Read", action: onMarkRead)
             Button("Reset Series Reading Progress", action: onResetProgress)
             Button("Skip Series", action: onSkip)

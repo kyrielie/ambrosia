@@ -42,6 +42,17 @@ struct EPUBParser {
     private(set) var title: String = ""
     private(set) var opfBasePath: String = ""   // e.g. "OEBPS"
 
+    // MARK: - TOCEntry
+
+    struct TOCEntry: Identifiable, Equatable {
+        let id: String
+        let title: String
+        let spineIndex: Int   // local to this parser; caller offsets for global use
+        let depth: Int        // 0 = top level
+    }
+
+    private(set) var toc: [TOCEntry] = []
+
     /// Set once by the caller after parse() and before any html(for:)/mergedHTML
     /// calls (architecture.md invariant 17: configure-once state, not a parameter
     /// threaded through every call). Used by html(for:) to strip the redundant
@@ -108,13 +119,25 @@ struct EPUBParser {
 
         guard !items.isEmpty else { throw EPUBError.emptySpine }
         spine = items
+
+        toc = Self.parseTOC(archive: archive, opfParser: opfParser, spine: spine, opfBasePath: opfBasePath)
     }
 
     // MARK: - html(for:userCSS:)
 
     /// Returns sanitised HTML for a single spine item, with publisher CSS stripped
     /// and userCSS injected before </head>.
-    func html(for item: SpineItem, userCSS: String) throws -> String {
+    /// - Parameter globalSpineIndex: The value written into `window.currentSpineIndex`
+    ///   (via `sanitise`). Defaults to `item.index` (this work's own local
+    ///   index), matching prior single-book behavior exactly. A multi-work
+    ///   series read passes the series-wide global index instead (see
+    ///   `GlobalSpineRef`), so `window.currentSpineIndex` agrees with the
+    ///   globally-unique `data-spine-index` values scroll mode's merged HTML
+    ///   already emits — required so JS-side spine resolution (annotation
+    ///   capture, link navigation) is consistent between paginated and
+    ///   scroll mode. This does not affect `item.index`, which still governs
+    ///   this work's own preface/endmatter checks below.
+    func html(for item: SpineItem, userCSS: String, globalSpineIndex: Int? = nil) throws -> String {
         let archive = try openArchive()
         guard let entry = archive[item.href],
               let data  = Self.extract(entry, from: archive)
@@ -123,7 +146,7 @@ struct EPUBParser {
         let raw = String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .isoLatin1)
                 ?? ""
-        var s = Self.sanitise(raw, userCSS: userCSS, spineIndex: item.index)
+        var s = Self.sanitise(raw, userCSS: userCSS, spineIndex: globalSpineIndex ?? item.index)
 
         // Match mergedHTML's per-item behaviour: strip the redundant "Preface"
         // heading on the first spine item (unconditional, not gated on
@@ -152,7 +175,21 @@ struct EPUBParser {
     /// Returns a single HTML document concatenating all spine items.
     /// Each item's <body> content is wrapped in a <section> with a
     /// data-spine-index attribute for JS reference. userCSS is injected once.
-    func mergedHTML(userCSS: String, ao3Record: AO3MetadataRecord? = nil) throws -> String {
+    /// - Parameter spineIndexOffset: Added to each item's own `index` when emitting
+    ///   `data-spine-index`. Single-book reads always pass 0, so `data-spine-index`
+    ///   matches `item.index` exactly as before. Multi-work series reads pass the
+    ///   running count of spine items already emitted by prior works, so the merged
+    ///   document's `data-spine-index` values are unique across the whole series
+    ///   rather than colliding at each work's own 0-based index. This does not
+    ///   change `item.index` itself or anything keyed off it internally (e.g.
+    ///   `isFirstSpineItem`); it only affects the attribute written into the HTML,
+    ///   which is what JS position/annotation code reads.
+    func mergedHTML(
+        userCSS: String,
+        ao3Record: AO3MetadataRecord? = nil,
+        spineIndexOffset: Int = 0,
+        imageBaseOverride: URL? = nil
+    ) throws -> String {
         let archive = try openArchive()
         var bodyChunks: [String] = []
 
@@ -166,9 +203,13 @@ struct EPUBParser {
                     ?? ""
 
             // Extract only the <body>…</body> content
-            let bodyContent = Self.extractBodyContent(from: raw, isFirstSpineItem: item.index == 0)
+            var bodyContent = Self.extractBodyContent(from: raw, isFirstSpineItem: item.index == 0)
+            if let imageBase = imageBaseOverride {
+                bodyContent = Self.rewriteImageReferences(in: bodyContent, imageBaseURL: imageBase)
+            }
+            let globalSpineIndex = item.index + spineIndexOffset
             bodyChunks.append("""
-            <section data-spine-index="\(item.index)" data-spine-id="\(item.id)">
+            <section data-spine-index="\(globalSpineIndex)" data-spine-id="\(item.id)">
             \(bodyContent)
             </section>
             """)
@@ -247,6 +288,102 @@ struct EPUBParser {
             _ = try archive.extract(entry, to: dest)
         }
         return tmp
+    }
+
+    // MARK: - TOC parsing
+
+    /// Resolution order: EPUB3 nav document, then EPUB2 NCX, then a synthesized
+    /// one-entry-per-spine-item fallback. If a TOC entry's href cannot be matched
+    /// to a spine item, that entry is dropped rather than defaulted to index 0 —
+    /// a silently-wrong jump target is worse than a visibly-missing entry.
+    private static func parseTOC(archive: Archive, opfParser: FullOPFParser, spine: [SpineItem], opfBasePath: String) -> [TOCEntry] {
+        func resolvedPath(_ href: String) -> String {
+            opfBasePath.isEmpty ? href : "\(opfBasePath)/\(href)"
+        }
+        func spineIndex(forHref href: String) -> Int? {
+            let stripped = href.components(separatedBy: "#").first ?? href
+            let resolved = resolvedPath(stripped)
+            return spine.first(where: { $0.href == resolved })?.index
+        }
+
+        // EPUB3 nav document
+        if let navID = opfParser.manifestProperties.first(where: { key, value in
+            value.split(separator: " ").map(String.init).contains("nav")
+        })?.key, let navHref = opfParser.manifest[navID] {
+            let navPath = resolvedPath(navHref)
+            if let entry = archive[navPath], let data = Self.extract(entry, from: archive) {
+                let navBasePath = (navPath as NSString).deletingLastPathComponent
+                let delegate = NavTOCParser()
+                let xmlParser = XMLParser(data: data)
+                xmlParser.delegate = delegate
+                xmlParser.parse()
+                var entries: [TOCEntry] = []
+                for item in delegate.entries {
+                    let hrefRelativeToOPF = navBasePath.isEmpty ? item.href : "\(navBasePath)/\(item.href)"
+                    // hrefRelativeToOPF may still contain "../" segments; standardize.
+                    let standardized = URL(fileURLWithPath: "/\(hrefRelativeToOPF)").standardizedFileURL.path
+                    let strippedForMatch = String(standardized.dropFirst())
+                    let stripped = strippedForMatch.components(separatedBy: "#").first ?? strippedForMatch
+                    guard let idx = spine.first(where: { $0.href == stripped })?.index else { continue }
+                    entries.append(TOCEntry(id: item.id, title: item.title, spineIndex: idx, depth: item.depth))
+                }
+                if !entries.isEmpty { return entries }
+            }
+        }
+
+        // EPUB2 NCX fallback
+        if let ncxID = opfParser.manifestMediaTypes.first(where: { $0.value == "application/x-dtbncx+xml" })?.key,
+           let ncxHref = opfParser.manifest[ncxID] {
+            let ncxPath = resolvedPath(ncxHref)
+            if let entry = archive[ncxPath], let data = Self.extract(entry, from: archive) {
+                let delegate = NCXParser()
+                let xmlParser = XMLParser(data: data)
+                xmlParser.delegate = delegate
+                xmlParser.parse()
+                var entries: [TOCEntry] = []
+                for item in delegate.entries {
+                    guard let idx = spineIndex(forHref: item.href) else { continue }
+                    entries.append(TOCEntry(id: item.id, title: item.title, spineIndex: idx, depth: item.depth))
+                }
+                if !entries.isEmpty { return entries }
+            }
+        }
+
+        // Fallback: one entry per spine item
+        return spine.enumerated().map { index, item in
+            TOCEntry(id: item.id, title: "Chapter \(index + 1)", spineIndex: item.index, depth: 0)
+        }
+    }
+
+    /// Rewrites `<img src="...">` and `<image xlink:href="...">` references to
+    /// absolute `file://` URLs under `imageBaseURL`, for use in the merged
+    /// multi-work document where a single relative baseURL can no longer resolve
+    /// every work's images (each work has its own extracted image directory).
+    /// Deliberately does not touch `<a href="...">` — in-book link resolution
+    /// is handled separately by navigateToInternalLink and must keep seeing the
+    /// original relative hrefs.
+    private static func rewriteImageReferences(in html: String, imageBaseURL: URL) -> String {
+        guard let encodedBase = imageBaseURL.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+            return html
+        }
+        var s = html
+        s = s.replacingOccurrences(
+            of: #"(<img[^>]+src\s*=\s*")(?!file://|https?://|data:)([^"]+)(")"#,
+            with: "$1file://\(encodedBase)/$2$3",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: #"(<img[^>]+src\s*=\s*')(?!file://|https?://|data:)([^']+)(')"#,
+            with: "$1file://\(encodedBase)/$2$3",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: #"(<image[^>]+xlink:href\s*=\s*")(?!file://|https?://|data:)([^"]+)(")"#,
+            with: "$1file://\(encodedBase)/$2$3",
+            options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: #"(<image[^>]+xlink:href\s*=\s*')(?!file://|https?://|data:)([^']+)(')"#,
+            with: "$1file://\(encodedBase)/$2$3",
+            options: .regularExpression)
+        return s
     }
 
     // MARK: - Private helpers
@@ -482,12 +619,155 @@ private class OPFParser: NSObject, XMLParserDelegate {
     }
 }
 
+/// Parses an EPUB3 nav document's `<nav epub:type="toc">` list, tracking
+/// `<ol>` nesting depth for TOCEntry.depth.
+private class NavTOCParser: NSObject, XMLParserDelegate {
+    struct RawEntry {
+        let id: String
+        let title: String
+        let href: String
+        let depth: Int
+    }
+
+    var entries: [RawEntry] = []
+
+    private var inTOCNav = false
+    private var navDepth = 0        // nesting depth of <nav> elements, to detect the matching close
+    private var olDepth = -1        // -1 = not inside the toc <nav> at all
+    private var pendingHref: String?
+    private var inAnchor = false
+    private var titleBuffer = ""
+    private var counter = 0
+
+    func parser(_ parser: XMLParser, didStartElement element: String,
+                namespaceURI: String?, qualifiedName qName: String?,
+                attributes attr: [String: String]) {
+        let local = Self.localName(element, qName)
+        switch local {
+        case "nav":
+            navDepth += 1
+            let type = attr["epub:type"] ?? attr["type"]
+            if !inTOCNav, type?.split(separator: " ").map(String.init).contains("toc") ?? false {
+                inTOCNav = true
+                olDepth = 0
+            }
+        case "ol" where inTOCNav:
+            olDepth += 1
+        case "a" where inTOCNav:
+            inAnchor = true
+            titleBuffer = ""
+            pendingHref = attr["href"]
+        default:
+            break
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        if inAnchor { titleBuffer += string }
+    }
+
+    func parser(_ parser: XMLParser, didEndElement element: String,
+                namespaceURI: String?, qualifiedName qName: String?) {
+        let local = Self.localName(element, qName)
+        switch local {
+        case "nav":
+            navDepth -= 1
+            if inTOCNav && navDepth == 0 { inTOCNav = false; olDepth = -1 }
+        case "ol" where inTOCNav:
+            olDepth -= 1
+        case "a" where inTOCNav:
+            inAnchor = false
+            let trimmed = titleBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let href = pendingHref, !href.isEmpty, !trimmed.isEmpty {
+                counter += 1
+                entries.append(RawEntry(id: "nav-\(counter)", title: trimmed, href: href, depth: max(0, olDepth - 1)))
+            }
+            pendingHref = nil
+        default:
+            break
+        }
+    }
+
+    private static func localName(_ element: String, _ qName: String?) -> String {
+        let name = qName ?? element
+        if let range = name.range(of: ":") {
+            return String(name[range.upperBound...])
+        }
+        return name
+    }
+}
+
+/// Parses an EPUB2 NCX document's `<navPoint>` tree, tracking nesting depth.
+private class NCXParser: NSObject, XMLParserDelegate {
+    struct RawEntry {
+        let id: String
+        let title: String
+        let href: String
+        let depth: Int
+    }
+
+    var entries: [RawEntry] = []
+
+    private var depth = -1
+    private var inNavLabelText = false
+    private var titleBuffer = ""
+    private var pendingID: String?
+    private var pendingHref: String?
+    private var pendingTitle: String?
+
+    func parser(_ parser: XMLParser, didStartElement element: String,
+                namespaceURI: String?, qualifiedName _: String?,
+                attributes attr: [String: String]) {
+        switch element {
+        case "navPoint":
+            depth += 1
+            pendingID = attr["id"]
+            pendingHref = nil
+            pendingTitle = nil
+        case "content":
+            if pendingHref == nil { pendingHref = attr["src"] }
+        case "text":
+            inNavLabelText = true
+            titleBuffer = ""
+        default:
+            break
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        if inNavLabelText { titleBuffer += string }
+    }
+
+    func parser(_ parser: XMLParser, didEndElement element: String,
+                namespaceURI: String?, qualifiedName _: String?) {
+        switch element {
+        case "text":
+            if inNavLabelText {
+                inNavLabelText = false
+                if pendingTitle == nil {
+                    let trimmed = titleBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty { pendingTitle = trimmed }
+                }
+            }
+        case "navPoint":
+            if let id = pendingID, let href = pendingHref, let title = pendingTitle {
+                entries.append(RawEntry(id: id, title: title, href: href, depth: max(0, depth)))
+            }
+            depth -= 1
+        default:
+            break
+        }
+    }
+}
+
 /// Full OPF parser: extracts manifest (id→href, id→mediaType), spine order, and dc:title.
 private class FullOPFParser: NSObject, XMLParserDelegate {
     /// manifest id → href (relative to OPF directory)
     var manifest: [String: String] = [:]
     /// manifest id → media-type
     var manifestMediaTypes: [String: String] = [:]
+    /// manifest id → properties attribute (space-separated token list, e.g. "nav")
+    var manifestProperties: [String: String] = [:]
     /// spine idrefs in document order
     var spineIdrefs: [String] = []
     /// dc:title value
@@ -510,6 +790,7 @@ private class FullOPFParser: NSObject, XMLParserDelegate {
             if let id = attr["id"], let href = attr["href"] {
                 manifest[id] = href
                 manifestMediaTypes[id] = attr["media-type"] ?? "application/xhtml+xml"
+                manifestProperties[id] = attr["properties"]
             }
         case "itemref" where inSpine:
             // linear="no" items are still included — they may be author notes etc.
