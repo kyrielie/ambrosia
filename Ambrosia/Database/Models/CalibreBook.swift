@@ -60,10 +60,15 @@ struct CalibreBook: Identifiable, Hashable {
         return ReaderPreferences.shared.correctCalibreAmpEntities ? stripped.correctedCalibreAmpEntity : stripped
     }
 
+    /// True for books whose description was written by Calibre's EPUB-merge plugin,
+    /// which prefixes merged/anthology comments with this exact literal string.
+    /// Deliberately an exact prefix match (not a loose "contains 'anthology'" check)
+    /// to avoid misfiring on real works whose own description happens to mention
+    /// the word "anthology".
     var isDescriptionAnthology: Bool {
         guard let comment = displayComment else { return false }
         let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.range(of: "Anthology", options: [.caseInsensitive, .anchored]) != nil
+        return trimmed.range(of: "Anthology containing:", options: [.caseInsensitive, .anchored]) != nil
     }
 
     var isAO3PublisherBook: Bool {
@@ -274,11 +279,20 @@ struct SeriesGroup: Identifiable, Hashable {
 enum LibraryItem: Identifiable, Hashable {
     case book(CalibreBook)
     case series(SeriesGroup)
+    /// A book that is a solo, non-leading member of a series with no other visible
+    /// members (so no `SeriesGroup` was built for it) — e.g. orphaned #5 of a series
+    /// where nobody else's #1-#4 or #6+ are in this library. Rendered as its own row
+    /// so a book that leads series A, is grouped in series B, and is orphaned-alone in
+    /// series C still surfaces all three memberships distinctly. The id is namespaced by
+    /// seriesKey (not just book id) because the same book can appear this way more than
+    /// once, once per orphaned series.
+    case orphanedSeriesEntry(book: CalibreBook, warning: SingletonSeriesWarning)
 
     var id: String {
         switch self {
         case .book(let book): return "book-\(book.id)"
         case .series(let series): return "series-\(series.id)"
+        case .orphanedSeriesEntry(let book, let warning): return "orphan-\(book.id)-\(warning.seriesKey)"
         }
     }
 }

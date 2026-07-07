@@ -131,25 +131,34 @@ func sortedSeriesWorks(_ works: [CalibreBook], using sortedEntries: [SeriesCache
     }
 }
 
-/// Assigns each page-resident book to the grouped series row(s) it leads, or to a
-/// standalone `.book` row if it leads none of its series and isn't subsumed into
+/// Assigns each page-resident book to the grouped series row(s) it leads, to
+/// standalone `.orphanedSeriesEntry` row(s) for series it's a solo, non-leading
+/// member of (no `SeriesGroup` exists because it has no other visible members),
+/// or to a plain `.book` row if it's in no series at all and isn't subsumed into
 /// someone else's group as a non-leading member.
 ///
 /// A book that leads more than one of its series (e.g. an AO3 work that opens both
 /// a tight subseries and a larger umbrella series) legitimately anchors more than
 /// one row here — this intentionally does not collapse a book down to a single
-/// "canonical" series. A book that is a member of a series but does not lead it is
-/// never emitted directly; it only surfaces inside the `works` array of whichever
-/// group(s) it belongs to.
+/// "canonical" series. A book that is a grouped (non-orphaned) member of a series
+/// but does not lead it is never emitted directly; it only surfaces inside the
+/// `works` array of whichever group(s) it belongs to. A book that is an *orphaned*
+/// (ungrouped) member of a series always gets its own `.orphanedSeriesEntry` row,
+/// since there's no group for it to be subsumed into.
 ///
 /// Leadership is read off `group.works.first?.id == book.id`, so `seriesByKey` must
 /// have been built with `SeriesGroup.works` populated via `sortedSeriesWorks`, or
 /// this will not agree with the database's notion of leadership.
+///
+/// `singletonWarningsByCalibreID` is one-to-many (see
+/// `AmbrosiaMetaDB.singletonNonLeadingSeriesEntries`): a book can be orphaned in more
+/// than one series simultaneously, and each such membership gets its own row here.
 func assignSeriesItems(
     pageBooks: [CalibreBook],
     entries: [SeriesCacheEntry],
     seriesByKey: [String: SeriesGroup],
-    collapsedIDs: Set<Int>
+    collapsedIDs: Set<Int>,
+    singletonWarningsByCalibreID: [Int: [SingletonSeriesWarning]] = [:]
 ) -> [LibraryItem] {
     var nextItems: [LibraryItem] = []
     var emittedSeries = Set<String>()
@@ -157,15 +166,27 @@ func assignSeriesItems(
         let bookEntries = entries
             .filter { $0.calibreID == book.id && !$0.isAnthology }
             .sorted { $0.seriesKey < $1.seriesKey }
+        let warningsBySeriesKey = Dictionary(
+            uniqueKeysWithValues: (singletonWarningsByCalibreID[book.id] ?? []).map { ($0.seriesKey, $0) }
+        )
         var emittedAny = false
         for entry in bookEntries {
-            guard let group = seriesByKey[entry.seriesKey],
-                  !emittedSeries.contains(entry.seriesKey),
-                  group.works.first?.id == book.id
-            else { continue }
-            nextItems.append(.series(group))
-            emittedSeries.insert(entry.seriesKey)
-            emittedAny = true
+            if let group = seriesByKey[entry.seriesKey] {
+                guard !emittedSeries.contains(entry.seriesKey),
+                      group.works.first?.id == book.id
+                else { continue }
+                nextItems.append(.series(group))
+                emittedSeries.insert(entry.seriesKey)
+                emittedAny = true
+            } else if let warning = warningsBySeriesKey[entry.seriesKey],
+                      !emittedSeries.contains(entry.seriesKey) {
+                // No SeriesGroup exists for this series (it has no other visible
+                // members), but it's a flagged orphaned membership (solo, index > 1).
+                // Give it its own row rather than silently dropping the membership.
+                nextItems.append(.orphanedSeriesEntry(book: book, warning: warning))
+                emittedSeries.insert(entry.seriesKey)
+                emittedAny = true
+            }
         }
         if !emittedAny && !collapsedIDs.contains(book.id) {
             nextItems.append(.book(book))

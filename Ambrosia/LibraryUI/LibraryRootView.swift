@@ -67,7 +67,7 @@ struct LibraryRootView: View {
     @State private var bookStates: [Int: BookState] = [:]
     @State private var ao3Metadata: [Int: AO3MetadataRecord] = [:]
     @State private var ao3ExtractionDiagnostics: [Int: AO3ExtractionDiagnostic] = [:]
-    @State private var singletonSeriesWarnings: [Int: SingletonSeriesWarning] = [:]
+    @State private var singletonSeriesWarnings: [Int: [SingletonSeriesWarning]] = [:]
     // Seeded from LibrarySession cache so the first render on every mode
     // switch uses correct membership data — no flash of wrong ordering.
     @State private var likedIDs: Set<Int> = []
@@ -201,6 +201,9 @@ struct LibraryRootView: View {
                 }
             }
             .onChange(of: prefs.hideNonAO3PublisherBooks) {
+                Task { await refreshVisibilitySnapshots() }
+            }
+            .onChange(of: prefs.hideAnthologyBooks) {
                 Task { await refreshVisibilitySnapshots() }
             }
             .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
@@ -374,12 +377,23 @@ struct LibraryRootView: View {
                         let ao3Map = Dictionary(uniqueKeysWithValues: rows.compactMap { row in
                             row.ao3.map { (row.book.id, $0) }
                         })
+                        // Fetch every series membership (not just one) per book so a
+                        // multi-series book is duplicated into every relevant series
+                        // folder below, rather than only ever landing in one.
+                        var seriesEntriesByBook: [Int: [SeriesCacheEntry]] = [:]
+                        if toolbarState.groupBySeries, let metaDB = session.metaDB {
+                            let ids = rows.map(\.book.id)
+                            if let entries = try? await metaDB.seriesEntries(for: ids) {
+                                seriesEntriesByBook = Dictionary(grouping: entries.filter { !$0.isAnthology }, by: \.calibreID)
+                            }
+                        }
                         let (copied, skipped) = await ExportManager.exportEPUBs(
                             books: rows.map(\.book),
                             libraryRoot: libraryRoot,
                             destination: destination,
                             ao3Map: ao3Map,
                             groupBySeries: toolbarState.groupBySeries,
+                            seriesEntries: seriesEntriesByBook,
                             progress: { done in
                                 Task { @MainActor in
                                     progressBar.doubleValue = Double(done)
@@ -471,7 +485,7 @@ struct LibraryRootView: View {
         }
 
         if toolbarState.sortField == .random {
-            let restrictIDs: [Int]?
+            var restrictIDs: [Int]?
             let filterForSQL: FilterExpression?
             if let result = toolbarState.activeFilterResult, result.isSQLBacked {
                 restrictIDs = nil
@@ -486,6 +500,17 @@ struct LibraryRootView: View {
             } else {
                 restrictIDs = nil
                 filterForSQL = nil
+            }
+            // §AO3-only-random fix: the two branches above that leave restrictIDs
+            // nil (SQL-backed filter, or no filter at all) never ran the result
+            // through visibleIDs(...), so hideNonAO3PublisherBooks (and skip/
+            // series-or-merged) were silently dropped for random sort whenever no
+            // explicit non-SQL filter was active — the exact case a plain "AO3
+            // only + random sort" browse hits. fetchAllMatchingIDs applies
+            // restrictIDs and filter together as AND conditions, so this combines
+            // safely with an active SQL-backed filter too.
+            if prefs.hideNonAO3PublisherBooks {
+                restrictIDs = intersect(restrictIDs ?? Array(ao3PublisherIDs), with: Array(ao3PublisherIDs))
             }
             let (page, hasMore) = await library.randomSortedPage(
                 offset: currentPage * pageSize, limit: pageSize,
@@ -519,13 +544,19 @@ struct LibraryRootView: View {
                 restrictIDs = nil
                 filterForSQL = nil
             }
+            // §AO3-only-random fix (same pattern as .random above): fold in
+            // hideNonAO3PublisherBooks whenever restrictIDs wasn't already routed
+            // through visibleIDs(...).
+            let effectiveRestrictIDs: [Int]? = prefs.hideNonAO3PublisherBooks
+                ? intersect(restrictIDs ?? Array(ao3PublisherIDs), with: Array(ao3PublisherIDs))
+                : restrictIDs
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "list", "mode": "wordCountSorted", "page": currentPage,
                 "query": LibraryFilterDebug.summary(query: query)
             ])
             let (page, hasMore) = await library.wordCountSortedPage(
                 offset: currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
-                query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                query: query, filter: filterForSQL, restrictIDs: effectiveRestrictIDs,
                 filterTagExpansions: cachedFilterTagExpansions
             )
             guard !toolbarState.isListSurfaceTornDown else { return }
@@ -813,7 +844,7 @@ struct LibraryRootView: View {
             let allBooks = await library.booksForIDs(allIDs)
             let seriesMetadata: [Int: AO3MetadataRecord]
             let seriesDiagnostics: [Int: AO3ExtractionDiagnostic]
-            let singletonWarnings: [Int: SingletonSeriesWarning]
+            let singletonWarnings: [Int: [SingletonSeriesWarning]]
             let placeholders: [String: [SeriesPlaceholder]]
             guard !Task.isCancelled else { return }
             do { seriesMetadata   = try await metaDB.ao3Metadata(for: allIDs) }
@@ -859,13 +890,24 @@ struct LibraryRootView: View {
 
             for (seriesKey, entries) in entriesBySeries {
                 let sortedEntries = sortedSeriesEntries(entries)
+                // Anthology/merged-epub rows (e.g. a Calibre epubmerge compilation that
+                // shares this series' ao3_series_id) must not count toward the group nor
+                // be exposed in it — but their presence must not disqualify the rest of
+                // the series from being grouped. Filter them out of `works` rather than
+                // bailing on the whole group when any single member is anthology-flagged.
                 let works = sortedEntries.compactMap { byID[$0.calibreID] }
+                    .filter { !$0.isDescriptionAnthology }
                 guard works.count > 1 else { continue }
-                guard works.allSatisfy({ !$0.isDescriptionAnthology }) else { continue }
+                let workIDs = Set(works.map(\.id))
+                // Mirror the same anthology exclusion onto the entries used for
+                // index/placeholder bookkeeping, so the anthology's own series_index
+                // doesn't leak into workIndices/missingIndices or get passed to
+                // sortedSeriesWorks alongside a `works` array that no longer includes it.
+                let filteredSortedEntries = sortedEntries.filter { workIDs.contains($0.calibreID) }
                 collapsedIDs.formUnion(works.map(\.id))
                 let metadata = works.compactMap { seriesMetadata[$0.id] }
                 let metadataByID = seriesMetadata
-                let indices = sortedEntries.map(\.seriesIndex)
+                let indices = filteredSortedEntries.map(\.seriesIndex)
                 let missing = missingIndices(in: indices)
                 let ratings = Array(Set(works.flatMap(\.tags).filter { if case .rating = AO3TagKind.classify($0) { return true }; return false })).sorted()
                 let warnings = Array(Set(works.flatMap(\.tags).filter { if case .warning = AO3TagKind.classify($0) { return true }; return false })).sorted()
@@ -886,8 +928,8 @@ struct LibraryRootView: View {
                 seriesByKey[seriesKey] = SeriesGroup(
                     id: seriesKey,
                     seriesKey: seriesKey,
-                    seriesName: sortedEntries.first?.seriesName ?? seriesKey,
-                    works: sortedSeriesWorks(works, using: sortedEntries),
+                    seriesName: filteredSortedEntries.first?.seriesName ?? seriesKey,
+                    works: sortedSeriesWorks(works, using: filteredSortedEntries),
                     allFandoms: fandoms,
                     allRelationships: relationships,
                     allCharacters: characters,
@@ -917,7 +959,8 @@ struct LibraryRootView: View {
                 pageBooks: pageBooks,
                 entries: entries,
                 seriesByKey: seriesByKey,
-                collapsedIDs: collapsedIDs
+                collapsedIDs: collapsedIDs,
+                singletonWarningsByCalibreID: warnings
             )
             await MainActor.run {
                 // §list-teardown fix: no-op if the List surface was torn down
@@ -947,6 +990,7 @@ struct LibraryRootView: View {
                     "collapsedIDs": collapsedIDs.count,
                     "items": nextItems.count,
                     "series": nextItems.filter { if case .series = $0 { return true }; return false }.count,
+                    "orphanedSeries": nextItems.filter { if case .orphanedSeriesEntry = $0 { return true }; return false }.count,
                     "singletons": nextItems.filter { if case .book = $0 { return true }; return false }.count
                 ])
             }
@@ -999,7 +1043,7 @@ struct LibraryRootView: View {
             let strippedBySkipped = raw.filter { !prefs.showSkippedCollection && skippedIDs.contains($0.id) }.count
             let strippedBySeriesOrMerged = raw.filter { seriesOrMergedIDs.contains($0.id) }.count
             let strippedByPublisher = raw.filter { prefs.hideNonAO3PublisherBooks && !$0.isAO3PublisherBook }.count
-            let strippedByAnthology = raw.filter { $0.isDescriptionAnthology }.count
+            let strippedByAnthology = raw.filter { prefs.hideAnthologyBooks && $0.isDescriptionAnthology }.count
             LibraryFilterDebug.log("visibleBooks.breakdown", [
                 "surface": "list",
                 "raw": raw.count,
@@ -1018,7 +1062,8 @@ struct LibraryRootView: View {
             shouldGroupSeriesRows: shouldGroupSeriesRows,
             skippedIDs: skippedIDs,
             seriesOrMergedIDs: seriesOrMergedIDs,
-            hideNonAO3PublisherBooks: prefs.hideNonAO3PublisherBooks
+            hideNonAO3PublisherBooks: prefs.hideNonAO3PublisherBooks,
+            hideAnthologyBooks: prefs.hideAnthologyBooks
         )
     }
 
@@ -1547,19 +1592,21 @@ struct LibraryRootView: View {
     private func itemRow(_ item: LibraryItem) -> some View {
         switch item {
         case .book(let book):
-            bookRow(book)
+            bookRow(book, warningsOverride: nil)
         case .series(let series):
             seriesRow(series)
+        case .orphanedSeriesEntry(let book, let warning):
+            bookRow(book, warningsOverride: [warning])
         }
     }
 
-    private func bookRow(_ book: CalibreBook) -> some View {
+    private func bookRow(_ book: CalibreBook, warningsOverride: [SingletonSeriesWarning]?) -> some View {
         BookListRow(
             book: book,
             bookState: bookStates[book.id],
             ao3Metadata: ao3Metadata[book.id],
             ao3ExtractionDiagnostic: ao3ExtractionDiagnostics[book.id],
-            singletonSeriesWarning: singletonSeriesWarnings[book.id],
+            singletonSeriesWarnings: warningsOverride ?? (singletonSeriesWarnings[book.id] ?? []),
             isLiked: likedIDs.contains(book.id),
             hideFanworksTagPill: prefs.hideFanworksTagPill,
             correctCalibreAmpEntities: prefs.correctCalibreAmpEntities,
@@ -1690,16 +1737,18 @@ struct LibraryRootView: View {
         }
     }
 
-    private func enrichWarnings(_ warnings: [Int: SingletonSeriesWarning], books: [CalibreBook]) -> [Int: SingletonSeriesWarning] {
+    private func enrichWarnings(_ warnings: [Int: [SingletonSeriesWarning]], books: [CalibreBook]) -> [Int: [SingletonSeriesWarning]] {
         let titlesByID = Dictionary(uniqueKeysWithValues: books.map { ($0.id, $0.displayTitle) })
         return warnings.reduce(into: [:]) { result, pair in
-            let (id, warning) = pair
-            result[id] = SingletonSeriesWarning(
-                seriesKey: warning.seriesKey,
-                seriesName: warning.seriesName,
-                seriesIndex: warning.seriesIndex,
-                title: titlesByID[id] ?? warning.title
-            )
+            let (id, warningsForBook) = pair
+            result[id] = warningsForBook.map { warning in
+                SingletonSeriesWarning(
+                    seriesKey: warning.seriesKey,
+                    seriesName: warning.seriesName,
+                    seriesIndex: warning.seriesIndex,
+                    title: titlesByID[id] ?? warning.title
+                )
+            }
         }
     }
 

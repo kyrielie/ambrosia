@@ -1044,7 +1044,12 @@ actor AmbrosiaMetaDB {
         }
     }
 
-    func singletonNonLeadingSeriesEntries(for calibreIDs: [Int]) throws -> [Int: SingletonSeriesWarning] {
+    /// Returns every orphaned/non-leading singleton series membership per book, keyed by
+    /// calibreID. A book that is a solo, non-leading member of more than one series (e.g.
+    /// orphaned #3 of series B and orphaned #5 of series C) gets one entry per series here —
+    /// this is intentionally one-to-many. Do not reintroduce a "first match wins" guard;
+    /// that was the root cause of silently dropping all but one orphaned membership per book.
+    func singletonNonLeadingSeriesEntries(for calibreIDs: [Int]) throws -> [Int: [SingletonSeriesWarning]] {
         guard !calibreIDs.isEmpty else { return [:] }
         let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")
         let sql = """
@@ -1068,14 +1073,15 @@ actor AmbrosiaMetaDB {
           AND series_index > 1
         ORDER BY calibre_id, series_name
         """
-        var result: [Int: SingletonSeriesWarning] = [:]
+        var result: [Int: [SingletonSeriesWarning]] = [:]
         for row in try prepare(sql, calibreIDs.map { $0 as Binding? }) {
             guard let calibreID = row.int(at: 0),
-                  result[calibreID] == nil,
                   let seriesKey = row[safe: 1] as? String,
                   let seriesName = row[safe: 2] as? String,
                   let seriesIndex = row.int(at: 3) else { continue }
-            result[calibreID] = SingletonSeriesWarning(seriesKey: seriesKey, seriesName: seriesName, seriesIndex: seriesIndex, title: "")
+            result[calibreID, default: []].append(
+                SingletonSeriesWarning(seriesKey: seriesKey, seriesName: seriesName, seriesIndex: seriesIndex, title: "")
+            )
         }
         return result
     }
