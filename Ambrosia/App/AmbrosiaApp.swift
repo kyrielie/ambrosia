@@ -22,7 +22,9 @@ struct AmbrosiaApp: App {
             appDelegate.modelContainer = container
             appDelegate.session = session
         } catch {
+            #if DEBUG
             print("[Ambrosia] SwiftData store incompatible: \(error)")
+            #endif
             let alert = NSAlert()
             alert.messageText = "Could Not Open Reading State"
             alert.informativeText = "Ambrosia could not open its reading-state database. No files were deleted. The app will run with temporary reading state until this is resolved.\n\n\(error.localizedDescription)"
@@ -68,6 +70,12 @@ struct AmbrosiaApp: App {
             }
             
             CommandMenu("Reader") {
+                Button("Toggle Reading Mode") {
+                    NSApp.sendAction(#selector(ReaderViewController.toggleReadingMode(_:)),
+                                     to: nil, from: nil)
+                }
+                .keyboardShortcut("m", modifiers: [.command])
+
                 Button("Add Annotation") {
                     NSApp.sendAction(#selector(ReaderViewController.addAnnotation(_:)),
                                      to: nil, from: nil)

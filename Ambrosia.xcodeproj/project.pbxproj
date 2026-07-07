@@ -37,6 +37,7 @@
 		AA000000000000000000SPF3 /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000SPM3 /* SwiftSoup */; };
 		AA1000000000000000000001 /* AmbrosiaMetaDB.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000011 /* AmbrosiaMetaDB.swift */; };
 		AA1000000000000000000005 /* TagExpansionResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000015 /* TagExpansionResolver.swift */; };
+		AA1000000000000000000006 /* LibraryQueryHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000016 /* LibraryQueryHelpers.swift */; };
 		AA1000000000000000000002 /* LibraryIndexManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000012 /* LibraryIndexManager.swift */; };
 		AA1000000000000000000003 /* SystemCollectionID.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000013 /* SystemCollectionID.swift */; };
 		AA1000000000000000000004 /* CollectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000014 /* CollectionStore.swift */; };
@@ -79,6 +80,19 @@
 		P22000000000000000000005F /* SearchActivityLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = P22000000000000000000005 /* SearchActivityLog.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXBuildFile section (AmbrosiaTests) */
+		TE00000000000000000TFBLD /* AmbrosiaMetaDBMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TE00000000000000000TFREF /* AmbrosiaMetaDBMigrationTests.swift */; };
+		TE00000000000000000TSQLF /* SQLite in Frameworks */ = {isa = PBXBuildFile; productRef = TE00000000000000000TSQPR /* SQLite */; };
+/* End PBXBuildFile section (AmbrosiaTests) */
+
+/* Begin PBXBuildFile section (AmbrosiaTests, part 2) */
+		TE000000000000000000BCTF /* CalibreTestFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = TE000000000000000000CTFX /* CalibreTestFixture.swift */; };
+		TE000000000000000000BCLF /* CalibreLibraryFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TE000000000000000000CLFT /* CalibreLibraryFixtureTests.swift */; };
+		TE000000000000000000BLQH /* LibraryQueryHelpersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TE000000000000000000LQHT /* LibraryQueryHelpersTests.swift */; };
+		TE000000000000000000BSCH /* calibre_fixture_schema.sql in Resources */ = {isa = PBXBuildFile; fileRef = TE000000000000000000SCHM /* calibre_fixture_schema.sql */; };
+		TE000000000000000000BSDA /* calibre_fixture_data.sql in Resources */ = {isa = PBXBuildFile; fileRef = TE000000000000000000SDAT /* calibre_fixture_data.sql */; };
+/* End PBXBuildFile section (AmbrosiaTests, part 2) */
+
 /* Begin PBXFileReference section */
 		00D6889E038A44BD866CAB5E /* ReaderPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderPreferences.swift; sourceTree = "<group>"; };
 		13BFBFFEBCEC4BB58C45EF85 /* LibraryRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryRootView.swift; sourceTree = "<group>"; };
@@ -105,6 +119,7 @@
 		AA000000000000000000PROD1 /* Ambrosia.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ambrosia.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA1000000000000000000011 /* AmbrosiaMetaDB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbrosiaMetaDB.swift; sourceTree = "<group>"; };
 		AA1000000000000000000015 /* TagExpansionResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagExpansionResolver.swift; sourceTree = "<group>"; };
+		AA1000000000000000000016 /* LibraryQueryHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryQueryHelpers.swift; sourceTree = "<group>"; };
 		AA1000000000000000000012 /* LibraryIndexManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryIndexManager.swift; sourceTree = "<group>"; };
 		AA1000000000000000000013 /* SystemCollectionID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemCollectionID.swift; sourceTree = "<group>"; };
 		AA1000000000000000000014 /* CollectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionStore.swift; sourceTree = "<group>"; };
@@ -149,6 +164,29 @@
 		P22000000000000000000005 /* SearchActivityLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchActivityLog.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileReference section (AmbrosiaTests) */
+		TE00000000000000000TFREF /* AmbrosiaMetaDBMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbrosiaMetaDBMigrationTests.swift; sourceTree = "<group>"; };
+		TE00000000000000000TPROD /* AmbrosiaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AmbrosiaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section (AmbrosiaTests) */
+
+/* Begin PBXFileReference section (AmbrosiaTests, part 2) */
+		TE000000000000000000CTFX /* CalibreTestFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreTestFixture.swift; sourceTree = "<group>"; };
+		TE000000000000000000CLFT /* CalibreLibraryFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreLibraryFixtureTests.swift; sourceTree = "<group>"; };
+		TE000000000000000000LQHT /* LibraryQueryHelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryQueryHelpersTests.swift; sourceTree = "<group>"; };
+		TE000000000000000000SCHM /* calibre_fixture_schema.sql */ = {isa = PBXFileReference; lastKnownFileType = text; path = calibre_fixture_schema.sql; sourceTree = "<group>"; };
+		TE000000000000000000SDAT /* calibre_fixture_data.sql */ = {isa = PBXFileReference; lastKnownFileType = text; path = calibre_fixture_data.sql; sourceTree = "<group>"; };
+/* End PBXFileReference section (AmbrosiaTests, part 2) */
+
+/* Begin PBXContainerItemProxy section */
+		TE00000000000000000TPRXY /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA000000000000000000PROJ /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 52DE067F0773415CAB462294;
+			remoteInfo = Ambrosia;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFrameworksBuildPhase section */
 		AA000000000000000000FWBP /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
@@ -163,6 +201,17 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXFrameworksBuildPhase section (AmbrosiaTests) */
+		TE00000000000000000TFWKP /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				TE00000000000000000TSQLF /* SQLite in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section (AmbrosiaTests) */
 
 /* Begin PBXGroup section */
 		0FB79E6B7F772FC94DF372BD /* Preferences */ = {
@@ -197,6 +246,7 @@
 				A11C24217BD6471FA3E2C333 /* Resources */,
 				397D9A9DAE894F5E81144288 /* Products */,
 				6229786D2FEE318600F0D47A /* Networking */,
+				TE00000000000000000TGRUP /* AmbrosiaTests */,
 			);
 			path = Ambrosia;
 			sourceTree = "<group>";
@@ -216,6 +266,7 @@
 			isa = PBXGroup;
 			children = (
 				AA000000000000000000PROD1 /* Ambrosia.app */,
+				TE00000000000000000TPROD /* AmbrosiaTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -296,6 +347,7 @@
 				FB223344556677889900BBCC /* LibraryRegistry.swift */,
 				AA1000000000000000000011 /* AmbrosiaMetaDB.swift */,
 				AA1000000000000000000015 /* TagExpansionResolver.swift */,
+				AA1000000000000000000016 /* LibraryQueryHelpers.swift */,
 				AA1000000000000000000012 /* LibraryIndexManager.swift */,
 				AA1000000000000000000013 /* SystemCollectionID.swift */,
 				AA1000000000000000000014 /* CollectionStore.swift */,
@@ -335,6 +387,20 @@
 			path = Email;
 			sourceTree = "<group>";
 		};
+		TE00000000000000000TGRUP /* AmbrosiaTests */ = {
+			isa = PBXGroup;
+			children = (
+				TE00000000000000000TFREF /* AmbrosiaMetaDBMigrationTests.swift */,
+				TE000000000000000000CTFX /* CalibreTestFixture.swift */,
+				TE000000000000000000CLFT /* CalibreLibraryFixtureTests.swift */,
+				TE000000000000000000LQHT /* LibraryQueryHelpersTests.swift */,
+				TE000000000000000000SCHM /* calibre_fixture_schema.sql */,
+				TE000000000000000000SDAT /* calibre_fixture_data.sql */,
+			);
+			path = "../AmbrosiaTests";
+			name = AmbrosiaTests;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -364,6 +430,38 @@
 		};
 /* End PBXNativeTarget section */
 
+/* Begin PBXNativeTarget section (AmbrosiaTests) */
+		TE00000000000000000TTRGT /* AmbrosiaTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = TE00000000000000000TCFLG /* Build configuration list for PBXNativeTarget "AmbrosiaTests" */;
+			buildPhases = (
+				TE00000000000000000TSRCP /* Sources */,
+				TE00000000000000000TFWKP /* Frameworks */,
+				TE00000000000000000TRSCP /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				TE00000000000000000TDEPN /* PBXTargetDependency */,
+			);
+			name = AmbrosiaTests;
+			packageProductDependencies = (
+				TE00000000000000000TSQPR /* SQLite */,
+			);
+			productName = AmbrosiaTests;
+			productReference = TE00000000000000000TPROD /* AmbrosiaTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section (AmbrosiaTests) */
+
+/* Begin PBXTargetDependency section */
+		TE00000000000000000TDEPN /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 52DE067F0773415CAB462294 /* Ambrosia */;
+			targetProxy = TE00000000000000000TPRXY /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin PBXProject section */
 		AA000000000000000000PROJ /* Project object */ = {
 			isa = PBXProject;
@@ -374,6 +472,10 @@
 				TargetAttributes = {
 					52DE067F0773415CAB462294 = {
 						CreatedOnToolsVersion = 15.0;
+					};
+					TE00000000000000000TTRGT = {
+						CreatedOnToolsVersion = 15.0;
+						TestTargetID = 52DE067F0773415CAB462294;
 					};
 				};
 			};
@@ -397,6 +499,7 @@
 			projectRoot = "";
 			targets = (
 				52DE067F0773415CAB462294 /* Ambrosia */,
+				TE00000000000000000TTRGT /* AmbrosiaTests */,
 			);
 		};
 /* End PBXProject section */
@@ -412,6 +515,18 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXResourcesBuildPhase section (AmbrosiaTests) */
+		TE00000000000000000TRSCP /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				TE000000000000000000BSCH /* calibre_fixture_schema.sql in Resources */,
+				TE000000000000000000BSDA /* calibre_fixture_data.sql in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section (AmbrosiaTests) */
 
 /* Begin PBXSourcesBuildPhase section */
 		AA000000000000000000SRCS /* Sources */ = {
@@ -446,6 +561,7 @@
 				FB223344556677889900BBCCF /* LibraryRegistry.swift in Sources */,
 				AA1000000000000000000001 /* AmbrosiaMetaDB.swift in Sources */,
 				AA1000000000000000000005 /* TagExpansionResolver.swift in Sources */,
+			AA1000000000000000000006 /* LibraryQueryHelpers.swift in Sources */,
 				AA1000000000000000000002 /* LibraryIndexManager.swift in Sources */,
 				AA1000000000000000000003 /* SystemCollectionID.swift in Sources */,
 				AA1000000000000000000004 /* CollectionStore.swift in Sources */,
@@ -485,6 +601,20 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section (AmbrosiaTests) */
+		TE00000000000000000TSRCP /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				TE00000000000000000TFBLD /* AmbrosiaMetaDBMigrationTests.swift in Sources */,
+				TE000000000000000000BCTF /* CalibreTestFixture.swift in Sources */,
+				TE000000000000000000BCLF /* CalibreLibraryFixtureTests.swift in Sources */,
+				TE000000000000000000BLQH /* LibraryQueryHelpersTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section (AmbrosiaTests) */
 
 /* Begin XCBuildConfiguration section */
 		AA000000000000000000DBG1 /* Debug */ = {
@@ -681,6 +811,39 @@
 		};
 /* End XCBuildConfiguration section */
 
+/* Begin XCBuildConfiguration section (AmbrosiaTests) */
+		TE00000000000000000TCDBG /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ambrosia.reader.AmbrosiaTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ambrosia.app/Contents/MacOS/Ambrosia";
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		TE00000000000000000TCREL /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ambrosia.reader.AmbrosiaTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ambrosia.app/Contents/MacOS/Ambrosia";
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section (AmbrosiaTests) */
+
 /* Begin XCConfigurationList section */
 		AA000000000000000000CFLG /* Build configuration list for PBXNativeTarget "Ambrosia" */ = {
 			isa = XCConfigurationList;
@@ -701,6 +864,18 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCConfigurationList section (AmbrosiaTests) */
+		TE00000000000000000TCFLG /* Build configuration list for PBXNativeTarget "AmbrosiaTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				TE00000000000000000TCDBG /* Debug */,
+				TE00000000000000000TCREL /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section (AmbrosiaTests) */
 
 /* Begin XCRemoteSwiftPackageReference section */
 		622978602FEE18E900F0D47A /* XCRemoteSwiftPackageReference "FlyingFox" */ = {
@@ -764,6 +939,14 @@
 			productName = SwiftSoup;
 		};
 /* End XCSwiftPackageProductDependency section */
+
+/* Begin XCSwiftPackageProductDependency section (AmbrosiaTests) */
+		TE00000000000000000TSQPR /* SQLite */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA000000000000000000PKG1 /* XCRemoteSwiftPackageReference "SQLite.swift" */;
+			productName = SQLite;
+		};
+/* End XCSwiftPackageProductDependency section (AmbrosiaTests) */
 	};
 	rootObject = AA000000000000000000PROJ /* Project object */;
 }

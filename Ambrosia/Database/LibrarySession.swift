@@ -152,10 +152,14 @@ final class LibrarySession {
             if let server = feedServer, let cs = collectionStore {
                 Task { await server.updateLibrary(newLibrary, metaDB: newMetaDB, collectionStore: cs) }
             }
+            #if DEBUG
             print("[LibrarySession] Opened \(url.lastPathComponent) — \(totalCount) books")
+            #endif
         } catch {
             lastError = "Could not open library: \(error.localizedDescription)"
+            #if DEBUG
             print("[LibrarySession] Open failed: \(error)")
+            #endif
         }
     }
 
@@ -240,13 +244,17 @@ final class LibrarySession {
             return cachedIDs
         }
         guard let fts = ftsLibrary else {
+            #if DEBUG
             print("[LibrarySession] fulltext search unavailable for phrase=\"\(trimmed)\"")
+            #endif
             return []
         }
         let limit = max(await library?.bookCount() ?? 0, 1)
         let ids = await fts.search(query: trimmed, limit: limit) ?? []
         if ids.isEmpty {
+            #if DEBUG
             print("[LibrarySession] fulltext search returned no matches for phrase=\"\(trimmed)\"")
+            #endif
         }
         rememberResolvedFulltext(ids: ids, key: key)
         return ids
@@ -273,7 +281,9 @@ final class LibrarySession {
             )
         }
         guard let fts = ftsLibrary else {
+            #if DEBUG
             print("[LibrarySession] fulltext search unavailable for phrase=\"\(phrase)\"")
+            #endif
             return SearchQuery(
                 tagTerms: query.tagTerms,
                 authorTerms: query.authorTerms,
@@ -286,7 +296,9 @@ final class LibrarySession {
             )
         }
         guard let ftsIDs = await fts.search(query: phrase), !ftsIDs.isEmpty else {
+            #if DEBUG
             print("[LibrarySession] fulltext search returned no matches for phrase=\"\(phrase)\"")
+            #endif
             rememberResolvedFulltext(ids: [], key: cacheKey)
             return SearchQuery(
                 tagTerms: query.tagTerms,
@@ -357,7 +369,7 @@ final class LibrarySession {
     func startFeedServer(port: UInt16 = 8765) {
         guard let library, let metaDB, let collectionStore else { return }
         if feedServer == nil { feedServer = LocalFeedServer() }
-        let server = feedServer!
+        guard let server = feedServer else { return }
         Task {
             await server.start(
                 library: library,
@@ -386,7 +398,9 @@ final class LibrarySession {
               !path.isEmpty else { return }
         let url = URL(fileURLWithPath: path)
         guard LibraryRegistry.shared.isValid(path) else {
+            #if DEBUG
             print("[LibrarySession] Saved path no longer valid: \(path)")
+            #endif
             return
         }
         await open(url: url)
@@ -404,7 +418,9 @@ final class LibrarySession {
                     self.startAO3Extraction(forceAll: true, seriesSyncGeneration: gen)
                 }
             } catch {
+                #if DEBUG
                 print("[LibrarySession] AO3 metadata reset failed: \(error)")
+                #endif
             }
         }
     }
@@ -505,7 +521,9 @@ final class LibrarySession {
                     attemptedAt: ISO8601DateFormatter().string(from: Date())
                 )
                 pendingFailure.append(diagnostic)
+                #if DEBUG
                 print("[LibrarySession] AO3 extraction skipped calibreID=\(id): \(failureReason ?? "unknown reason")")
+                #endif
             }
             DispatchQueue.main.async { [weak self] in
                 self?.extractionProgress.completed += 1
@@ -534,9 +552,13 @@ final class LibrarySession {
                 try await metaDB.importConfiguredAO3TagSeedsIfNeeded()
                 guard AO3TagSeedDatabaseConfig.shared.isEnabled else { return }
                 let counts = try await metaDB.ao3TagSeedCounts()
+                #if DEBUG
                 print("[LibrarySession] AO3 tag seeds ready: \(counts.canonicalTags) canonical tags, \(counts.synonyms) synonyms, \(counts.hierarchyEdges) hierarchy edges")
+                #endif
             } catch {
+                #if DEBUG
                 print("[LibrarySession] AO3 tag seed import failed: \(error)")
+                #endif
             }
         }
     }
@@ -555,7 +577,9 @@ final class LibrarySession {
             do {
                 try await metaDB.insertCalibreSeriesFallback(entries)
             } catch {
+                #if DEBUG
                 print("[LibrarySession] Calibre series cache seed failed: \(error)")
+                #endif
             }
             await self?.completeCoordinatedSeriesSync(generation: generation)
         }
@@ -591,7 +615,9 @@ final class LibrarySession {
                 NotificationCenter.default.post(name: .seriesOrMergedCollectionDidChange, object: nil)
             }
         } catch {
+            #if DEBUG
             print("[LibrarySession] Series or Merged sync failed: \(error)")
+            #endif
         }
     }
 }

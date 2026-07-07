@@ -82,10 +82,6 @@ struct FlowLayout: Layout {
     }
 }
 
-func isAnthology(_ book: CalibreBook) -> Bool {
-    book.isDescriptionAnthology
-}
-
 func missingIndices(in indices: [Int]) -> [Int] {
     let unique = Array(Set(indices)).sorted()
     guard let last = unique.last, last > 1 else { return [] }

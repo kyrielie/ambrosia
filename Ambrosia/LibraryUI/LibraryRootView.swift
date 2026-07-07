@@ -43,6 +43,11 @@ struct LibraryRootView: View {
 
     @State private var books: [CalibreBook] = []
     @State private var items: [LibraryItem] = []
+    // Finding 12: set true if any of rebuildItems' eight AmbrosiaMetaDB calls throws
+    // (locked file, disk read error, corrupt row). Without this, a failure and an
+    // honestly-empty result (e.g. "this book has no series") are indistinguishable
+    // to the user. Reset at the start of each rebuildItems() run.
+    @State private var rebuildDegraded: Bool = false
     @State private var hasNextPage  = false
     @State private var currentPage  = 0
     /// Raw SQL row offset for the current page. When grouping is on, `visibleBooks`
@@ -399,6 +404,9 @@ struct LibraryRootView: View {
     private var rootContent: some View {
         VStack(spacing: 0) {
             Divider()
+            if rebuildDegraded {
+                degradedDataBanner
+            }
             if toolbarState.hasActiveFilter || activeFullTextPhrase != nil {
                 activeFilterChip(count: toolbarState.activeFilterResult?.totalCount)
             }
@@ -421,6 +429,23 @@ struct LibraryRootView: View {
             Divider()
             footer
         }
+    }
+
+    // Finding 12: shown when any of rebuildItems' AmbrosiaMetaDB calls failed this
+    // pass, so series grouping / tag diagnostics / singleton warnings may be
+    // showing an empty-but-not-actually-empty result. Tapping retries the pass.
+    private var degradedDataBanner: some View {
+        Button {
+            rebuildItems()
+        } label: {
+            Label("Some library data couldn't load — tap to retry", systemImage: "exclamationmark.triangle")
+                .font(.callout)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+        }
+        .buttonStyle(.plain)
+        .background(Color.yellow.opacity(0.15))
     }
 
     // MARK: - Data loading
@@ -696,6 +721,7 @@ struct LibraryRootView: View {
                 "reason": shouldGroupSeriesRows ? "noMetaDB" : "groupingOff"
             ])
             items = books.map { .book($0) }
+            rebuildDegraded = false
             return
         }
         // §grouping-flash fix: do NOT pre-assign items = books.map(.book) here. That
@@ -721,25 +747,50 @@ struct LibraryRootView: View {
         // overwrite `items` with out-of-date results.
         rebuildTask?.cancel()
         rebuildTask = Task {
+            var degraded = false
             let pageIDs = pageBooks.map(\.id)
             let pageMetadata: [Int: AO3MetadataRecord]
             let pageDiagnostics: [Int: AO3ExtractionDiagnostic]
             let entries: [SeriesCacheEntry]
             guard !Task.isCancelled else { return }
             do { pageMetadata   = try await metaDB.ao3Metadata(for: pageIDs) }
-            catch { pageMetadata = [:]; print("[LibraryRootView] rebuildItems: ao3Metadata(page) failed: \(error)") }
+            catch {
+                pageMetadata = [:]
+                #if DEBUG
+                degraded = true
+                print("[LibraryRootView] rebuildItems: ao3Metadata(page) failed: \(error)")
+                #endif
+            }
             guard !Task.isCancelled else { return }
             do { pageDiagnostics = try await metaDB.ao3ExtractionDiagnostics(for: pageIDs) }
-            catch { pageDiagnostics = [:]; print("[LibraryRootView] rebuildItems: ao3ExtractionDiagnostics(page) failed: \(error)") }
+            catch {
+                pageDiagnostics = [:]
+                #if DEBUG
+                degraded = true
+                print("[LibraryRootView] rebuildItems: ao3ExtractionDiagnostics(page) failed: \(error)")
+                #endif
+            }
             guard !Task.isCancelled else { return }
             do { entries = try await metaDB.seriesEntries(for: pageIDs) }
-            catch { entries = []; print("[LibraryRootView] rebuildItems: seriesEntries(page) failed: \(error)") }
+            catch {
+                entries = []
+                #if DEBUG
+                degraded = true
+                print("[LibraryRootView] rebuildItems: seriesEntries(page) failed: \(error)")
+                #endif
+            }
             let groupedEntries = Dictionary(grouping: entries.filter { !$0.isAnthology }, by: \.seriesKey)
             let seriesKeys = groupedEntries.keys.sorted()
             let allEntries: [SeriesCacheEntry]
             guard !Task.isCancelled else { return }
             do { allEntries = try await metaDB.seriesEntries(keys: seriesKeys) }
-            catch { allEntries = []; print("[LibraryRootView] rebuildItems: seriesEntries(keys) failed: \(error)") }
+            catch {
+                allEntries = []
+                #if DEBUG
+                degraded = true
+                print("[LibraryRootView] rebuildItems: seriesEntries(keys) failed: \(error)")
+                #endif
+            }
             let allIDs = Array(Set(allEntries.map(\.calibreID)))
             guard !Task.isCancelled else { return }
             // CalibreLibrary is actor-isolated now: this await serializes automatically
@@ -754,16 +805,40 @@ struct LibraryRootView: View {
             let placeholders: [String: [SeriesPlaceholder]]
             guard !Task.isCancelled else { return }
             do { seriesMetadata   = try await metaDB.ao3Metadata(for: allIDs) }
-            catch { seriesMetadata = [:]; print("[LibraryRootView] rebuildItems: ao3Metadata(series) failed: \(error)") }
+            catch {
+                seriesMetadata = [:]
+                #if DEBUG
+                degraded = true
+                print("[LibraryRootView] rebuildItems: ao3Metadata(series) failed: \(error)")
+                #endif
+            }
             guard !Task.isCancelled else { return }
             do { seriesDiagnostics = try await metaDB.ao3ExtractionDiagnostics(for: allIDs) }
-            catch { seriesDiagnostics = [:]; print("[LibraryRootView] rebuildItems: ao3ExtractionDiagnostics(series) failed: \(error)") }
+            catch {
+                seriesDiagnostics = [:]
+                #if DEBUG
+                degraded = true
+                print("[LibraryRootView] rebuildItems: ao3ExtractionDiagnostics(series) failed: \(error)")
+                #endif
+            }
             guard !Task.isCancelled else { return }
             do { singletonWarnings = try await metaDB.singletonNonLeadingSeriesEntries(for: pageIDs) }
-            catch { singletonWarnings = [:]; print("[LibraryRootView] rebuildItems: singletonNonLeadingSeriesEntries failed: \(error)") }
+            catch {
+                singletonWarnings = [:]
+                #if DEBUG
+                degraded = true
+                print("[LibraryRootView] rebuildItems: singletonNonLeadingSeriesEntries failed: \(error)")
+                #endif
+            }
             guard !Task.isCancelled else { return }
             do { placeholders = try await metaDB.placeholders(for: seriesKeys) }
-            catch { placeholders = [:]; print("[LibraryRootView] rebuildItems: placeholders failed: \(error)") }
+            catch {
+                placeholders = [:]
+                #if DEBUG
+                degraded = true
+                print("[LibraryRootView] rebuildItems: placeholders failed: \(error)")
+                #endif
+            }
             let warnings = enrichWarnings(singletonWarnings, books: pageBooks)
             let byID = Dictionary(uniqueKeysWithValues: allBooks.map { ($0.id, $0) })
             let entriesBySeries = Dictionary(grouping: allEntries.filter { !$0.isAnthology }, by: \.seriesKey)
@@ -774,7 +849,7 @@ struct LibraryRootView: View {
                 let sortedEntries = sortedSeriesEntries(entries)
                 let works = sortedEntries.compactMap { byID[$0.calibreID] }
                 guard works.count > 1 else { continue }
-                guard works.allSatisfy({ !isAnthology($0) }) else { continue }
+                guard works.allSatisfy({ !$0.isDescriptionAnthology }) else { continue }
                 collapsedIDs.formUnion(works.map(\.id))
                 let metadata = works.compactMap { seriesMetadata[$0.id] }
                 let metadataByID = seriesMetadata
@@ -849,6 +924,7 @@ struct LibraryRootView: View {
                 ao3Metadata = pageMetadata
                 ao3ExtractionDiagnostics = pageDiagnostics
                 singletonSeriesWarnings = warnings
+                rebuildDegraded = degraded
                 LibraryFilterDebug.log("rebuildItems.end", [
                     "surface": "list",
                     "pageBooks": pageBooks.count,
@@ -887,22 +963,19 @@ struct LibraryRootView: View {
     }
 
     private func visibleIDs(_ ids: [Int]) -> [Int] {
-        // Only suppress seriesOrMergedIDs members when series grouping is active and a
-        // SeriesGroup row is being shown to represent them. Without grouping, this filter
-        // silently drops books that are rn>1 in one series but rn=1 in another — the
-        // multi-series-membership case (e.g. "Star Wars Drabbles" + "100 Star Wars Women
-        // Drabbles") causes all works in a series to vanish from a bare series: search.
-        ids.filter { id in
-            (prefs.showSkippedCollection || !skippedIDs.contains(id)) &&
-            (!shouldGroupSeriesRows || !seriesOrMergedIDs.contains(id)) &&
-            (!prefs.hideNonAO3PublisherBooks || ao3PublisherIDs.contains(id))
-        }
+        LibraryQueryHelpers.visibleIDs(
+            ids,
+            showSkippedCollection: prefs.showSkippedCollection,
+            shouldGroupSeriesRows: shouldGroupSeriesRows,
+            skippedIDs: skippedIDs,
+            seriesOrMergedIDs: seriesOrMergedIDs,
+            hideNonAO3PublisherBooks: prefs.hideNonAO3PublisherBooks,
+            ao3PublisherIDs: ao3PublisherIDs
+        )
     }
 
     private func intersect(_ ids: [Int], with optionalIDs: [Int]?) -> [Int] {
-        guard let other = optionalIDs else { return ids }
-        let allowed = Set(other)
-        return ids.filter { allowed.contains($0) }
+        LibraryQueryHelpers.intersect(ids, with: optionalIDs)
     }
 
     private func visibleBooks(_ raw: [CalibreBook]) -> [CalibreBook] {
@@ -911,7 +984,7 @@ struct LibraryRootView: View {
             let strippedBySkipped = raw.filter { !prefs.showSkippedCollection && skippedIDs.contains($0.id) }.count
             let strippedBySeriesOrMerged = raw.filter { seriesOrMergedIDs.contains($0.id) }.count
             let strippedByPublisher = raw.filter { prefs.hideNonAO3PublisherBooks && !$0.isAO3PublisherBook }.count
-            let strippedByAnthology = raw.filter { isAnthology($0) }.count
+            let strippedByAnthology = raw.filter { $0.isDescriptionAnthology }.count
             LibraryFilterDebug.log("visibleBooks.breakdown", [
                 "surface": "list",
                 "raw": raw.count,
@@ -924,12 +997,14 @@ struct LibraryRootView: View {
             ])
         }
         #endif
-        return raw.filter { book in
-            (prefs.showSkippedCollection || !skippedIDs.contains(book.id)) &&
-            (!shouldGroupSeriesRows || !seriesOrMergedIDs.contains(book.id)) &&
-            (!prefs.hideNonAO3PublisherBooks || book.isAO3PublisherBook) &&
-            !isAnthology(book)
-        }
+        return LibraryQueryHelpers.visibleBooks(
+            raw,
+            showSkippedCollection: prefs.showSkippedCollection,
+            shouldGroupSeriesRows: shouldGroupSeriesRows,
+            skippedIDs: skippedIDs,
+            seriesOrMergedIDs: seriesOrMergedIDs,
+            hideNonAO3PublisherBooks: prefs.hideNonAO3PublisherBooks
+        )
     }
 
     @MainActor
@@ -1257,19 +1332,7 @@ struct LibraryRootView: View {
     /// Add or replace a filter rule. All quick taps (tag, author, rating, etc.)
     /// go through this path — no separate LibraryFilter system.
     private func addOrReplaceRule(_ rule: FilterRule) {
-        if toolbarState.filterExpression.groups.isEmpty {
-            toolbarState.filterExpression.groups = [FilterGroup()]
-        }
-        let allRules = toolbarState.filterExpression.groups.flatMap(\.rules)
-        let isDuplicate = allRules.contains {
-            $0.field == rule.field && $0.value == rule.value && $0.op == rule.op
-        }
-        guard !isDuplicate else { return }
-        // For single-value fields (author, series) replace instead of stacking
-        if rule.field == .authorName || rule.field == .series {
-            toolbarState.filterExpression.groups[0].rules.removeAll { $0.field == rule.field }
-        }
-        toolbarState.filterExpression.groups[0].rules.append(rule)
+        LibraryQueryHelpers.addOrReplaceRule(rule, in: &toolbarState.filterExpression)
         applyFilterRules()
     }
 
@@ -1336,19 +1399,7 @@ struct LibraryRootView: View {
     }
 
     private func queryWithCachedFullText(_ query: SearchQuery) -> SearchQuery {
-        guard let phrase = query.fulltextPhrase?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !phrase.isEmpty else { return query }
-        guard let ids = session.cachedFulltextIDs(for: phrase) else { return query }
-        return SearchQuery(
-            tagTerms: query.tagTerms,
-            authorTerms: query.authorTerms,
-            titleTerms: query.titleTerms,
-            seriesTerms: query.seriesTerms,
-            statusTerms: query.statusTerms,
-            fulltextPhrase: query.fulltextPhrase,
-            plainTerms: [],
-            ftsMatchedIDs: ids
-        )
+        LibraryQueryHelpers.queryWithCachedFullText(query, session: session)
     }
 
     /// Resolves synonym expansions for `terms` via `AmbrosiaMetaDB` (Invariant 10)
@@ -1728,15 +1779,7 @@ struct LibraryRootView: View {
     }
 
     private func stateForMutation(_ calibreID: Int) -> BookState {
-        var desc = FetchDescriptor<BookState>(
-            predicate: #Predicate { $0.calibreID == calibreID }
-        )
-        desc.fetchLimit = 1
-        let state = (try? modelContext.fetch(desc).first) ?? BookState(calibreID: calibreID)
-        if state.modelContext == nil {
-            modelContext.insert(state)
-        }
-        return state
+        LibraryQueryHelpers.stateForMutation(calibreID, in: modelContext)
     }
 
     private var footer: some View {

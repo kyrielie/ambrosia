@@ -7,9 +7,9 @@ import SQLite
 enum LibraryFilterDebug {
     static func now() -> CFAbsoluteTime { CFAbsoluteTimeGetCurrent() }
 
-    static func log(_ event: String, _ fields: [String: CustomStringConvertible?] = [:]) {
+    static func log(_ event: String, _ fields: @autoclosure () -> [String: CustomStringConvertible?] = [:]) {
         #if DEBUG
-        let detail = fields
+        let detail = fields()
             .compactMap { key, value -> String? in
                 guard let value else { return nil }
                 return "\(key)=\(value)"
@@ -571,7 +571,9 @@ extension CalibreLibrary {
             return count
         } catch {
             let message = "bookCount(query:filter:) error: \(error)"
+            #if DEBUG
             print("[CalibreLibrary] \(message)")
+            #endif
             recordSearchError(message)
             return 0
         }
