@@ -209,6 +209,13 @@ final class EmailLibraryViewController: NSViewController {
                 self?.refreshCollections()
             }
             .store(in: &preferenceCancellables)
+        ReaderPreferences.shared.$hideAnthologyBooks
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.refreshCollections()
+            }
+            .store(in: &preferenceCancellables)
         ReaderPreferences.shared.$emailPillsShowCollections
             .dropFirst()
             .receive(on: DispatchQueue.main)
@@ -910,7 +917,7 @@ final class EmailLibraryViewController: NSViewController {
         // computes its own page).
         var groupAwareVisible: [CalibreBook]? = nil
         if toolbarState.sortField == .random {
-            let restrictIDs: [Int]?
+            var restrictIDs: [Int]?
             let filterForSQL: FilterExpression?
             var isEmptyExplicitIDs = false
             if let result = toolbarState.activeFilterResult, result.isSQLBacked {
@@ -926,6 +933,13 @@ final class EmailLibraryViewController: NSViewController {
             } else {
                 restrictIDs = nil
                 filterForSQL = nil
+            }
+            // §AO3-only-random fix: same as the List surface — restrictIDs stayed
+            // nil (and thus skipped visibleIDs' hideNonAO3PublisherBooks check)
+            // whenever an SQL-backed filter or no filter at all was active. Fold
+            // it in directly; fetchAllMatchingIDs ANDs restrictIDs with filter.
+            if !isEmptyExplicitIDs && ReaderPreferences.shared.hideNonAO3PublisherBooks {
+                restrictIDs = intersect(restrictIDs ?? Array(ao3PublisherIDs), with: Array(ao3PublisherIDs))
             }
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "email", "mode": "random", "page": currentPage
@@ -975,6 +989,10 @@ final class EmailLibraryViewController: NSViewController {
                 restrictIDs = nil
                 filterForSQL = nil
             }
+            // §AO3-only-random fix: same as .random above.
+            let effectiveRestrictIDs: [Int]? = (!isEmptyExplicitIDs && ReaderPreferences.shared.hideNonAO3PublisherBooks)
+                ? intersect(restrictIDs ?? Array(ao3PublisherIDs), with: Array(ao3PublisherIDs))
+                : restrictIDs
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "email", "mode": "wordCountSorted", "page": currentPage,
                 "query": LibraryFilterDebug.summary(query: query)
@@ -985,7 +1003,7 @@ final class EmailLibraryViewController: NSViewController {
             } else {
                 let (page, hasMore) = await library.wordCountSortedPage(
                     offset: currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
-                    query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                    query: query, filter: filterForSQL, restrictIDs: effectiveRestrictIDs,
                     filterTagExpansions: cachedFilterTagExpansions
                 )
                 wordCountPage = page
@@ -1229,6 +1247,7 @@ final class EmailLibraryViewController: NSViewController {
             let allEntries: [SeriesCacheEntry]
             let metadata: [Int: AO3MetadataRecord]
             let placeholders: [String: [SeriesPlaceholder]]
+            let singletonWarnings: [Int: [SingletonSeriesWarning]]
             var degraded = false
             guard !Task.isCancelled else { return }
             do { entries = try await metaDB.seriesEntries(for: pageIDs) }
@@ -1274,6 +1293,15 @@ final class EmailLibraryViewController: NSViewController {
                 placeholders = [:]
                 #if DEBUG
                 print("[EmailLibraryViewController] rebuildSidebarItems: placeholders failed: \(error)")
+                #endif
+                degraded = true
+            }
+            guard !Task.isCancelled else { return }
+            do { singletonWarnings = try await metaDB.singletonNonLeadingSeriesEntries(for: pageIDs) }
+            catch {
+                singletonWarnings = [:]
+                #if DEBUG
+                print("[EmailLibraryViewController] rebuildSidebarItems: singletonNonLeadingSeriesEntries failed: \(error)")
                 #endif
                 degraded = true
             }
@@ -1331,7 +1359,8 @@ final class EmailLibraryViewController: NSViewController {
                 pageBooks: pageBooks,
                 entries: entries,
                 seriesByKey: groups,
-                collapsedIDs: collapsedIDs
+                collapsedIDs: collapsedIDs,
+                singletonWarningsByCalibreID: singletonWarnings
             )
             await MainActor.run {
                 guard self.books.map(\.id) == pageBooks.map(\.id) else {
@@ -1409,7 +1438,8 @@ final class EmailLibraryViewController: NSViewController {
             shouldGroupSeriesRows: shouldGroupSidebarRows,
             skippedIDs: skippedIDs,
             seriesOrMergedIDs: seriesOrMergedIDs,
-            hideNonAO3PublisherBooks: ReaderPreferences.shared.hideNonAO3PublisherBooks
+            hideNonAO3PublisherBooks: ReaderPreferences.shared.hideNonAO3PublisherBooks,
+            hideAnthologyBooks: ReaderPreferences.shared.hideAnthologyBooks
         )
     }
 
@@ -1870,11 +1900,19 @@ struct FilterSheetCarrier: View {
                             let ao3Map = Dictionary(uniqueKeysWithValues: rows.compactMap { row in
                                 row.ao3.map { (row.book.id, $0) }
                             })
+                            var seriesEntriesByBook: [Int: [SeriesCacheEntry]] = [:]
+                            if capturedToolbarState?.groupBySeries == true, let metaDB = session.metaDB {
+                                let ids = rows.map(\.book.id)
+                                if let entries = try? await metaDB.seriesEntries(for: ids) {
+                                    seriesEntriesByBook = Dictionary(grouping: entries.filter { !$0.isAnthology }, by: \.calibreID)
+                                }
+                            }
                             ExportManager.presentEPUBExportPanel(
                                 books: rows.map(\.book),
                                 libraryRoot: libraryRoot,
                                 ao3Map: ao3Map,
-                                groupBySeries: capturedToolbarState?.groupBySeries ?? false
+                                groupBySeries: capturedToolbarState?.groupBySeries ?? false,
+                                seriesEntries: seriesEntriesByBook
                             )
                         }
                     }

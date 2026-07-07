@@ -442,6 +442,7 @@ private extension LibraryItem {
         switch self {
         case .book(let book): return [book]
         case .series(let series): return series.works
+        case .orphanedSeriesEntry(let book, _): return [book]
         }
     }
 
@@ -449,6 +450,7 @@ private extension LibraryItem {
         switch self {
         case .book(let book): return .singleBook(book)
         case .series(let series): return .series(series)
+        case .orphanedSeriesEntry(let book, _): return .singleBook(book)
         }
     }
 }
@@ -613,6 +615,10 @@ final class EmailBookCellView: NSTableCellView {
             titleLabel.stringValue = series.seriesName
             authorLabel.attributedStringValue = Self.seriesLine(for: series)
             showCollectionPills ? configureCollectionPills(collectionPills) : configureSeriesPills(series)
+        case .orphanedSeriesEntry(let book, let warning):
+            titleLabel.stringValue = "\(book.displayTitle) (\(warning.seriesName) #\(warning.seriesIndex))"
+            authorLabel.attributedStringValue = Self.authorLine(for: book, ao3Metadata: ao3Metadata)
+            showCollectionPills ? configureCollectionPills(collectionPills) : configureMetadataPills(ao3Metadata)
         }
 
         if readPercent > 0.01 {

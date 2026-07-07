@@ -258,14 +258,17 @@ struct ExportManager {
     // MARK: - §3: EPUB folder export (async, with progress)
 
     /// Copy EPUBs to `destination` and call `progress` after each file.
-    /// Returns (copied, skippedTitles) when done.
+    /// Returns (copied, skippedTitles) when done. `copied` counts distinct books
+    /// successfully copied at least once, not the total number of file-copy
+    /// operations — a multi-series book copied into three series folders still
+    /// counts as one toward `copied`.
     static func exportEPUBs(
         books: [CalibreBook],
         libraryRoot: URL,
         destination: URL,
         ao3Map: [Int: AO3MetadataRecord],
         groupBySeries: Bool,
-        seriesEntries: [Int: SeriesCacheEntry] = [:],
+        seriesEntries: [Int: [SeriesCacheEntry]] = [:],
         filenameIDSource: ExportFilenameIDSource = .ao3ThenCalibre,
         progress: @Sendable @escaping (Int) -> Void
     ) async -> (copied: Int, skipped: [String]) {
@@ -277,20 +280,38 @@ struct ExportManager {
                 guard let source = book.epubURL(libraryRoot: libraryRoot) else {
                     skipped.append(book.displayTitle); progress(copied + skipped.count); continue
                 }
-                let targetFolder: URL
-                if groupBySeries, let entry = seriesEntries[book.id] {
-                    let folderName = CalibreBook.sanitizedForFilename(entry.seriesName)
-                    targetFolder = destination.appendingPathComponent(folderName)
+                let targetFolders: [URL]
+                if groupBySeries, let entries = seriesEntries[book.id], !entries.isEmpty {
+                    // A book that's a member of more than one series (e.g. #1 of A and
+                    // #3 of B) gets copied into every one of its series' folders, not
+                    // just the first. Dedup folder names in case two entries somehow
+                    // resolve to the same series name.
+                    var seenFolderNames = Set<String>()
+                    targetFolders = entries.compactMap { entry -> URL? in
+                        let folderName = CalibreBook.sanitizedForFilename(entry.seriesName)
+                        guard seenFolderNames.insert(folderName).inserted else { return nil }
+                        return destination.appendingPathComponent(folderName)
+                    }
                 } else {
-                    targetFolder = destination
+                    targetFolders = [destination]
                 }
-                try? FileManager.default.createDirectory(at: targetFolder, withIntermediateDirectories: true)
+
                 let filename = book.exportFilename(ao3: ao3Map[book.id], idSource: filenameIDSource)
-                let dest = uniqueDestination(for: filename, in: targetFolder)
-                do {
-                    try FileManager.default.copyItem(at: source, to: dest)
+                var copiedThisBook = false
+                for targetFolder in targetFolders {
+                    try? FileManager.default.createDirectory(at: targetFolder, withIntermediateDirectories: true)
+                    let dest = uniqueDestination(for: filename, in: targetFolder)
+                    do {
+                        try FileManager.default.copyItem(at: source, to: dest)
+                        copiedThisBook = true
+                    } catch {
+                        // Continue attempting the remaining folders for this book even
+                        // if one copy fails; only count as skipped if none succeeded.
+                    }
+                }
+                if copiedThisBook {
                     copied += 1
-                } catch {
+                } else {
                     skipped.append(book.displayTitle)
                 }
                 progress(copied + skipped.count)
@@ -306,12 +327,15 @@ struct ExportManager {
 
     /// Present a folder picker and copy all matching EPUBs into the chosen directory.
     /// Files are renamed using exportFilename() (§3). Collisions are resolved with -2, -3, …
+    /// Delegates to `exportEPUBs` for the actual copy logic so the series-duplication
+    /// behavior (a multi-series book copied into every one of its series' folders)
+    /// only needs to be implemented and tested in one place.
     @MainActor
     static func presentEPUBExportPanel(books: [CalibreBook],
                                         libraryRoot: URL,
                                         ao3Map: [Int: AO3MetadataRecord],
                                         groupBySeries: Bool = false,
-                                        seriesEntries: [Int: SeriesCacheEntry] = [:],
+                                        seriesEntries: [Int: [SeriesCacheEntry]] = [:],
                                         filenameIDSource: ExportFilenameIDSource = .ao3ThenCalibre) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -333,57 +357,18 @@ struct ExportManager {
                 guard confirm.runModal() == .alertFirstButtonReturn else { return }
             }
 
-            Task.detached(priority: .userInitiated) {
-                var copied = 0, skipped: [String] = []
-
-                if groupBySeries {
-                    // §3a: Series-grouped export
-                    for book in books {
-                        guard let source = book.epubURL(libraryRoot: libraryRoot) else {
-                            skipped.append(book.displayTitle); continue
-                        }
-                        let targetFolder: URL
-                        if let entry = seriesEntries[book.id] {
-                            let folderName = CalibreBook.sanitizedForFilename(entry.seriesName)
-                            targetFolder = destination.appendingPathComponent(folderName)
-                        } else {
-                            targetFolder = destination
-                        }
-                        try? FileManager.default.createDirectory(
-                            at: targetFolder, withIntermediateDirectories: true)
-                        let filename = book.exportFilename(ao3: ao3Map[book.id],
-                                                           idSource: filenameIDSource)
-                        let dest = uniqueDestination(for: filename, in: targetFolder)
-                        do {
-                            try FileManager.default.copyItem(at: source, to: dest)
-                            copied += 1
-                        } catch {
-                            skipped.append(book.displayTitle)
-                        }
-                    }
-                } else {
-                    // §3: Flat folder export
-                    for book in books {
-                        guard let source = book.epubURL(libraryRoot: libraryRoot) else {
-                            skipped.append(book.displayTitle); continue
-                        }
-                        let filename = book.exportFilename(ao3: ao3Map[book.id],
-                                                           idSource: filenameIDSource)
-                        let dest = uniqueDestination(for: filename, in: destination)
-                        do {
-                            try FileManager.default.copyItem(at: source, to: dest)
-                            copied += 1
-                        } catch {
-                            skipped.append(book.displayTitle)
-                        }
-                    }
-                }
-
-                let finalCopied = copied
-                let finalSkipped = skipped
-                await MainActor.run {
-                    presentEPUBExportSummary(copied: finalCopied, skipped: finalSkipped)
-                }
+            Task {
+                let (copied, skipped) = await exportEPUBs(
+                    books: books,
+                    libraryRoot: libraryRoot,
+                    destination: destination,
+                    ao3Map: ao3Map,
+                    groupBySeries: groupBySeries,
+                    seriesEntries: seriesEntries,
+                    filenameIDSource: filenameIDSource,
+                    progress: { _ in }
+                )
+                presentEPUBExportSummary(copied: copied, skipped: skipped)
             }
         }
     }

@@ -185,9 +185,15 @@ private extension String {
 }
 
 struct SingletonSeriesWarningButton: View {
-    let warning: SingletonSeriesWarning
+    let warnings: [SingletonSeriesWarning]
     @State private var showIndex = false
     @State private var showCollectionPicker = false
+
+    private var helpText: String {
+        warnings.count == 1
+            ? warnings[0].displayText
+            : "\(warnings.count) orphaned series memberships"
+    }
 
     var body: some View {
         Button {
@@ -197,23 +203,25 @@ struct SingletonSeriesWarningButton: View {
                 .foregroundStyle(.orange)
         }
         .buttonStyle(.borderless)
-        .help(warning.displayText)
+        .help(helpText)
         .popover(isPresented: $showIndex) {
             VStack(alignment: .leading, spacing: 10) {
-                Text(warning.seriesName).font(.headline)
-                Text("Local index: #\(warning.seriesIndex)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                HStack {
-                    Text("\(warning.seriesIndex).")
+                ForEach(Array(warnings.enumerated()), id: \.offset) { offset, warning in
+                    if offset > 0 { Divider() }
+                    Text(warning.seriesName).font(.headline)
+                    Text("Local index: #\(warning.seriesIndex)")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                        .frame(width: 28, alignment: .trailing)
-                    Text(warning.title).lineLimit(1)
+                    HStack {
+                        Text("\(warning.seriesIndex).")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 28, alignment: .trailing)
+                        Text(warning.title).lineLimit(1)
+                    }
+                    Text(warning.displayText)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                 }
-                Divider()
-                Text(warning.displayText)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
             }
             .padding(14)
             .frame(width: 340)

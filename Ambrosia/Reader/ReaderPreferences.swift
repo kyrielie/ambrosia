@@ -125,6 +125,14 @@ final class ReaderPreferences: ObservableObject {
     @Published var hideNonAO3PublisherBooks: Bool {
         didSet { UserDefaults.standard.set(hideNonAO3PublisherBooks, forKey: Keys.hideNonAO3PublisherBooks) }
     }
+    /// Hides books whose Calibre description was written by the EPUB-merge plugin
+    /// (see `CalibreBook.isDescriptionAnthology`) — i.e. merged/anthology files —
+    /// from the library list entirely, separate from the existing series-grouping
+    /// exclusion (which only keeps them out of grouped series rows, not out of the
+    /// library altogether).
+    @Published var hideAnthologyBooks: Bool {
+        didSet { UserDefaults.standard.set(hideAnthologyBooks, forKey: Keys.hideAnthologyBooks) }
+    }
     @Published var emailPillsShowCollections: Bool {
         didSet { UserDefaults.standard.set(emailPillsShowCollections, forKey: Keys.emailPillsShowCollections) }
     }
@@ -241,6 +249,7 @@ final class ReaderPreferences: ObservableObject {
         static let hideFanworksTagPill         = true
         static let correctCalibreAmpEntities   = true
         static let hideNonAO3PublisherBooks    = false
+        static let hideAnthologyBooks          = true
         static let emailPillsShowCollections   = false
         static let useScreenFraction           = true
         static let defaultWindowWidth          = CGFloat(960)
@@ -270,6 +279,7 @@ final class ReaderPreferences: ObservableObject {
         static let hideFanworksTagPill         = "rp.hideFanworksTagPill"
         static let correctCalibreAmpEntities   = "rp.correctCalibreAmpEntities"
         static let hideNonAO3PublisherBooks    = "rp.hideNonAO3PublisherBooks"
+        static let hideAnthologyBooks          = "rp.hideAnthologyBooks"
         static let emailPillsShowCollections   = "rp.emailPillsShowCollections"
         static let feedServerEnableDailyStory  = "rp.feedServerEnableDailyStory"
         static let feedServerExcludedCollectionIDs = "rp.feedServerExcludedCollectionIDs"
@@ -336,6 +346,9 @@ final class ReaderPreferences: ObservableObject {
         hideNonAO3PublisherBooks = ud.object(forKey: Keys.hideNonAO3PublisherBooks) != nil
             ? ud.bool(forKey: Keys.hideNonAO3PublisherBooks)
             : Defaults.hideNonAO3PublisherBooks
+        hideAnthologyBooks = ud.object(forKey: Keys.hideAnthologyBooks) != nil
+            ? ud.bool(forKey: Keys.hideAnthologyBooks)
+            : Defaults.hideAnthologyBooks
         emailPillsShowCollections = ud.object(forKey: Keys.emailPillsShowCollections) != nil
             ? ud.bool(forKey: Keys.emailPillsShowCollections)
             : Defaults.emailPillsShowCollections
@@ -625,6 +638,7 @@ final class ReaderPreferences: ObservableObject {
         showSkippedCollection       = Defaults.showSkippedCollection
         hideFanworksTagPill         = Defaults.hideFanworksTagPill
         hideNonAO3PublisherBooks    = Defaults.hideNonAO3PublisherBooks
+        hideAnthologyBooks          = Defaults.hideAnthologyBooks
         emailPillsShowCollections   = Defaults.emailPillsShowCollections
     }
 }

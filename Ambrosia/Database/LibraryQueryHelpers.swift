@@ -44,20 +44,22 @@ enum LibraryQueryHelpers {
 
     /// Filters raw `CalibreBook` results down to the ones that should actually
     /// be rendered, given the same visibility rules as `visibleIDs`, plus
-    /// anthology exclusion.
+    /// optional anthology exclusion (see `CalibreBook.isDescriptionAnthology`
+    /// and `ReaderPreferences.hideAnthologyBooks`).
     static func visibleBooks(
         _ raw: [CalibreBook],
         showSkippedCollection: Bool,
         shouldGroupSeriesRows: Bool,
         skippedIDs: Set<Int>,
         seriesOrMergedIDs: Set<Int>,
-        hideNonAO3PublisherBooks: Bool
+        hideNonAO3PublisherBooks: Bool,
+        hideAnthologyBooks: Bool
     ) -> [CalibreBook] {
         raw.filter { book in
             (showSkippedCollection || !skippedIDs.contains(book.id)) &&
             (!shouldGroupSeriesRows || !seriesOrMergedIDs.contains(book.id)) &&
             (!hideNonAO3PublisherBooks || book.isAO3PublisherBook) &&
-            !book.isDescriptionAnthology
+            (!hideAnthologyBooks || !book.isDescriptionAnthology)
         }
     }
 

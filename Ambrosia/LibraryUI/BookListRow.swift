@@ -9,7 +9,7 @@ struct BookListRow: View, Equatable {
     let bookState: BookState?
     let ao3Metadata: AO3MetadataRecord?
     let ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?
-    let singletonSeriesWarning: SingletonSeriesWarning?
+    let singletonSeriesWarnings: [SingletonSeriesWarning]
     let isLiked: Bool
     let isInReadLater: Bool
     let onReadLaterToggle: () -> Void
@@ -43,7 +43,7 @@ struct BookListRow: View, Equatable {
             && lhs.book.comment           == rhs.book.comment
             && lhs.ao3Metadata            == rhs.ao3Metadata
             && lhs.ao3ExtractionDiagnostic == rhs.ao3ExtractionDiagnostic
-            && lhs.singletonSeriesWarning == rhs.singletonSeriesWarning
+            && lhs.singletonSeriesWarnings == rhs.singletonSeriesWarnings
             && lhs.bookState?.calibreID        == rhs.bookState?.calibreID
             && lhs.isLiked                     == rhs.isLiked
             && lhs.isInReadLater                == rhs.isInReadLater
@@ -53,7 +53,7 @@ struct BookListRow: View, Equatable {
             && lhs.selectedCount               == rhs.selectedCount
     }
 
-    init(book: CalibreBook, bookState: BookState?, ao3Metadata: AO3MetadataRecord?, ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?, singletonSeriesWarning: SingletonSeriesWarning?, isLiked: Bool, hideFanworksTagPill: Bool, correctCalibreAmpEntities: Bool, modelContext: ModelContext,
+    init(book: CalibreBook, bookState: BookState?, ao3Metadata: AO3MetadataRecord?, ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?, singletonSeriesWarnings: [SingletonSeriesWarning], isLiked: Bool, hideFanworksTagPill: Bool, correctCalibreAmpEntities: Bool, modelContext: ModelContext,
          onTagTap: @escaping (String, FilterField) -> Void,
          onAuthorTap: @escaping (String) -> Void,
          onOpenSelected: @escaping () -> Void,
@@ -73,7 +73,7 @@ struct BookListRow: View, Equatable {
         self.bookState    = bookState
         self.ao3Metadata  = ao3Metadata
         self.ao3ExtractionDiagnostic = ao3ExtractionDiagnostic
-        self.singletonSeriesWarning = singletonSeriesWarning
+        self.singletonSeriesWarnings = singletonSeriesWarnings
         self.isLiked      = isLiked
         self.isInReadLater = isInReadLater
         self.onReadLaterToggle = onReadLaterToggle
@@ -170,8 +170,8 @@ struct BookListRow: View, Equatable {
 
     @ViewBuilder
     private var singletonSeriesWarningButton: some View {
-        if let warning = singletonSeriesWarning {
-            SingletonSeriesWarningButton(warning: warning)
+        if !singletonSeriesWarnings.isEmpty {
+            SingletonSeriesWarningButton(warnings: singletonSeriesWarnings)
         }
     }
 
