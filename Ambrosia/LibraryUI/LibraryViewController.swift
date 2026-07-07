@@ -57,6 +57,16 @@ class LibraryViewController: NSViewController {
     // MARK: - View mode switching
 
     private func applyViewMode(_ mode: LibraryViewMode) {
+        // §list-teardown fix: tell the outgoing List surface (if any) to stop
+        // reloading before it's torn down. LibraryRootView's reload paths are
+        // unstructured Task { } blocks kicked off from .onChange, which are not
+        // cancelled just because the NSHostingView is removed from the hierarchy —
+        // see LibraryToolbarState.isListSurfaceTornDown and LibraryRootView's
+        // guards in loadPage()/rebuildItems()/refreshBookStates().
+        if listHostingView != nil, mode != .list {
+            toolbarState.isListSurfaceTornDown = true
+        }
+
         // Remove existing child VCs
         children.forEach {
             // §switch-flicker fix: stop EmailLibraryViewController's observation
@@ -100,6 +110,10 @@ class LibraryViewController: NSViewController {
                 hv.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             ])
             listHostingView = hv
+            // Fresh List instance: clear the teardown flag so its .onAppear /
+            // .onChange-triggered reloads run normally. Must happen after the
+            // new hosting view is attached, not before.
+            toolbarState.isListSurfaceTornDown = false
 
         case .email:
             let childVC = EmailLibraryViewController(

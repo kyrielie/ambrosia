@@ -58,6 +58,13 @@ final class LibraryToolbarState {
     /// Registered by the active content view. Called on the main thread.
     var filterCommitHandler: ((FilterRule) -> Void)?
 
+    /// Set by LibraryViewController immediately before the List surface's
+    /// NSHostingView is removed from the hierarchy. LibraryRootView's async
+    /// reload paths must check this and no-op if true, since unstructured
+    /// Task { } blocks triggered by .onChange are not auto-cancelled when a
+    /// SwiftUI view is removed from an NSHostingView.
+    var isListSurfaceTornDown: Bool = false
+
     init() {
         groupBySeries = UserDefaults.standard.bool(forKey: "groupBySeries")
     }
