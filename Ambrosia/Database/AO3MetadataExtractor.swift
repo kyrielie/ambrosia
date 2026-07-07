@@ -102,7 +102,9 @@ enum AO3MetadataExtractor {
             logMissingParsedFieldsIfNeeded(record)
             return record
         } catch {
+            #if DEBUG
             print("[AO3MetadataExtractor] Parse failed: \(error)")
+            #endif
             return nil
         }
     }

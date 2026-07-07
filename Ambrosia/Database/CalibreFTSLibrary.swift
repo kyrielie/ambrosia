@@ -264,6 +264,8 @@ actor CalibreFTSLibrary {
     }
 
     private static func log(_ message: String) {
+        #if DEBUG
         print("[CalibreFTSLibrary] \(message)")
+        #endif
     }
 }

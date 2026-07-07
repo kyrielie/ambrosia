@@ -801,8 +801,13 @@ private struct DataTab: View {
 
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(tagSeedConfig.databasePath?.isEmpty == false ? URL(fileURLWithPath: tagSeedConfig.databasePath!).lastPathComponent : "No database selected")
-                            .font(.callout)
+                        if let path = tagSeedConfig.databasePath, !path.isEmpty {
+                            Text(URL(fileURLWithPath: path).lastPathComponent)
+                                .font(.callout)
+                        } else {
+                            Text("No database selected")
+                                .font(.callout)
+                        }
                         if let path = tagSeedConfig.databasePath, !path.isEmpty {
                             Text(path)
                                 .font(.caption)
@@ -1103,9 +1108,10 @@ extension Color {
     }
 
     var hexString: String? {
-        guard let cg = NSColor(self).cgColor.converted(
-            to: CGColorSpace(name: CGColorSpace.sRGB)!,
-            intent: .defaultIntent, options: nil),
+        guard let sRGB = CGColorSpace(name: CGColorSpace.sRGB),
+              let cg = NSColor(self).cgColor.converted(
+                to: sRGB,
+                intent: .defaultIntent, options: nil),
               let c = cg.components, c.count >= 3 else { return nil }
         return String(format: "#%02X%02X%02X", Int(c[0]*255), Int(c[1]*255), Int(c[2]*255))
     }

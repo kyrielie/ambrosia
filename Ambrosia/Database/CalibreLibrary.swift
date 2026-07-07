@@ -479,7 +479,9 @@ actor CalibreLibrary {
                 return b
             }
         } catch {
+            #if DEBUG
             print("[CalibreLibrary] fetchAllMatchingBooks error: \(error)")
+            #endif
             return []
         }
     }
@@ -529,7 +531,9 @@ actor CalibreLibrary {
             }
             return result
         } catch {
+            #if DEBUG
             print("[CalibreLibrary] books error: \(error)")
+            #endif
             return []
         }
     }
@@ -674,7 +678,9 @@ actor CalibreLibrary {
             ])
             return books
         } catch {
+            #if DEBUG
             print("[CalibreLibrary] books(ids:query:) error: \(error)")
+            #endif
             return []
         }
     }
@@ -702,7 +708,9 @@ actor CalibreLibrary {
                 return b
             }
         } catch {
+            #if DEBUG
             print("[CalibreLibrary] booksForIDs error: \(error)")
+            #endif
             return []
         }
     }

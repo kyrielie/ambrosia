@@ -57,6 +57,29 @@ final class EmailSidebarViewController: NSViewController,
     private var hasTriggeredLoadMore = false
     private var isRestoringSelection = false
 
+    // MARK: - Degraded-data banner (Finding 12 follow-up)
+    //
+    // rebuildSidebarItems in EmailLibraryViewController has the identical
+    // silent-catch pattern LibraryRootView's rebuildItems had before plan2
+    // Finding 12 — five `try? await metaDB....` calls falling back to empty
+    // data with no signal at all (not even a #if DEBUG print). This mirrors
+    // LibraryRootView's fix on the AppKit side: a thin dismissible banner
+    // above the sidebar list, toggled by the parent view controller.
+    var onRetryTapped: (() -> Void)?
+    var rebuildDegraded: Bool = false {
+        didSet {
+            guard isViewLoaded else { return }
+            degradedBannerHeightConstraint?.constant = rebuildDegraded ? 28 : 0
+            degradedBanner?.isHidden = !rebuildDegraded
+        }
+    }
+    private var degradedBanner: NSView!
+    private var degradedBannerHeightConstraint: NSLayoutConstraint!
+
+    @objc private func retryButtonClicked() {
+        onRetryTapped?()
+    }
+
     // MARK: - Lifecycle
 
     override func loadView() {
@@ -88,6 +111,30 @@ final class EmailSidebarViewController: NSViewController,
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(scrollView)
 
+        let banner = NSView()
+        banner.translatesAutoresizingMaskIntoConstraints = false
+        banner.wantsLayer = true
+        banner.layer?.backgroundColor = NSColor.systemYellow.withAlphaComponent(0.15).cgColor
+        banner.isHidden = true
+        degradedBanner = banner
+
+        let label = NSTextField(labelWithString: "Some library data couldn't load")
+        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        label.textColor = .secondaryLabelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let retryButton = NSButton(title: "Retry", target: self, action: #selector(retryButtonClicked))
+        retryButton.bezelStyle = .inline
+        retryButton.controlSize = .small
+        retryButton.translatesAutoresizingMaskIntoConstraints = false
+
+        banner.addSubview(label)
+        banner.addSubview(retryButton)
+        container.addSubview(banner)
+
+        let heightConstraint = banner.heightAnchor.constraint(equalToConstant: 0)
+        degradedBannerHeightConstraint = heightConstraint
+
         NotificationCenter.default.addObserver(
             self, selector: #selector(scrollDidChange),
             name: NSScrollView.didLiveScrollNotification, object: scrollView
@@ -96,7 +143,16 @@ final class EmailSidebarViewController: NSViewController,
 
 
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: container.topAnchor),
+            banner.topAnchor.constraint(equalTo: container.topAnchor),
+            banner.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            banner.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            heightConstraint,
+            label.leadingAnchor.constraint(equalTo: banner.leadingAnchor, constant: 8),
+            label.centerYAnchor.constraint(equalTo: banner.centerYAnchor),
+            retryButton.trailingAnchor.constraint(equalTo: banner.trailingAnchor, constant: -8),
+            retryButton.centerYAnchor.constraint(equalTo: banner.centerYAnchor),
+
+            scrollView.topAnchor.constraint(equalTo: banner.bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),

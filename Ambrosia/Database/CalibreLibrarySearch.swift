@@ -93,7 +93,9 @@ extension CalibreLibrary {
             return count
         } catch {
             let message = "bookCount(query:) error: \(error)"
+            #if DEBUG
             print("[CalibreLibrary] \(message)")
+            #endif
             recordSearchError(message)
             return 0
         }

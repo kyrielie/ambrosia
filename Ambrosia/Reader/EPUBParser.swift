@@ -10,7 +10,6 @@ import ZIPFoundation
 //   EPUBParser  (plainText(for:))
 //   PaginationJS (countAllTextChars, getCharOffset, renderPage)
 //   HighlightBridge (restoreHighlights JS injection)
-//   BookmarkManager (jump-to-position JS injection)
 //
 // Any deviation between Swift and JS offset counting causes irreproducible
 // position drift that is extremely difficult to debug. Never change one side

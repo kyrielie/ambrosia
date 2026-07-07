@@ -110,7 +110,9 @@ final class PaginationEngine: NSObject {
         wv.evaluateJavaScript(js) { [weak self] result, error in
             guard let self else { return }
             if let error {
+                #if DEBUG
                 print("[PaginationEngine] JS error: \(error)")
+                #endif
                 self.spineDidLoad?(1)
                 return
             }

@@ -235,10 +235,10 @@ final class EmailLibraryViewController: NSViewController {
         sidebarVC.onSelect     = { [weak self] book in self?.setSelectedBook(book) }
         sidebarVC.onOpen       = { [weak self] target in
             guard let self else { return }
-            let ctx = ModelContext(modelContainer)
-            AppDelegate.shared?.openReaderWindow(target: target, modelContext: ctx)
+            AppDelegate.shared?.openReaderWindow(target: target, modelContext: modelContainer.mainContext)
         }
         sidebarVC.onLoadMore   = { [weak self] in self?.loadNextPageIfAvailable() }
+        sidebarVC.onRetryTapped = { [weak self] in self?.rebuildSidebarItems() }
         sidebarVC.onEditFilter = { [weak self] in
             self?.toolbarState.showFilterDrawer = true
         }
@@ -251,9 +251,8 @@ final class EmailLibraryViewController: NSViewController {
         }
         sidebarVC.onContextMenuOpen = { [weak self] books in
             guard let self else { return }
-            let ctx = ModelContext(modelContainer)
             for book in books {
-                AppDelegate.shared?.openReaderWindow(book: book, modelContext: ctx)
+                AppDelegate.shared?.openReaderWindow(book: book, modelContext: modelContainer.mainContext)
             }
         }
         sidebarVC.onContextMenuSetLiked = { [weak self] books, liked in
@@ -556,18 +555,7 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Quick filter helper (mirrors BookGridItem.addOrReplaceRule)
 
     func addOrReplaceRule(_ rule: FilterRule) {
-        if toolbarState.filterExpression.groups.isEmpty {
-            toolbarState.filterExpression.groups = [FilterGroup()]
-        }
-        let allRules = toolbarState.filterExpression.groups.flatMap(\.rules)
-        let isDuplicate = allRules.contains {
-            $0.field == rule.field && $0.value == rule.value && $0.op == rule.op
-        }
-        guard !isDuplicate else { return }
-        if rule.field == .authorName || rule.field == .series {
-            toolbarState.filterExpression.groups[0].rules.removeAll { $0.field == rule.field }
-        }
-        toolbarState.filterExpression.groups[0].rules.append(rule)
+        LibraryQueryHelpers.addOrReplaceRule(rule, in: &toolbarState.filterExpression)
         applyFilterRules()
     }
 
@@ -1186,19 +1174,7 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func queryWithCachedFullText(_ query: SearchQuery) -> SearchQuery {
-        guard let phrase = query.fulltextPhrase?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !phrase.isEmpty else { return query }
-        guard let ids = session.cachedFulltextIDs(for: phrase) else { return query }
-        return SearchQuery(
-            tagTerms: query.tagTerms,
-            authorTerms: query.authorTerms,
-            titleTerms: query.titleTerms,
-            seriesTerms: query.seriesTerms,
-            statusTerms: query.statusTerms,
-            fulltextPhrase: query.fulltextPhrase,
-            plainTerms: [],
-            ftsMatchedIDs: ids
-        )
+        LibraryQueryHelpers.queryWithCachedFullText(query, session: session)
     }
 
     /// Mirrors `LibraryRootView.resolveTagExpansionsIfNeeded`. See that method for rationale.
@@ -1226,6 +1202,7 @@ final class EmailLibraryViewController: NSViewController {
             ])
             items = books.map { .book($0) }
             sidebarVC?.items = items
+            sidebarVC?.rebuildDegraded = false
             return
         }
 
@@ -1245,12 +1222,31 @@ final class EmailLibraryViewController: NSViewController {
         rebuildSidebarTask?.cancel()
         rebuildSidebarTask = Task {
             let pageIDs = pageBooks.map(\.id)
+            let entries: [SeriesCacheEntry]
+            let allEntries: [SeriesCacheEntry]
+            let metadata: [Int: AO3MetadataRecord]
+            let placeholders: [String: [SeriesPlaceholder]]
+            var degraded = false
             guard !Task.isCancelled else { return }
-            let entries = (try? await metaDB.seriesEntries(for: pageIDs)) ?? []
+            do { entries = try await metaDB.seriesEntries(for: pageIDs) }
+            catch {
+                entries = []
+                #if DEBUG
+                print("[EmailLibraryViewController] rebuildSidebarItems: seriesEntries(page) failed: \(error)")
+                #endif
+                degraded = true
+            }
             let groupedEntries = Dictionary(grouping: entries.filter { !$0.isAnthology }, by: \.seriesKey)
             let seriesKeys = groupedEntries.keys.sorted()
             guard !Task.isCancelled else { return }
-            let allEntries = (try? await metaDB.seriesEntries(keys: seriesKeys)) ?? []
+            do { allEntries = try await metaDB.seriesEntries(keys: seriesKeys) }
+            catch {
+                allEntries = []
+                #if DEBUG
+                print("[EmailLibraryViewController] rebuildSidebarItems: seriesEntries(keys) failed: \(error)")
+                #endif
+                degraded = true
+            }
             let allIDs = Array(Set(allEntries.map(\.calibreID)))
             guard !Task.isCancelled else { return }
             // CalibreLibrary is actor-isolated now: this await serializes automatically
@@ -1261,9 +1257,23 @@ final class EmailLibraryViewController: NSViewController {
             // LibraryRootView.rebuildItems.
             let allBooks = await library.booksForIDs(allIDs)
             guard !Task.isCancelled else { return }
-            let metadata = (try? await metaDB.ao3Metadata(for: allIDs)) ?? [:]
+            do { metadata = try await metaDB.ao3Metadata(for: allIDs) }
+            catch {
+                metadata = [:]
+                #if DEBUG
+                print("[EmailLibraryViewController] rebuildSidebarItems: ao3Metadata failed: \(error)")
+                #endif
+                degraded = true
+            }
             guard !Task.isCancelled else { return }
-            let placeholders = (try? await metaDB.placeholders(for: seriesKeys)) ?? [:]
+            do { placeholders = try await metaDB.placeholders(for: seriesKeys) }
+            catch {
+                placeholders = [:]
+                #if DEBUG
+                print("[EmailLibraryViewController] rebuildSidebarItems: placeholders failed: \(error)")
+                #endif
+                degraded = true
+            }
             let byID = Dictionary(uniqueKeysWithValues: allBooks.map { ($0.id, $0) })
             let entriesBySeries = Dictionary(grouping: allEntries.filter { !$0.isAnthology }, by: \.seriesKey)
             var groups: [String: SeriesGroup] = [:]
@@ -1331,6 +1341,7 @@ final class EmailLibraryViewController: NSViewController {
                 }
                 self.items = nextItems
                 self.sidebarVC?.items = nextItems
+                self.sidebarVC?.rebuildDegraded = degraded
                 LibraryFilterDebug.log("rebuildSidebarItems.end", [
                     "surface": "email",
                     "pageBooks": pageBooks.count,
@@ -1371,31 +1382,30 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func visibleIDs(_ ids: [Int]) -> [Int] {
-        // Only suppress seriesOrMergedIDs members when series grouping is active and a
-        // SeriesGroup row is being shown for them. Without grouping the suppression
-        // silently deletes books that are rn>1 in one series but rn=1 (representative)
-        // in another — e.g. all works in "Star Wars Drabbles" become invisible because
-        // they are also members of "100 Star Wars Women Drabbles".
-        ids.filter { id in
-            (ReaderPreferences.shared.showSkippedCollection || !skippedIDs.contains(id)) &&
-            (!shouldGroupSidebarRows || !seriesOrMergedIDs.contains(id)) &&
-            (!ReaderPreferences.shared.hideNonAO3PublisherBooks || ao3PublisherIDs.contains(id))
-        }
+        LibraryQueryHelpers.visibleIDs(
+            ids,
+            showSkippedCollection: ReaderPreferences.shared.showSkippedCollection,
+            shouldGroupSeriesRows: shouldGroupSidebarRows,
+            skippedIDs: skippedIDs,
+            seriesOrMergedIDs: seriesOrMergedIDs,
+            hideNonAO3PublisherBooks: ReaderPreferences.shared.hideNonAO3PublisherBooks,
+            ao3PublisherIDs: ao3PublisherIDs
+        )
     }
 
     private func intersect(_ ids: [Int], with optionalIDs: [Int]?) -> [Int] {
-        guard let other = optionalIDs else { return ids }
-        let allowed = Set(other)
-        return ids.filter { allowed.contains($0) }
+        LibraryQueryHelpers.intersect(ids, with: optionalIDs)
     }
 
     private func visibleBooks(_ raw: [CalibreBook]) -> [CalibreBook] {
-        raw.filter { book in
-            (ReaderPreferences.shared.showSkippedCollection || !skippedIDs.contains(book.id)) &&
-            (!shouldGroupSidebarRows || !seriesOrMergedIDs.contains(book.id)) &&
-            (!ReaderPreferences.shared.hideNonAO3PublisherBooks || book.isAO3PublisherBook) &&
-            !book.isDescriptionAnthology
-        }
+        LibraryQueryHelpers.visibleBooks(
+            raw,
+            showSkippedCollection: ReaderPreferences.shared.showSkippedCollection,
+            shouldGroupSeriesRows: shouldGroupSidebarRows,
+            skippedIDs: skippedIDs,
+            seriesOrMergedIDs: seriesOrMergedIDs,
+            hideNonAO3PublisherBooks: ReaderPreferences.shared.hideNonAO3PublisherBooks
+        )
     }
 
     private func loadNextPageIfAvailable() {
@@ -1405,7 +1415,7 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     func refreshBookStates() {
-        let ctx = ModelContext(modelContainer)
+        let ctx = modelContainer.mainContext
         let all = (try? ctx.fetch(FetchDescriptor<BookState>())) ?? []
         bookStates = all.reduce(into: [:]) { $0[$1.calibreID] = $1 }
         sidebarVC?.bookStates = bookStates
@@ -1437,11 +1447,10 @@ final class EmailLibraryViewController: NSViewController {
 
     private func markRead(_ books: [CalibreBook]) {
         let ids = books.map(\.id)
-        let container = modelContainer
         Task {
-            let ctx = ModelContext(container)
+            let ctx = modelContainer.mainContext
             for calibreID in ids {
-                let state = self.stateForMutation(calibreID, in: ctx)
+                let state = LibraryQueryHelpers.stateForMutation(calibreID, in: ctx)
                 state.markRead()
             }
             try? ctx.save()
@@ -1465,11 +1474,10 @@ final class EmailLibraryViewController: NSViewController {
 
     private func resetProgress(_ books: [CalibreBook]) {
         let ids = books.map(\.id)
-        let container = modelContainer
         Task {
-            let ctx = ModelContext(container)
+            let ctx = modelContainer.mainContext
             for calibreID in ids {
-                let state = self.stateForMutation(calibreID, in: ctx)
+                let state = LibraryQueryHelpers.stateForMutation(calibreID, in: ctx)
                 state.resetReadingProgress()
             }
             try? ctx.save()
@@ -1489,18 +1497,6 @@ final class EmailLibraryViewController: NSViewController {
             refreshBookStates()
             await loadPage(reset: true)
         }
-    }
-
-    private func stateForMutation(_ calibreID: Int, in ctx: ModelContext) -> BookState {
-        var desc = FetchDescriptor<BookState>(
-            predicate: #Predicate { $0.calibreID == calibreID }
-        )
-        desc.fetchLimit = 1
-        let state = (try? ctx.fetch(desc).first) ?? BookState(calibreID: calibreID)
-        if state.modelContext == nil {
-            ctx.insert(state)
-        }
-        return state
     }
 
     @MainActor
@@ -1591,14 +1587,8 @@ final class EmailLibraryViewController: NSViewController {
         let cid = book.id
         Task.detached { [mc = modelContainer] in
             let ctx = ModelContext(mc)
-            let all = (try? ctx.fetch(FetchDescriptor<BookState>())) ?? []
-            if let s = all.first(where: { $0.calibreID == cid }) {
-                s.lastOpenedDate = Date()
-            } else {
-                let s = BookState(calibreID: cid)
-                s.lastOpenedDate = Date()
-                ctx.insert(s)
-            }
+            let state = LibraryQueryHelpers.stateForMutation(cid, in: ctx)
+            state.lastOpenedDate = Date()
             try? ctx.save()
         }
         return rvc

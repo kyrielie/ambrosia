@@ -267,7 +267,9 @@ struct FilterRuleRow: View {
         // window.  NSApp.keyWindow may point to the wrong window.
         .background(WindowAccessorView { win in
             if rowWindow !== win {
+                #if DEBUG
                 print("[FilterRuleRow] window captured: \(win?.title ?? "nil") (\(String(describing: win)))")
+                #endif
                 rowWindow = win
             }
         })

@@ -1,6 +1,5 @@
 import Foundation
 
-// Phase 0 stub — implementation when needed
 class DebounceTimer {
     private var workItem: DispatchWorkItem?
     private let queue: DispatchQueue

@@ -69,7 +69,7 @@ final class LibraryIndexManager {
         do {
             return try AmbrosiaMetaDB.librariesBaseDirectory().appendingPathComponent("index.json")
         } catch {
-            let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fm.temporaryDirectory
             return support.appendingPathComponent("Ambrosia").appendingPathComponent("libraries").appendingPathComponent("index.json")
         }
     }
@@ -85,7 +85,9 @@ final class LibraryIndexManager {
             }
             try fm.moveItem(at: tmp, to: url)
         } catch {
+            #if DEBUG
             print("[LibraryIndexManager] Write failed: \(error)")
+            #endif
         }
     }
 }

@@ -69,17 +69,8 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         let calibreID = book.id
         Task.detached {
             let ctx = ModelContext(modelContainer)
-            var desc = FetchDescriptor<BookState>(
-                predicate: #Predicate { $0.calibreID == calibreID }
-            )
-            desc.fetchLimit = 1
-            if let state = try? ctx.fetch(desc).first {
-                state.lastOpenedDate = Date()
-            } else {
-                let state = BookState(calibreID: calibreID)
-                state.lastOpenedDate = Date()
-                ctx.insert(state)
-            }
+            let state = LibraryQueryHelpers.stateForMutation(calibreID, in: ctx)
+            state.lastOpenedDate = Date()
             try? ctx.save()
         }
     }
@@ -132,18 +123,9 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         let calibreID = book.id
         let container = modelContainer
         Task.detached {
-            let ctx  = ModelContext(container)
-            var desc = FetchDescriptor<BookState>(
-                predicate: #Predicate { $0.calibreID == calibreID }
-            )
-            desc.fetchLimit = 1
-            if let state = try? ctx.fetch(desc).first {
-                state.totalReadingTimeSeconds += elapsed
-            } else {
-                let state = BookState(calibreID: calibreID)
-                state.totalReadingTimeSeconds = elapsed
-                ctx.insert(state)
-            }
+            let ctx = ModelContext(container)
+            let state = LibraryQueryHelpers.stateForMutation(calibreID, in: ctx)
+            state.totalReadingTimeSeconds += elapsed
             try? ctx.save()
         }
     }

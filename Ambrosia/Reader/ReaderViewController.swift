@@ -40,6 +40,26 @@ struct LocalReaderFindState: Equatable {
 // Message handlers (all registered at construction time):
 //   positionUpdate, pageAction, highlightAdded, highlightTapped
 
+// MARK: - WeakScriptMessageHandler
+//
+// WKUserContentController.add(_:name:) retains its handler strongly. Registering
+// `self` (a view controller) directly creates a closed reference cycle:
+// ReaderViewController -> WKWebView -> configuration -> userContentController -> self.
+// Registering this weak-referencing proxy instead avoids that cycle regardless of
+// whether every future registration site remembers to call
+// removeScriptMessageHandler(forName:) during teardown.
+final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var target: WKScriptMessageHandler?
+
+    init(target: WKScriptMessageHandler) {
+        self.target = target
+    }
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        target?.userContentController(controller, didReceive: message)
+    }
+}
+
 class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMessageHandler {
 
     // MARK: - Dependencies
@@ -165,13 +185,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     private var saveTimer: Timer?
     private var readingHistorySessionID: Int64?
-    private var _saveContext: ModelContext?
-    private var saveContext: ModelContext {
-        if let c = _saveContext { return c }
-        let c = ModelContext(modelContainer)
-        _saveContext = c
-        return c
-    }
+    private var saveContext: ModelContext { modelContainer.mainContext }
     private var bookStates: [Int: BookState] = [:]
     /// The calibreID of whichever work currently owns `currentSpineIndex`.
     /// Falls back to the reading target's primary book before spineMap is
@@ -245,11 +259,12 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         #endif
 
-        config.userContentController.add(self, name: "positionUpdate")
-        config.userContentController.add(self, name: "pageAction")
-        config.userContentController.add(self, name: "highlightAdded")
-        config.userContentController.add(self, name: "highlightTapped")
-        config.userContentController.add(self, name: "consoleLog")   // JS console → Xcode log
+        let scriptMessageHandler = WeakScriptMessageHandler(target: self)
+        config.userContentController.add(scriptMessageHandler, name: "positionUpdate")
+        config.userContentController.add(scriptMessageHandler, name: "pageAction")
+        config.userContentController.add(scriptMessageHandler, name: "highlightAdded")
+        config.userContentController.add(scriptMessageHandler, name: "highlightTapped")
+        config.userContentController.add(scriptMessageHandler, name: "consoleLog")   // JS console → Xcode log
 
         let container = NSView()
         container.wantsLayer = true
@@ -427,7 +442,13 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             isLayoutReady = true
             if let pending = pendingSpineLoad {
                 pendingSpineLoad = nil
-                loadSpineItem(index: pending.index, restorePosition: pending.restorePosition)
+                if currentMode == .paginated {
+                    loadSpineItem(index: pending.index, restorePosition: pending.restorePosition)
+                } else {
+                    #if DEBUG
+                    print("[ReaderVC] viewDidLayout: dropped stale pendingSpineLoad, currentMode=\(currentMode)")
+                    #endif
+                }
             }
         }
         repositionFindBar()
@@ -443,9 +464,27 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         // the reload invalidates it, then reload with that fraction as the
         // restore target — loadSpineItem recomputes column CSS from the new
         // webView.bounds at the moment it's called.
+        //
+        // Paginated-only: loadSpineItem() injects paginatedColumnCSS (which sets
+        // `overflow-x: scroll !important` on `html`), so calling it while in
+        // scroll mode would silently replace the merged scroll-mode document
+        // with a single paginated spine item and force horizontal scrolling.
+        // paginationEngine is created unconditionally in loadView() (non-nil in
+        // both modes), so `paginationEngine?.` alone does not guard against
+        // firing in scroll mode — the explicit currentMode checks below do.
+        guard currentMode == .paginated else {
+            #if DEBUG
+            print("[ReaderVC] viewDidLayout: skipping resize reload, currentMode=\(currentMode)")
+            #endif
+            return
+        }
         resizeDebounce.schedule { [weak self] in
-            guard let self else { return }
+            guard let self, self.currentMode == .paginated else { return }
             self.paginationEngine?.currentFraction { fraction in
+                guard self.currentMode == .paginated else { return }
+                #if DEBUG
+                print("[ReaderVC] viewDidLayout: resize reload -> loadSpineItem index=\(self.currentSpineIndex) fraction=\(fraction)")
+                #endif
                 self.loadSpineItem(
                     index: self.currentSpineIndex,
                     restorePosition: .fraction(fraction)
@@ -631,7 +670,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             currentHTML = try buildScrollHTML()
             loadCurrentHTML()
         } catch {
+            #if DEBUG
             print("[ReaderVC] reloadHTML error: \(error)")
+            #endif
         }
     }
 
@@ -806,7 +847,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     func webView(_ webView: WKWebView,
                  didFail navigation: WKNavigation!, withError error: Error) {
+        #if DEBUG
         print("[ReaderVC] Navigation failed: \(error.localizedDescription)")
+        #endif
     }
 
     func webView(_ webView: WKWebView,
@@ -1226,7 +1269,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                     self.readingHistorySessionID = id
                 }
             } catch {
+                #if DEBUG
                 print("[ReadingHistory] Start failed: \(error)")
+                #endif
             }
         }
     }
@@ -1268,7 +1313,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                     AppDelegate.shared?.session.bumpMembershipVersion()  // §7
                 }
             } catch {
+                #if DEBUG
                 print("[ReadingHistory] \(final ? "Final update" : "Update") failed: \(error)")
+                #endif
             }
         }
     }
@@ -1371,6 +1418,15 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     }
 
     // MARK: - Responder-chain actions
+
+    @objc func toggleReadingMode(_ sender: Any?) {
+        switch currentMode {
+        case .scroll:
+            switchToPaginatedMode()
+        case .paginated:
+            switchToScrollMode()
+        }
+    }
 
     @objc func addAnnotation(_ sender: Any?) { savePointAnnotationAtCurrentPosition() }
     @objc func showAnnotationSidebar(_ sender: Any?) { toggleAnnotationSidebar() }
@@ -1937,7 +1993,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
         let sidebar = makeAnnotationSidebarView()
         let hosting = NSHostingView(rootView: sidebar)
-        // Invariant #10: sizingOptions = [] lets Auto Layout (the panel's content
+        // Invariant 9: sizingOptions = [] lets Auto Layout (the panel's content
         // layout pass) own the hosting view's size. Without this NSHostingView
         // reports its SwiftUI intrinsic size, fights the window layout, and
         // collapses the panel — repositioning it to the left.

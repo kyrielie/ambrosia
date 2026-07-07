@@ -208,7 +208,7 @@ actor LocalFeedServer {
         let port = config.port
         serverTask = Task {
             do {
-                let server = HTTPServer(port: port)
+                let server = HTTPServer(address: .loopback(port: port))
                 await server.appendRoute("GET /") { [capturedSelf] _ in
                     try await capturedSelf.handleIndex()
                 }
@@ -227,7 +227,9 @@ actor LocalFeedServer {
                 try await server.run()
             } catch {
                 if !Task.isCancelled {
+                    #if DEBUG
                     print("[LocalFeedServer] Server stopped with error: \(error)")
+                    #endif
                 }
             }
         }

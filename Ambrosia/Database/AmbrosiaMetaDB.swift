@@ -14,6 +14,17 @@ struct ReadingHistoryEntry: Identifiable, Hashable, Sendable {
     let categories: [String]
 }
 
+enum MetaDBError: LocalizedError {
+    case applicationSupportUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .applicationSupportUnavailable:
+            return "Could not locate the Application Support directory."
+        }
+    }
+}
+
 func libraryHash(for libraryURL: URL) -> String {
     let resolved = libraryURL.resolvingSymlinksInPath().path
     let digest = SHA256.hash(data: Data(resolved.utf8))
@@ -45,7 +56,9 @@ actor AmbrosiaMetaDB {
     }
 
     static func librariesBaseDirectory() throws -> URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw MetaDBError.applicationSupportUnavailable
+        }
         let dir = support.appendingPathComponent("Ambrosia").appendingPathComponent("libraries")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
@@ -63,10 +76,56 @@ actor AmbrosiaMetaDB {
         try createAnnotations(db: db)
         try createReadingHistory(db: db)
         try createAO3Metadata(db: db)
+        try createSchemaMigrations(db: db)
+        try bridgeLegacyUserVersionMigrations(db: db)
         try migrateSeriesPlaceholdersToKeyedIfNeeded(db: db)
         try dedupeSeriesCacheIfNeeded(db: db)
         try createAO3TagSynonyms(db: db)
         try bootstrapSystemCollections(db: db)
+    }
+
+    // MARK: - Migration tracking (Finding 13)
+    //
+    // The two migrations below predate this table and were gated solely on
+    // PRAGMA user_version — a single global ordinal with no per-migration
+    // name record. That means a future migration must know the current
+    // highest version number *and* be appended after these two in
+    // runMigrations' call order, with nothing enforcing either constraint.
+    // schema_migrations replaces that with name-based membership checks, so
+    // new migrations can be added in any order without an ordinal to track.
+    // bridgeLegacyUserVersionMigrations backfills this table for installs
+    // that already ran the two user_version-gated migrations, so they are
+    // not re-run under the new check.
+
+    private static func createSchemaMigrations(db: Connection) throws {
+        try db.execute("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            name        TEXT PRIMARY KEY,
+            applied_at  TEXT NOT NULL
+        );
+        """)
+    }
+
+    private static func hasAppliedMigration(_ name: String, db: Connection) -> Bool {
+        let count = (try? db.scalar("SELECT COUNT(*) FROM schema_migrations WHERE name = ?", name)) as? Int64 ?? 0
+        return count > 0
+    }
+
+    private static func markMigrationApplied(_ name: String, db: Connection) throws {
+        try db.run(
+            "INSERT OR IGNORE INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+            name, ISO8601DateFormatter().string(from: Date())
+        )
+    }
+
+    private static func bridgeLegacyUserVersionMigrations(db: Connection) throws {
+        let version = (try? db.scalar("PRAGMA user_version")) as? Int64 ?? 0
+        if version >= seriesPlaceholdersKeyedMigrationVersion {
+            try markMigrationApplied(migrationNameSeriesPlaceholdersToKeyed, db: db)
+        }
+        if version >= dedupeSeriesCacheMigrationVersion {
+            try markMigrationApplied(migrationNameDedupeSeriesCache, db: db)
+        }
     }
 
     private static func createCollections(db: Connection) throws {
@@ -228,10 +287,10 @@ actor AmbrosiaMetaDB {
     /// once instead of on every cold start, and wrapped in a transaction so
     /// a crash mid-migration cannot leave the database without the table.
     private static let seriesPlaceholdersKeyedMigrationVersion: Int64 = 1
+    private static let migrationNameSeriesPlaceholdersToKeyed = "2025_series_placeholders_keyed"
 
     private static func migrateSeriesPlaceholdersToKeyedIfNeeded(db: Connection) throws {
-        let version = (try? db.scalar("PRAGMA user_version")) as? Int64 ?? 0
-        guard version < seriesPlaceholdersKeyedMigrationVersion else { return }
+        guard !hasAppliedMigration(migrationNameSeriesPlaceholdersToKeyed, db: db) else { return }
         try db.transaction {
             _ = try? db.run("ALTER TABLE series_placeholders ADD COLUMN series_key TEXT")
             try db.run("UPDATE series_placeholders SET series_key = 'calibre:' || series_name WHERE series_key IS NULL OR series_key = ''")
@@ -255,6 +314,7 @@ actor AmbrosiaMetaDB {
             CREATE INDEX IF NOT EXISTS idx_series_placeholders_key ON series_placeholders(series_key);
             """)
             try db.run("PRAGMA user_version = \(seriesPlaceholdersKeyedMigrationVersion)")
+            try markMigrationApplied(migrationNameSeriesPlaceholdersToKeyed, db: db)
         }
     }
 
@@ -268,10 +328,10 @@ actor AmbrosiaMetaDB {
     /// NOT NULL`), leaving only the genuine AO3 series membership. Gated on
     /// `PRAGMA user_version` per Invariant 11 so it runs exactly once.
     private static let dedupeSeriesCacheMigrationVersion: Int64 = 2
+    private static let migrationNameDedupeSeriesCache = "2025_dedupe_series_cache"
 
     private static func dedupeSeriesCacheIfNeeded(db: Connection) throws {
-        let version = (try? db.scalar("PRAGMA user_version")) as? Int64 ?? 0
-        guard version < dedupeSeriesCacheMigrationVersion else { return }
+        guard !hasAppliedMigration(migrationNameDedupeSeriesCache, db: db) else { return }
         try db.transaction {
             try db.run("""
                 DELETE FROM series_cache
@@ -281,6 +341,7 @@ actor AmbrosiaMetaDB {
                   )
                 """)
             try db.run("PRAGMA user_version = \(dedupeSeriesCacheMigrationVersion)")
+            try markMigrationApplied(migrationNameDedupeSeriesCache, db: db)
         }
     }
 
