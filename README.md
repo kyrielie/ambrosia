@@ -1,8 +1,22 @@
 # Ambrosia
 
-Ambrosia is a developer-preview native macOS EPUB library reader for AO3-heavy Calibre libraries. It reads Calibre's `metadata.db`, renders EPUBs in a custom reader, and stores Ambrosia-only state in a separate per-library database.
+Ambrosia is a native macOS EPUB library reader for AO3-heavy Calibre libraries. It reads Calibre's `metadata.db`, renders EPUBs in a custom reader, and stores Ambrosia-only state in a separate per-library database.
 
-The app is currently aimed at local development and testing. There are no packaged, notarized, or downloadable releases in this repository.
+## Screenshots
+
+<details>
+  <summary>📸 Click to expand screenshot gallery (7 Images)</summary>
+  <br>
+  <p align="center">
+    <img src="./screenshots/screenshot1.jpg" width="48%" alt="Screenshot 1">
+    <img src="./screenshots/screenshot2.jpg" width="48%" alt="Screenshot 2">
+    <img src="./screenshots/screenshot3.jpg" width="48%" alt="Screenshot 3">
+    <img src="./screenshots/screenshot4.jpg" width="48%" alt="Screenshot 4">
+    <img src="./screenshots/screenshot5.jpg" width="48%" alt="Screenshot 5">
+    <img src="./screenshots/screenshot6.jpg" width="48%" alt="Screenshot 6">
+    <img src="./screenshots/screenshot7.jpg" width="48%" alt="Screenshot 7">
+  </p>
+</details>
 
 ## Features
 
@@ -27,9 +41,6 @@ Either use command to bypass Gatekeeper or right-click, open, allow.
 ```zsh
 sudo xattr -rd com.apple.quarantine /path/to/Ambrosia.app
 ```
-
-## Screenshots
-
 
 
 ## Requirements
