@@ -927,6 +927,9 @@ final class EmailLibraryViewController: NSViewController {
                 restrictIDs = nil
                 filterForSQL = nil
             }
+            LibraryFilterDebug.log("loadPage.start", [
+                "surface": "email", "mode": "random", "page": currentPage
+            ])
             if isEmptyExplicitIDs {
                 if reset { books = [] }
                 hasNextPage = false
@@ -1349,7 +1352,9 @@ final class EmailLibraryViewController: NSViewController {
                     "collapsedIDs": collapsedIDs.count,
                     "items": nextItems.count,
                     "series": nextItems.filter { if case .series = $0 { return true }; return false }.count,
-                    "singletons": nextItems.filter { if case .book = $0 { return true }; return false }.count
+                    "singletons": nextItems.filter { if case .book = $0 { return true }; return false }.count,
+                    "firstIDs": pageBooks.prefix(5).map(\.id).map(String.init).joined(separator: ","),
+                    "firstTitles": pageBooks.prefix(5).map(\.title).joined(separator: " | ")
                 ])
             }
         }

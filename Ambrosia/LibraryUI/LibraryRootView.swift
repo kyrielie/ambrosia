@@ -452,6 +452,9 @@ struct LibraryRootView: View {
 
     @MainActor
     private func loadPage() async {
+        // §list-teardown fix: no-op if the List surface has been torn down
+        // (mode switched away). See LibraryToolbarState.isListSurfaceTornDown.
+        guard !toolbarState.isListSurfaceTornDown else { return }
         let loadStart = LibraryFilterDebug.now()
         guard let library = session.library else { books = []; return }
         let rawQuery = toolbarState.searchText.isEmpty
@@ -489,6 +492,7 @@ struct LibraryRootView: View {
                 query: query, filter: filterForSQL, restrictIDs: restrictIDs,
                 filterTagExpansions: cachedFilterTagExpansions
             )
+            guard !toolbarState.isListSurfaceTornDown else { return }
             books = page
             hasNextPage = hasMore
         } else if toolbarState.sortField == .wordCount {
@@ -524,6 +528,7 @@ struct LibraryRootView: View {
                 query: query, filter: filterForSQL, restrictIDs: restrictIDs,
                 filterTagExpansions: cachedFilterTagExpansions
             )
+            guard !toolbarState.isListSurfaceTornDown else { return }
             books = page
             hasNextPage = hasMore
         } else if let result = toolbarState.activeFilterResult, result.isSQLBacked {
@@ -566,6 +571,7 @@ struct LibraryRootView: View {
                     visible.append(contentsOf: visibleBooks(raw))
                     if raw.count < pageFetchLimit { exhausted = true; break }
                 }
+                guard !toolbarState.isListSurfaceTornDown else { return }
                 rawSQLOffsetHistory.append(rawSQLOffset)
                 rawSQLOffset = offset
                 hasNextPage = !exhausted || visible.count > pageSize
@@ -589,6 +595,7 @@ struct LibraryRootView: View {
                     filterTagExpansions: cachedFilterTagExpansions
                 )
                 let visible = visibleBooks(raw)
+                guard !toolbarState.isListSurfaceTornDown else { return }
                 hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
                 books = Array(visible.prefix(pageSize))
                 LibraryFilterDebug.log("visibleBooks.end", [
@@ -616,6 +623,7 @@ struct LibraryRootView: View {
                 sort: toolbarState.sortField, ascending: toolbarState.ascending,
                 query: query
             )
+            guard !toolbarState.isListSurfaceTornDown else { return }
             hasNextPage = raw.count > pageSize
             books = Array(raw.prefix(pageSize))
         } else if toolbarState.activeFilterResult != nil {
@@ -655,6 +663,7 @@ struct LibraryRootView: View {
                     visible.append(contentsOf: visibleBooks(raw))
                     if raw.count < pageFetchLimit { exhausted = true; break }
                 }
+                guard !toolbarState.isListSurfaceTornDown else { return }
                 rawSQLOffsetHistory.append(rawSQLOffset)
                 rawSQLOffset = offset
                 hasNextPage = !exhausted || visible.count > pageSize
@@ -676,6 +685,7 @@ struct LibraryRootView: View {
                     query: query
                 )
                 let visible = visibleBooks(raw)
+                guard !toolbarState.isListSurfaceTornDown else { return }
                 hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
                 books = Array(visible.prefix(pageSize))
                 LibraryFilterDebug.log("visibleBooks.end", [
@@ -713,6 +723,8 @@ struct LibraryRootView: View {
     }
 
     private func rebuildItems() {
+        // §list-teardown fix: no-op if the List surface has been torn down.
+        guard !toolbarState.isListSurfaceTornDown else { return }
         guard shouldGroupSeriesRows, let metaDB = session.metaDB, let library = session.library else {
             LibraryFilterDebug.log("rebuildItems.sync", [
                 "surface": "list",
@@ -908,6 +920,9 @@ struct LibraryRootView: View {
                 collapsedIDs: collapsedIDs
             )
             await MainActor.run {
+                // §list-teardown fix: no-op if the List surface was torn down
+                // while this Task was in flight.
+                guard !self.toolbarState.isListSurfaceTornDown else { return }
                 // Staleness guard: if loadPage() ran again while this Task was in
                 // flight, books has changed and these results are stale — discard
                 // them rather than overwriting newer state. Mirrors the equivalent
@@ -1019,6 +1034,8 @@ struct LibraryRootView: View {
     }
 
     private func refreshBookStates() {
+        // §list-teardown fix: no-op if the List surface has been torn down.
+        guard !toolbarState.isListSurfaceTornDown else { return }
         let all = (try? modelContext.fetch(FetchDescriptor<BookState>())) ?? []
         bookStates = all.reduce(into: [:]) { $0[$1.calibreID] = $1 }
         Task {
@@ -1034,6 +1051,7 @@ struct LibraryRootView: View {
             let currentReadLater = Set((try? await fetchedReadLater) ?? [])
             let currentSkipped = Set((try? await fetchedSkipped) ?? [])
             let currentSeriesOrMerged = Set((try? await fetchedSeriesOrMerged) ?? [])
+            guard !toolbarState.isListSurfaceTornDown else { return }
             await MainActor.run {
             likedIDs = currentLiked
             readLaterIDs = currentReadLater
