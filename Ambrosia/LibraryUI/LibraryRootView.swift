@@ -75,10 +75,19 @@ struct LibraryRootView: View {
     @State private var skippedIDs: Set<Int> = []
     @State private var seriesOrMergedIDs: Set<Int> = []
     @State private var ao3PublisherIDs: Set<Int> = []
+    @State private var anthologyIDs: Set<Int> = []
     @State private var selectedIDs: Set<Int> = []
     @State private var fullTextTask: Task<Void, Never>? = nil
     @State private var filterCountTask: Task<Void, Never>? = nil
     @State private var rebuildTask: Task<Void, Never>? = nil
+    // Every `Task { await loadPage() }` call site below now goes through this
+    // instead of being fire-and-forget. Previously ~20 sites (sort/filter/page
+    // changes) could each spawn an untracked Task, and nothing cancelled a
+    // still-running one when a newer change superseded it — same-surface calls
+    // could interleave and last-write-wins on `books`/`items`/`hasNextPage` in
+    // an undefined order, and a task begun just before switching away from this
+    // view mode kept running with nothing to stop it. Matches the existing
+    // tracked-task idiom already used for fullTextTask/filterCountTask/rebuildTask.
     // §perf: prevents the onChange(reloadToken) handler from firing a duplicate
     // loadPage() when applyFilterRules() has already called it synchronously.
     @State private var suppressNextReloadToken = false
@@ -252,6 +261,7 @@ struct LibraryRootView: View {
                     skippedIDs = session.cachedSkippedIDs
                     seriesOrMergedIDs = session.cachedSeriesOrMergedIDs
                     ao3PublisherIDs = session.cachedAO3PublisherIDs
+                    anthologyIDs = session.cachedAnthologyIDs
                     Task { await loadPage() }
                     refreshBookStates()
                 }
@@ -383,8 +393,9 @@ struct LibraryRootView: View {
                         var seriesEntriesByBook: [Int: [SeriesCacheEntry]] = [:]
                         if toolbarState.groupBySeries, let metaDB = session.metaDB {
                             let ids = rows.map(\.book.id)
+                            let currentAnthologyIDs = await session.library?.anthologyBookIDs() ?? []
                             if let entries = try? await metaDB.seriesEntries(for: ids) {
-                                seriesEntriesByBook = Dictionary(grouping: entries.filter { !$0.isAnthology }, by: \.calibreID)
+                                seriesEntriesByBook = Dictionary(grouping: entries.filter { !currentAnthologyIDs.contains($0.calibreID) }, by: \.calibreID)
                             }
                         }
                         let (copied, skipped) = await ExportManager.exportEPUBs(
@@ -469,6 +480,7 @@ struct LibraryRootView: View {
         // §list-teardown fix: no-op if the List surface has been torn down
         // (mode switched away). See LibraryToolbarState.isListSurfaceTornDown.
         guard !toolbarState.isListSurfaceTornDown else { return }
+        guard !Task.isCancelled else { return }
         let loadStart = LibraryFilterDebug.now()
         guard let library = session.library else { books = []; return }
         let rawQuery = toolbarState.searchText.isEmpty
@@ -485,13 +497,13 @@ struct LibraryRootView: View {
         }
 
         if toolbarState.sortField == .random {
-            var restrictIDs: [Int]?
+            let restrictIDs: [Int]?
             let filterForSQL: FilterExpression?
             if let result = toolbarState.activeFilterResult, result.isSQLBacked {
                 restrictIDs = nil
                 filterForSQL = toolbarState.filterExpression
             } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
-                restrictIDs = visibleIDs(intersect(result.calibreIDs, with: query.ftsMatchedIDs))
+                restrictIDs = intersect(result.calibreIDs, with: query.ftsMatchedIDs)
                 filterForSQL = nil
             } else if toolbarState.activeFilterResult != nil {
                 books = []; items = []; hasNextPage = false
@@ -501,23 +513,20 @@ struct LibraryRootView: View {
                 restrictIDs = nil
                 filterForSQL = nil
             }
-            // §AO3-only-random fix: the two branches above that leave restrictIDs
-            // nil (SQL-backed filter, or no filter at all) never ran the result
-            // through visibleIDs(...), so hideNonAO3PublisherBooks (and skip/
-            // series-or-merged) were silently dropped for random sort whenever no
-            // explicit non-SQL filter was active — the exact case a plain "AO3
-            // only + random sort" browse hits. fetchAllMatchingIDs applies
-            // restrictIDs and filter together as AND conditions, so this combines
-            // safely with an active SQL-backed filter too.
-            if prefs.hideNonAO3PublisherBooks {
-                restrictIDs = intersect(restrictIDs ?? Array(ao3PublisherIDs), with: Array(ao3PublisherIDs))
-            }
+            // The visibility policy (skip/series-grouping/AO3-publisher-only/
+            // anthology) is now applied once, uniformly, inside
+            // randomSortedPage regardless of which branch above set
+            // restrictIDs — this replaces per-branch restrictIDs mutation
+            // hacks that used to leave the SQL-backed-filter and no-filter
+            // cases uncovered (see git history / prior session notes).
             let (page, hasMore) = await library.randomSortedPage(
                 offset: currentPage * pageSize, limit: pageSize,
                 query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                visibility: currentVisibilityPolicy,
                 filterTagExpansions: cachedFilterTagExpansions
             )
             guard !toolbarState.isListSurfaceTornDown else { return }
+            guard !Task.isCancelled else { return }
             books = page
             hasNextPage = hasMore
         } else if toolbarState.sortField == .wordCount {
@@ -531,7 +540,7 @@ struct LibraryRootView: View {
                 restrictIDs = nil
                 filterForSQL = toolbarState.filterExpression
             } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
-                restrictIDs = visibleIDs(intersect(result.calibreIDs, with: query.ftsMatchedIDs))
+                restrictIDs = intersect(result.calibreIDs, with: query.ftsMatchedIDs)
                 filterForSQL = nil
             } else if toolbarState.activeFilterResult != nil {
                 LibraryFilterDebug.log("loadPage.start", [
@@ -544,22 +553,18 @@ struct LibraryRootView: View {
                 restrictIDs = nil
                 filterForSQL = nil
             }
-            // §AO3-only-random fix (same pattern as .random above): fold in
-            // hideNonAO3PublisherBooks whenever restrictIDs wasn't already routed
-            // through visibleIDs(...).
-            let effectiveRestrictIDs: [Int]? = prefs.hideNonAO3PublisherBooks
-                ? intersect(restrictIDs ?? Array(ao3PublisherIDs), with: Array(ao3PublisherIDs))
-                : restrictIDs
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "list", "mode": "wordCountSorted", "page": currentPage,
                 "query": LibraryFilterDebug.summary(query: query)
             ])
             let (page, hasMore) = await library.wordCountSortedPage(
                 offset: currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
-                query: query, filter: filterForSQL, restrictIDs: effectiveRestrictIDs,
+                query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                visibility: currentVisibilityPolicy,
                 filterTagExpansions: cachedFilterTagExpansions
             )
             guard !toolbarState.isListSurfaceTornDown else { return }
+            guard !Task.isCancelled else { return }
             books = page
             hasNextPage = hasMore
         } else if let result = toolbarState.activeFilterResult, result.isSQLBacked {
@@ -603,6 +608,7 @@ struct LibraryRootView: View {
                     if raw.count < pageFetchLimit { exhausted = true; break }
                 }
                 guard !toolbarState.isListSurfaceTornDown else { return }
+                guard !Task.isCancelled else { return }
                 rawSQLOffsetHistory.append(rawSQLOffset)
                 rawSQLOffset = offset
                 hasNextPage = !exhausted || visible.count > pageSize
@@ -627,6 +633,7 @@ struct LibraryRootView: View {
                 )
                 let visible = visibleBooks(raw)
                 guard !toolbarState.isListSurfaceTornDown else { return }
+                guard !Task.isCancelled else { return }
                 hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
                 books = Array(visible.prefix(pageSize))
                 LibraryFilterDebug.log("visibleBooks.end", [
@@ -655,6 +662,7 @@ struct LibraryRootView: View {
                 query: query
             )
             guard !toolbarState.isListSurfaceTornDown else { return }
+            guard !Task.isCancelled else { return }
             hasNextPage = raw.count > pageSize
             books = Array(raw.prefix(pageSize))
         } else if toolbarState.activeFilterResult != nil {
@@ -695,6 +703,7 @@ struct LibraryRootView: View {
                     if raw.count < pageFetchLimit { exhausted = true; break }
                 }
                 guard !toolbarState.isListSurfaceTornDown else { return }
+                guard !Task.isCancelled else { return }
                 rawSQLOffsetHistory.append(rawSQLOffset)
                 rawSQLOffset = offset
                 hasNextPage = !exhausted || visible.count > pageSize
@@ -717,6 +726,7 @@ struct LibraryRootView: View {
                 )
                 let visible = visibleBooks(raw)
                 guard !toolbarState.isListSurfaceTornDown else { return }
+                guard !Task.isCancelled else { return }
                 hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
                 books = Array(visible.prefix(pageSize))
                 LibraryFilterDebug.log("visibleBooks.end", [
@@ -822,7 +832,7 @@ struct LibraryRootView: View {
                 print("[LibraryRootView] rebuildItems: seriesEntries(page) failed: \(error)")
                 #endif
             }
-            let groupedEntries = Dictionary(grouping: entries.filter { !$0.isAnthology }, by: \.seriesKey)
+            let groupedEntries = Dictionary(grouping: entries.filter { !anthologyIDs.contains($0.calibreID) }, by: \.seriesKey)
             let seriesKeys = groupedEntries.keys.sorted()
             let allEntries: [SeriesCacheEntry]
             guard !Task.isCancelled else { return }
@@ -884,7 +894,7 @@ struct LibraryRootView: View {
             }
             let warnings = enrichWarnings(singletonWarnings, books: pageBooks)
             let byID = Dictionary(uniqueKeysWithValues: allBooks.map { ($0.id, $0) })
-            let entriesBySeries = Dictionary(grouping: allEntries.filter { !$0.isAnthology }, by: \.seriesKey)
+            let entriesBySeries = Dictionary(grouping: allEntries.filter { !anthologyIDs.contains($0.calibreID) }, by: \.seriesKey)
             var collapsedIDs = Set<Int>()
             var seriesByKey: [String: SeriesGroup] = [:]
 
@@ -960,7 +970,8 @@ struct LibraryRootView: View {
                 entries: entries,
                 seriesByKey: seriesByKey,
                 collapsedIDs: collapsedIDs,
-                singletonWarningsByCalibreID: warnings
+                singletonWarningsByCalibreID: warnings,
+                anthologyIDs: anthologyIDs
             )
             await MainActor.run {
                 // §list-teardown fix: no-op if the List surface was torn down
@@ -1021,16 +1032,24 @@ struct LibraryRootView: View {
         toolbarState.groupBySeries || toolbarState.filterExpression.hasSeriesOrMergedEqualsRule
     }
 
-    private func visibleIDs(_ ids: [Int]) -> [Int] {
-        LibraryQueryHelpers.visibleIDs(
-            ids,
+    /// Single point where this surface's scattered visibility state
+    /// (skip/series-grouping/AO3-publisher/anthology bools + cached ID sets)
+    /// becomes one value. See LibraryVisibilityPolicy.swift.
+    private var currentVisibilityPolicy: LibraryVisibilityPolicy {
+        LibraryVisibilityPolicy(
             showSkippedCollection: prefs.showSkippedCollection,
             shouldGroupSeriesRows: shouldGroupSeriesRows,
+            hideNonAO3PublisherBooks: prefs.hideNonAO3PublisherBooks,
+            hideAnthologyBooks: prefs.hideAnthologyBooks,
             skippedIDs: skippedIDs,
             seriesOrMergedIDs: seriesOrMergedIDs,
-            hideNonAO3PublisherBooks: prefs.hideNonAO3PublisherBooks,
-            ao3PublisherIDs: ao3PublisherIDs
+            ao3PublisherIDs: ao3PublisherIDs,
+            anthologyIDs: anthologyIDs
         )
+    }
+
+    private func visibleIDs(_ ids: [Int]) -> [Int] {
+        currentVisibilityPolicy.filter(ids)
     }
 
     private func intersect(_ ids: [Int], with optionalIDs: [Int]?) -> [Int] {
@@ -1056,20 +1075,14 @@ struct LibraryRootView: View {
             ])
         }
         #endif
-        return LibraryQueryHelpers.visibleBooks(
-            raw,
-            showSkippedCollection: prefs.showSkippedCollection,
-            shouldGroupSeriesRows: shouldGroupSeriesRows,
-            skippedIDs: skippedIDs,
-            seriesOrMergedIDs: seriesOrMergedIDs,
-            hideNonAO3PublisherBooks: prefs.hideNonAO3PublisherBooks,
-            hideAnthologyBooks: prefs.hideAnthologyBooks
-        )
+        return currentVisibilityPolicy.filter(raw)
     }
 
     @MainActor
     private func refreshVisibilitySnapshots(resetPage: Bool = true) async {
         ao3PublisherIDs = await session.library?.ao3PublisherBookIDs() ?? []
+        anthologyIDs = await session.library?.anthologyBookIDs() ?? []
+        session.cachedAnthologyIDs = anthologyIDs
         if resetPage { currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = [] }
         if toolbarState.filterExpression.hasCompleteRules {
             applyFilterRules()
@@ -1092,6 +1105,7 @@ struct LibraryRootView: View {
             // CalibreLibrary is actor-isolated now, so a direct await serializes and
             // runs off-main on its own — no Task.detached wrapper needed.
             let currentAO3PublisherIDs = await capturedLibrary?.ao3PublisherBookIDs() ?? []
+            let currentAnthologyIDs = await capturedLibrary?.anthologyBookIDs() ?? []
             let currentLiked = (try? await fetchedLiked) ?? []
             let currentReadLater = Set((try? await fetchedReadLater) ?? [])
             let currentSkipped = Set((try? await fetchedSkipped) ?? [])
@@ -1104,12 +1118,14 @@ struct LibraryRootView: View {
             skippedIDs = currentSkipped
             seriesOrMergedIDs = currentSeriesOrMerged
             ao3PublisherIDs = currentAO3PublisherIDs
+            anthologyIDs = currentAnthologyIDs
             // Write back to session cache so the next mode switch gets
             // correct data on its first render.
             session.cachedLikedIDs = currentLiked
             session.cachedSkippedIDs = currentSkipped
             session.cachedSeriesOrMergedIDs = currentSeriesOrMerged
             session.cachedAO3PublisherIDs = currentAO3PublisherIDs
+            session.cachedAnthologyIDs = currentAnthologyIDs
             pruneSelection()
             currentPage = 0
             rawSQLOffset = 0
@@ -1306,7 +1322,6 @@ struct LibraryRootView: View {
             let filterTagExpansions = await TagExpansionResolver.filterTagExpansions(
                 for: expression, metaDB: session.metaDB
             )
-            cachedFilterTagExpansions = filterTagExpansions
             let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary,
                                         tagExpansions: filterTagExpansions)
 
@@ -1363,11 +1378,13 @@ struct LibraryRootView: View {
             let currentSkipped = Set((try? await fetchedSkipped) ?? [])
             let currentSeriesOrMerged = Set((try? await fetchedSeriesOrMerged) ?? [])
             let publisherIDs = await capturedLibrary2?.ao3PublisherBookIDs() ?? []
+            let currentAnthologyIDs2 = await capturedLibrary2?.anthologyBookIDs() ?? []
             let filteredIDs = prefs.showSkippedCollection
                 ? finalResult.calibreIDs
                 : finalResult.calibreIDs.filter { !currentSkipped.contains($0) }
             let visibleFilteredIDs = filteredIDs.filter { !currentSeriesOrMerged.contains($0) }
                 .filter { !prefs.hideNonAO3PublisherBooks || publisherIDs.contains($0) }
+                .filter { !prefs.hideAnthologyBooks || !currentAnthologyIDs2.contains($0) }
             guard toolbarState.libraryFilterApplicationToken == token else { return }
             defer { toolbarState.finishLibraryFilterApplication(token: token) }
             let cacheableResult = FilterResult(
@@ -1377,9 +1394,12 @@ struct LibraryRootView: View {
             toolbarState.activeFilterResult = cacheableResult
             session.rememberFilterResult(cacheableResult, for: expression)  // §7
             toolbarState.clearPendingFullTextSearch()
+            cachedFilterTagExpansions = filterTagExpansions
             likedIDs = currentLikedIDs
             skippedIDs = currentSkipped
             seriesOrMergedIDs = currentSeriesOrMerged
+            anthologyIDs = currentAnthologyIDs2
+            session.cachedAnthologyIDs = currentAnthologyIDs2
             selectedIDs.removeAll()
             suppressNextReloadToken = true   // §perf: we call loadPage() below; skip onChange duplicate
             currentPage = 0; rawSQLOffset = 0; rawSQLOffsetHistory = []; rawSQLOffsetOverflow = []; await loadPage()

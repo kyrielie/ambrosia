@@ -158,13 +158,14 @@ func assignSeriesItems(
     entries: [SeriesCacheEntry],
     seriesByKey: [String: SeriesGroup],
     collapsedIDs: Set<Int>,
-    singletonWarningsByCalibreID: [Int: [SingletonSeriesWarning]] = [:]
+    singletonWarningsByCalibreID: [Int: [SingletonSeriesWarning]] = [:],
+    anthologyIDs: Set<Int> = []
 ) -> [LibraryItem] {
     var nextItems: [LibraryItem] = []
     var emittedSeries = Set<String>()
     for book in pageBooks {
         let bookEntries = entries
-            .filter { $0.calibreID == book.id && !$0.isAnthology }
+            .filter { $0.calibreID == book.id && !anthologyIDs.contains($0.calibreID) }
             .sorted { $0.seriesKey < $1.seriesKey }
         let warningsBySeriesKey = Dictionary(
             uniqueKeysWithValues: (singletonWarningsByCalibreID[book.id] ?? []).map { ($0.seriesKey, $0) }

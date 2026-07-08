@@ -895,6 +895,13 @@ private struct DataTab: View {
             Section {
                 Toggle("Enable Daily Story feed", isOn: $prefs.feedServerEnableDailyStory)
 
+                Text("""
+                    The feed server is reachable by any device on your local network \
+                    while running — no authentication is required.
+                    """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 if rssCollections.isEmpty {
                     Text(rssCollections.isEmpty && AppDelegate.shared?.session?.isOpen == true
                          ? "No collections in the current library."

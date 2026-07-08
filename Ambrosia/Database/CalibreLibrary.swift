@@ -155,17 +155,31 @@ actor CalibreLibrary {
     }
 
     func anthologyBookIDs() -> Set<Int> {
+        // Cheap SQL prefilter: loose, unanchored candidate net over the raw HTML
+        // comment column. Comment blobs are large, so we don't want to fetch every
+        // one — this LIKE is still a cheap single-column scan.
         let rows = (try? db.prepare(
             """
-            SELECT book
+            SELECT book, text
             FROM comments
-            WHERE LOWER(LTRIM(text)) LIKE 'anthology%'
+            WHERE LOWER(text) LIKE '%anthology%'
             """
         ).map { $0 }) ?? []
-        return Set(rows.compactMap { row in
-            if let value = row[0] as? Int64 { return Int(value) }
-            return row[0] as? Int
-        })
+        var result = Set<Int>()
+        for row in rows {
+            guard let text = row[1] as? String else { continue }
+            let bookID: Int?
+            if let value = row[0] as? Int64 { bookID = Int(value) }
+            else { bookID = row[0] as? Int }
+            guard let id = bookID else { continue }
+            // Real, accurate check against HTML-stripped text, using the same
+            // anchored detector CalibreBook.isDescriptionAnthology uses, so the
+            // two checks can never drift apart.
+            if AnthologyDetector.isAnthology(rawComment: text) {
+                result.insert(id)
+            }
+        }
+        return result
     }
 
     func ao3PublisherBookIDs() -> Set<Int> {
@@ -339,10 +353,15 @@ actor CalibreLibrary {
     func wordCountSortedPage(offset: Int, limit: Int, ascending: Bool,
                               query: SearchQuery, filter: FilterExpression?,
                               restrictIDs: [Int]?,
+                              visibility: LibraryVisibilityPolicy = .allowAll,
                               filterTagExpansions: [String: [String]] = [:]) -> (page: [CalibreBook], hasMore: Bool) {
-        // 1. Fetch all matching IDs (no author/tag/comment hydration).
-        let allIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
+        // 1. Fetch all matching IDs (no author/tag/comment hydration), then
+        // apply the visibility policy (skip/series-grouping/AO3-publisher-only/
+        // anthology) once, here, instead of callers pre-intersecting restrictIDs
+        // with individual ID sets at each call site.
+        let matchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
                                          filterTagExpansions: filterTagExpansions)
+        let allIDs = visibility.filter(matchedIDs)
 
         // 2. Bulk-fetch word counts for this ID set only.
         let wordCounts: [Int: Int]
@@ -374,9 +393,11 @@ actor CalibreLibrary {
     func randomSortedPage(offset: Int, limit: Int,
                            query: SearchQuery, filter: FilterExpression?,
                            restrictIDs: [Int]?,
+                           visibility: LibraryVisibilityPolicy = .allowAll,
                            filterTagExpansions: [String: [String]] = [:]) -> (page: [CalibreBook], hasMore: Bool) {
-        let allIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
+        let matchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
                                          filterTagExpansions: filterTagExpansions)
+        let allIDs = visibility.filter(matchedIDs)
         let sortedIDs = sortedRandomly(allIDs)
         let start = min(offset, sortedIDs.count)
         let end   = min(offset + limit, sortedIDs.count)

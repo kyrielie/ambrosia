@@ -46,6 +46,7 @@ final class LibrarySession {
     var cachedSeriesOrMergedIDs: Set<Int> = []
     var cachedAO3PublisherIDs: Set<Int> = []
     var cachedReadLaterIDs: Set<Int> = []
+    var cachedAnthologyIDs: Set<Int> = []
 
     /// The path of the currently open library.
     private(set) var activePath: String?
@@ -139,6 +140,7 @@ final class LibrarySession {
             cachedSeriesOrMergedIDs = []
             cachedAO3PublisherIDs = []
             cachedReadLaterIDs = []
+            cachedAnthologyIDs = []
             LibraryRegistry.shared.register(url)
             LibraryIndexManager.shared.record(url: url)
             importAO3TagSeeds()
@@ -214,6 +216,7 @@ final class LibrarySession {
         cachedReadLaterIDs = []
         SearchActivityLog.shared.clear()
         cachedAO3PublisherIDs = []
+        cachedAnthologyIDs = []
         stopFeedServer()                                     // §4
     }
 

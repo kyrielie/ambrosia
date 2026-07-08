@@ -18,50 +18,11 @@ import SwiftData
 // pass. This file covers only the pieces that are genuinely identical.
 enum LibraryQueryHelpers {
 
-    /// Filters `ids` down to the ones that should actually be shown, given the
-    /// current skip/series-grouping/AO3-publisher visibility rules.
-    ///
-    /// Only suppresses `seriesOrMergedIDs` members when series grouping is
-    /// active and a SeriesGroup row is being shown to represent them. Without
-    /// grouping, suppressing them unconditionally would silently drop books
-    /// that are rn>1 in one series but rn=1 (representative) in another — the
-    /// multi-series-membership case.
-    static func visibleIDs(
-        _ ids: [Int],
-        showSkippedCollection: Bool,
-        shouldGroupSeriesRows: Bool,
-        skippedIDs: Set<Int>,
-        seriesOrMergedIDs: Set<Int>,
-        hideNonAO3PublisherBooks: Bool,
-        ao3PublisherIDs: Set<Int>
-    ) -> [Int] {
-        ids.filter { id in
-            (showSkippedCollection || !skippedIDs.contains(id)) &&
-            (!shouldGroupSeriesRows || !seriesOrMergedIDs.contains(id)) &&
-            (!hideNonAO3PublisherBooks || ao3PublisherIDs.contains(id))
-        }
-    }
-
-    /// Filters raw `CalibreBook` results down to the ones that should actually
-    /// be rendered, given the same visibility rules as `visibleIDs`, plus
-    /// optional anthology exclusion (see `CalibreBook.isDescriptionAnthology`
-    /// and `ReaderPreferences.hideAnthologyBooks`).
-    static func visibleBooks(
-        _ raw: [CalibreBook],
-        showSkippedCollection: Bool,
-        shouldGroupSeriesRows: Bool,
-        skippedIDs: Set<Int>,
-        seriesOrMergedIDs: Set<Int>,
-        hideNonAO3PublisherBooks: Bool,
-        hideAnthologyBooks: Bool
-    ) -> [CalibreBook] {
-        raw.filter { book in
-            (showSkippedCollection || !skippedIDs.contains(book.id)) &&
-            (!shouldGroupSeriesRows || !seriesOrMergedIDs.contains(book.id)) &&
-            (!hideNonAO3PublisherBooks || book.isAO3PublisherBook) &&
-            (!hideAnthologyBooks || !book.isDescriptionAnthology)
-        }
-    }
+    /// NOTE: `visibleIDs`/`visibleBooks` used to live here as free functions
+    /// taking 6-8 parameters each. Both call sites (LibraryRootView,
+    /// EmailLibraryViewController) now build a `LibraryVisibilityPolicy` once
+    /// (`currentVisibilityPolicy`) and call `.filter(_:)` directly — see
+    /// LibraryVisibilityPolicy.swift. Retired rather than left as unused dead code.
 
     /// Intersects `ids` with `optionalIDs`, or returns `ids` unchanged if
     /// `optionalIDs` is nil (i.e. "no additional restriction").

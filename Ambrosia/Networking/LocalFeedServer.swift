@@ -17,7 +17,7 @@ import FlyingFox
 //     stops FlyingFox immediately.
 //
 // Security posture:
-//   • Binds to loopback only by default (127.0.0.1:<port>).
+//   • Binds to all network interfaces (.inet) so other devices on the LAN can connect.
 //   • No auth — this is a local-only feed for a single user's library.
 //   • Off by default; user must enable in Preferences.
 //
@@ -79,7 +79,6 @@ actor LocalFeedServer {
 
     struct Config {
         var port: UInt16 = 8765
-        var bindLoopbackOnly: Bool = true
     }
 
     // MARK: Stored state
@@ -208,7 +207,7 @@ actor LocalFeedServer {
         let port = config.port
         serverTask = Task {
             do {
-                let server = HTTPServer(address: .loopback(port: port))
+                let server = HTTPServer(address: .inet(port: port))
                 await server.appendRoute("GET /") { [capturedSelf] _ in
                     try await capturedSelf.handleIndex()
                 }
@@ -216,10 +215,16 @@ actor LocalFeedServer {
                     try await capturedSelf.handleCollectionFeed(request: request)
                 }
                 await server.appendRoute("GET /feed/search.xml") { [capturedSelf] _ in
-                    try await capturedSelf.handleSearchFeed()
+                    try await capturedSelf.handleSearchFeed(format: .rss)
+                }
+                await server.appendRoute("GET /feed/search.json") { [capturedSelf] _ in
+                    try await capturedSelf.handleSearchFeed(format: .json)
                 }
                 await server.appendRoute("GET /feed/random-daily.xml") { [capturedSelf] _ in
-                    try await capturedSelf.handleRandomDailyFeed()
+                    try await capturedSelf.handleRandomDailyFeed(format: .rss)
+                }
+                await server.appendRoute("GET /feed/random-daily.json") { [capturedSelf] _ in
+                    try await capturedSelf.handleRandomDailyFeed(format: .json)
                 }
                 await server.appendRoute("GET /feeds.opml") { [capturedSelf] _ in
                     try await capturedSelf.handleOPML()
@@ -237,6 +242,14 @@ actor LocalFeedServer {
 
     // MARK: - Route handlers
 
+    /// Serialization format for a feed route. `.rss` keeps the existing hand-rolled
+    /// XML string builder; `.json` uses the Codable-based JSON Feed 1.1 builder.
+    /// Both consume the same book/AO3-metadata fetch — see `fetchFeedBooks(calibreIDs:)`.
+    private enum FeedFormat {
+        case rss
+        case json
+    }
+
     private func handleIndex() async throws -> HTTPResponse {
         let ud = UserDefaults.standard
         let excludedRaw = ud.string(forKey: "rp.feedServerExcludedCollectionIDs") ?? ""
@@ -246,15 +259,18 @@ actor LocalFeedServer {
         let collections = ((try? await collectionStore?.collections()) ?? [])
             .filter { !excluded.contains($0.id) }
         var links = collections.map { col in
-            "<li><a href=\"/feed/collection/\(col.id).xml\">\(htmlEscape(col.name))</a></li>"
+            "<li><a href=\"/feed/collection/\(col.id).xml\">\(htmlEscape(col.name))</a> " +
+            "(<a href=\"/feed/collection/\(col.id).json\">JSON</a>)</li>"
         }.joined(separator: "\n")
 
         if dailyEnabled {
-            links += "\n<li><a href=\"/feed/random-daily.xml\">Daily Story</a></li>"
+            links += "\n<li><a href=\"/feed/random-daily.xml\">Daily Story</a> " +
+                     "(<a href=\"/feed/random-daily.json\">JSON</a>)</li>"
         }
 
         if let snapshot = CurrentSearchSnapshot.load() {
-            links += "\n<li><a href=\"/feed/search.xml\">Current Search: \(htmlEscape(snapshot.label))</a></li>"
+            links += "\n<li><a href=\"/feed/search.xml\">Current Search: \(htmlEscape(snapshot.label))</a> " +
+                     "(<a href=\"/feed/search.json\">JSON</a>)</li>"
         }
 
         let html = """
@@ -276,15 +292,21 @@ actor LocalFeedServer {
     }
 
     private func handleCollectionFeed(request: HTTPRequest) async throws -> HTTPResponse {
-        // Extract collection ID from path: /feed/collection/<id>.xml
+        // Extract collection ID and format from path: /feed/collection/<id>.xml|.json
         let path = request.path               // e.g. "/feed/collection/abc123.xml"
         guard path.hasPrefix("/feed/collection/") else {
             return HTTPResponse(statusCode: .notFound)
         }
         let suffix = String(path.dropFirst("/feed/collection/".count))
-        let collectionID = suffix.hasSuffix(".xml")
-            ? String(suffix.dropLast(4))
-            : suffix
+        let format: FeedFormat = suffix.hasSuffix(".json") ? .json : .rss
+        let collectionID: String
+        if suffix.hasSuffix(".json") {
+            collectionID = String(suffix.dropLast(5))
+        } else if suffix.hasSuffix(".xml") {
+            collectionID = String(suffix.dropLast(4))
+        } else {
+            collectionID = suffix
+        }
 
         guard !collectionID.isEmpty else {
             return HTTPResponse(statusCode: .notFound)
@@ -303,39 +325,77 @@ actor LocalFeedServer {
         }
         let memberIDs = (try? await collectionStore?.members(of: collectionID)) ?? []
 
-        let xml = try await buildRSSFeed(
-            title: "Ambrosia — \(collection.name)",
-            feedDescription: "Books in the \(collection.name) collection",
-            calibreIDs: memberIDs
-        )
-        return HTTPResponse(statusCode: .ok,
-                            headers: [.contentType: "application/rss+xml; charset=utf-8"],
-                            body: Data(xml.utf8))
-    }
-
-    private func handleSearchFeed() async throws -> HTTPResponse {
-        guard let snapshot = CurrentSearchSnapshot.load() else {
-            let empty = buildEmptyFeed(title: "Ambrosia — Current Search",
-                                       message: "No search has been published yet.")
+        switch format {
+        case .rss:
+            let xml = try await buildRSSFeed(
+                title: "Ambrosia — \(collection.name)",
+                feedDescription: "Books in the \(collection.name) collection",
+                calibreIDs: memberIDs
+            )
             return HTTPResponse(statusCode: .ok,
                                 headers: [.contentType: "application/rss+xml; charset=utf-8"],
-                                body: Data(empty.utf8))
+                                body: Data(xml.utf8))
+        case .json:
+            let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
+            let json = try await buildJSONFeed(
+                title: "Ambrosia — \(collection.name)",
+                feedDescription: "Books in the \(collection.name) collection",
+                calibreIDs: memberIDs,
+                feedURL: "\(baseURL)/feed/collection/\(collectionID).json"
+            )
+            return HTTPResponse(statusCode: .ok,
+                                headers: [.contentType: "application/feed+json; charset=utf-8"],
+                                body: json)
         }
-        let xml = try await buildRSSFeed(
-            title: "Ambrosia — \(snapshot.label)",
-            feedDescription: "Published search snapshot from \(snapshot.publishedAt)",
-            calibreIDs: snapshot.calibreIDs
-        )
-        return HTTPResponse(statusCode: .ok,
-                            headers: [.contentType: "application/rss+xml; charset=utf-8"],
-                            body: Data(xml.utf8))
+    }
+
+    private func handleSearchFeed(format: FeedFormat) async throws -> HTTPResponse {
+        guard let snapshot = CurrentSearchSnapshot.load() else {
+            switch format {
+            case .rss:
+                let empty = buildEmptyFeed(title: "Ambrosia — Current Search",
+                                           message: "No search has been published yet.")
+                return HTTPResponse(statusCode: .ok,
+                                    headers: [.contentType: "application/rss+xml; charset=utf-8"],
+                                    body: Data(empty.utf8))
+            case .json:
+                let empty = buildEmptyJSONFeed(title: "Ambrosia — Current Search",
+                                               feedDescription: "No search has been published yet.",
+                                               feedURL: "\(localNetworkURLSync ?? "http://localhost:\(_port)")/feed/search.json")
+                return HTTPResponse(statusCode: .ok,
+                                    headers: [.contentType: "application/feed+json; charset=utf-8"],
+                                    body: empty)
+            }
+        }
+        switch format {
+        case .rss:
+            let xml = try await buildRSSFeed(
+                title: "Ambrosia — \(snapshot.label)",
+                feedDescription: "Published search snapshot from \(snapshot.publishedAt)",
+                calibreIDs: snapshot.calibreIDs
+            )
+            return HTTPResponse(statusCode: .ok,
+                                headers: [.contentType: "application/rss+xml; charset=utf-8"],
+                                body: Data(xml.utf8))
+        case .json:
+            let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
+            let json = try await buildJSONFeed(
+                title: "Ambrosia — \(snapshot.label)",
+                feedDescription: "Published search snapshot from \(snapshot.publishedAt)",
+                calibreIDs: snapshot.calibreIDs,
+                feedURL: "\(baseURL)/feed/search.json"
+            )
+            return HTTPResponse(statusCode: .ok,
+                                headers: [.contentType: "application/feed+json; charset=utf-8"],
+                                body: json)
+        }
     }
 
     /// A single random book, re-picked once per UTC calendar day. The seed is
     /// derived from the day index, not a stored value, so it is stable for any
     /// number of polls within the same day and changes deterministically at
     /// the next UTC midnight.
-    private func handleRandomDailyFeed() async throws -> HTTPResponse {
+    private func handleRandomDailyFeed(format: FeedFormat) async throws -> HTTPResponse {
         let ud = UserDefaults.standard
         let dailyEnabled = ud.object(forKey: "rp.feedServerEnableDailyStory").flatMap { _ in ud.bool(forKey: "rp.feedServerEnableDailyStory") as Bool? } ?? false
         guard dailyEnabled else {
@@ -346,21 +406,45 @@ actor LocalFeedServer {
         }
         let allIDs = await library.allBookIDs()
         guard !allIDs.isEmpty else {
-            return HTTPResponse(statusCode: .ok,
-                headers: [.contentType: "application/rss+xml; charset=utf-8"],
-                body: Data(buildEmptyFeed(title: "Ambrosia — Daily Story",
-                                         message: "No books in library.").utf8))
+            switch format {
+            case .rss:
+                return HTTPResponse(statusCode: .ok,
+                    headers: [.contentType: "application/rss+xml; charset=utf-8"],
+                    body: Data(buildEmptyFeed(title: "Ambrosia — Daily Story",
+                                             message: "No books in library.").utf8))
+            case .json:
+                let empty = buildEmptyJSONFeed(title: "Ambrosia — Daily Story",
+                                               feedDescription: "No books in library.",
+                                               feedURL: "\(localNetworkURLSync ?? "http://localhost:\(_port)")/feed/random-daily.json")
+                return HTTPResponse(statusCode: .ok,
+                    headers: [.contentType: "application/feed+json; charset=utf-8"],
+                    body: empty)
+            }
         }
         let seed = Int(Date().timeIntervalSince1970 / 86400)
         let picked = allIDs[seed % allIDs.count]
-        let xml = try await buildRSSFeed(
-            title: "Ambrosia — Daily Story",
-            feedDescription: "A random story from your library, refreshed each day.",
-            calibreIDs: [picked]
-        )
-        return HTTPResponse(statusCode: .ok,
-            headers: [.contentType: "application/rss+xml; charset=utf-8"],
-            body: Data(xml.utf8))
+        switch format {
+        case .rss:
+            let xml = try await buildRSSFeed(
+                title: "Ambrosia — Daily Story",
+                feedDescription: "A random story from your library, refreshed each day.",
+                calibreIDs: [picked]
+            )
+            return HTTPResponse(statusCode: .ok,
+                headers: [.contentType: "application/rss+xml; charset=utf-8"],
+                body: Data(xml.utf8))
+        case .json:
+            let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
+            let json = try await buildJSONFeed(
+                title: "Ambrosia — Daily Story",
+                feedDescription: "A random story from your library, refreshed each day.",
+                calibreIDs: [picked],
+                feedURL: "\(baseURL)/feed/random-daily.json"
+            )
+            return HTTPResponse(statusCode: .ok,
+                headers: [.contentType: "application/feed+json; charset=utf-8"],
+                body: json)
+        }
     }
 
     /// Generates an OPML 2.0 outline of every collection feed, plus the
@@ -435,20 +519,30 @@ actor LocalFeedServer {
 
     // MARK: - RSS generation
 
+    // MARK: - Shared feed data fetch (used by both RSS and JSON Feed builders)
+
+    /// Bulk-fetches Calibre book stubs plus their AO3 metadata for a set of
+    /// calibre IDs. Both `buildRSSFeed` and `buildJSONFeed` serialize this same
+    /// pairing differently — this is the one place that touches Calibre/AmbrosiaMetaDB.
+    private func fetchFeedBooks(calibreIDs: [Int]) async -> [(book: CalibreBook, ao3: AO3MetadataRecord?)] {
+        guard let library, let metaDB else { return [] }
+        let ao3Map = (try? await metaDB.ao3Metadata(for: calibreIDs)) ?? [:]
+        let books = await library.books(ids: calibreIDs, offset: 0, limit: min(calibreIDs.count, 500),
+                                   sort: .title, ascending: true)
+        return books.map { ($0, ao3Map[$0.id]) }
+    }
+
+    // MARK: - RSS generation
+
     private func buildRSSFeed(title: String,
                                feedDescription: String,
                                calibreIDs: [Int]) async throws -> String {
-        guard let library, let metaDB else { return buildEmptyFeed(title: title, message: "No library open.") }
+        guard let library else { return buildEmptyFeed(title: title, message: "No library open.") }
 
-        let ao3Map = (try? await metaDB.ao3Metadata(for: calibreIDs)) ?? [:]
-
-        // Fetch book stubs from Calibre (title, series, path) — bulk, not per-book.
-        let books = await library.books(ids: calibreIDs, offset: 0, limit: min(calibreIDs.count, 500),
-                                   sort: .title, ascending: true)
+        let pairs = await fetchFeedBooks(calibreIDs: calibreIDs)
 
         var items: [String] = []
-        for book in books {
-            let ao3 = ao3Map[book.id]
+        for (book, ao3) in pairs {
             let itemXML = await buildRSSItem(book: book, ao3: ao3, library: library)
             items.append(itemXML)
         }
@@ -526,6 +620,192 @@ actor LocalFeedServer {
         return xml
     }
 
+    // MARK: - JSON Feed generation
+    //
+    // JSON Feed 1.1 (https://www.jsonfeed.org/version/1.1/), served as an additional
+    // route alongside RSS — same routes, `.json` instead of `.xml` — not a replacement.
+    // Reuses `fetchFeedBooks` for the Calibre/AO3 fetch; only the serializer differs.
+    // Two things this gets us that hand-rolled RSS strings can't cleanly express:
+    //   - `authors` as a real array of `{name, url}` objects instead of one
+    //     comma-joined string in a single RSS <author> tag.
+    //   - `tags` as a real array (fandoms/relationships/characters/additional tags/
+    //     categories/Calibre tags), where the RSS builder has no tag/category field
+    //     at all today.
+    // `JSONEncoder` also removes the hand-rolled `xmlEscape` class of bug (its four-
+    // character escape list) for this route — JSON string escaping is handled by
+    // the encoder, not by us.
+    //
+    // JSON Feed 1.1 has no book-specific fields, so word count, chapter progress,
+    // completion, AO3 rating/warnings/categories, series, and date_modified ride
+    // in a per-item `_ambrosia` extension object (the spec's underscore-prefixed
+    // convention for reader-specific data) rather than being flattened into prose
+    // inside `summary`. Readers that don't recognize `_ambrosia` just ignore it.
+
+    private struct JSONFeedAuthor: Codable {
+        var name: String?
+        var url: String?
+    }
+
+    private struct JSONFeedSeriesEntry: Codable {
+        var name: String
+        var index: Int
+        var ao3_id: String?
+    }
+
+    /// Ambrosia-specific metadata that has no JSON Feed 1.1 field of its own.
+    /// Sent under the spec's `_`-prefixed extension convention — readers that
+    /// don't recognize `_ambrosia` ignore it; ones that do get real structured
+    /// data instead of the prose stats line baked into `summary`.
+    private struct JSONFeedAmbrosiaExtension: Codable {
+        var word_count: Int?
+        var chapter_current: Int?
+        var chapter_total: Int?
+        var is_complete: Bool?
+        var fandoms: [String]?
+        var relationships: [String]?
+        var characters: [String]?
+        var ratings: [String]?
+        var warnings: [String]?
+        var categories: [String]?
+        var series: [JSONFeedSeriesEntry]?
+        var date_modified: String?
+    }
+
+    private struct JSONFeedItem: Codable {
+        var id: String
+        var url: String?
+        var title: String?
+        var content_html: String?
+        var summary: String?
+        var date_published: String?
+        var authors: [JSONFeedAuthor]?
+        var tags: [String]?
+        var _ambrosia: JSONFeedAmbrosiaExtension?
+    }
+
+    private struct JSONFeedDocument: Codable {
+        var version = "https://jsonfeed.org/version/1.1"
+        var title: String
+        var description: String?
+        var home_page_url: String?
+        var feed_url: String?
+        var items: [JSONFeedItem]
+    }
+
+    private static let jsonFeedEncoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
+    }()
+
+    private func buildJSONFeed(title: String,
+                                feedDescription: String,
+                                calibreIDs: [Int],
+                                feedURL: String) async throws -> Data {
+        guard let library else {
+            return buildEmptyJSONFeed(title: title, feedDescription: "No library open.", feedURL: feedURL)
+        }
+
+        let pairs = await fetchFeedBooks(calibreIDs: calibreIDs)
+        var items: [JSONFeedItem] = []
+        for (book, ao3) in pairs {
+            items.append(await buildJSONFeedItem(book: book, ao3: ao3, library: library))
+        }
+
+        let doc = JSONFeedDocument(
+            title: title,
+            description: feedDescription,
+            home_page_url: nil,
+            feed_url: feedURL,
+            items: items
+        )
+        return (try? Self.jsonFeedEncoder.encode(doc)) ?? buildEmptyJSONFeed(title: title, feedDescription: feedDescription, feedURL: feedURL)
+    }
+
+    private func buildEmptyJSONFeed(title: String, feedDescription: String, feedURL: String) -> Data {
+        let doc = JSONFeedDocument(title: title, description: feedDescription, home_page_url: nil, feed_url: feedURL, items: [])
+        return (try? Self.jsonFeedEncoder.encode(doc)) ?? Data("{}".utf8)
+    }
+
+    private func buildJSONFeedItem(book: CalibreBook,
+                                    ao3: AO3MetadataRecord?,
+                                    library: CalibreLibrary) async -> JSONFeedItem {
+        // summary is just the stripped comment now — word count, chapters,
+        // completion, fandoms/rating/warnings/categories/series all ride as
+        // structured data in `_ambrosia` instead of a prose stats line.
+        let summary = book.comment.map { HTMLStripper.strip($0) } ?? ""
+
+        let contentHTML = await cachedMergedHTML(book: book, library: library)
+
+        let datePublished: String?
+        if let ao3Date = ao3?.publishedDate, !ao3Date.isEmpty {
+            datePublished = iso8601DateString(from: ao3Date)
+        } else if let calibreDate = book.publishedDate,
+                  calibreDate > Self.calibrePubdateSentinel {
+            datePublished = iso8601DateString(from: calibreDate)
+        } else {
+            datePublished = nil
+        }
+
+        // Real author array — one JSONFeedAuthor per author name, unlike RSS's
+        // single comma-joined <author>. Only attach an AO3 profile URL when there's
+        // exactly one author, since `authorUsername` is a single AO3 field and
+        // guessing which of several co-authors it belongs to would be wrong.
+        let authors: [JSONFeedAuthor]? = book.authors.isEmpty ? nil : book.authors.map { name in
+            let url = (book.authors.count == 1 ? ao3?.authorUsername : nil)
+                .map { "https://archiveofourown.org/users/\($0)" }
+            return JSONFeedAuthor(name: name, url: url)
+        }
+
+        // Plain tag list is freeform only now: Calibre's regular tags (ratings/
+        // warnings/categories classified out via AO3TagBuckets) plus AO3's own
+        // "Additional Tags" field, which AO3 itself treats as freeform. Fandoms,
+        // relationships, characters, ratings, warnings, and categories are all
+        // structured entity types, not freeform tags, so they move to `_ambrosia`
+        // as their own typed arrays instead of being flattened into `tags`.
+        let buckets = AO3TagBuckets.from(tags: book.tags)
+        var seenTags = Set<String>()
+        var tags: [String] = []
+        for tag in buckets.regular + (ao3?.additionalTags ?? []) {
+            if seenTags.insert(tag).inserted { tags.append(tag) }
+        }
+
+        func dedup(_ values: [String]) -> [String] {
+            var seen = Set<String>()
+            return values.filter { seen.insert($0).inserted }
+        }
+        let categories = dedup(buckets.categories + (ao3?.categories ?? []))
+
+        let dateModified = ao3?.updatedDate.flatMap { $0.isEmpty ? nil : iso8601DateString(from: $0) }
+
+        let ambrosiaExtension = JSONFeedAmbrosiaExtension(
+            word_count: ao3?.wordCount ?? book.wordCount,
+            chapter_current: ao3?.chapterCurrent,
+            chapter_total: ao3?.chapterTotal,
+            is_complete: ao3?.isComplete,
+            fandoms: ao3?.fandoms.flatMap { $0.isEmpty ? nil : $0 },
+            relationships: ao3?.relationships.flatMap { $0.isEmpty ? nil : $0 },
+            characters: ao3?.characters.flatMap { $0.isEmpty ? nil : $0 },
+            ratings: buckets.ratings.isEmpty ? nil : buckets.ratings,
+            warnings: buckets.warnings.isEmpty ? nil : buckets.warnings,
+            categories: categories.isEmpty ? nil : categories,
+            series: ao3?.series.map { JSONFeedSeriesEntry(name: $0.name, index: $0.index, ao3_id: $0.ao3ID) },
+            date_modified: dateModified
+        )
+
+        return JSONFeedItem(
+            id: "ambrosia-book-\(book.id)",
+            url: ao3?.storyURL,
+            title: book.displayTitle,
+            content_html: contentHTML.isEmpty ? nil : contentHTML,
+            summary: summary.isEmpty ? nil : summary,
+            date_published: datePublished,
+            authors: authors,
+            tags: tags.isEmpty ? nil : tags,
+            _ambrosia: ambrosiaExtension
+        )
+    }
+
     private func buildStatsLine(book: CalibreBook, ao3: AO3MetadataRecord?) -> String {
         var parts: [String] = []
         if let wc = ao3?.wordCount ?? book.wordCount, wc > 0 {
@@ -588,18 +868,21 @@ actor LocalFeedServer {
 
     private func htmlEscape(_ s: String) -> String { xmlEscape(s) }
 
-    private func rfc822Date(from isoString: String) -> String {
-        // Try to parse as ISO 8601 date, return RFC 822 for the <pubDate> field.
+    /// Tries ISO 8601 with fractional seconds, then without, then a bare
+    /// yyyy-MM-dd date. Shared by both the RSS (RFC 822) and JSON Feed (ISO 8601)
+    /// date formatters below so there's one parsing chain, not two.
+    private func parseFlexibleDate(_ isoString: String) -> Date? {
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = iso.date(from: isoString) ?? {
-            iso.formatOptions = [.withInternetDateTime]
-            return iso.date(from: isoString)
-        }() ?? {
-            let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.locale = Locale(identifier: "en_US_POSIX")
-            return f.date(from: isoString)
-        }()
-        return rfc822Date(from: date ?? Date.distantPast)
+        if let date = iso.date(from: isoString) { return date }
+        iso.formatOptions = [.withInternetDateTime]
+        if let date = iso.date(from: isoString) { return date }
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.locale = Locale(identifier: "en_US_POSIX")
+        return f.date(from: isoString)
+    }
+
+    private func rfc822Date(from isoString: String) -> String {
+        rfc822Date(from: parseFlexibleDate(isoString) ?? Date.distantPast)
     }
 
     private func rfc822Date(from date: Date) -> String {
@@ -608,5 +891,13 @@ actor LocalFeedServer {
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = TimeZone(identifier: "UTC")
         return f.string(from: date)
+    }
+
+    private func iso8601DateString(from isoString: String) -> String {
+        iso8601DateString(from: parseFlexibleDate(isoString) ?? Date.distantPast)
+    }
+
+    private func iso8601DateString(from date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
     }
 }

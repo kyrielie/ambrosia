@@ -23,6 +23,7 @@
 		622978642FEE18E900F0D47A /* FlyingSocks in Frameworks */ = {isa = PBXBuildFile; productRef = 622978632FEE18E900F0D47A /* FlyingSocks */; };
 		6229786E2FEE318600F0D47A /* LocalFeedServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6229786C2FEE318600F0D47A /* LocalFeedServer.swift */; };
 		622978712FEE322100F0D47A /* CacheTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6229786F2FEE322100F0D47A /* CacheTypes.swift */; };
+		627CB5F02FFE06A00045C09E /* LibraryVisibilityPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 627CB5EF2FFE06A00045C09E /* LibraryVisibilityPolicy.swift */; };
 		62BD17022FDA2B7000BBB857 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 62BD17012FDA2B7000BBB857 /* Assets.xcassets */; };
 		62E763062FF2266E00B84049 /* RSSPublishView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62E763022FF2266E00B84049 /* RSSPublishView.swift */; };
 		70378A99C66B46E59C7D64FAF /* SeriesListRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EB81AC21C9F4FA58C11EC0B /* SeriesListRow.swift */; };
@@ -36,14 +37,12 @@
 		AA000000000000000000SPF2 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000SPM2 /* ZIPFoundation */; };
 		AA000000000000000000SPF3 /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000SPM3 /* SwiftSoup */; };
 		AA1000000000000000000001 /* AmbrosiaMetaDB.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000011 /* AmbrosiaMetaDB.swift */; };
-		AA1000000000000000000005 /* TagExpansionResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000015 /* TagExpansionResolver.swift */; };
-		AA1000000000000000000006 /* LibraryQueryHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000016 /* LibraryQueryHelpers.swift */; };
 		AA1000000000000000000002 /* LibraryIndexManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000012 /* LibraryIndexManager.swift */; };
 		AA1000000000000000000003 /* SystemCollectionID.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000013 /* SystemCollectionID.swift */; };
 		AA1000000000000000000004 /* CollectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000014 /* CollectionStore.swift */; };
+		AA1000000000000000000005 /* TagExpansionResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000015 /* TagExpansionResolver.swift */; };
+		AA1000000000000000000006 /* LibraryQueryHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000016 /* LibraryQueryHelpers.swift */; };
 		AA11223344556677889900AAF /* AnnotationSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677889900AA /* AnnotationSidebarView.swift */; };
-		FC001122334455667788DDF3 /* TOCSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788DDF2 /* TOCSidebarView.swift */; };
-		FC001122334455667788EE02 /* SeriesSpineMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788EE01 /* SeriesSpineMap.swift */; };
 		AA2000000000000000000001 /* AO3MetadataExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000000000000000000011 /* AO3MetadataExtractor.swift */; };
 		AA2000000000000000000002 /* ExtractionProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000000000000000000012 /* ExtractionProgress.swift */; };
 		AA3000000000000000000001 /* AO3TagSeedDatabaseConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA3000000000000000000011 /* AO3TagSeedDatabaseConfig.swift */; };
@@ -74,24 +73,27 @@
 		FC001122334455667788DDEE1 /* CalibreBook.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788DDEF /* CalibreBook.swift */; };
 		FC001122334455667788DDEE2 /* CalibreLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788DDF0 /* CalibreLibrary.swift */; };
 		FC001122334455667788DDEE3 /* LibrarySession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788DDF1 /* LibrarySession.swift */; };
+		FC001122334455667788DDF3 /* TOCSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788DDF2 /* TOCSidebarView.swift */; };
+		FC001122334455667788EE02 /* SeriesSpineMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC001122334455667788EE01 /* SeriesSpineMap.swift */; };
 		P22000000000000000000001F /* CollectionActivityEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = P22000000000000000000001 /* CollectionActivityEntry.swift */; };
 		P22000000000000000000002F /* ActivityFeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = P22000000000000000000002 /* ActivityFeed.swift */; };
 		P22000000000000000000003F /* ActivityFeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = P22000000000000000000003 /* ActivityFeedView.swift */; };
 		P22000000000000000000005F /* SearchActivityLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = P22000000000000000000005 /* SearchActivityLog.swift */; };
-/* End PBXBuildFile section */
-
-/* Begin PBXBuildFile section (AmbrosiaTests) */
+		TE000000000000000000BCTF /* CalibreTestFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = TE000000000000000000CTFX /* CalibreTestFixture.swift */; };
+		TE000000000000000000BLQH /* LibraryQueryHelpersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TE000000000000000000LQHT /* LibraryQueryHelpersTests.swift */; };
 		TE00000000000000000TFBLD /* AmbrosiaMetaDBMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TE00000000000000000TFREF /* AmbrosiaMetaDBMigrationTests.swift */; };
 		TE00000000000000000TSQLF /* SQLite in Frameworks */ = {isa = PBXBuildFile; productRef = TE00000000000000000TSQPR /* SQLite */; };
-/* End PBXBuildFile section (AmbrosiaTests) */
+/* End PBXBuildFile section */
 
-/* Begin PBXBuildFile section (AmbrosiaTests, part 2) */
-		TE000000000000000000BCTF /* CalibreTestFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = TE000000000000000000CTFX /* CalibreTestFixture.swift */; };
-		TE000000000000000000BCLF /* CalibreLibraryFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TE000000000000000000CLFT /* CalibreLibraryFixtureTests.swift */; };
-		TE000000000000000000BLQH /* LibraryQueryHelpersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TE000000000000000000LQHT /* LibraryQueryHelpersTests.swift */; };
-		TE000000000000000000BSCH /* calibre_fixture_schema.sql in Resources */ = {isa = PBXBuildFile; fileRef = TE000000000000000000SCHM /* calibre_fixture_schema.sql */; };
-		TE000000000000000000BSDA /* calibre_fixture_data.sql in Resources */ = {isa = PBXBuildFile; fileRef = TE000000000000000000SDAT /* calibre_fixture_data.sql */; };
-/* End PBXBuildFile section (AmbrosiaTests, part 2) */
+/* Begin PBXContainerItemProxy section */
+		TE00000000000000000TPRXY /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA000000000000000000PROJ /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 52DE067F0773415CAB462294;
+			remoteInfo = Ambrosia;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		00D6889E038A44BD866CAB5E /* ReaderPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderPreferences.swift; sourceTree = "<group>"; };
@@ -105,6 +107,7 @@
 		5037BC30F5C947B49D7196AE /* LibraryWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryWindowController.swift; sourceTree = "<group>"; };
 		6229786C2FEE318600F0D47A /* LocalFeedServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalFeedServer.swift; sourceTree = "<group>"; };
 		6229786F2FEE322100F0D47A /* CacheTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CacheTypes.swift; sourceTree = "<group>"; };
+		627CB5EF2FFE06A00045C09E /* LibraryVisibilityPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryVisibilityPolicy.swift; sourceTree = "<group>"; };
 		62BD17012FDA2B7000BBB857 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		62E763022FF2266E00B84049 /* RSSPublishView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RSSPublishView.swift; sourceTree = "<group>"; };
 		7E96791E70E24692B2282A1E /* FilterRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterRule.swift; sourceTree = "<group>"; };
@@ -118,14 +121,12 @@
 		AA000000000000000000PLIST /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA000000000000000000PROD1 /* Ambrosia.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ambrosia.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA1000000000000000000011 /* AmbrosiaMetaDB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbrosiaMetaDB.swift; sourceTree = "<group>"; };
-		AA1000000000000000000015 /* TagExpansionResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagExpansionResolver.swift; sourceTree = "<group>"; };
-		AA1000000000000000000016 /* LibraryQueryHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryQueryHelpers.swift; sourceTree = "<group>"; };
 		AA1000000000000000000012 /* LibraryIndexManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryIndexManager.swift; sourceTree = "<group>"; };
 		AA1000000000000000000013 /* SystemCollectionID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemCollectionID.swift; sourceTree = "<group>"; };
 		AA1000000000000000000014 /* CollectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionStore.swift; sourceTree = "<group>"; };
+		AA1000000000000000000015 /* TagExpansionResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagExpansionResolver.swift; sourceTree = "<group>"; };
+		AA1000000000000000000016 /* LibraryQueryHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryQueryHelpers.swift; sourceTree = "<group>"; };
 		AA11223344556677889900AA /* AnnotationSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationSidebarView.swift; sourceTree = "<group>"; };
-		FC001122334455667788DDF2 /* TOCSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TOCSidebarView.swift; sourceTree = "<group>"; };
-		FC001122334455667788EE01 /* SeriesSpineMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeriesSpineMap.swift; sourceTree = "<group>"; };
 		AA2000000000000000000011 /* AO3MetadataExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AO3MetadataExtractor.swift; sourceTree = "<group>"; };
 		AA2000000000000000000012 /* ExtractionProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtractionProgress.swift; sourceTree = "<group>"; };
 		AA3000000000000000000011 /* AO3TagSeedDatabaseConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AO3TagSeedDatabaseConfig.swift; sourceTree = "<group>"; };
@@ -158,34 +159,17 @@
 		FC001122334455667788DDEF /* CalibreBook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreBook.swift; sourceTree = "<group>"; };
 		FC001122334455667788DDF0 /* CalibreLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreLibrary.swift; sourceTree = "<group>"; };
 		FC001122334455667788DDF1 /* LibrarySession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySession.swift; sourceTree = "<group>"; };
+		FC001122334455667788DDF2 /* TOCSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TOCSidebarView.swift; sourceTree = "<group>"; };
+		FC001122334455667788EE01 /* SeriesSpineMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeriesSpineMap.swift; sourceTree = "<group>"; };
 		P22000000000000000000001 /* CollectionActivityEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionActivityEntry.swift; sourceTree = "<group>"; };
 		P22000000000000000000002 /* ActivityFeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityFeed.swift; sourceTree = "<group>"; };
 		P22000000000000000000003 /* ActivityFeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityFeedView.swift; sourceTree = "<group>"; };
 		P22000000000000000000005 /* SearchActivityLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchActivityLog.swift; sourceTree = "<group>"; };
-/* End PBXFileReference section */
-
-/* Begin PBXFileReference section (AmbrosiaTests) */
+		TE000000000000000000CTFX /* CalibreTestFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreTestFixture.swift; sourceTree = "<group>"; };
+		TE000000000000000000LQHT /* LibraryQueryHelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryQueryHelpersTests.swift; sourceTree = "<group>"; };
 		TE00000000000000000TFREF /* AmbrosiaMetaDBMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AmbrosiaMetaDBMigrationTests.swift; sourceTree = "<group>"; };
 		TE00000000000000000TPROD /* AmbrosiaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AmbrosiaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-/* End PBXFileReference section (AmbrosiaTests) */
-
-/* Begin PBXFileReference section (AmbrosiaTests, part 2) */
-		TE000000000000000000CTFX /* CalibreTestFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreTestFixture.swift; sourceTree = "<group>"; };
-		TE000000000000000000CLFT /* CalibreLibraryFixtureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreLibraryFixtureTests.swift; sourceTree = "<group>"; };
-		TE000000000000000000LQHT /* LibraryQueryHelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryQueryHelpersTests.swift; sourceTree = "<group>"; };
-		TE000000000000000000SCHM /* calibre_fixture_schema.sql */ = {isa = PBXFileReference; lastKnownFileType = text; path = calibre_fixture_schema.sql; sourceTree = "<group>"; };
-		TE000000000000000000SDAT /* calibre_fixture_data.sql */ = {isa = PBXFileReference; lastKnownFileType = text; path = calibre_fixture_data.sql; sourceTree = "<group>"; };
-/* End PBXFileReference section (AmbrosiaTests, part 2) */
-
-/* Begin PBXContainerItemProxy section */
-		TE00000000000000000TPRXY /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = AA000000000000000000PROJ /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 52DE067F0773415CAB462294;
-			remoteInfo = Ambrosia;
-		};
-/* End PBXContainerItemProxy section */
+/* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		AA000000000000000000FWBP /* Frameworks */ = {
@@ -200,9 +184,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-/* End PBXFrameworksBuildPhase section */
-
-/* Begin PBXFrameworksBuildPhase section (AmbrosiaTests) */
 		TE00000000000000000TFWKP /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -211,7 +192,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-/* End PBXFrameworksBuildPhase section (AmbrosiaTests) */
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		0FB79E6B7F772FC94DF372BD /* Preferences */ = {
@@ -349,6 +330,7 @@
 				AA1000000000000000000015 /* TagExpansionResolver.swift */,
 				AA1000000000000000000016 /* LibraryQueryHelpers.swift */,
 				AA1000000000000000000012 /* LibraryIndexManager.swift */,
+				627CB5EF2FFE06A00045C09E /* LibraryVisibilityPolicy.swift */,
 				AA1000000000000000000013 /* SystemCollectionID.swift */,
 				AA1000000000000000000014 /* CollectionStore.swift */,
 				FC001122334455667788DDF0 /* CalibreLibrary.swift */,
@@ -392,13 +374,10 @@
 			children = (
 				TE00000000000000000TFREF /* AmbrosiaMetaDBMigrationTests.swift */,
 				TE000000000000000000CTFX /* CalibreTestFixture.swift */,
-				TE000000000000000000CLFT /* CalibreLibraryFixtureTests.swift */,
 				TE000000000000000000LQHT /* LibraryQueryHelpersTests.swift */,
-				TE000000000000000000SCHM /* calibre_fixture_schema.sql */,
-				TE000000000000000000SDAT /* calibre_fixture_data.sql */,
 			);
-			path = "../AmbrosiaTests";
 			name = AmbrosiaTests;
+			path = ../AmbrosiaTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -428,9 +407,6 @@
 			productReference = AA000000000000000000PROD1 /* Ambrosia.app */;
 			productType = "com.apple.product-type.application";
 		};
-/* End PBXNativeTarget section */
-
-/* Begin PBXNativeTarget section (AmbrosiaTests) */
 		TE00000000000000000TTRGT /* AmbrosiaTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = TE00000000000000000TCFLG /* Build configuration list for PBXNativeTarget "AmbrosiaTests" */;
@@ -452,15 +428,7 @@
 			productReference = TE00000000000000000TPROD /* AmbrosiaTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-/* End PBXNativeTarget section (AmbrosiaTests) */
-
-/* Begin PBXTargetDependency section */
-		TE00000000000000000TDEPN /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 52DE067F0773415CAB462294 /* Ambrosia */;
-			targetProxy = TE00000000000000000TPRXY /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
+/* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
 		AA000000000000000000PROJ /* Project object */ = {
@@ -514,19 +482,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-/* End PBXResourcesBuildPhase section */
-
-/* Begin PBXResourcesBuildPhase section (AmbrosiaTests) */
 		TE00000000000000000TRSCP /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				TE000000000000000000BSCH /* calibre_fixture_schema.sql in Resources */,
-				TE000000000000000000BSDA /* calibre_fixture_data.sql in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-/* End PBXResourcesBuildPhase section (AmbrosiaTests) */
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		AA000000000000000000SRCS /* Sources */ = {
@@ -561,7 +524,7 @@
 				FB223344556677889900BBCCF /* LibraryRegistry.swift in Sources */,
 				AA1000000000000000000001 /* AmbrosiaMetaDB.swift in Sources */,
 				AA1000000000000000000005 /* TagExpansionResolver.swift in Sources */,
-			AA1000000000000000000006 /* LibraryQueryHelpers.swift in Sources */,
+				AA1000000000000000000006 /* LibraryQueryHelpers.swift in Sources */,
 				AA1000000000000000000002 /* LibraryIndexManager.swift in Sources */,
 				AA1000000000000000000003 /* SystemCollectionID.swift in Sources */,
 				AA1000000000000000000004 /* CollectionStore.swift in Sources */,
@@ -591,6 +554,7 @@
 				D100000000000005F /* EmailReaderSidebarView.swift in Sources */,
 				E200000000000001F /* SearchQueryParser.swift in Sources */,
 				E200000000000002F /* CalibreLibrarySearch.swift in Sources */,
+				627CB5F02FFE06A00045C09E /* LibraryVisibilityPolicy.swift in Sources */,
 				E200000000000003F /* CalibreFTSLibrary.swift in Sources */,
 				E200000000000004F /* SearchSuggestionsView.swift in Sources */,
 				P22000000000000000000001F /* CollectionActivityEntry.swift in Sources */,
@@ -600,21 +564,25 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-/* End PBXSourcesBuildPhase section */
-
-/* Begin PBXSourcesBuildPhase section (AmbrosiaTests) */
 		TE00000000000000000TSRCP /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				TE00000000000000000TFBLD /* AmbrosiaMetaDBMigrationTests.swift in Sources */,
 				TE000000000000000000BCTF /* CalibreTestFixture.swift in Sources */,
-				TE000000000000000000BCLF /* CalibreLibraryFixtureTests.swift in Sources */,
 				TE000000000000000000BLQH /* LibraryQueryHelpersTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-/* End PBXSourcesBuildPhase section (AmbrosiaTests) */
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		TE00000000000000000TDEPN /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 52DE067F0773415CAB462294 /* Ambrosia */;
+			targetProxy = TE00000000000000000TPRXY /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		AA000000000000000000DBG1 /* Debug */ = {
@@ -809,9 +777,6 @@
 			};
 			name = Release;
 		};
-/* End XCBuildConfiguration section */
-
-/* Begin XCBuildConfiguration section (AmbrosiaTests) */
 		TE00000000000000000TCDBG /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -822,8 +787,8 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.ambrosia.reader.AmbrosiaTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ambrosia.app/Contents/MacOS/Ambrosia";
 				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ambrosia.app/Contents/MacOS/Ambrosia";
 			};
 			name = Debug;
 		};
@@ -837,12 +802,12 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.ambrosia.reader.AmbrosiaTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ambrosia.app/Contents/MacOS/Ambrosia";
 				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Ambrosia.app/Contents/MacOS/Ambrosia";
 			};
 			name = Release;
 		};
-/* End XCBuildConfiguration section (AmbrosiaTests) */
+/* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
 		AA000000000000000000CFLG /* Build configuration list for PBXNativeTarget "Ambrosia" */ = {
@@ -863,9 +828,6 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-/* End XCConfigurationList section */
-
-/* Begin XCConfigurationList section (AmbrosiaTests) */
 		TE00000000000000000TCFLG /* Build configuration list for PBXNativeTarget "AmbrosiaTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -875,7 +837,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-/* End XCConfigurationList section (AmbrosiaTests) */
+/* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
 		622978602FEE18E900F0D47A /* XCRemoteSwiftPackageReference "FlyingFox" */ = {
@@ -938,15 +900,12 @@
 			package = AA000000000000000000PKG3 /* XCRemoteSwiftPackageReference "SwiftSoup" */;
 			productName = SwiftSoup;
 		};
-/* End XCSwiftPackageProductDependency section */
-
-/* Begin XCSwiftPackageProductDependency section (AmbrosiaTests) */
 		TE00000000000000000TSQPR /* SQLite */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = AA000000000000000000PKG1 /* XCRemoteSwiftPackageReference "SQLite.swift" */;
 			productName = SQLite;
 		};
-/* End XCSwiftPackageProductDependency section (AmbrosiaTests) */
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = AA000000000000000000PROJ /* Project object */;
 }

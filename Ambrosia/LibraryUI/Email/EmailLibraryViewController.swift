@@ -48,6 +48,7 @@ final class EmailLibraryViewController: NSViewController {
     private var skippedIDs: Set<Int> = []
     private var seriesOrMergedIDs: Set<Int> = []
     private var ao3PublisherIDs: Set<Int> = []
+    private var anthologyIDs: Set<Int> = []
     private var collectionMembership: [String: Set<Int>] = [:]
     private var pendingCollectionSeedIDs: [Int] = []
     private var currentPage = 0
@@ -157,6 +158,7 @@ final class EmailLibraryViewController: NSViewController {
         skippedIDs        = session.cachedSkippedIDs
         likedIDs          = session.cachedLikedIDs
         ao3PublisherIDs   = session.cachedAO3PublisherIDs
+        anthologyIDs      = session.cachedAnthologyIDs
         readLaterIDs      = session.cachedReadLaterIDs
         lastGroupBySeries = toolbarState.groupBySeries
         refreshBookStates()
@@ -164,7 +166,7 @@ final class EmailLibraryViewController: NSViewController {
         if toolbarState.filterExpression.hasCompleteRules {
             applyFilterRules()
         } else {
-            Task { await loadPage(reset: true) }
+            Task { [weak self] in guard let self else { return }; await self.loadPage(reset: true) }
         }
         startObservingToolbarState()
         startObservingPreferences()
@@ -485,12 +487,12 @@ final class EmailLibraryViewController: NSViewController {
         if toolbarState.reshuffleToken != lastReshuffleToken {
             lastReshuffleToken = toolbarState.reshuffleToken
             if toolbarState.sortField == .random {
-                Task { await loadPage(reset: true) }
+                Task { [weak self] in guard let self else { return }; await self.loadPage(reset: true) }
             }
         }
         if toolbarState.groupBySeries != lastGroupBySeries {
             lastGroupBySeries = toolbarState.groupBySeries
-            Task { await loadPage(reset: true) }
+            Task { [weak self] in guard let self else { return }; await self.loadPage(reset: true) }
         }
         let newSearch    = toolbarState.searchText
         let newSort      = toolbarState.sortField
@@ -555,7 +557,7 @@ final class EmailLibraryViewController: NSViewController {
             }
         } else {
             applyFullTextPhraseToLocalFind()
-            Task { await loadPage(reset: true) }
+            Task { [weak self] in guard let self else { return }; await self.loadPage(reset: true) }
         }
     }
 
@@ -580,7 +582,7 @@ final class EmailLibraryViewController: NSViewController {
         guard toolbarState.filterExpression.hasCompleteRules else {
             toolbarState.activeFilterResult = nil
             toolbarState.cancelLibraryFilterApplication()
-            Task { await loadPage(reset: true) }
+            Task { [weak self] in guard let self else { return }; await self.loadPage(reset: true) }
             return
         }
         let expression = toolbarState.filterExpression
@@ -593,7 +595,7 @@ final class EmailLibraryViewController: NSViewController {
             toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
-            Task { await loadPage(reset: true) }
+            Task { [weak self] in guard let self else { return }; await self.loadPage(reset: true) }
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "email",
                 "mode": "sqlPagedDeferredCount",
@@ -606,7 +608,7 @@ final class EmailLibraryViewController: NSViewController {
             toolbarState.activeFilterResult = cached
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
-            Task { await loadPage(reset: true) }
+            Task { [weak self] in guard let self else { return }; await self.loadPage(reset: true) }
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "email",
                 "mode": "cached",
@@ -676,7 +678,6 @@ final class EmailLibraryViewController: NSViewController {
             let filterTagExpansions = await TagExpansionResolver.filterTagExpansions(
                 for: expression, metaDB: session.metaDB
             )
-            cachedFilterTagExpansions = filterTagExpansions
             let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary,
                                         tagExpansions: filterTagExpansions)
 
@@ -725,12 +726,14 @@ final class EmailLibraryViewController: NSViewController {
             let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
             let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
             let currentAO3PublisherIDs = await library.ao3PublisherBookIDs()
+            let currentAnthologyIDs = await library.anthologyBookIDs()
             let filteredIDs = ReaderPreferences.shared.showSkippedCollection
                 ? result.calibreIDs
                 : result.calibreIDs.filter { !currentSkipped.contains($0) }
             let visibleFilteredIDs = filteredIDs
                 .filter { !currentSeriesOrMerged.contains($0) }
                 .filter { !ReaderPreferences.shared.hideNonAO3PublisherBooks || currentAO3PublisherIDs.contains($0) }
+                .filter { !ReaderPreferences.shared.hideAnthologyBooks || !currentAnthologyIDs.contains($0) }
             guard toolbarState.libraryFilterApplicationToken == token else { return }
             defer { toolbarState.finishLibraryFilterApplication(token: token) }
             let cacheableResult = FilterResult(
@@ -740,10 +743,13 @@ final class EmailLibraryViewController: NSViewController {
             toolbarState.activeFilterResult = cacheableResult
             session.rememberFilterResult(cacheableResult, for: expression)  // §7
             toolbarState.clearPendingFullTextSearch()
+            cachedFilterTagExpansions = filterTagExpansions
             likedIDs = currentLikedIDs
             skippedIDs = currentSkipped
             seriesOrMergedIDs = currentSeriesOrMerged
             ao3PublisherIDs = currentAO3PublisherIDs
+            anthologyIDs = currentAnthologyIDs
+            session.cachedAnthologyIDs = currentAnthologyIDs
             await loadPage(reset: true)
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "email",
@@ -809,7 +815,7 @@ final class EmailLibraryViewController: NSViewController {
         guard activeFullTextPhrase()?.trimmingCharacters(in: .whitespacesAndNewlines) == phrase else { return }
         toolbarState.activeFilterResult = FilterResult(calibreIDs: ids, totalCount: ids.count)
         toolbarState.clearPendingFullTextSearch()
-        Task { await loadPage(reset: true) }
+        Task { [weak self] in guard let self else { return }; await self.loadPage(reset: true) }
     }
 
     private func scheduleDeferredSQLFilterCount(query: SearchQuery) {
@@ -917,14 +923,14 @@ final class EmailLibraryViewController: NSViewController {
         // computes its own page).
         var groupAwareVisible: [CalibreBook]? = nil
         if toolbarState.sortField == .random {
-            var restrictIDs: [Int]?
+            let restrictIDs: [Int]?
             let filterForSQL: FilterExpression?
             var isEmptyExplicitIDs = false
             if let result = toolbarState.activeFilterResult, result.isSQLBacked {
                 restrictIDs = nil
                 filterForSQL = toolbarState.filterExpression
             } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
-                restrictIDs = visibleIDs(intersect(result.calibreIDs, with: query.ftsMatchedIDs))
+                restrictIDs = intersect(result.calibreIDs, with: query.ftsMatchedIDs)
                 filterForSQL = nil
             } else if toolbarState.activeFilterResult != nil {
                 isEmptyExplicitIDs = true
@@ -933,13 +939,6 @@ final class EmailLibraryViewController: NSViewController {
             } else {
                 restrictIDs = nil
                 filterForSQL = nil
-            }
-            // §AO3-only-random fix: same as the List surface — restrictIDs stayed
-            // nil (and thus skipped visibleIDs' hideNonAO3PublisherBooks check)
-            // whenever an SQL-backed filter or no filter at all was active. Fold
-            // it in directly; fetchAllMatchingIDs ANDs restrictIDs with filter.
-            if !isEmptyExplicitIDs && ReaderPreferences.shared.hideNonAO3PublisherBooks {
-                restrictIDs = intersect(restrictIDs ?? Array(ao3PublisherIDs), with: Array(ao3PublisherIDs))
             }
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "email", "mode": "random", "page": currentPage
@@ -954,11 +953,17 @@ final class EmailLibraryViewController: NSViewController {
                 sidebarVC?.likedIDs = likedIDs
                 return
             }
+            // The visibility policy is applied once, uniformly, inside
+            // randomSortedPage — see LibraryRootView's equivalent branch for
+            // why the restrictIDs mutation this used to do per-branch was
+            // replaced.
             let (page, hasMore) = await library.randomSortedPage(
                 offset: currentPage * pageSize, limit: pageSize,
                 query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                visibility: currentVisibilityPolicy,
                 filterTagExpansions: cachedFilterTagExpansions
             )
+            guard !isTornDown, !Task.isCancelled else { return }
             if reset { books = page } else { books.append(contentsOf: page) }
             hasNextPage = hasMore
             rebuildSidebarItems()
@@ -979,7 +984,7 @@ final class EmailLibraryViewController: NSViewController {
                 restrictIDs = nil
                 filterForSQL = toolbarState.filterExpression
             } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
-                restrictIDs = visibleIDs(intersect(result.calibreIDs, with: query.ftsMatchedIDs))
+                restrictIDs = intersect(result.calibreIDs, with: query.ftsMatchedIDs)
                 filterForSQL = nil
             } else if toolbarState.activeFilterResult != nil {
                 restrictIDs = nil
@@ -989,10 +994,6 @@ final class EmailLibraryViewController: NSViewController {
                 restrictIDs = nil
                 filterForSQL = nil
             }
-            // §AO3-only-random fix: same as .random above.
-            let effectiveRestrictIDs: [Int]? = (!isEmptyExplicitIDs && ReaderPreferences.shared.hideNonAO3PublisherBooks)
-                ? intersect(restrictIDs ?? Array(ao3PublisherIDs), with: Array(ao3PublisherIDs))
-                : restrictIDs
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "email", "mode": "wordCountSorted", "page": currentPage,
                 "query": LibraryFilterDebug.summary(query: query)
@@ -1003,9 +1004,11 @@ final class EmailLibraryViewController: NSViewController {
             } else {
                 let (page, hasMore) = await library.wordCountSortedPage(
                     offset: currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
-                    query: query, filter: filterForSQL, restrictIDs: effectiveRestrictIDs,
+                    query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                    visibility: currentVisibilityPolicy,
                     filterTagExpansions: cachedFilterTagExpansions
                 )
+                guard !isTornDown, !Task.isCancelled else { return }
                 wordCountPage = page
                 wordCountHasMore = hasMore
             }
@@ -1042,7 +1045,9 @@ final class EmailLibraryViewController: NSViewController {
                     offset += rawChunk.count
                     visible.append(contentsOf: visibleBooks(rawChunk))
                     if rawChunk.count < pageFetchLimit { exhausted = true; break }
+                    guard !isTornDown, !Task.isCancelled else { return }
                 }
+                guard !isTornDown, !Task.isCancelled else { return }
                 rawSQLOffsetHistory.append(rawSQLOffset)
                 rawSQLOffset = offset
                 groupAwareVisible = visible
@@ -1063,6 +1068,7 @@ final class EmailLibraryViewController: NSViewController {
                     filter: toolbarState.filterExpression,
                     filterTagExpansions: cachedFilterTagExpansions
                 )
+                guard !isTornDown, !Task.isCancelled else { return }
             }
             scheduleDeferredSQLFilterCount(query: query)
         } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
@@ -1080,6 +1086,7 @@ final class EmailLibraryViewController: NSViewController {
                 sort: toolbarState.sortField, ascending: toolbarState.ascending,
                 query: query
             )
+            guard !isTornDown, !Task.isCancelled else { return }
         } else if toolbarState.activeFilterResult != nil {
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "email",
@@ -1116,7 +1123,9 @@ final class EmailLibraryViewController: NSViewController {
                     offset += rawChunk.count
                     visible.append(contentsOf: visibleBooks(rawChunk))
                     if rawChunk.count < pageFetchLimit { exhausted = true; break }
+                    guard !isTornDown, !Task.isCancelled else { return }
                 }
+                guard !isTornDown, !Task.isCancelled else { return }
                 rawSQLOffsetHistory.append(rawSQLOffset)
                 rawSQLOffset = offset
                 groupAwareVisible = visible
@@ -1135,9 +1144,11 @@ final class EmailLibraryViewController: NSViewController {
                     sort: toolbarState.sortField, ascending: toolbarState.ascending,
                     query: query
                 )
+                guard !isTornDown, !Task.isCancelled else { return }
             }
         }
 
+        guard !isTornDown, !Task.isCancelled else { return }
         let page: [CalibreBook]
         if let wordCountPage {
             hasNextPage = wordCountHasMore
@@ -1258,7 +1269,7 @@ final class EmailLibraryViewController: NSViewController {
                 #endif
                 degraded = true
             }
-            let groupedEntries = Dictionary(grouping: entries.filter { !$0.isAnthology }, by: \.seriesKey)
+            let groupedEntries = Dictionary(grouping: entries.filter { !anthologyIDs.contains($0.calibreID) }, by: \.seriesKey)
             let seriesKeys = groupedEntries.keys.sorted()
             guard !Task.isCancelled else { return }
             do { allEntries = try await metaDB.seriesEntries(keys: seriesKeys) }
@@ -1306,7 +1317,7 @@ final class EmailLibraryViewController: NSViewController {
                 degraded = true
             }
             let byID = Dictionary(uniqueKeysWithValues: allBooks.map { ($0.id, $0) })
-            let entriesBySeries = Dictionary(grouping: allEntries.filter { !$0.isAnthology }, by: \.seriesKey)
+            let entriesBySeries = Dictionary(grouping: allEntries.filter { !anthologyIDs.contains($0.calibreID) }, by: \.seriesKey)
             var groups: [String: SeriesGroup] = [:]
 
             for (seriesKey, entries) in entriesBySeries {
@@ -1360,7 +1371,8 @@ final class EmailLibraryViewController: NSViewController {
                 entries: entries,
                 seriesByKey: groups,
                 collapsedIDs: collapsedIDs,
-                singletonWarningsByCalibreID: singletonWarnings
+                singletonWarningsByCalibreID: singletonWarnings,
+                anthologyIDs: anthologyIDs
             )
             await MainActor.run {
                 guard self.books.map(\.id) == pageBooks.map(\.id) else {
@@ -1415,16 +1427,22 @@ final class EmailLibraryViewController: NSViewController {
         toolbarState.groupBySeries || toolbarState.filterExpression.hasSeriesOrMergedEqualsRule
     }
 
-    private func visibleIDs(_ ids: [Int]) -> [Int] {
-        LibraryQueryHelpers.visibleIDs(
-            ids,
+    /// Mirrors LibraryRootView.currentVisibilityPolicy — see LibraryVisibilityPolicy.swift.
+    private var currentVisibilityPolicy: LibraryVisibilityPolicy {
+        LibraryVisibilityPolicy(
             showSkippedCollection: ReaderPreferences.shared.showSkippedCollection,
             shouldGroupSeriesRows: shouldGroupSidebarRows,
+            hideNonAO3PublisherBooks: ReaderPreferences.shared.hideNonAO3PublisherBooks,
+            hideAnthologyBooks: ReaderPreferences.shared.hideAnthologyBooks,
             skippedIDs: skippedIDs,
             seriesOrMergedIDs: seriesOrMergedIDs,
-            hideNonAO3PublisherBooks: ReaderPreferences.shared.hideNonAO3PublisherBooks,
-            ao3PublisherIDs: ao3PublisherIDs
+            ao3PublisherIDs: ao3PublisherIDs,
+            anthologyIDs: anthologyIDs
         )
+    }
+
+    private func visibleIDs(_ ids: [Int]) -> [Int] {
+        currentVisibilityPolicy.filter(ids)
     }
 
     private func intersect(_ ids: [Int], with optionalIDs: [Int]?) -> [Int] {
@@ -1432,21 +1450,13 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func visibleBooks(_ raw: [CalibreBook]) -> [CalibreBook] {
-        LibraryQueryHelpers.visibleBooks(
-            raw,
-            showSkippedCollection: ReaderPreferences.shared.showSkippedCollection,
-            shouldGroupSeriesRows: shouldGroupSidebarRows,
-            skippedIDs: skippedIDs,
-            seriesOrMergedIDs: seriesOrMergedIDs,
-            hideNonAO3PublisherBooks: ReaderPreferences.shared.hideNonAO3PublisherBooks,
-            hideAnthologyBooks: ReaderPreferences.shared.hideAnthologyBooks
-        )
+        currentVisibilityPolicy.filter(raw)
     }
 
     private func loadNextPageIfAvailable() {
         guard hasNextPage else { return }
         currentPage += 1
-        Task { await loadPage(reset: false) }
+        Task { [weak self] in guard let self else { return }; await self.loadPage(reset: false) }
     }
 
     func refreshBookStates() {
@@ -1541,15 +1551,18 @@ final class EmailLibraryViewController: NSViewController {
         let currentSkipped = membershipByID[SystemCollectionID.skipped] ?? []
         let currentSeriesOrMerged = membershipByID[SystemCollectionID.seriesOrMerged] ?? []
         let currentAO3PublisherIDs = await session.library?.ao3PublisherBookIDs() ?? []
+        let currentAnthologyIDs = await session.library?.anthologyBookIDs() ?? []
         collectionMembership = Dictionary(uniqueKeysWithValues: collections.map { collection in
             return (collection.name, membershipByID[collection.id] ?? [])
         })
         likedIDs = (try? await session.collectionStore?.likedIDs()) ?? []
         readLaterIDs = Set((try? await session.collectionStore?.members(of: SystemCollectionID.readLater)) ?? [])
-        let shouldReloadPage = skippedIDs != currentSkipped || seriesOrMergedIDs != currentSeriesOrMerged || ao3PublisherIDs != currentAO3PublisherIDs
+        let shouldReloadPage = skippedIDs != currentSkipped || seriesOrMergedIDs != currentSeriesOrMerged || ao3PublisherIDs != currentAO3PublisherIDs || anthologyIDs != currentAnthologyIDs
         skippedIDs = currentSkipped
         seriesOrMergedIDs = currentSeriesOrMerged
         ao3PublisherIDs = currentAO3PublisherIDs
+        anthologyIDs = currentAnthologyIDs
+        session.cachedAnthologyIDs = currentAnthologyIDs
         sidebarVC?.collectionMembership = collectionMembership
         sidebarVC?.likedIDs = likedIDs
         sidebarVC?.readLaterIDs = readLaterIDs
@@ -1903,8 +1916,9 @@ struct FilterSheetCarrier: View {
                             var seriesEntriesByBook: [Int: [SeriesCacheEntry]] = [:]
                             if capturedToolbarState?.groupBySeries == true, let metaDB = session.metaDB {
                                 let ids = rows.map(\.book.id)
+                                let currentAnthologyIDs = await session.library?.anthologyBookIDs() ?? []
                                 if let entries = try? await metaDB.seriesEntries(for: ids) {
-                                    seriesEntriesByBook = Dictionary(grouping: entries.filter { !$0.isAnthology }, by: \.calibreID)
+                                    seriesEntriesByBook = Dictionary(grouping: entries.filter { !currentAnthologyIDs.contains($0.calibreID) }, by: \.calibreID)
                                 }
                             }
                             ExportManager.presentEPUBExportPanel(

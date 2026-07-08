@@ -48,3 +48,26 @@ enum HTMLStripper {
         return result
     }
 }
+
+/// Single source of truth for detecting Calibre EPUB-merge-plugin anthology comments.
+/// Used by both `CalibreBook.isDescriptionAnthology` (already HTML-stripped, single book)
+/// and `CalibreLibrary.anthologyBookIDs()` (raw HTML from a SQL prefilter, many books),
+/// so the two checks can never drift apart again.
+enum AnthologyDetector {
+
+    /// True if `strippedComment` (already run through `HTMLStripper.strip`) is an
+    /// anthology/merge comment written by Calibre's EPUB-merge plugin.
+    /// Deliberately an exact prefix match (not a loose "contains 'anthology'" check)
+    /// to avoid misfiring on real works whose own description happens to mention
+    /// the word "anthology".
+    static func isAnthology(strippedComment: String) -> Bool {
+        guard !strippedComment.isEmpty else { return false }
+        let trimmed = strippedComment.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.range(of: "Anthology containing:", options: [.caseInsensitive, .anchored]) != nil
+    }
+
+    /// Convenience for callers holding raw (unstripped) HTML comment text.
+    static func isAnthology(rawComment: String) -> Bool {
+        isAnthology(strippedComment: HTMLStripper.strip(rawComment))
+    }
+}
