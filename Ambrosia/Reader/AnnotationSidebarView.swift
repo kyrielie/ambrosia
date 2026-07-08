@@ -104,31 +104,38 @@ private struct AnnotationRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: symbolName)
-                .foregroundStyle(accentColor)
-                .font(.caption)
-                .padding(.top, 3)
+            Button {
+                onJump(annotation)
+            } label: {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: symbolName)
+                        .foregroundStyle(accentColor)
+                        .font(.caption)
+                        .padding(.top, 3)
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(previewText)
-                    .font(.caption)
-                    .lineLimit(3)
-                    .foregroundStyle(.primary)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(previewText)
+                            .font(.caption)
+                            .lineLimit(3)
+                            .foregroundStyle(.primary)
 
-                if let note = annotation.note, !note.isEmpty, !isEditingNote {
-                    Text(note)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .italic()
+                        if let note = annotation.note, !note.isEmpty, !isEditingNote {
+                            Text(note)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .italic()
+                        }
+
+                        Text(annotation.createdDate.formatted(date: .abbreviated, time: .omitted))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
-
-                Text(annotation.createdDate.formatted(date: .abbreviated, time: .omitted))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-
-            Spacer()
+            .buttonStyle(.plain)
 
             Button {
                 onDelete(annotation.id)
@@ -146,7 +153,5 @@ private struct AnnotationRow: View {
             RoundedRectangle(cornerRadius: 6)
                 .fill(Color.primary.opacity(0.04))
         )
-        .contentShape(Rectangle())
-        .onTapGesture { onJump(annotation) }
     }
 }

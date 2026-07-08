@@ -42,6 +42,7 @@
 		AA1000000000000000000004 /* CollectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000014 /* CollectionStore.swift */; };
 		AA1000000000000000000005 /* TagExpansionResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000015 /* TagExpansionResolver.swift */; };
 		AA1000000000000000000006 /* LibraryQueryHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000016 /* LibraryQueryHelpers.swift */; };
+		AA1000000000000000000007 /* LibraryQueryController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1000000000000000000017 /* LibraryQueryController.swift */; };
 		AA11223344556677889900AAF /* AnnotationSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11223344556677889900AA /* AnnotationSidebarView.swift */; };
 		AA2000000000000000000001 /* AO3MetadataExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000000000000000000011 /* AO3MetadataExtractor.swift */; };
 		AA2000000000000000000002 /* ExtractionProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000000000000000000012 /* ExtractionProgress.swift */; };
@@ -126,6 +127,7 @@
 		AA1000000000000000000014 /* CollectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionStore.swift; sourceTree = "<group>"; };
 		AA1000000000000000000015 /* TagExpansionResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagExpansionResolver.swift; sourceTree = "<group>"; };
 		AA1000000000000000000016 /* LibraryQueryHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryQueryHelpers.swift; sourceTree = "<group>"; };
+		AA1000000000000000000017 /* LibraryQueryController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryQueryController.swift; sourceTree = "<group>"; };
 		AA11223344556677889900AA /* AnnotationSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationSidebarView.swift; sourceTree = "<group>"; };
 		AA2000000000000000000011 /* AO3MetadataExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AO3MetadataExtractor.swift; sourceTree = "<group>"; };
 		AA2000000000000000000012 /* ExtractionProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtractionProgress.swift; sourceTree = "<group>"; };
@@ -329,6 +331,7 @@
 				AA1000000000000000000011 /* AmbrosiaMetaDB.swift */,
 				AA1000000000000000000015 /* TagExpansionResolver.swift */,
 				AA1000000000000000000016 /* LibraryQueryHelpers.swift */,
+				AA1000000000000000000017 /* LibraryQueryController.swift */,
 				AA1000000000000000000012 /* LibraryIndexManager.swift */,
 				627CB5EF2FFE06A00045C09E /* LibraryVisibilityPolicy.swift */,
 				AA1000000000000000000013 /* SystemCollectionID.swift */,
@@ -525,6 +528,7 @@
 				AA1000000000000000000001 /* AmbrosiaMetaDB.swift in Sources */,
 				AA1000000000000000000005 /* TagExpansionResolver.swift in Sources */,
 				AA1000000000000000000006 /* LibraryQueryHelpers.swift in Sources */,
+				AA1000000000000000000007 /* LibraryQueryController.swift in Sources */,
 				AA1000000000000000000002 /* LibraryIndexManager.swift in Sources */,
 				AA1000000000000000000003 /* SystemCollectionID.swift in Sources */,
 				AA1000000000000000000004 /* CollectionStore.swift in Sources */,

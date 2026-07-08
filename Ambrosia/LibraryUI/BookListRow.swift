@@ -51,6 +51,7 @@ struct BookListRow: View, Equatable {
             && lhs.correctCalibreAmpEntities   == rhs.correctCalibreAmpEntities
             && lhs.bookState?.totalReadPercent == rhs.bookState?.totalReadPercent
             && lhs.selectedCount               == rhs.selectedCount
+            && lhs.selectedIDs                 == rhs.selectedIDs
     }
 
     init(book: CalibreBook, bookState: BookState?, ao3Metadata: AO3MetadataRecord?, ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?, singletonSeriesWarnings: [SingletonSeriesWarning], isLiked: Bool, hideFanworksTagPill: Bool, correctCalibreAmpEntities: Bool, modelContext: ModelContext,
@@ -180,9 +181,14 @@ struct BookListRow: View, Equatable {
         if !book.authors.isEmpty {
             HStack(spacing: 4) {
                 ForEach(book.authors, id: \.self) { author in
-                    Text(author)
-                        .font(.subheadline).foregroundStyle(.secondary)
-                        .onTapGesture { onAuthorTap(author) }
+                    Button {
+                        onAuthorTap(author)
+                    } label: {
+                        Text(author)
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Filter by \(author)")
                     if author != book.authors.last {
                         Text("·").foregroundStyle(.tertiary).font(.subheadline)
                     }
@@ -197,8 +203,13 @@ struct BookListRow: View, Equatable {
         if !pills.isEmpty {
             FlowLayout(spacing: 4) {
                 ForEach(pills) { pill in
-                    tagPill(pill.label, color: pill.color)
-                        .onTapGesture { onTagTap(pill.label, pill.field) }
+                    Button {
+                        onTagTap(pill.label, pill.field)
+                    } label: {
+                        tagPill(pill.label, color: pill.color)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Filter by \(pill.label)")
                 }
             }
         }

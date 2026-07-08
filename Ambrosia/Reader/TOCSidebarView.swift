@@ -52,8 +52,8 @@ struct TOCSidebarView: View {
             } else {
                 List {
                     ForEach(entries) { entry in
-                        if entry.workTitle != nil, isFirstEntry(of: entry) {
-                            Text(entry.workTitle!)
+                        if let workTitle = entry.workTitle, isFirstEntry(of: entry) {
+                            Text(workTitle)
                                 .font(.caption.bold())
                                 .foregroundStyle(.secondary)
                                 .listRowSeparator(.hidden)
@@ -82,16 +82,20 @@ private struct TOCRow: View {
     let onJump: (TOCPanelEntry) -> Void
 
     var body: some View {
-        Text(entry.title)
-            .font(.caption)
-            .fontWeight(isCurrent ? .semibold : .regular)
-            .foregroundStyle(isCurrent ? .primary : .secondary)
-            .lineLimit(2)
-            .padding(.leading, CGFloat(entry.depth) * 16)
-            .padding(.vertical, 4)
-            .padding(.horizontal, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .onTapGesture { onJump(entry) }
+        Button {
+            onJump(entry)
+        } label: {
+            Text(entry.title)
+                .font(.caption)
+                .fontWeight(isCurrent ? .semibold : .regular)
+                .foregroundStyle(isCurrent ? .primary : .secondary)
+                .lineLimit(2)
+                .padding(.leading, CGFloat(entry.depth) * 16)
+                .padding(.vertical, 4)
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

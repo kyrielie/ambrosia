@@ -85,6 +85,11 @@ actor CalibreLibrary {
         ao3WordCountCache = wordCounts
         ao3DateCache = dates
         crossoverIDCache = crossoverIDs
+        // §Phase3: word-count-sorted pages and any page/count keyed on this
+        // library's AO3 fields are now stale. Same actor reaching into its own
+        // state, no version plumbing needed (see LRUCache note above pageCache).
+        pageCache.removeAll()
+        countCache.removeAll()
     }
 
     /// §6.2: last error from a search/count query, if any. Set by `bookCount(query:)`
@@ -106,6 +111,24 @@ actor CalibreLibrary {
     func clearSearchError() {
         lastSearchError = nil
     }
+
+    // MARK: - §Phase3: Page/count result cache
+    //
+    // Declared at default (internal) visibility, NOT private: bookCount(query:filter:)
+    // lives in an extension in FilterDrawer/FilterBuilder.swift, a different file,
+    // and `private` here would make these invisible there.
+    //
+    // Invalidation:
+    //  - Library switch/close: free, this whole actor instance is replaced.
+    //  - Membership change (like/skip/read-later/collection/series sync): the
+    //    caller passes the current LibrarySession.membershipVersion into every
+    //    cached method below as part of the key, so a stale entry simply never
+    //    matches once the version has moved on.
+    //  - AO3 extraction batch completes: updateAO3MetaCaches(...) clears both
+    //    caches directly (same actor, no version plumbing needed).
+    //  - Random reshuffle: covered by randomSeed being part of the key.
+    var pageCache: LRUCache<PageCacheKey, (page: [CalibreBook], hasMore: Bool)> = LRUCache(limit: 48)
+    var countCache: LRUCache<CountCacheKey, Int> = LRUCache(limit: 48)
 
     // MARK: - Count
 
@@ -354,7 +377,20 @@ actor CalibreLibrary {
                               query: SearchQuery, filter: FilterExpression?,
                               restrictIDs: [Int]?,
                               visibility: LibraryVisibilityPolicy = .allowAll,
-                              filterTagExpansions: [String: [String]] = [:]) -> (page: [CalibreBook], hasMore: Bool) {
+                              filterTagExpansions: [String: [String]] = [:],
+                              visibilityVersion: Int = 0) -> (page: [CalibreBook], hasMore: Bool) {
+        let cacheKey = PageCacheKey(
+            querySignature: LibraryFilterDebug.summary(query: query),
+            filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
+            tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
+            visibilityVersion: visibilityVersion,
+            sortField: .wordCount,
+            ascending: ascending,
+            randomSeed: randomSeed,
+            offset: offset,
+            limit: limit
+        )
+        if let cached = pageCache[cacheKey] { return cached }
         // 1. Fetch all matching IDs (no author/tag/comment hydration), then
         // apply the visibility policy (skip/series-grouping/AO3-publisher-only/
         // anthology) once, here, instead of callers pre-intersecting restrictIDs
@@ -380,12 +416,17 @@ actor CalibreLibrary {
         // 4. Slice the requested page.
         let start = min(offset, sortedIDs.count)
         let end   = min(offset + limit, sortedIDs.count)
-        guard start < end else { return ([], false) }
+        guard start < end else {
+            pageCache.set(([], false), for: cacheKey)
+            return ([], false)
+        }
         let pageIDs = Array(sortedIDs[start..<end])
 
         // 5. Hydrate only the page (authors, tags, comments).
         let page = booksForIDs(pageIDs)
-        return (page, end < sortedIDs.count)
+        let result = (page, end < sortedIDs.count)
+        pageCache.set(result, for: cacheKey)
+        return result
     }
 
     /// Random-sorted page, analogous to wordCountSortedPage.
@@ -394,17 +435,35 @@ actor CalibreLibrary {
                            query: SearchQuery, filter: FilterExpression?,
                            restrictIDs: [Int]?,
                            visibility: LibraryVisibilityPolicy = .allowAll,
-                           filterTagExpansions: [String: [String]] = [:]) -> (page: [CalibreBook], hasMore: Bool) {
+                           filterTagExpansions: [String: [String]] = [:],
+                           visibilityVersion: Int = 0) -> (page: [CalibreBook], hasMore: Bool) {
+        let cacheKey = PageCacheKey(
+            querySignature: LibraryFilterDebug.summary(query: query),
+            filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
+            tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
+            visibilityVersion: visibilityVersion,
+            sortField: .random,
+            ascending: true,
+            randomSeed: randomSeed,
+            offset: offset,
+            limit: limit
+        )
+        if let cached = pageCache[cacheKey] { return cached }
         let matchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
                                          filterTagExpansions: filterTagExpansions)
         let allIDs = visibility.filter(matchedIDs)
         let sortedIDs = sortedRandomly(allIDs)
         let start = min(offset, sortedIDs.count)
         let end   = min(offset + limit, sortedIDs.count)
-        guard start < end else { return ([], false) }
+        guard start < end else {
+            pageCache.set(([], false), for: cacheKey)
+            return ([], false)
+        }
         let pageIDs = Array(sortedIDs[start..<end])
         let page = booksForIDs(pageIDs)
-        return (page, end < sortedIDs.count)
+        let result = (page, end < sortedIDs.count)
+        pageCache.set(result, for: cacheKey)
+        return result
     }
 
     // MARK: - §1: fetchAllMatchingIDs (lightweight — IDs only, no hydration)
@@ -516,8 +575,29 @@ actor CalibreLibrary {
         ascending: Bool,
         query: SearchQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: []),
         filter: FilterExpression? = nil,
-        filterTagExpansions: [String: [String]] = [:]
+        filterTagExpansions: [String: [String]] = [:],
+        visibilityVersion: Int = 0
     ) -> [CalibreBook] {
+        // §Phase3: this is the hot path hit on every page load/switch when no
+        // explicit ID set is active (the scenario the page cache targets —
+        // identical filter/sort/page on List vs Email used to both hit SQL).
+        // Cache is keyed on the page contents only (offset/limit), NOT on
+        // hasMore, since this overload has no "more pages" concept of its own.
+        let cacheKey = PageCacheKey(
+            querySignature: LibraryFilterDebug.summary(query: query),
+            filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
+            tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
+            visibilityVersion: visibilityVersion,
+            sortField: sort,
+            ascending: ascending,
+            randomSeed: randomSeed,
+            offset: offset,
+            limit: limit
+        )
+        if let cached = pageCache[cacheKey] {
+            LibraryFilterDebug.log("books.cacheHit", ["rows": cached.page.count])
+            return cached.page
+        }
         let start = LibraryFilterDebug.now()
         do {
             let rows = try _fetchBooks(
@@ -550,6 +630,10 @@ actor CalibreLibrary {
             default:
                 break
             }
+            // hasMore is not knowable from this overload alone (callers infer it
+            // from rows.count vs the limit they passed); store false as a filler,
+            // it is never read back — only `.page` is used by this overload's callers.
+            pageCache.set((result, false), for: cacheKey)
             return result
         } catch {
             #if DEBUG
