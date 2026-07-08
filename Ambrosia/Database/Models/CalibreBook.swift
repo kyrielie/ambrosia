@@ -67,8 +67,7 @@ struct CalibreBook: Identifiable, Hashable {
     /// the word "anthology".
     var isDescriptionAnthology: Bool {
         guard let comment = displayComment else { return false }
-        let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.range(of: "Anthology containing:", options: [.caseInsensitive, .anchored]) != nil
+        return AnthologyDetector.isAnthology(strippedComment: comment)
     }
 
     var isAO3PublisherBook: Bool {
