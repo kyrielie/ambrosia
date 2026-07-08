@@ -144,37 +144,35 @@ struct CollectionsView: View {
                 Button("Cancel") { renamingID = nil }
                     .buttonStyle(.borderless).controlSize(.small)
             } else {
+                Button {
                     if !selectedCalibreIDs.isEmpty {
-                        Button {
-                            toggleMembership(collection: collection)
-                        } label: {
-                        Image(systemName: isMember ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(isMember ? Color.accentColor : .secondary)
+                        toggleMembership(collection: collection)
+                    } else {
+                        onSelectCollection?(collection)
+                        dismiss()
                     }
-                    .buttonStyle(.borderless)
-                }
+                } label: {
+                    HStack {
+                        if !selectedCalibreIDs.isEmpty {
+                            Image(systemName: isMember ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(isMember ? Color.accentColor : .secondary)
+                        }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(collection.name).lineLimit(1)
-                    Text("\(count) book\(count == 1 ? "" : "s")")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(collection.name).lineLimit(1)
+                            Text("\(count) book\(count == 1 ? "" : "s")")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
 
-                if selectedCalibreIDs.isEmpty {
-                    Image(systemName: "chevron.right")
-                        .font(.caption).foregroundStyle(.tertiary)
+                        if selectedCalibreIDs.isEmpty {
+                            Image(systemName: "chevron.right")
+                                .font(.caption).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .contentShape(Rectangle())
                 }
-            }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard !isRenaming else { return }
-            if !selectedCalibreIDs.isEmpty {
-                toggleMembership(collection: collection)
-            } else {
-                onSelectCollection?(collection)
-                dismiss()
+                .buttonStyle(.plain)
             }
         }
         .contextMenu {

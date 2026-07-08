@@ -554,6 +554,18 @@ extension CalibreLibrary {
 
     func bookCount(query: SearchQuery, filter: FilterExpression?,
                    filterTagExpansions: [String: [String]] = [:]) -> Int {
+        // §Phase3: this count is SQL-level only (query + filter), not
+        // visibility-filtered — it never took a visibility parameter before
+        // this cache existed, so visibilityVersion is fixed at 0 here rather
+        // than threaded in from callers, matching its actual semantics
+        // instead of over-invalidating on every like/skip toggle.
+        let cacheKey = CountCacheKey(
+            querySignature: LibraryFilterDebug.summary(query: query),
+            filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
+            tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
+            visibilityVersion: 0
+        )
+        if let cached = countCache[cacheKey] { return cached }
         let start = LibraryFilterDebug.now()
         LibraryFilterDebug.log("count.start", [
             "mode": "sqlPagedDeferredCount",
@@ -568,6 +580,7 @@ extension CalibreLibrary {
                 "elapsedMS": LibraryFilterDebug.elapsedMS(since: start)
             ])
             clearSearchError()
+            countCache.set(count, for: cacheKey)
             return count
         } catch {
             let message = "bookCount(query:filter:) error: \(error)"

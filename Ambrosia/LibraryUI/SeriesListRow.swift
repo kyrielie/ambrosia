@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-struct SeriesListRow: View {
+struct SeriesListRow: View, Equatable {
     let series: SeriesGroup
     let hideFanworksTagPill: Bool
     let isLiked: Bool
@@ -17,6 +17,17 @@ struct SeriesListRow: View {
 
     @State private var showIndex = false
     @State private var showCollectionPicker = false
+
+    // Closures are excluded (functions aren't Equatable); everything that
+    // actually varies the rendered content is included. Mirrors BookListRow's
+    // `==`, and — unlike the version that shipped without this — must be kept
+    // in sync with every stored property added above.
+    static func == (lhs: SeriesListRow, rhs: SeriesListRow) -> Bool {
+        lhs.series               == rhs.series
+            && lhs.hideFanworksTagPill == rhs.hideFanworksTagPill
+            && lhs.isLiked             == rhs.isLiked
+            && lhs.isInReadLater       == rhs.isInReadLater
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -107,8 +118,13 @@ struct SeriesListRow: View {
         if !pills.isEmpty {
             FlowLayout(spacing: 4) {
                 ForEach(pills) { pill in
-                    tagPill(pill.label, color: pill.color)
-                        .onTapGesture { onTagTap(pill.label, pill.field) }
+                    Button {
+                        onTagTap(pill.label, pill.field)
+                    } label: {
+                        tagPill(pill.label, color: pill.color)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Filter by \(pill.label)")
                 }
             }
         }

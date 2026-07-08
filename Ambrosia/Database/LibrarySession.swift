@@ -51,6 +51,55 @@ final class LibrarySession {
     /// The path of the currently open library.
     private(set) var activePath: String?
 
+    /// Name-keyed collection membership, mirroring what each view used to
+    /// build itself from `collectionStore.collections()` +
+    /// `membershipByCollectionID()`. Populated by `refreshCollectionSnapshots()`.
+    var collectionMembershipByName: [String: Set<Int>] = [:]
+
+    /// §Phase1: Single source of truth for the six visibility ID sets.
+    /// Replaces the two independent per-surface refresh functions previously
+    /// duplicated in LibraryRootView (`refreshBookStates()`) and
+    /// EmailLibraryViewController (`refreshCollectionSnapshots()`), of which
+    /// only the former reliably wrote all six `cachedX` sets back here — the
+    /// latter only wrote `cachedAnthologyIDs`. Diffs against the previous
+    /// cached values and bumps `membershipVersion` exactly once if anything
+    /// actually changed, so callers can rely on `membershipVersion` as an
+    /// accurate "did visibility change" signal instead of calling
+    /// `bumpMembershipVersion()` themselves after this returns.
+    func refreshCollectionSnapshots() async {
+        guard let collectionStore else { return }
+        let collections = (try? await collectionStore.collections()) ?? []
+        let membershipByID = (try? await collectionStore.membershipByCollectionID()) ?? [:]
+        let currentLiked = (try? await collectionStore.likedIDs()) ?? []
+        let currentReadLater = Set((try? await collectionStore.members(of: SystemCollectionID.readLater)) ?? [])
+        let currentSkipped = membershipByID[SystemCollectionID.skipped] ?? []
+        let currentSeriesOrMerged = membershipByID[SystemCollectionID.seriesOrMerged] ?? []
+        let currentAO3PublisherIDs = await library?.ao3PublisherBookIDs() ?? []
+        let currentAnthologyIDs = await library?.anthologyBookIDs() ?? []
+
+        let changed = cachedLikedIDs != currentLiked
+            || cachedReadLaterIDs != currentReadLater
+            || cachedSkippedIDs != currentSkipped
+            || cachedSeriesOrMergedIDs != currentSeriesOrMerged
+            || cachedAO3PublisherIDs != currentAO3PublisherIDs
+            || cachedAnthologyIDs != currentAnthologyIDs
+
+        cachedLikedIDs = currentLiked
+        cachedReadLaterIDs = currentReadLater
+        cachedSkippedIDs = currentSkipped
+        cachedSeriesOrMergedIDs = currentSeriesOrMerged
+        cachedAO3PublisherIDs = currentAO3PublisherIDs
+        cachedAnthologyIDs = currentAnthologyIDs
+
+        collectionMembershipByName = Dictionary(uniqueKeysWithValues: collections.map { collection in
+            (collection.name, membershipByID[collection.id] ?? [])
+        })
+
+        if changed {
+            bumpMembershipVersion()
+        }
+    }
+
     /// True while a library is open and ready to query.
     var isOpen: Bool { library != nil }
 

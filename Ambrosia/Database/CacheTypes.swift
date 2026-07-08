@@ -27,6 +27,40 @@ extension FilterResultCacheKey {
     }
 }
 
+// MARK: - §Phase3: Page/count cache keys
+
+/// Cache key for a page of hydrated CalibreBook results. Two calls that only
+/// differ in one of these fields (offset, filter, query, sort, tag-expansion
+/// resolution, or visibility/membership state) must NOT share a cache entry.
+struct PageCacheKey: Hashable {
+    let querySignature: String
+    let filterSignature: String
+    let tagExpansionsDigest: String
+    let visibilityVersion: Int
+    let sortField: SortField
+    let ascending: Bool
+    let randomSeed: UInt64
+    let offset: Int
+    let limit: Int
+}
+
+/// Cache key for a bare count (no pagination, no hydration).
+struct CountCacheKey: Hashable {
+    let querySignature: String
+    let filterSignature: String
+    let tagExpansionsDigest: String
+    let visibilityVersion: Int
+}
+
+/// Stable, order-independent digest of a resolved tag-synonym expansion
+/// dictionary. Two dictionaries with the same keys/values in different
+/// insertion order must produce the same digest.
+func tagExpansionsDigest(_ expansions: [String: [String]]) -> String {
+    expansions.keys.sorted().map { key in
+        "\(key):[\((expansions[key] ?? []).sorted().joined(separator: ","))]"
+    }.joined(separator: "|")
+}
+
 // MARK: - LRU container
 
 /// A simple bounded LRU dictionary. The oldest-inserted entry is evicted when `limit` is reached.

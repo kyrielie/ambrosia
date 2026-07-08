@@ -12,6 +12,9 @@ final class EmailLibraryViewController: NSViewController {
     let modelContainer: ModelContainer
     let session:        LibrarySession
     let toolbarState:   LibraryToolbarState
+    // §Phase2: shared visibility-filtering logic, also owned by
+    // LibraryRootView. Stateless aside from its debug-log label.
+    private let queryController = LibraryQueryController(surfaceLabel: "email")
 
     // MARK: - Child VCs
 
@@ -51,20 +54,16 @@ final class EmailLibraryViewController: NSViewController {
     private var anthologyIDs: Set<Int> = []
     private var collectionMembership: [String: Set<Int>] = [:]
     private var pendingCollectionSeedIDs: [Int] = []
-    private var currentPage = 0
-    /// Raw SQL row offset for the current load, used instead of currentPage * pageSize
-    /// when grouping is on — see LibraryRootView.rawSQLOffset for full rationale.
-    private var rawSQLOffset = 0
-    /// History of prior rawSQLOffset values. The email view only paginates forward
-    /// (infinite scroll, no Previous button), so this exists purely for symmetry with
-    /// LibraryRootView and is cleared on every reset; nothing currently pops it.
-    private var rawSQLOffsetHistory: [Int] = []
+    // §Phase2-Pass1: currentPage/rawSQLOffset/rawSQLOffsetHistory/
+    // groupAwareOverflow used to be four independent properties (this file
+    // used the name "groupAwareOverflow" where LibraryRootView used
+    // "rawSQLOffsetOverflow" for the identical purpose -- both now map onto
+    // PagingOffsetState.rawSQLOffsetOverflow). Bundled into one
+    // PagingOffsetState, shared type with LibraryRootView, so
+    // LibraryQueryController (Pass 4/5) can take one inout value instead of
+    // four/five loosely-named parameters.
+    private var offsetState = PagingOffsetState()
     private var hasNextPage = false
-    /// Overflow from the group-aware drain loop in loadPage: the loop stops once it
-    /// has >= pageSize visible rows, which can overshoot by up to pageFetchLimit - 1.
-    /// The excess is buffered here and prepended to the next page instead of being
-    /// re-fetched (rawSQLOffset has already moved past it) or silently dropped.
-    private var groupAwareOverflow: [CalibreBook] = []
     private let pageSize    = 25
     private var pageFetchLimit: Int { (pageSize * 3) + 1 }
 
@@ -895,10 +894,7 @@ final class EmailLibraryViewController: NSViewController {
         }
 
         if reset {
-            currentPage = 0
-            rawSQLOffset = 0
-            rawSQLOffsetHistory = []
-            groupAwareOverflow = []
+            offsetState.resetForNewFilter()
             books = []
             // §grouping-flash fix: clear items immediately on a fresh query so the
             // sidebar shows nothing rather than the previous query's stale rows while
@@ -941,7 +937,7 @@ final class EmailLibraryViewController: NSViewController {
                 filterForSQL = nil
             }
             LibraryFilterDebug.log("loadPage.start", [
-                "surface": "email", "mode": "random", "page": currentPage
+                "surface": "email", "mode": "random", "page": offsetState.currentPage
             ])
             if isEmptyExplicitIDs {
                 if reset { books = [] }
@@ -958,10 +954,11 @@ final class EmailLibraryViewController: NSViewController {
             // why the restrictIDs mutation this used to do per-branch was
             // replaced.
             let (page, hasMore) = await library.randomSortedPage(
-                offset: currentPage * pageSize, limit: pageSize,
+                offset: offsetState.currentPage * pageSize, limit: pageSize,
                 query: query, filter: filterForSQL, restrictIDs: restrictIDs,
                 visibility: currentVisibilityPolicy,
-                filterTagExpansions: cachedFilterTagExpansions
+                filterTagExpansions: cachedFilterTagExpansions,
+                visibilityVersion: session.membershipVersion
             )
             guard !isTornDown, !Task.isCancelled else { return }
             if reset { books = page } else { books.append(contentsOf: page) }
@@ -995,7 +992,7 @@ final class EmailLibraryViewController: NSViewController {
                 filterForSQL = nil
             }
             LibraryFilterDebug.log("loadPage.start", [
-                "surface": "email", "mode": "wordCountSorted", "page": currentPage,
+                "surface": "email", "mode": "wordCountSorted", "page": offsetState.currentPage,
                 "query": LibraryFilterDebug.summary(query: query)
             ])
             if isEmptyExplicitIDs {
@@ -1003,10 +1000,11 @@ final class EmailLibraryViewController: NSViewController {
                 wordCountHasMore = false
             } else {
                 let (page, hasMore) = await library.wordCountSortedPage(
-                    offset: currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
+                    offset: offsetState.currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
                     query: query, filter: filterForSQL, restrictIDs: restrictIDs,
                     visibility: currentVisibilityPolicy,
-                    filterTagExpansions: cachedFilterTagExpansions
+                    filterTagExpansions: cachedFilterTagExpansions,
+                    visibilityVersion: session.membershipVersion
                 )
                 guard !isTornDown, !Task.isCancelled else { return }
                 wordCountPage = page
@@ -1017,14 +1015,14 @@ final class EmailLibraryViewController: NSViewController {
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "email",
                 "mode": "sqlPagedDeferredCount",
-                "page": currentPage,
+                "page": offsetState.currentPage,
                 "query": LibraryFilterDebug.summary(query: query),
                 "filter": LibraryFilterDebug.summary(expression: toolbarState.filterExpression)
             ])
             if shouldGroupSidebarRows {
-                var visible: [CalibreBook] = reset ? [] : groupAwareOverflow
-                if !reset { groupAwareOverflow = [] }
-                var offset = rawSQLOffset
+                var visible: [CalibreBook] = reset ? [] : offsetState.rawSQLOffsetOverflow
+                if !reset { offsetState.rawSQLOffsetOverflow = [] }
+                var offset = offsetState.rawSQLOffset
                 var exhausted = false
                 var totalRawFetched = 0
                 var iterations = 0
@@ -1036,7 +1034,8 @@ final class EmailLibraryViewController: NSViewController {
                         sort: toolbarState.sortField, ascending: toolbarState.ascending,
                         query: query,
                         filter: toolbarState.filterExpression,
-                        filterTagExpansions: cachedFilterTagExpansions
+                        filterTagExpansions: cachedFilterTagExpansions,
+                        visibilityVersion: session.membershipVersion
                     )
                     LibraryFilterDebug.log("visibleBooks.fetch", [
                         "surface": "email", "offset": offset, "raw": rawChunk.count
@@ -1048,8 +1047,8 @@ final class EmailLibraryViewController: NSViewController {
                     guard !isTornDown, !Task.isCancelled else { return }
                 }
                 guard !isTornDown, !Task.isCancelled else { return }
-                rawSQLOffsetHistory.append(rawSQLOffset)
-                rawSQLOffset = offset
+                offsetState.rawSQLOffsetHistory.append(offsetState.rawSQLOffset)
+                offsetState.rawSQLOffset = offset
                 groupAwareVisible = visible
                 hasNextPage = !exhausted || visible.count > pageSize
                 LibraryFilterDebug.log("visibleBooks.end", [
@@ -1062,11 +1061,12 @@ final class EmailLibraryViewController: NSViewController {
                 raw = []
             } else {
                 raw = await library.books(
-                    offset: currentPage * pageSize, limit: pageFetchLimit,
+                    offset: offsetState.currentPage * pageSize, limit: pageFetchLimit,
                     sort: toolbarState.sortField, ascending: toolbarState.ascending,
                     query: query,
                     filter: toolbarState.filterExpression,
-                    filterTagExpansions: cachedFilterTagExpansions
+                    filterTagExpansions: cachedFilterTagExpansions,
+                    visibilityVersion: session.membershipVersion
                 )
                 guard !isTornDown, !Task.isCancelled else { return }
             }
@@ -1075,14 +1075,14 @@ final class EmailLibraryViewController: NSViewController {
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "email",
                 "mode": "explicitIDs",
-                "page": currentPage,
+                "page": offsetState.currentPage,
                 "candidateIDs": result.calibreIDs.count,
                 "query": LibraryFilterDebug.summary(query: query)
             ])
             let ids = visibleIDs(intersect(result.calibreIDs, with: query.ftsMatchedIDs))
             raw = await library.books(
                 ids: ids,
-                offset: currentPage * pageSize, limit: pageSize + 1,
+                offset: offsetState.currentPage * pageSize, limit: pageSize + 1,
                 sort: toolbarState.sortField, ascending: toolbarState.ascending,
                 query: query
             )
@@ -1091,20 +1091,20 @@ final class EmailLibraryViewController: NSViewController {
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "email",
                 "mode": "emptyExplicitIDs",
-                "page": currentPage
+                "page": offsetState.currentPage
             ])
             raw = []
         } else {
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "email",
                 "mode": "unfiltered",
-                "page": currentPage,
+                "page": offsetState.currentPage,
                 "query": LibraryFilterDebug.summary(query: query)
             ])
             if shouldGroupSidebarRows {
-                var visible: [CalibreBook] = reset ? [] : groupAwareOverflow
-                if !reset { groupAwareOverflow = [] }
-                var offset = rawSQLOffset
+                var visible: [CalibreBook] = reset ? [] : offsetState.rawSQLOffsetOverflow
+                if !reset { offsetState.rawSQLOffsetOverflow = [] }
+                var offset = offsetState.rawSQLOffset
                 var exhausted = false
                 var totalRawFetched = 0
                 var iterations = 0
@@ -1114,7 +1114,8 @@ final class EmailLibraryViewController: NSViewController {
                     let rawChunk = await library.books(
                         offset: offset, limit: pageFetchLimit,
                         sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                        query: query
+                        query: query,
+                        visibilityVersion: session.membershipVersion
                     )
                     LibraryFilterDebug.log("visibleBooks.fetch", [
                         "surface": "email", "offset": offset, "raw": rawChunk.count
@@ -1126,8 +1127,8 @@ final class EmailLibraryViewController: NSViewController {
                     guard !isTornDown, !Task.isCancelled else { return }
                 }
                 guard !isTornDown, !Task.isCancelled else { return }
-                rawSQLOffsetHistory.append(rawSQLOffset)
-                rawSQLOffset = offset
+                offsetState.rawSQLOffsetHistory.append(offsetState.rawSQLOffset)
+                offsetState.rawSQLOffset = offset
                 groupAwareVisible = visible
                 hasNextPage = !exhausted || visible.count > pageSize
                 LibraryFilterDebug.log("visibleBooks.end", [
@@ -1140,9 +1141,10 @@ final class EmailLibraryViewController: NSViewController {
                 raw = []
             } else {
                 raw = await library.books(
-                    offset: currentPage * pageSize, limit: pageFetchLimit,
+                    offset: offsetState.currentPage * pageSize, limit: pageFetchLimit,
                     sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                    query: query
+                    query: query,
+                    visibilityVersion: session.membershipVersion
                 )
                 guard !isTornDown, !Task.isCancelled else { return }
             }
@@ -1156,12 +1158,12 @@ final class EmailLibraryViewController: NSViewController {
         } else if let groupAwareVisible {
             // hasNextPage was already set by the group-aware drain loop above.
             page = Array(groupAwareVisible.prefix(pageSize))
-            groupAwareOverflow = Array(groupAwareVisible.dropFirst(pageSize))
+            offsetState.rawSQLOffsetOverflow = Array(groupAwareVisible.dropFirst(pageSize))
             LibraryFilterDebug.log("visibleBooks.pagePrefix", [
                 "surface": "email",
                 "visible": groupAwareVisible.count,
                 "page": page.count,
-                "overflow": groupAwareOverflow.count
+                "overflow": offsetState.rawSQLOffsetOverflow.count
             ])
         } else {
             let visible = visibleBooks(raw)
@@ -1429,7 +1431,7 @@ final class EmailLibraryViewController: NSViewController {
 
     /// Mirrors LibraryRootView.currentVisibilityPolicy — see LibraryVisibilityPolicy.swift.
     private var currentVisibilityPolicy: LibraryVisibilityPolicy {
-        LibraryVisibilityPolicy(
+        queryController.visibilityPolicy(
             showSkippedCollection: ReaderPreferences.shared.showSkippedCollection,
             shouldGroupSeriesRows: shouldGroupSidebarRows,
             hideNonAO3PublisherBooks: ReaderPreferences.shared.hideNonAO3PublisherBooks,
@@ -1442,20 +1444,20 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func visibleIDs(_ ids: [Int]) -> [Int] {
-        currentVisibilityPolicy.filter(ids)
+        queryController.visibleIDs(ids, policy: currentVisibilityPolicy)
     }
 
     private func intersect(_ ids: [Int], with optionalIDs: [Int]?) -> [Int] {
-        LibraryQueryHelpers.intersect(ids, with: optionalIDs)
+        queryController.intersect(ids, with: optionalIDs)
     }
 
     private func visibleBooks(_ raw: [CalibreBook]) -> [CalibreBook] {
-        currentVisibilityPolicy.filter(raw)
+        queryController.visibleBooks(raw, policy: currentVisibilityPolicy)
     }
 
     private func loadNextPageIfAvailable() {
         guard hasNextPage else { return }
-        currentPage += 1
+        offsetState.currentPage += 1
         Task { [weak self] in guard let self else { return }; await self.loadPage(reset: false) }
     }
 
@@ -1485,7 +1487,10 @@ final class EmailLibraryViewController: NSViewController {
             } else {
                 try? await session.collectionStore?.bulkAdd(calibreIDs: [book.id], to: SystemCollectionID.readLater)
             }
-            session.bumpMembershipVersion()
+            // §Phase1: bumpMembershipVersion() removed here — it is now called
+            // by session.refreshCollectionSnapshots() itself (invoked by the
+            // line below) exactly when it detects the read-later set actually
+            // changed, so an explicit call here would double-bump.
             await refreshCollectionSnapshots()
         }
     }
@@ -1546,26 +1551,33 @@ final class EmailLibraryViewController: NSViewController {
 
     @MainActor
     private func refreshCollectionSnapshots() async {
-        let collections = (try? await session.collectionStore?.collections()) ?? []
-        let membershipByID = (try? await session.collectionStore?.membershipByCollectionID()) ?? [:]
-        let currentSkipped = membershipByID[SystemCollectionID.skipped] ?? []
-        let currentSeriesOrMerged = membershipByID[SystemCollectionID.seriesOrMerged] ?? []
-        let currentAO3PublisherIDs = await session.library?.ao3PublisherBookIDs() ?? []
-        let currentAnthologyIDs = await session.library?.anthologyBookIDs() ?? []
-        collectionMembership = Dictionary(uniqueKeysWithValues: collections.map { collection in
-            return (collection.name, membershipByID[collection.id] ?? [])
-        })
-        likedIDs = (try? await session.collectionStore?.likedIDs()) ?? []
-        readLaterIDs = Set((try? await session.collectionStore?.members(of: SystemCollectionID.readLater)) ?? [])
-        let shouldReloadPage = skippedIDs != currentSkipped || seriesOrMergedIDs != currentSeriesOrMerged || ao3PublisherIDs != currentAO3PublisherIDs || anthologyIDs != currentAnthologyIDs
-        skippedIDs = currentSkipped
-        seriesOrMergedIDs = currentSeriesOrMerged
-        ao3PublisherIDs = currentAO3PublisherIDs
-        anthologyIDs = currentAnthologyIDs
-        session.cachedAnthologyIDs = currentAnthologyIDs
+        // §Phase1: was previously the only writer of five of the six cachedX
+        // sets on the List side and the ONLY writer of NONE of them on this
+        // (Email) side except cachedAnthologyIDs — now delegates to the
+        // single shared writer on LibrarySession, which writes all six and
+        // bumps membershipVersion itself exactly once if anything changed.
+        let previousSkipped = skippedIDs
+        let previousSeriesOrMerged = seriesOrMergedIDs
+        let previousAO3PublisherIDs = ao3PublisherIDs
+        let previousAnthologyIDs = anthologyIDs
+
+        await session.refreshCollectionSnapshots()
+
+        collectionMembership = session.collectionMembershipByName
+        likedIDs = session.cachedLikedIDs
+        readLaterIDs = session.cachedReadLaterIDs
+        skippedIDs = session.cachedSkippedIDs
+        seriesOrMergedIDs = session.cachedSeriesOrMergedIDs
+        ao3PublisherIDs = session.cachedAO3PublisherIDs
+        anthologyIDs = session.cachedAnthologyIDs
         sidebarVC?.collectionMembership = collectionMembership
         sidebarVC?.likedIDs = likedIDs
         sidebarVC?.readLaterIDs = readLaterIDs
+
+        let shouldReloadPage = skippedIDs != previousSkipped
+            || seriesOrMergedIDs != previousSeriesOrMerged
+            || ao3PublisherIDs != previousAO3PublisherIDs
+            || anthologyIDs != previousAnthologyIDs
         if shouldReloadPage {
             await loadPage(reset: true)
         }

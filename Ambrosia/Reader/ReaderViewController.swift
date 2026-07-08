@@ -1812,6 +1812,10 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         )
         let hosting = NSHostingView(rootView: barView)
         hosting.translatesAutoresizingMaskIntoConstraints = false
+        // Invariant 9 — matches AnnotationSidebarView's/TOCSidebarView's own hosting:
+        // frame is fully owned by the constraints below, so SwiftUI's own
+        // intrinsic/min/max sizing must be disabled rather than fought with.
+        hosting.sizingOptions = []
         view.addSubview(hosting)
         NSLayoutConstraint.activate([
             hosting.leadingAnchor.constraint(equalTo: view.leadingAnchor),

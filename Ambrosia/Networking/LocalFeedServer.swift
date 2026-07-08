@@ -214,17 +214,17 @@ actor LocalFeedServer {
                 await server.appendRoute("GET /feed/collection/*") { [capturedSelf] request in
                     try await capturedSelf.handleCollectionFeed(request: request)
                 }
-                await server.appendRoute("GET /feed/search.xml") { [capturedSelf] _ in
-                    try await capturedSelf.handleSearchFeed(format: .rss)
+                await server.appendRoute("GET /feed/search.xml") { [capturedSelf] request in
+                    try await capturedSelf.handleSearchFeed(format: .rss, request: request)
                 }
-                await server.appendRoute("GET /feed/search.json") { [capturedSelf] _ in
-                    try await capturedSelf.handleSearchFeed(format: .json)
+                await server.appendRoute("GET /feed/search.json") { [capturedSelf] request in
+                    try await capturedSelf.handleSearchFeed(format: .json, request: request)
                 }
-                await server.appendRoute("GET /feed/random-daily.xml") { [capturedSelf] _ in
-                    try await capturedSelf.handleRandomDailyFeed(format: .rss)
+                await server.appendRoute("GET /feed/random-daily.xml") { [capturedSelf] request in
+                    try await capturedSelf.handleRandomDailyFeed(format: .rss, request: request)
                 }
-                await server.appendRoute("GET /feed/random-daily.json") { [capturedSelf] _ in
-                    try await capturedSelf.handleRandomDailyFeed(format: .json)
+                await server.appendRoute("GET /feed/random-daily.json") { [capturedSelf] request in
+                    try await capturedSelf.handleRandomDailyFeed(format: .json, request: request)
                 }
                 await server.appendRoute("GET /feeds.opml") { [capturedSelf] _ in
                     try await capturedSelf.handleOPML()
@@ -327,29 +327,31 @@ actor LocalFeedServer {
 
         switch format {
         case .rss:
-            let xml = try await buildRSSFeed(
-                title: "Ambrosia — \(collection.name)",
-                feedDescription: "Books in the \(collection.name) collection",
-                calibreIDs: memberIDs
-            )
-            return HTTPResponse(statusCode: .ok,
-                                headers: [.contentType: "application/rss+xml; charset=utf-8"],
-                                body: Data(xml.utf8))
-        case .json:
-            let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
-            let json = try await buildJSONFeed(
+            let result = try await buildRSSFeed(
                 title: "Ambrosia — \(collection.name)",
                 feedDescription: "Books in the \(collection.name) collection",
                 calibreIDs: memberIDs,
-                feedURL: "\(baseURL)/feed/collection/\(collectionID).json"
+                ifNoneMatch: ifNoneMatchHeader(request)
             )
-            return HTTPResponse(statusCode: .ok,
-                                headers: [.contentType: "application/feed+json; charset=utf-8"],
-                                body: json)
+            return httpResponse(for: result, contentType: "application/rss+xml; charset=utf-8") { Data($0.utf8) }
+        case .json:
+            let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
+            let page = Int(request.query["page"] ?? "") ?? 1
+            let perPage = Int(request.query["per_page"] ?? "") ?? Self.jsonFeedDefaultPerPage
+            let result = try await buildJSONFeed(
+                title: "Ambrosia — \(collection.name)",
+                feedDescription: "Books in the \(collection.name) collection",
+                calibreIDs: memberIDs,
+                feedURL: "\(baseURL)/feed/collection/\(collectionID).json",
+                page: page,
+                perPage: perPage,
+                ifNoneMatch: ifNoneMatchHeader(request)
+            )
+            return httpResponse(for: result, contentType: "application/feed+json; charset=utf-8") { $0 }
         }
     }
 
-    private func handleSearchFeed(format: FeedFormat) async throws -> HTTPResponse {
+    private func handleSearchFeed(format: FeedFormat, request: HTTPRequest) async throws -> HTTPResponse {
         guard let snapshot = CurrentSearchSnapshot.load() else {
             switch format {
             case .rss:
@@ -369,25 +371,27 @@ actor LocalFeedServer {
         }
         switch format {
         case .rss:
-            let xml = try await buildRSSFeed(
-                title: "Ambrosia — \(snapshot.label)",
-                feedDescription: "Published search snapshot from \(snapshot.publishedAt)",
-                calibreIDs: snapshot.calibreIDs
-            )
-            return HTTPResponse(statusCode: .ok,
-                                headers: [.contentType: "application/rss+xml; charset=utf-8"],
-                                body: Data(xml.utf8))
-        case .json:
-            let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
-            let json = try await buildJSONFeed(
+            let result = try await buildRSSFeed(
                 title: "Ambrosia — \(snapshot.label)",
                 feedDescription: "Published search snapshot from \(snapshot.publishedAt)",
                 calibreIDs: snapshot.calibreIDs,
-                feedURL: "\(baseURL)/feed/search.json"
+                ifNoneMatch: ifNoneMatchHeader(request)
             )
-            return HTTPResponse(statusCode: .ok,
-                                headers: [.contentType: "application/feed+json; charset=utf-8"],
-                                body: json)
+            return httpResponse(for: result, contentType: "application/rss+xml; charset=utf-8") { Data($0.utf8) }
+        case .json:
+            let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
+            let page = Int(request.query["page"] ?? "") ?? 1
+            let perPage = Int(request.query["per_page"] ?? "") ?? Self.jsonFeedDefaultPerPage
+            let result = try await buildJSONFeed(
+                title: "Ambrosia — \(snapshot.label)",
+                feedDescription: "Published search snapshot from \(snapshot.publishedAt)",
+                calibreIDs: snapshot.calibreIDs,
+                feedURL: "\(baseURL)/feed/search.json",
+                page: page,
+                perPage: perPage,
+                ifNoneMatch: ifNoneMatchHeader(request)
+            )
+            return httpResponse(for: result, contentType: "application/feed+json; charset=utf-8") { $0 }
         }
     }
 
@@ -395,7 +399,7 @@ actor LocalFeedServer {
     /// derived from the day index, not a stored value, so it is stable for any
     /// number of polls within the same day and changes deterministically at
     /// the next UTC midnight.
-    private func handleRandomDailyFeed(format: FeedFormat) async throws -> HTTPResponse {
+    private func handleRandomDailyFeed(format: FeedFormat, request: HTTPRequest) async throws -> HTTPResponse {
         let ud = UserDefaults.standard
         let dailyEnabled = ud.object(forKey: "rp.feedServerEnableDailyStory").flatMap { _ in ud.bool(forKey: "rp.feedServerEnableDailyStory") as Bool? } ?? false
         guard dailyEnabled else {
@@ -425,25 +429,23 @@ actor LocalFeedServer {
         let picked = allIDs[seed % allIDs.count]
         switch format {
         case .rss:
-            let xml = try await buildRSSFeed(
-                title: "Ambrosia — Daily Story",
-                feedDescription: "A random story from your library, refreshed each day.",
-                calibreIDs: [picked]
-            )
-            return HTTPResponse(statusCode: .ok,
-                headers: [.contentType: "application/rss+xml; charset=utf-8"],
-                body: Data(xml.utf8))
-        case .json:
-            let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
-            let json = try await buildJSONFeed(
+            let result = try await buildRSSFeed(
                 title: "Ambrosia — Daily Story",
                 feedDescription: "A random story from your library, refreshed each day.",
                 calibreIDs: [picked],
-                feedURL: "\(baseURL)/feed/random-daily.json"
+                ifNoneMatch: ifNoneMatchHeader(request)
             )
-            return HTTPResponse(statusCode: .ok,
-                headers: [.contentType: "application/feed+json; charset=utf-8"],
-                body: json)
+            return httpResponse(for: result, contentType: "application/rss+xml; charset=utf-8") { Data($0.utf8) }
+        case .json:
+            let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
+            let result = try await buildJSONFeed(
+                title: "Ambrosia — Daily Story",
+                feedDescription: "A random story from your library, refreshed each day.",
+                calibreIDs: [picked],
+                feedURL: "\(baseURL)/feed/random-daily.json",
+                ifNoneMatch: ifNoneMatchHeader(request)
+            )
+            return httpResponse(for: result, contentType: "application/feed+json; charset=utf-8") { $0 }
         }
     }
 
@@ -517,29 +519,80 @@ actor LocalFeedServer {
         )
     }
 
-    // MARK: - RSS generation
-
     // MARK: - Shared feed data fetch (used by both RSS and JSON Feed builders)
 
     /// Bulk-fetches Calibre book stubs plus their AO3 metadata for a set of
     /// calibre IDs. Both `buildRSSFeed` and `buildJSONFeed` serialize this same
     /// pairing differently — this is the one place that touches Calibre/AmbrosiaMetaDB.
+    /// Callers fetch this once, use it to compute an ETag, and only proceed to the
+    /// (expensive — full merged HTML per item) builder call if the client's
+    /// `If-None-Match` doesn't already match.
     private func fetchFeedBooks(calibreIDs: [Int]) async -> [(book: CalibreBook, ao3: AO3MetadataRecord?)] {
-        guard let library, let metaDB else { return [] }
+        guard let library, let metaDB, !calibreIDs.isEmpty else { return [] }
         let ao3Map = (try? await metaDB.ao3Metadata(for: calibreIDs)) ?? [:]
-        let books = await library.books(ids: calibreIDs, offset: 0, limit: min(calibreIDs.count, 500),
+        // No cap here — callers decide how many IDs to pass in. RSS passes the
+        // full list (no pagination protocol exists for RSS); JSON Feed passes
+        // one page's worth (see buildJSONFeed's page/per_page handling).
+        let books = await library.books(ids: calibreIDs, offset: 0, limit: calibreIDs.count,
                                    sort: .title, ascending: true)
         return books.map { ($0, ao3Map[$0.id]) }
+    }
+
+    /// A cheap ETag over the fetched pairs plus any pagination/format params that
+    /// affect the response shape. Reflects collection-membership changes (the pair
+    /// list itself) and AO3 re-extraction (`ao3.updatedDate`) — it does not reflect
+    /// a bare Calibre comment/tag edit made outside AO3 extraction, since that has
+    /// no cheap-to-read "last modified" signal available here. Good enough to skip
+    /// the expensive per-item work on a repeat poll where nothing relevant changed;
+    /// not a substitute for a real content-hash if that gap matters later.
+    private func computeFeedETag(pairs: [(book: CalibreBook, ao3: AO3MetadataRecord?)],
+                                  extra: String) -> String {
+        var combined = extra
+        for (book, ao3) in pairs {
+            combined += "|\(book.id):\(ao3?.updatedDate ?? "")"
+        }
+        return "\"\(String(combined.hashValue, radix: 16))\""
+    }
+
+    private func ifNoneMatchHeader(_ request: HTTPRequest) -> String? {
+        request.headers[HTTPHeader("If-None-Match")]
+    }
+
+    /// Result of a feed build: either the client's `If-None-Match` already
+    /// matched (skip re-rendering entirely) or here's the freshly built body.
+    private enum FeedBuildResult<Body> {
+        case notModified(etag: String)
+        case body(etag: String, data: Body)
+    }
+
+    private func httpResponse<Body>(for result: FeedBuildResult<Body>,
+                                     contentType: String,
+                                     toData: (Body) -> Data) -> HTTPResponse {
+        switch result {
+        case .notModified(let etag):
+            return HTTPResponse(statusCode: .notModified, headers: [.eTag: etag])
+        case .body(let etag, let data):
+            return HTTPResponse(statusCode: .ok,
+                                headers: [.contentType: contentType, .eTag: etag],
+                                body: toData(data))
+        }
     }
 
     // MARK: - RSS generation
 
     private func buildRSSFeed(title: String,
                                feedDescription: String,
-                               calibreIDs: [Int]) async throws -> String {
-        guard let library else { return buildEmptyFeed(title: title, message: "No library open.") }
+                               calibreIDs: [Int],
+                               ifNoneMatch: String?) async throws -> FeedBuildResult<String> {
+        guard let library else {
+            return .body(etag: "\"empty\"", data: buildEmptyFeed(title: title, message: "No library open."))
+        }
 
         let pairs = await fetchFeedBooks(calibreIDs: calibreIDs)
+        let etag = computeFeedETag(pairs: pairs, extra: "rss")
+        if let ifNoneMatch, ifNoneMatch == etag {
+            return .notModified(etag: etag)
+        }
 
         var items: [String] = []
         for (book, ao3) in pairs {
@@ -547,7 +600,7 @@ actor LocalFeedServer {
             items.append(itemXML)
         }
 
-        return """
+        let xml = """
         <?xml version="1.0" encoding="UTF-8"?>
         <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
           <channel>
@@ -559,6 +612,7 @@ actor LocalFeedServer {
           </channel>
         </rss>
         """
+        return .body(etag: etag, data: xml)
     }
 
     private func buildEmptyFeed(title: String, message: String) -> String {
@@ -689,6 +743,7 @@ actor LocalFeedServer {
         var description: String?
         var home_page_url: String?
         var feed_url: String?
+        var next_url: String?
         var items: [JSONFeedItem]
     }
 
@@ -698,18 +753,53 @@ actor LocalFeedServer {
         return encoder
     }()
 
+    private static let jsonFeedDefaultPerPage = 100
+    private static let jsonFeedMaxPerPage = 500
+
     private func buildJSONFeed(title: String,
                                 feedDescription: String,
                                 calibreIDs: [Int],
-                                feedURL: String) async throws -> Data {
+                                feedURL: String,
+                                page: Int = 1,
+                                perPage: Int = jsonFeedDefaultPerPage,
+                                ifNoneMatch: String?) async throws -> FeedBuildResult<Data> {
         guard let library else {
-            return buildEmptyJSONFeed(title: title, feedDescription: "No library open.", feedURL: feedURL)
+            return .body(etag: "\"empty\"",
+                        data: buildEmptyJSONFeed(title: title, feedDescription: "No library open.", feedURL: feedURL))
         }
 
-        let pairs = await fetchFeedBooks(calibreIDs: calibreIDs)
+        // Cheap SQL fetch returns every matching book, title-sorted. Only the
+        // current page's slice gets the expensive per-item work below (full
+        // merged EPUB HTML), so payload size stays bounded no matter how large
+        // the underlying collection is.
+        let allPairs = await fetchFeedBooks(calibreIDs: calibreIDs)
+        let clampedPerPage = min(max(perPage, 1), Self.jsonFeedMaxPerPage)
+        let clampedPage = max(page, 1)
+        let start = (clampedPage - 1) * clampedPerPage
+        let pagePairs: [(book: CalibreBook, ao3: AO3MetadataRecord?)]
+        if start < allPairs.count {
+            pagePairs = Array(allPairs[start..<min(start + clampedPerPage, allPairs.count)])
+        } else {
+            pagePairs = []
+        }
+
+        let hasMore = start + clampedPerPage < allPairs.count
+        let etag = computeFeedETag(pairs: pagePairs, extra: "json:\(allPairs.count):\(clampedPage):\(clampedPerPage):\(hasMore)")
+        if let ifNoneMatch, ifNoneMatch == etag {
+            return .notModified(etag: etag)
+        }
+
         var items: [JSONFeedItem] = []
-        for (book, ao3) in pairs {
+        for (book, ao3) in pagePairs {
             items.append(await buildJSONFeedItem(book: book, ao3: ao3, library: library))
+        }
+
+        let nextURL: String?
+        if hasMore {
+            let separator = feedURL.contains("?") ? "&" : "?"
+            nextURL = "\(feedURL)\(separator)page=\(clampedPage + 1)&per_page=\(clampedPerPage)"
+        } else {
+            nextURL = nil
         }
 
         let doc = JSONFeedDocument(
@@ -717,9 +807,11 @@ actor LocalFeedServer {
             description: feedDescription,
             home_page_url: nil,
             feed_url: feedURL,
+            next_url: nextURL,
             items: items
         )
-        return (try? Self.jsonFeedEncoder.encode(doc)) ?? buildEmptyJSONFeed(title: title, feedDescription: feedDescription, feedURL: feedURL)
+        let data = (try? Self.jsonFeedEncoder.encode(doc)) ?? buildEmptyJSONFeed(title: title, feedDescription: feedDescription, feedURL: feedURL)
+        return .body(etag: etag, data: data)
     }
 
     private func buildEmptyJSONFeed(title: String, feedDescription: String, feedURL: String) -> Data {
