@@ -125,7 +125,7 @@ struct BookListRow: View, Equatable {
             Button("Reset Reading Progress") { onResetProgress() }
             Button(selectedCount == 1 ? "Skip" : "Skip Selected") { onSkip() }
             Divider()
-            Button("Add to Collection...") { showCollectionPicker = true }
+            Button("Add to Collection…") { showCollectionPicker = true }
         }
         .popover(isPresented: $showCollectionPicker, arrowEdge: .trailing) {
             CollectionSearchPickerView(

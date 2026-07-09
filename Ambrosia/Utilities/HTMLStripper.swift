@@ -9,9 +9,31 @@ import Foundation
 ///    and is too slow to call per-book during a background import.
 enum HTMLStripper {
 
+    /// Caches stripped output keyed by the raw HTML input. `CalibreBook` is a
+    /// plain struct with no stored cache slot of its own (see its header
+    /// comment — "no SwiftData, no faulting"), so `displayComment` and
+    /// `isDescriptionAnthology` are computed properties that would otherwise
+    /// redo this multi-regex strip on every access: once per row every time
+    /// it scrolls back into view in a SwiftUI `List` (rows are destroyed and
+    /// recreated, not just hidden), and once per book on every
+    /// `LibraryVisibilityPolicy.filter(_ books:)` pass when the
+    /// anthology-hiding toggle is on. NSCache is thread-safe and evicts under
+    /// memory pressure, so this is safe to hit from both the main-actor UI
+    /// path and CalibreLibrary's background query path.
+    private static let cache: NSCache<NSString, NSString> = {
+        let c = NSCache<NSString, NSString>()
+        c.countLimit = 2_000 // generous relative to a typical library page/session
+        return c
+    }()
+
     /// Returns plain text with HTML tags removed and entities decoded.
     static func strip(_ html: String) -> String {
         guard !html.isEmpty else { return "" }
+
+        let key = html as NSString
+        if let cached = cache.object(forKey: key) {
+            return cached as String
+        }
 
         // Replace common block tags with newlines before stripping
         var result = html
@@ -45,6 +67,7 @@ enum HTMLStripper {
             .replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
+        cache.setObject(result as NSString, forKey: key)
         return result
     }
 }

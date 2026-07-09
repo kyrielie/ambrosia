@@ -47,6 +47,18 @@ struct LibraryColorScheme: Equatable {
     var textColor: String
 }
 
+// MARK: - PreferenceChangeKind
+
+/// Distinguishes preference changes that can be applied to an already-loaded
+/// reader document by mutating CSS variables in place (`.cosmetic`) from ones
+/// that require a full `reloadHTML()`/`loadSpineItem(...)` (`.structural`).
+/// `keyBindings` and `contextMenu` are read by neither `css(paginated:)` nor
+/// any reload path, so they intentionally send neither case.
+enum PreferenceChangeKind: Equatable {
+    case cosmetic
+    case structural
+}
+
 // MARK: - ReaderPreferences
 
 /// User-configurable reading and library preferences, all UserDefaults-backed.
@@ -54,40 +66,80 @@ final class ReaderPreferences: ObservableObject {
 
     static let shared = ReaderPreferences()
 
+    /// Fired once per cosmetic or structural preference change, in addition
+    /// to the blanket `objectWillChange` Combine already provides via
+    /// `@Published`. `ReaderViewController.subscribeToPreferences()` sinks on
+    /// this instead of `objectWillChange` so cosmetic changes can take the
+    /// live CSS-variable path instead of a full reload.
+    let preferenceChangeKind = PassthroughSubject<PreferenceChangeKind, Never>()
+
     // MARK: - Reader appearance
 
     @Published var fontFamily: String {
-        didSet { UserDefaults.standard.set(fontFamily, forKey: Keys.fontFamily) }
+        didSet {
+            UserDefaults.standard.set(fontFamily, forKey: Keys.fontFamily)
+            preferenceChangeKind.send(.cosmetic)
+        }
     }
     @Published var fontSize: Int {
-        didSet { UserDefaults.standard.set(fontSize, forKey: Keys.fontSize) }
+        didSet {
+            UserDefaults.standard.set(fontSize, forKey: Keys.fontSize)
+            preferenceChangeKind.send(.cosmetic)
+        }
     }
     @Published var lineHeight: Double {
-        didSet { UserDefaults.standard.set(lineHeight, forKey: Keys.lineHeight) }
+        didSet {
+            UserDefaults.standard.set(lineHeight, forKey: Keys.lineHeight)
+            preferenceChangeKind.send(.cosmetic)
+        }
     }
     @Published var maxWidth: Int {
-        didSet { UserDefaults.standard.set(maxWidth, forKey: Keys.maxWidth) }
+        didSet {
+            UserDefaults.standard.set(maxWidth, forKey: Keys.maxWidth)
+            preferenceChangeKind.send(.cosmetic)
+        }
     }
     @Published var readerBackgroundColor: String {
-        didSet { UserDefaults.standard.set(readerBackgroundColor, forKey: Keys.readerBackgroundColor) }
+        didSet {
+            UserDefaults.standard.set(readerBackgroundColor, forKey: Keys.readerBackgroundColor)
+            preferenceChangeKind.send(.cosmetic)
+        }
     }
     @Published var readerTextColor: String {
-        didSet { UserDefaults.standard.set(readerTextColor, forKey: Keys.readerTextColor) }
+        didSet {
+            UserDefaults.standard.set(readerTextColor, forKey: Keys.readerTextColor)
+            preferenceChangeKind.send(.cosmetic)
+        }
     }
     @Published var paddingH: Int {
-        didSet { UserDefaults.standard.set(paddingH, forKey: Keys.paddingH) }
+        didSet {
+            UserDefaults.standard.set(paddingH, forKey: Keys.paddingH)
+            preferenceChangeKind.send(.cosmetic)
+        }
     }
     @Published var paddingV: Int {
-        didSet { UserDefaults.standard.set(paddingV, forKey: Keys.paddingV) }
+        didSet {
+            UserDefaults.standard.set(paddingV, forKey: Keys.paddingV)
+            preferenceChangeKind.send(.cosmetic)
+        }
     }
     @Published var allowReaderLinkClicks: Bool {
-        didSet { UserDefaults.standard.set(allowReaderLinkClicks, forKey: Keys.allowReaderLinkClicks) }
+        didSet {
+            UserDefaults.standard.set(allowReaderLinkClicks, forKey: Keys.allowReaderLinkClicks)
+            preferenceChangeKind.send(.cosmetic)
+        }
     }
     @Published var removeParagraphIndents: Bool {
-        didSet { UserDefaults.standard.set(removeParagraphIndents, forKey: Keys.removeParagraphIndents) }
+        didSet {
+            UserDefaults.standard.set(removeParagraphIndents, forKey: Keys.removeParagraphIndents)
+            preferenceChangeKind.send(.cosmetic)
+        }
     }
     @Published var colsPerScreen: ColsPerScreen {
-        didSet { UserDefaults.standard.set(colsPerScreen.rawValue, forKey: Keys.colsPerScreen) }
+        didSet {
+            UserDefaults.standard.set(colsPerScreen.rawValue, forKey: Keys.colsPerScreen)
+            preferenceChangeKind.send(.structural)
+        }
     }
 
     // MARK: - Library appearance — colour mode
@@ -206,8 +258,10 @@ final class ReaderPreferences: ObservableObject {
     // MARK: - Reading mode
 
     @Published var defaultReadingMode: ReadingMode {
-        didSet { UserDefaults.standard.set(defaultReadingMode.rawValue,
-                                           forKey: Keys.defaultReadingMode) }
+        didSet {
+            UserDefaults.standard.set(defaultReadingMode.rawValue, forKey: Keys.defaultReadingMode)
+            preferenceChangeKind.send(.structural)
+        }
     }
 
     // MARK: - Window size
@@ -224,6 +278,21 @@ final class ReaderPreferences: ObservableObject {
 
     /// Context menu configuration — not persisted.
     var contextMenu: ContextMenuPreferences = ContextMenuPreferences()
+
+    // MARK: - Keyboard shortcuts
+
+    /// Actions absent from this dictionary are unbound. `showTOCSidebar`
+    /// deliberately ships unbound by default (it had no shortcut before
+    /// Pass A) rather than being given one now — a mixed "some actions have
+    /// no default shortcut" state is fine as long as it's a deliberate
+    /// choice, which this comment is recording it as.
+    @Published var keyBindings: [RebindableAction: KeyBinding] {
+        didSet {
+            if let data = try? JSONEncoder().encode(keyBindings) {
+                UserDefaults.standard.set(data, forKey: Keys.keyBindings)
+            }
+        }
+    }
 
     // MARK: - Defaults
 
@@ -255,6 +324,16 @@ final class ReaderPreferences: ObservableObject {
         static let defaultWindowWidth          = CGFloat(960)
         static let defaultWindowHeight         = CGFloat(1080)
         static let defaultReadingMode          = ReadingMode.scroll
+
+        // showTOCSidebar is intentionally absent — see keyBindings' doc comment.
+        static let keyBindings: [RebindableAction: KeyBinding] = [
+            .toggleReadingMode:     KeyBinding(character: "m", modifiers: [.command, .shift]),
+            .addAnnotation:         KeyBinding(character: "d", modifiers: [.command]),
+            .showAnnotationSidebar: KeyBinding(character: "b", modifiers: [.command]),
+            .toggleFindBar:         KeyBinding(character: "f", modifiers: [.command]),
+            .findNext:              KeyBinding(character: "g", modifiers: [.command]),
+            .findPrevious:          KeyBinding(character: "g", modifiers: [.command, .shift]),
+        ]
     }
 
     private enum Keys {
@@ -287,6 +366,7 @@ final class ReaderPreferences: ObservableObject {
         static let defaultWindowWidth          = "pref.windowWidth"
         static let defaultWindowHeight         = "pref.windowHeight"
         static let defaultReadingMode          = "rp.defaultReadingMode"
+        static let keyBindings                 = "rp.keyBindings"
     }
 
     private init() {
@@ -373,6 +453,13 @@ final class ReaderPreferences: ObservableObject {
 
         let rawMode = ud.string(forKey: Keys.defaultReadingMode) ?? Defaults.defaultReadingMode.rawValue
         defaultReadingMode = ReadingMode(rawValue: rawMode) ?? .scroll
+
+        if let data = ud.data(forKey: Keys.keyBindings),
+           let decoded = try? JSONDecoder().decode([RebindableAction: KeyBinding].self, from: data) {
+            keyBindings = decoded
+        } else {
+            keyBindings = Defaults.keyBindings
+        }
     }
 
     // MARK: - CSS (reader only)
@@ -381,34 +468,65 @@ final class ReaderPreferences: ObservableObject {
         css(paginated: false)
     }
 
+    /// Emits just the *contents* of the `:root { ... }` block (no braces) for
+    /// the cosmetic properties `css(paginated:)` drives via CSS variables:
+    /// fontFamily, fontSize, lineHeight, readerBackgroundColor,
+    /// readerTextColor, paddingH, paddingV, maxWidth, allowReaderLinkClicks,
+    /// and removeParagraphIndents. `ReaderViewController.applyCosmeticCSSUpdate()`
+    /// writes this into a standalone `<style id="ambrosia-vars">` element
+    /// without needing the rest of the stylesheet reinjected.
+    /// `removeParagraphIndents` is expressed as a variable whose value is
+    /// either `0` or the CSS-wide keyword `unset` (valid wherever
+    /// `text-indent` is valid) rather than a conditionally-included rule
+    /// block, since the rule referencing it must stay static in the HTML for
+    /// this to be a value swap and not a reload.
+    var cssVariableDeclarations: String {
+        let indentVar = removeParagraphIndents ? "0" : "unset"
+        return """
+        --ambrosia-font-family: \(fontFamily);
+        --ambrosia-font-size: \(fontSize)px;
+        --ambrosia-line-height: \(lineHeight);
+        --ambrosia-bg: \(readerBackgroundColor);
+        --ambrosia-text: \(readerTextColor);
+        --ambrosia-padding-h: \(paddingH)px;
+        --ambrosia-padding-v: \(paddingV)px;
+        --ambrosia-max-width: \(maxWidth)px;
+        --ambrosia-link-pointer-events: \(allowReaderLinkClicks ? "auto" : "none");
+        --ambrosia-paragraph-indent: \(indentVar);
+        """
+    }
+
     /// - Parameter paginated: When true, omits body padding — paginated mode
     ///   applies its own page-margin padding via `paginatedColumnCSS`'s body
     ///   rule (with `!important`), and would otherwise fight with this rule
-    ///   for the same property.
+    ///   for the same property. This is a reading-mode concern, not a
+    ///   live-updatable preference, so it stays a parameter here rather than
+    ///   folding into `cssVariableDeclarations` (mode switches are already a
+    ///   full reload per Invariant 7) — the `bodyPadding` literal below is
+    ///   substituted directly into the rule rather than driven by a CSS
+    ///   variable, since it never needs to change without a full reload.
     func css(paginated: Bool) -> String {
-        let linkPointerEvents = allowReaderLinkClicks ? "auto" : "none"
-        let bodyPadding = paginated ? "0" : "\(paddingV)px \(paddingH)px"
-        let paragraphIndentCSS = removeParagraphIndents
-            ? """
-        p, div, li {
-            text-indent: 0 !important;
-        }
-        p::first-line, div::first-line, li::first-line {
-            text-indent: 0 !important;
-        }
-        """
-            : ""
+        // Body padding is intentionally NOT one of the CSS variables in
+        // `cssVariableDeclarations`: whether it's 0 or paddingV/paddingH
+        // depends on reading mode, not on any live-updatable preference, and
+        // reading-mode switches already go through a full reload (Invariant
+        // 7). Substituting it directly here keeps that reload path
+        // unchanged; the cosmetic live-update path never touches this rule.
+        let bodyPadding = paginated ? "0" : "var(--ambrosia-padding-v) var(--ambrosia-padding-h)"
         return """
         /* === Ambrosia user preferences === */
+        :root {
+            \(cssVariableDeclarations)
+        }
         html, body {
-            background-color: \(readerBackgroundColor);
-            color: \(readerTextColor);
+            background-color: var(--ambrosia-bg);
+            color: var(--ambrosia-text);
         }
         body {
-            font-family: \(fontFamily);
-            font-size: \(fontSize)px;
-            line-height: \(lineHeight);
-            max-width: \(maxWidth)px;
+            font-family: var(--ambrosia-font-family);
+            font-size: var(--ambrosia-font-size);
+            line-height: var(--ambrosia-line-height);
+            max-width: var(--ambrosia-max-width);
             margin: 0 auto;
             padding: \(bodyPadding);
             -webkit-font-smoothing: antialiased;
@@ -416,7 +534,7 @@ final class ReaderPreferences: ObservableObject {
         }
         img  { max-width: 100%; height: auto; display: block; margin: 1em auto; }
         p    { margin-bottom: 0.8em; }
-        a    { color: inherit; text-decoration: underline; pointer-events: \(linkPointerEvents); cursor: pointer; }
+        a    { color: inherit; text-decoration: underline; pointer-events: var(--ambrosia-link-pointer-events); cursor: pointer; }
         em, i { font-style: italic; }
         strong, b { font-weight: bold; }
         h1, h2, h3, h4, h5, h6 { font-weight: bold; margin: 1em 0 0.5em; line-height: 1.2; }
@@ -428,7 +546,12 @@ final class ReaderPreferences: ObservableObject {
         pre { overflow-x: auto; padding: 1em; background: rgba(128,128,128,0.1); border-radius: 4px; }
         div, section, article { float: none !important; position: static !important; }
         nav[epub\\:type="toc"], nav[epub\\:type="landmarks"] { display: none; }
-        \(paragraphIndentCSS)
+        p, div, li {
+            text-indent: var(--ambrosia-paragraph-indent, unset) !important;
+        }
+        p::first-line, div::first-line, li::first-line {
+            text-indent: var(--ambrosia-paragraph-indent, unset) !important;
+        }
         """
     }
 
@@ -613,6 +736,39 @@ final class ReaderPreferences: ObservableObject {
 
     // MARK: - Reset
 
+    /// Mirrors CotEditor's `isRestorable` pattern (Finding 8): true only when at
+    /// least one reader setting differs from its default, so the reset button
+    /// is inert rather than an always-live destructive action.
+    var isReaderCustomized: Bool {
+        fontFamily != Defaults.fontFamily
+            || fontSize != Defaults.fontSize
+            || lineHeight != Defaults.lineHeight
+            || maxWidth != Defaults.maxWidth
+            || readerBackgroundColor != Defaults.readerBackgroundColor
+            || readerTextColor != Defaults.readerTextColor
+            || paddingH != Defaults.paddingH
+            || paddingV != Defaults.paddingV
+            || allowReaderLinkClicks != Defaults.allowReaderLinkClicks
+            || removeParagraphIndents != Defaults.removeParagraphIndents
+            || colsPerScreen != Defaults.colsPerScreen
+            || defaultReadingMode != Defaults.defaultReadingMode
+            || keyBindings != Defaults.keyBindings
+    }
+
+    var isLibraryCustomized: Bool {
+        libraryColorMode != Defaults.libraryColorMode
+            || libraryAppearanceMode != Defaults.libraryAppearanceMode
+            || libraryLightBackgroundColor != Defaults.libraryLightBackgroundColor
+            || libraryDarkBackgroundColor != Defaults.libraryDarkBackgroundColor
+            || libraryLightTextColor != Defaults.libraryLightTextColor
+            || libraryDarkTextColor != Defaults.libraryDarkTextColor
+            || showSkippedCollection != Defaults.showSkippedCollection
+            || hideFanworksTagPill != Defaults.hideFanworksTagPill
+            || hideNonAO3PublisherBooks != Defaults.hideNonAO3PublisherBooks
+            || hideAnthologyBooks != Defaults.hideAnthologyBooks
+            || emailPillsShowCollections != Defaults.emailPillsShowCollections
+    }
+
     func resetReaderToDefaults() {
         fontFamily            = Defaults.fontFamily
         fontSize              = Defaults.fontSize
@@ -626,6 +782,20 @@ final class ReaderPreferences: ObservableObject {
         removeParagraphIndents = Defaults.removeParagraphIndents
         colsPerScreen          = Defaults.colsPerScreen
         defaultReadingMode    = Defaults.defaultReadingMode
+        keyBindings           = Defaults.keyBindings
+    }
+
+    /// Resets only `keyBindings`, independent of the rest of the Reader tab's
+    /// "Restore Defaults" (which would also reset fonts, colors, etc.) — the
+    /// Shortcuts tab has its own scoped restore button.
+    func resetReaderShortcutsToDefaults() {
+        keyBindings = Defaults.keyBindings
+    }
+
+    /// Exposed so `ShortcutsTab` can disable its own restore button without
+    /// reaching into the private `Defaults` enum.
+    static var defaultKeyBindingsForReset: [RebindableAction: KeyBinding] {
+        Defaults.keyBindings
     }
 
     func resetLibraryToDefaults() {

@@ -85,6 +85,7 @@ actor LocalFeedServer {
 
     private(set) var config: Config
     private var serverTask: Task<Void, Never>?
+    private var httpServer: HTTPServer?
     private var htmlCache: [HTMLCacheKey: String] = [:]
 
     /// Calibre's null-pubdate sentinel: 2000-12-31 00:00:00 UTC.
@@ -178,10 +179,33 @@ actor LocalFeedServer {
         _isRunning = true
     }
 
+    /// Start the server and suspend until the socket is actually bound and
+    /// listening (or `timeout` elapses). Replaces the previous pattern of a
+    /// fixed `asyncAfter` delay before reading `isRunning`/`localNetworkURLSync`,
+    /// which could read stale state under port contention or slow network-stack
+    /// init (design-philosophy audit, Finding 4). Returns `true` once actually
+    /// listening, `false` if the timeout elapsed first.
+    @discardableResult
+    func startAndWaitUntilListening(library: CalibreLibrary,
+                                     metaDB: AmbrosiaMetaDB,
+                                     collectionStore: CollectionStore,
+                                     config: Config = Config(),
+                                     timeout: TimeInterval = 5) async -> Bool {
+        start(library: library, metaDB: metaDB, collectionStore: collectionStore, config: config)
+        guard let server = httpServer else { return _isRunning }
+        do {
+            try await server.waitUntilListening(timeout: timeout)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     /// Stop the server and release library references.
     func stop() {
         serverTask?.cancel()
         serverTask = nil
+        httpServer = nil
         _isRunning = false
         library = nil
         metaDB  = nil
@@ -208,6 +232,7 @@ actor LocalFeedServer {
         serverTask = Task {
             do {
                 let server = HTTPServer(address: .inet(port: port))
+                httpServer = server
                 await server.appendRoute("GET /") { [capturedSelf] _ in
                     try await capturedSelf.handleIndex()
                 }
@@ -875,9 +900,9 @@ actor LocalFeedServer {
             chapter_current: ao3?.chapterCurrent,
             chapter_total: ao3?.chapterTotal,
             is_complete: ao3?.isComplete,
-            fandoms: ao3?.fandoms.flatMap { $0.isEmpty ? nil : $0 },
-            relationships: ao3?.relationships.flatMap { $0.isEmpty ? nil : $0 },
-            characters: ao3?.characters.flatMap { $0.isEmpty ? nil : $0 },
+            fandoms: ao3?.fandoms.compactMap { $0.isEmpty ? nil : $0 },
+            relationships: ao3?.relationships.compactMap { $0.isEmpty ? nil : $0 },
+            characters: ao3?.characters.compactMap { $0.isEmpty ? nil : $0 },
             ratings: buckets.ratings.isEmpty ? nil : buckets.ratings,
             warnings: buckets.warnings.isEmpty ? nil : buckets.warnings,
             categories: categories.isEmpty ? nil : categories,

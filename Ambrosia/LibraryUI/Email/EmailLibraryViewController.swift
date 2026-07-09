@@ -18,7 +18,7 @@ final class EmailLibraryViewController: NSViewController {
 
     // MARK: - Child VCs
 
-    private var splitVC:   NSSplitViewController!
+    private var splitVC:   AmbrosiaEmailSplitViewController!
     private var sidebarVC: EmailSidebarViewController!
     private var readerSidebarHostingVC: NSHostingController<EmailReaderSidebarView>!
     private var librarySidebarItem: NSSplitViewItem!
@@ -312,9 +312,12 @@ final class EmailLibraryViewController: NSViewController {
             self.showCollectionPicker(for: books.map(\.id), relativeTo: anchorRect, of: anchorView)
         }
 
-        splitVC = NSSplitViewController()
+        splitVC = AmbrosiaEmailSplitViewController()
         splitVC.splitView.isVertical   = true
         splitVC.splitView.autosaveName = "AmbrosiaEmailSplitView"
+        splitVC.onDividerResize = { [weak self] in
+            self?.rememberSidebarThicknessIfVisible()
+        }
         applyLibraryAppearance()
 
         librarySidebarItem = NSSplitViewItem(viewController: sidebarVC)
@@ -425,12 +428,40 @@ final class EmailLibraryViewController: NSViewController {
 
     @objc func performSidebarToggle() {
         guard let item = librarySidebarItem else { return }
-        isSidebarHidden = !item.isCollapsed
+        let willCollapse = !item.isCollapsed
+        if willCollapse {
+            // Capture the user's current width before it goes away — otherwise
+            // reopening falls back to whatever `lastSidebarThickness` was last
+            // set to (the 280pt default, if the pane was never dragged), not
+            // the size the user actually left it at.
+            rememberSidebarThickness()
+        }
+        isSidebarHidden = willCollapse
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.2
-            item.isCollapsed = isSidebarHidden
+            item.isCollapsed = willCollapse
             splitVC.splitView.layoutSubtreeIfNeeded()
         }
+        if !willCollapse {
+            // Un-collapsing an NSSplitViewItem doesn't reliably restore its
+            // pre-collapse width on its own here — this view controller (and
+            // its splitVC/split view items) is torn down and rebuilt from
+            // scratch on every List/Email mode switch, so there's no
+            // long-lived NSSplitView instance for AppKit's own autosave/
+            // collapse-memory to key off between toggles within a session.
+            // Explicitly reapply the remembered width.
+            restoreSidebarThickness(lastSidebarThickness)
+        }
+    }
+
+    /// Called from `AmbrosiaEmailSplitViewController.onDividerResize` as the
+    /// user manually drags the library divider, so a later collapse/reopen
+    /// (or a reader-pane swap via `replaceRightPane`) restores the width
+    /// actually in use rather than a stale value from setup or the last
+    /// programmatic resize.
+    private func rememberSidebarThicknessIfVisible() {
+        guard librarySidebarItem?.isCollapsed == false else { return }
+        rememberSidebarThickness()
     }
 
     // MARK: - Toolbar state observation
@@ -1945,5 +1976,51 @@ struct FilterSheetCarrier: View {
                     toolbarState.triggerEPUBExport = false
                 }
             }
+    }
+}
+
+// MARK: - AmbrosiaEmailSplitViewController
+
+/// `NSSplitViewController` installs itself as its managed `NSSplitView`'s
+/// delegate internally and hard-asserts (`NSInternalInconsistencyException`,
+/// "A SplitView managed by a SplitViewController cannot have its delegate
+/// modified") if anything else calls `splitView.delegate = ...` on it — this
+/// crashed at launch when that assignment was made directly against
+/// `EmailLibraryViewController`. The supported way to customize divider
+/// behavior is to subclass `NSSplitViewController` itself and override the
+/// `NSSplitViewDelegate` methods here, since `NSSplitViewController` already
+/// conforms to `NSSplitViewDelegate` and is the one object AppKit permits to
+/// hold that role.
+final class AmbrosiaEmailSplitViewController: NSSplitViewController {
+
+    /// Fired after a user-driven divider resize so the owning
+    /// `EmailLibraryViewController` can persist the new sidebar width.
+    var onDividerResize: (() -> Void)?
+
+    /// Clamps divider drags to each pane's own min/max thickness.
+    ///
+    /// Without this, NSSplitView's default behavior lets a single fast mouse-
+    /// drag tick move a divider past a neighboring pane's collapse threshold
+    /// in one jump. With three collapsible-adjacent panes ([library |
+    /// annotations | reader]) and no delegate constraining drag targets, a
+    /// quick drag/close on the library divider (index 0) can overshoot far
+    /// enough that AppKit's redistribution logic also collapses or reveals
+    /// the annotations sidebar as collateral damage — the "annotations
+    /// sidebar appears when it shouldn't" bug. Clamping the proposed position
+    /// to the dragged pane's own bounds keeps each drag tick's effect local
+    /// to the divider actually being moved.
+    override func splitView(_ splitView: NSSplitView, constrainSplitPosition proposedPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        guard dividerIndex >= 0, dividerIndex < splitViewItems.count - 1 else { return proposedPosition }
+        let leadingItem = splitViewItems[dividerIndex]
+        guard !leadingItem.isCollapsed else { return proposedPosition }
+        let leadingOrigin = splitView.subviews[dividerIndex].frame.minX
+        let minPosition = leadingOrigin + leadingItem.minimumThickness
+        let maxPosition = leadingOrigin + leadingItem.maximumThickness
+        return min(max(proposedPosition, minPosition), maxPosition)
+    }
+
+    override func splitViewDidResizeSubviews(_ notification: Notification) {
+        super.splitViewDidResizeSubviews(notification)
+        onDividerResize?()
     }
 }

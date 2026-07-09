@@ -432,6 +432,24 @@ final class LibrarySession {
         }
     }
 
+    /// Starts the feed server and suspends until it's actually bound and
+    /// listening, or `timeout` elapses. Prefer this over `startFeedServer`
+    /// wherever the caller needs to reliably read `localNetworkURLSync`
+    /// afterward (design-philosophy audit, Finding 4).
+    @discardableResult
+    func startFeedServerAndWaitUntilListening(port: UInt16 = 8765, timeout: TimeInterval = 5) async -> Bool {
+        guard let library, let metaDB, let collectionStore else { return false }
+        if feedServer == nil { feedServer = LocalFeedServer() }
+        guard let server = feedServer else { return false }
+        return await server.startAndWaitUntilListening(
+            library: library,
+            metaDB: metaDB,
+            collectionStore: collectionStore,
+            config: LocalFeedServer.Config(port: port),
+            timeout: timeout
+        )
+    }
+
     func stopFeedServer() {
         let server = feedServer
         feedServer = nil

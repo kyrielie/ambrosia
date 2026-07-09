@@ -91,7 +91,7 @@ struct SeriesListRow: View, Equatable {
             Button("Reset Series Reading Progress", action: onResetProgress)
             Button("Skip Series", action: onSkip)
             Divider()
-            Button("Add to Collection...") { showCollectionPicker = true }
+            Button("Add to Collection…") { showCollectionPicker = true }
         }
         .popover(isPresented: $showCollectionPicker, arrowEdge: .trailing) {
             CollectionSearchPickerView(
