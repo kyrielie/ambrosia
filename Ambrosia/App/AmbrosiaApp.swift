@@ -69,19 +69,30 @@ struct AmbrosiaApp: App {
                 }
             }
             
+            // Shortcuts for every item in this menu are rebindable from
+            // Preferences → Shortcuts. Intentionally no `.keyboardShortcut(...)`
+            // modifiers here: SwiftUI's `Commands` builder is evaluated once
+            // when the Scene is built, with no reliable way for a `@Published`
+            // change deep in ReaderPreferences to force it to re-evaluate and
+            // redraw the menu bar's displayed key equivalent without a
+            // relaunch. Instead, AppDelegate.syncReaderMenuShortcuts() locates
+            // this menu by title at runtime and sets `.keyEquivalent`/
+            // `.keyEquivalentModifierMask` directly on the resulting
+            // NSMenuItems from ReaderPreferences.shared.keyBindings, live,
+            // whenever a binding changes. Item titles below must match
+            // RebindableAction.displayName exactly — that's how the sync
+            // code finds each item.
             CommandMenu("Reader") {
                 Button("Toggle Reading Mode") {
                     NSApp.sendAction(#selector(ReaderViewController.toggleReadingMode(_:)),
                                      to: nil, from: nil)
                 }
-                .keyboardShortcut("m", modifiers: [.command])
 
                 Button("Add Annotation") {
                     NSApp.sendAction(#selector(ReaderViewController.addAnnotation(_:)),
                                      to: nil, from: nil)
                 }
-                .keyboardShortcut("d", modifiers: [.command])
-                
+
                 Button("Show Annotations") {
                     if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
                        libraryWindowController.window?.isKeyWindow == true {
@@ -91,7 +102,6 @@ struct AmbrosiaApp: App {
                                          to: nil, from: nil)
                     }
                 }
-                .keyboardShortcut("b", modifiers: [.command])
 
                 Button("Show Table of Contents") {
                     if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
@@ -101,6 +111,23 @@ struct AmbrosiaApp: App {
                         NSApp.sendAction(#selector(ReaderViewController.showTOCSidebar(_:)),
                                          to: nil, from: nil)
                     }
+                }
+
+                Divider()
+
+                Button("Toggle Find Bar") {
+                    NSApp.sendAction(#selector(ReaderViewController.toggleFindBarAction(_:)),
+                                     to: nil, from: nil)
+                }
+
+                Button("Find Next") {
+                    NSApp.sendAction(#selector(ReaderViewController.findNextAction(_:)),
+                                     to: nil, from: nil)
+                }
+
+                Button("Find Previous") {
+                    NSApp.sendAction(#selector(ReaderViewController.findPreviousAction(_:)),
+                                     to: nil, from: nil)
                 }
             }
         }

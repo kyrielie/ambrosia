@@ -1,5 +1,6 @@
 import AppKit
 import SwiftData
+import Combine
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -8,6 +9,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var libraryWindowController: LibraryWindowController?
     var modelContainer: ModelContainer!
     var session: LibrarySession!
+
+    private var keyBindingsSubscription: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
@@ -30,6 +33,48 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             session: session
         )
         libraryWindowController?.showWindow(nil)
+
+        syncReaderMenuShortcuts()
+        keyBindingsSubscription = ReaderPreferences.shared.$keyBindings
+            .sink { [weak self] _ in
+                self?.syncReaderMenuShortcuts()
+            }
+    }
+
+    // MARK: - Reader menu shortcut sync
+
+    /// Sets `.keyEquivalent`/`.keyEquivalentModifierMask` directly on the
+    /// "Reader" `NSMenu`'s items from `ReaderPreferences.shared.keyBindings`.
+    /// Called once at launch and again whenever `keyBindings` changes, so
+    /// the menu bar's displayed shortcut updates live without a relaunch —
+    /// see the doc comment on `CommandMenu("Reader")` in AmbrosiaApp.swift
+    /// for why this can't be done via SwiftUI's `.keyboardShortcut(...)`.
+    /// An action absent from `keyBindings` (currently only possible for
+    /// `showTOCSidebar`, which ships unbound by default) gets an empty
+    /// `keyEquivalent`, which AppKit treats as "no shortcut displayed."
+    func syncReaderMenuShortcuts() {
+        guard let readerMenu = NSApp.mainMenu?.item(withTitle: "Reader")?.submenu else {
+            #if DEBUG
+            print("[AppDelegate] Could not locate \"Reader\" NSMenu for shortcut sync.")
+            #endif
+            return
+        }
+        let bindings = ReaderPreferences.shared.keyBindings
+        for action in RebindableAction.allCases {
+            guard let item = readerMenu.items.first(where: { $0.title == action.displayName }) else {
+                #if DEBUG
+                print("[AppDelegate] No NSMenuItem titled \"\(action.displayName)\" found in Reader menu.")
+                #endif
+                continue
+            }
+            if let binding = bindings[action] {
+                item.keyEquivalent = binding.character
+                item.keyEquivalentModifierMask = binding.keyEquivalentModifierMask
+            } else {
+                item.keyEquivalent = ""
+                item.keyEquivalentModifierMask = []
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }

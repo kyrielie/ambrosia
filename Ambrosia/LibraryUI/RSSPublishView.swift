@@ -79,6 +79,7 @@ struct ManageFeedsView: View {
     @State private var selected: FeedTarget = .currentSearch
     @State private var copyConfirmation: Bool = false
     @State private var snapshotLabel: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(collections: [(id: String, name: String)],
          baseURL: String,
@@ -160,9 +161,17 @@ struct ManageFeedsView: View {
                 Button(copyConfirmation ? "Copied" : "Copy") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(selectedURL, forType: .string)
-                    withAnimation { copyConfirmation = true }
+                    if reduceMotion {
+                        copyConfirmation = true
+                    } else {
+                        withAnimation { copyConfirmation = true }
+                    }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        withAnimation { copyConfirmation = false }
+                        if reduceMotion {
+                            copyConfirmation = false
+                        } else {
+                            withAnimation { copyConfirmation = false }
+                        }
                     }
                 }
                 .disabled(isExcluded)
@@ -199,7 +208,7 @@ struct ManageFeedsView: View {
                     onStopServer()
                 }
                 .foregroundStyle(.red)
-                Button("Export OPML...") {
+                Button("Export OPML…") {
                     onExportOPML()
                 }
                 Spacer()

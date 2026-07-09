@@ -1619,8 +1619,9 @@ struct LibraryRootView: View {
             onMarkRead: { markRead(selectedBooks(fallback: book)) },
             onResetProgress: { resetProgress(selectedBooks(fallback: book)) },
             onCollectionChanged: {
-                session.bumpMembershipVersion()
-                Task { await refreshVisibilitySnapshots(resetPage: false) }
+                CollectionAssignment.didAssign(session: session) {
+                    Task { await refreshVisibilitySnapshots(resetPage: false) }
+                }
             },
             selectedCount: selectedBooks(fallback: book).count,
             selectedIDs: selectedBookIDs(fallback: book)
@@ -1645,7 +1646,11 @@ struct LibraryRootView: View {
             onSkip:           { skip(series.works) },
             onMarkRead:       { markRead(series.works) },
             onResetProgress:  { resetProgress(series.works) },
-            onCollectionChanged: { refreshBookStates() }
+            onCollectionChanged: {
+                CollectionAssignment.didAssign(session: session) {
+                    refreshBookStates()
+                }
+            }
         )
         .equatable()
         .listRowSeparator(.visible)

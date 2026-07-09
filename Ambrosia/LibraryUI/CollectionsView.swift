@@ -53,7 +53,7 @@ struct CollectionsView: View {
                             isCreating = true
                             newName = ""
                         } label: {
-                            Label("New Collection...", systemImage: "plus")
+                            Label("New Collection…", systemImage: "plus")
                                 .foregroundStyle(Color.accentColor)
                         }
                         .buttonStyle(.plain)
@@ -426,35 +426,6 @@ struct CollectionSearchPickerView: View {
             await reload()
             await onChange?()
             onComplete?()
-        }
-    }
-}
-
-struct AddToCollectionMenu: View {
-    let calibreIDs: [Int]
-    var onChange: (() async -> Void)? = nil
-    @State private var isPresented = false
-
-    init(book: CalibreBook, onChange: (() async -> Void)? = nil) {
-        self.calibreIDs = [book.id]
-        self.onChange = onChange
-    }
-
-    init(calibreIDs: [Int], onChange: (() async -> Void)? = nil) {
-        self.calibreIDs = calibreIDs
-        self.onChange = onChange
-    }
-
-    var body: some View {
-        Button("Add to Collection...") {
-            isPresented = true
-        }
-        .popover(isPresented: $isPresented, arrowEdge: .trailing) {
-            CollectionSearchPickerView(
-                calibreIDs: calibreIDs,
-                onChange: onChange,
-                onComplete: { isPresented = false }
-            )
         }
     }
 }

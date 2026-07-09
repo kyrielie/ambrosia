@@ -15,6 +15,7 @@ struct ReadingGoalView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Environment(LibrarySession.self) private var session
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @Query private var goals: [ReadingGoal]
 
@@ -103,7 +104,7 @@ struct ReadingGoalView: View {
                         .font(.caption.bold())
                 }
                 .frame(width: 60, height: 60)
-                .animation(.spring(), value: progress)
+                .animation(reduceMotion ? nil : .spring(), value: progress)
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 4) {

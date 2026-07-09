@@ -40,7 +40,7 @@ final class PreferencesWindowController: NSWindowController {
 
 private struct PreferencesRootView: View {
     @ObservedObject private var prefs = ReaderPreferences.shared
-    @State private var tab: PrefTab = .reader
+    @State private var tab: PrefTab = PrefTab(rawValue: UserDefaults.standard.string(forKey: "lastPreferencesTab") ?? "") ?? .reader
 
     var body: some View {
         TabView(selection: $tab) {
@@ -59,12 +59,21 @@ private struct PreferencesRootView: View {
             DataTab()
                 .tabItem { Label("Data", systemImage: "externaldrive") }
                 .tag(PrefTab.data)
+
+            ShortcutsTab()
+                .tabItem { Label("Shortcuts", systemImage: "keyboard") }
+                .tag(PrefTab.shortcuts)
         }
         .frame(width: 580)
+        // Finding 11c: remember the last-open Preferences tab across launches,
+        // the same way state restoration already applies to window position.
+        .onChange(of: tab) { _, newValue in
+            UserDefaults.standard.set(newValue.rawValue, forKey: "lastPreferencesTab")
+        }
     }
 }
 
-private enum PrefTab { case reader, library, window, data }
+private enum PrefTab: String { case reader, library, window, data, shortcuts }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MARK: - Reader Tab
@@ -152,16 +161,30 @@ private struct ReaderTab: View {
 
             // ── Reset ─────────────────────────────────────────────────────
             Section {
-                Button("Restore Reader Defaults", role: .destructive) {
-                    prefs.resetReaderToDefaults()
-                    readerBgColor   = Color(hex: prefs.readerBackgroundColor) ?? .white
-                    readerTextColor = Color(hex: prefs.readerTextColor) ?? .black
+                HStack {
+                    Spacer()
+                    Button("Restore Defaults", role: .destructive) {
+                        confirmResetReaderDefaults()
+                    }
+                    .disabled(prefs.isReaderCustomized == false)
                 }
-                .frame(maxWidth: .infinity)
             }
         }
         .formStyle(.grouped)
         .padding(.bottom, 8)
+    }
+
+    private func confirmResetReaderDefaults() {
+        let alert = NSAlert()
+        alert.messageText = "Restore Reader Defaults?"
+        alert.informativeText = "Font, spacing, and color settings for the reader will be reset. This can't be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Restore Defaults")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        prefs.resetReaderToDefaults()
+        readerBgColor   = Color(hex: prefs.readerBackgroundColor) ?? .white
+        readerTextColor = Color(hex: prefs.readerTextColor) ?? .black
     }
 
     // MARK: Font family row
@@ -270,7 +293,6 @@ private struct ReaderTab: View {
 
 private struct LibraryTab: View {
     @ObservedObject private var prefs = ReaderPreferences.shared
-    @ObservedObject private var tagSeedConfig = AO3TagSeedDatabaseConfig.shared
     @Environment(\.colorScheme) private var systemScheme
 
     // Local colour state for the custom pickers
@@ -278,8 +300,6 @@ private struct LibraryTab: View {
     @State private var lightText: Color = Color(hex: ReaderPreferences.shared.libraryLightTextColor)       ?? .black
     @State private var darkBG:    Color = Color(hex: ReaderPreferences.shared.libraryDarkBackgroundColor)  ?? Color(nsColor: .windowBackgroundColor)
     @State private var darkText:  Color = Color(hex: ReaderPreferences.shared.libraryDarkTextColor)        ?? Color(nsColor: .labelColor)
-    @State private var knownLibraries: [LibraryIndexEntry] = []
-    @State private var tagSynonymCacheMessage: String?
 
     private var effectiveIsDark: Bool {
         switch prefs.libraryAppearanceMode {
@@ -384,116 +404,32 @@ private struct LibraryTab: View {
 
             // ── Reset ─────────────────────────────────────────────────────
             Section {
-                Button("Restore Library Defaults", role: .destructive) {
-                    prefs.resetLibraryToDefaults()
-                    syncLocalState()
+                HStack {
+                    Spacer()
+                    Button("Restore Defaults", role: .destructive) {
+                        confirmResetLibraryDefaults()
+                    }
+                    .disabled(prefs.isLibraryCustomized == false)
                 }
-                .frame(maxWidth: .infinity)
             }
         }
         .formStyle(.grouped)
         .padding(.bottom, 8)
         .onAppear {
             syncLocalState()
-            reloadKnownLibraries()
-            tagSeedConfig.refreshValidation()
         }
     }
 
-    @ViewBuilder
-    private var tagSeedStatusView: some View {
-        switch tagSeedConfig.validationStatus {
-        case .disabled:
-            Label("Synonym matching is off.", systemImage: "pause.circle")
-                .foregroundStyle(.secondary)
-        case .notConfigured:
-            Label("Choose an ao3_tag_seeds.db file to enable synonym matching.", systemImage: "exclamationmark.circle")
-                .foregroundStyle(.secondary)
-        case .valid(let counts):
-            Label(
-                "\(counts.canonicalTags) canonical tags, \(counts.synonyms) synonyms, \(counts.hierarchyEdges) hierarchy edges",
-                systemImage: "checkmark.circle"
-            )
-            .foregroundStyle(.green)
-        case .invalid(let message):
-            Label(message, systemImage: "exclamationmark.triangle")
-                .foregroundStyle(.orange)
-        }
-    }
-
-    @ViewBuilder
-    private func libraryIndexRow(_ entry: LibraryIndexEntry) -> some View {
-        let reachable = FileManager.default.fileExists(atPath: entry.lastKnownPath)
-        HStack(alignment: .center, spacing: 10) {
-            Image(systemName: reachable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(reachable ? Color.green : Color.orange)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.displayName)
-                    .font(.callout.weight(.medium))
-                Text(entry.lastKnownPath)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text("Last opened \(entry.lastOpened)")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-            Spacer()
-            if !reachable {
-                Button("Re-link...") {
-                    relink(entry)
-                }
-                .controlSize(.small)
-            }
-        }
-    }
-
-    private func reloadKnownLibraries() {
-        knownLibraries = LibraryIndexManager.shared.entries()
-    }
-
-    private func relink(_ entry: LibraryIndexEntry) {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.message = "Choose the new location for \(entry.displayName)"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            try LibraryIndexManager.shared.relink(oldHash: entry.hash, newLibraryURL: url)
-            reloadKnownLibraries()
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Could Not Re-link Library"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.runModal()
-        }
-    }
-
-    private func chooseTagSeedDatabase() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [UTType(filenameExtension: "db") ?? .data]
-        panel.message = "Choose ao3_tag_seeds.db"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        tagSeedConfig.chooseDatabase(url: url)
-    }
-
-    private func clearTagSynonymCache() {
-        tagSynonymCacheMessage = nil
-        guard let metaDB = AppDelegate.shared?.session?.metaDB else { return }
-        Task {
-            do {
-                try await metaDB.clearAO3TagSynonymCacheAndReloadSeeds()
-                tagSynonymCacheMessage = "Imported synonym cache cleared."
-            } catch {
-                tagSynonymCacheMessage = error.localizedDescription
-            }
-        }
+    private func confirmResetLibraryDefaults() {
+        let alert = NSAlert()
+        alert.messageText = "Restore Library Defaults?"
+        alert.informativeText = "Library appearance, colors, and row visibility settings will be reset. This can't be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Restore Defaults")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        prefs.resetLibraryToDefaults()
+        syncLocalState()
     }
 
     // MARK: Custom colour pair rows
@@ -691,16 +627,18 @@ private struct WindowTab: View {
             }
 
             Section {
-                Button {
-                    if let size = ReaderWindowController.saveFrontWindowSizeAsDefault() {
-                        savedSizeMessage = "Saved \(Int(size.width)) x \(Int(size.height)) px"
-                    } else {
-                        savedSizeMessage = "Open a reader window first"
+                HStack {
+                    Button {
+                        if let size = ReaderWindowController.saveFrontWindowSizeAsDefault() {
+                            savedSizeMessage = "Saved \(Int(size.width)) x \(Int(size.height)) px"
+                        } else {
+                            savedSizeMessage = "Open a reader window first"
+                        }
+                    } label: {
+                        Label("Save Current Reader Window Size", systemImage: "square.and.arrow.down")
                     }
-                } label: {
-                    Label("Save Current Reader Window Size", systemImage: "square.and.arrow.down")
+                    Spacer()
                 }
-                .frame(maxWidth: .infinity)
 
                 if let savedSizeMessage {
                     Text(savedSizeMessage)
@@ -716,55 +654,6 @@ private struct WindowTab: View {
         }
         .formStyle(.grouped)
         .padding(.bottom, 8)
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MARK: - Columns Tab
-// ─────────────────────────────────────────────────────────────────────────────
-
-private struct ColumnsTab: View {
-    @State private var wordCountLabel: String = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
-    @State private var kudosLabel:     String = CustomColumnConfig.shared.kudosLabel     ?? "(none)"
-    @State private var availableColumns: [String] = []
-
-    var body: some View {
-        Form {
-            Section {
-                if availableColumns.isEmpty {
-                    Text("Open a Calibre library to see available custom columns.")
-                        .font(.callout).foregroundStyle(.secondary)
-                } else {
-                    let opts = ["(none)"] + availableColumns
-                    Picker("Word count column", selection: $wordCountLabel) {
-                        ForEach(opts, id: \.self) { Text($0).tag($0) }
-                    }
-                    .onChange(of: wordCountLabel) { _, v in
-                        CustomColumnConfig.shared.wordCountLabel = v == "(none)" ? nil : v
-                    }
-                    Picker("Kudos column", selection: $kudosLabel) {
-                        ForEach(opts, id: \.self) { Text($0).tag($0) }
-                    }
-                    .onChange(of: kudosLabel) { _, v in
-                        CustomColumnConfig.shared.kudosLabel = v == "(none)" ? nil : v
-                    }
-                }
-            } header: {
-                Label("Calibre Custom Columns", systemImage: "tablecells").font(.headline)
-            } footer: {
-                Text("Maps Calibre custom column labels to word count and kudos. Labels are case-sensitive.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-        .onAppear { Task { await loadAvailableColumns() } }
-    }
-
-    private func loadAvailableColumns() async {
-        guard let library = AppDelegate.shared?.session?.library else { return }
-        availableColumns = await library.customColumns().map(\.label).sorted()
-        wordCountLabel   = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
-        kudosLabel       = CustomColumnConfig.shared.kudosLabel     ?? "(none)"
     }
 }
 
@@ -818,7 +707,7 @@ private struct DataTab: View {
                         }
                     }
                     Spacer()
-                    Button("Choose Database...") {
+                    Button("Choose Database…") {
                         chooseTagSeedDatabase()
                     }
                     .controlSize(.small)
@@ -844,11 +733,13 @@ private struct DataTab: View {
             }
 
             Section {
-                Button("Re-extract AO3 metadata") {
-                    confirmReextract()
+                HStack {
+                    Button("Re-extract AO3 metadata") {
+                        confirmReextract()
+                    }
+                    .disabled(AppDelegate.shared?.session?.isOpen != true)
+                    Spacer()
                 }
-                .disabled(AppDelegate.shared?.session?.isOpen != true)
-                .frame(maxWidth: .infinity)
             } header: {
                 Label("AO3 Metadata", systemImage: "text.magnifyingglass").font(.headline)
             } footer: {
@@ -983,7 +874,7 @@ private struct DataTab: View {
             }
             Spacer()
             if !reachable {
-                Button("Re-link...") {
+                Button("Re-link…") {
                     relink(entry)
                 }
                 .controlSize(.small)
@@ -1099,8 +990,152 @@ private enum ReaderTheme: String, CaseIterable, Identifiable {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MARK: - Color ↔ hex helpers
+// MARK: - Shortcuts Tab
 // ─────────────────────────────────────────────────────────────────────────────
+
+private struct ShortcutsTab: View {
+    @ObservedObject private var prefs = ReaderPreferences.shared
+    @State private var rejectionMessages: [RebindableAction: String] = [:]
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(RebindableAction.allCases, id: \.self) { action in
+                    shortcutRow(for: action)
+                }
+            } header: {
+                Label("Reader Shortcuts", systemImage: "keyboard").font(.headline)
+            } footer: {
+                Text("Click a shortcut to record a new one. Cmd+C/V/X/Z, Cmd+Shift+Z, Cmd+, and Cmd+O are reserved and can't be reassigned.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                HStack {
+                    Spacer()
+                    Button("Restore Defaults", role: .destructive) {
+                        prefs.resetReaderShortcutsToDefaults()
+                        rejectionMessages = [:]
+                    }
+                    .disabled(prefs.keyBindings == ReaderPreferences.defaultKeyBindingsForReset)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding(.bottom, 8)
+    }
+
+    @ViewBuilder
+    private func shortcutRow(for action: RebindableAction) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(action.displayName)
+                Spacer()
+                ShortcutRecorderView(
+                    currentBinding: prefs.keyBindings[action],
+                    onRecord: { candidate in
+                        let result = validate(candidate, for: action, against: prefs.keyBindings)
+                        if result.isValid {
+                            prefs.keyBindings[action] = candidate
+                            rejectionMessages[action] = nil
+                        } else {
+                            rejectionMessages[action] = result.rejectionMessage
+                        }
+                    }
+                )
+                .accessibilityLabel("Record shortcut for \(action.displayName)")
+                .accessibilityValue(prefs.keyBindings[action]?.displayString ?? "No shortcut")
+            }
+            if let message = rejectionMessages[action] {
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+}
+
+/// A "click to record" control backed by a local NSEvent key-down monitor
+/// while focused. Captures the next keystroke, hands it to the caller for
+/// validation, and displays either the current binding or "Recording…"/an
+/// unbound placeholder. This is a bespoke NSViewRepresentable, so SwiftUI
+/// does not auto-infer accessibility labels for it — callers must add
+/// `.accessibilityLabel`/`.accessibilityValue` themselves (see shortcutRow
+/// above), per the design plan's accessibility requirement.
+struct ShortcutRecorderView: NSViewRepresentable {
+    var currentBinding: KeyBinding?
+    var onRecord: (KeyBinding) -> Void
+
+    func makeNSView(context: Context) -> RecorderButton {
+        let button = RecorderButton()
+        button.onRecord = onRecord
+        button.updateTitle(binding: currentBinding)
+        return button
+    }
+
+    func updateNSView(_ nsView: RecorderButton, context: Context) {
+        nsView.onRecord = onRecord
+        nsView.updateTitle(binding: currentBinding)
+    }
+
+    final class RecorderButton: NSButton {
+        var onRecord: ((KeyBinding) -> Void)?
+        private var monitor: Any?
+        private var isRecording = false
+
+        init() {
+            super.init(frame: .zero)
+            bezelStyle = .rounded
+            setButtonType(.momentaryPushIn)
+            target = self
+            action = #selector(startRecording)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError() }
+
+        deinit {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+
+        func updateTitle(binding: KeyBinding?) {
+            guard !isRecording else { return }
+            title = binding?.displayString ?? "Click to set"
+        }
+
+        @objc private func startRecording() {
+            guard !isRecording else { return }
+            isRecording = true
+            title = "Recording…"
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else { return event }
+                self.stopRecording(with: event)
+                return nil
+            }
+        }
+
+        private func stopRecording(with event: NSEvent) {
+            isRecording = false
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+            guard let character = event.charactersIgnoringModifiers?.lowercased(), !character.isEmpty else {
+                title = "Click to set"
+                return
+            }
+            var modifiers: Set<ModifierKey> = []
+            if event.modifierFlags.contains(.command) { modifiers.insert(.command) }
+            if event.modifierFlags.contains(.shift)   { modifiers.insert(.shift) }
+            if event.modifierFlags.contains(.option)  { modifiers.insert(.option) }
+            if event.modifierFlags.contains(.control) { modifiers.insert(.control) }
+            let binding = KeyBinding(character: character, modifiers: modifiers)
+            onRecord?(binding)
+        }
+    }
+}
+
+
 
 extension Color {
     init?(hex: String) {

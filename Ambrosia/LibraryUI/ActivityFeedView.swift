@@ -14,6 +14,7 @@ struct ActivityFeedView: View {
     @State private var filter: ActivityFeedFilter = .all
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
@@ -113,8 +114,12 @@ struct ActivityFeedView: View {
                         count: count(for: tab),
                         selected: filter == tab
                     ) {
-                        withAnimation(.easeInOut(duration: 0.15)) {
+                        if reduceMotion {
                             filter = tab
+                        } else {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                filter = tab
+                            }
                         }
                     }
                 }

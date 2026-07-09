@@ -8,6 +8,7 @@ struct FilterDrawerView: View {
     var onApply: () -> Void
     var onClear: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -103,7 +104,11 @@ struct FilterDrawerView: View {
                 Spacer()
 
                 Button("+ Add Group") {
-                    withAnimation { expression.groups.append(FilterGroup()) }
+                    if reduceMotion {
+                        expression.groups.append(FilterGroup())
+                    } else {
+                        withAnimation { expression.groups.append(FilterGroup()) }
+                    }
                 }
                 .buttonStyle(.borderless)
 
@@ -125,6 +130,7 @@ private struct GroupSection: View {
     let showGroupLabel: Bool
     let groupIndex: Int
     let onDelete: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -156,8 +162,12 @@ private struct GroupSection: View {
                 }
 
                 Button("+ Rule") {
-                    withAnimation {
+                    if reduceMotion {
                         group.rules.append(FilterRule(field: .tag, op: .equals, value: ""))
+                    } else {
+                        withAnimation {
+                            group.rules.append(FilterRule(field: .tag, op: .equals, value: ""))
+                        }
                     }
                 }
                 .buttonStyle(.borderless).font(.caption)
@@ -184,7 +194,11 @@ private struct GroupSection: View {
             // has been removed, the Binding's getter/setter simply no-ops.
             ForEach(group.rules) { rule in
                     FilterRuleRow(rule: ruleBinding(for: rule.id)) {
-                        withAnimation { group.rules.removeAll { $0.id == rule.id } }
+                        if reduceMotion {
+                            group.rules.removeAll { $0.id == rule.id }
+                        } else {
+                            withAnimation { group.rules.removeAll { $0.id == rule.id } }
+                        }
                     }
                     .padding(.horizontal, 14)
                 }

@@ -172,7 +172,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private var notePopover: NSPopover?
 
     // Preferences subscription
-    private var prefsCancellable: AnyCancellable?
+    private var prefsCancellables: Set<AnyCancellable> = []
 
     // Find bar
     private var findBarHostingView: NSHostingView<FindBarView>?
@@ -771,17 +771,65 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     // MARK: - Preferences subscription
 
+    private let preferencesReloadDebounce = DebounceTimer(delay: 0.15)
+
     private func subscribeToPreferences() {
-        prefsCancellable = ReaderPreferences.shared.objectWillChange
+        // Blanket `objectWillChange` sink removed — `preferenceChangeKind`
+        // (sent once per `didSet`, classified `.cosmetic`/`.structural`)
+        // replaces it entirely, so every change fires exactly one of the two
+        // sinks below rather than both.
+        ReaderPreferences.shared.preferenceChangeKind
+            .filter { $0 == .cosmetic }
             .sink { [weak self] _ in
+                guard let self else { return }
+                // Cheap and correct as an immediate apply, per the design
+                // doc — stays outside the debounce below.
                 if let bg = Self.nsColor(hex: ReaderPreferences.shared.readerBackgroundColor) {
-                    self?.webView.underPageBackgroundColor = bg
-                    self?.view.layer?.backgroundColor = bg.cgColor
+                    self.webView.underPageBackgroundColor = bg
+                    self.view.layer?.backgroundColor = bg.cgColor
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now()) {
+                self.applyCosmeticCSSUpdate()
+            }
+            .store(in: &prefsCancellables)
+
+        ReaderPreferences.shared.preferenceChangeKind
+            .filter { $0 == .structural }
+            .sink { [weak self] _ in
+                // A ColorPicker-style drag can emit a rapid stream of updates
+                // while a control is open, not one commit at the end. Each
+                // one previously queued its own full buildScrollHTML() +
+                // webView.loadHTMLString — debounce so a drag produces one
+                // reload after the user settles, not one per intermediate
+                // sample (design-philosophy audit, Finding 3).
+                self?.preferencesReloadDebounce.schedule { [weak self] in
                     self?.reloadHTML()
                 }
             }
+            .store(in: &prefsCancellables)
+    }
+
+    /// Applies a cosmetic-only preference change (see `PreferenceChangeKind`)
+    /// to the already-loaded document by replacing a standalone
+    /// `<style id="ambrosia-vars">` element's `textContent` with the current
+    /// `:root` variable declarations, instead of a full reload. Per
+    /// Invariant 8, this call needs no return value, so completionHandler is
+    /// nil.
+    private func applyCosmeticCSSUpdate() {
+        let declarations = ReaderPreferences.shared.cssVariableDeclarations
+        guard let data = try? JSONEncoder().encode(declarations),
+              let jsStringLiteral = String(data: data, encoding: .utf8) else { return }
+        let js = """
+        (function() {
+            var style = document.getElementById('ambrosia-vars');
+            if (!style) {
+                style = document.createElement('style');
+                style.id = 'ambrosia-vars';
+                document.head.appendChild(style);
+            }
+            style.textContent = ':root {' + \(jsStringLiteral) + '}';
+        })();
+        """
+        webView.evaluateJavaScript(js, completionHandler: nil)
     }
 
     // MARK: - Mode switching
@@ -1401,18 +1449,17 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     // MARK: - Keyboard events
 
     override func keyDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.command) {
-            switch event.charactersIgnoringModifiers {
-            case "d": savePointAnnotationAtCurrentPosition(); return
-            case "b": toggleAnnotationSidebar(); return
-            case "f": toggleFindBar(); return
-            case "g":
-                if event.modifierFlags.contains(.shift) { findPrevious() }
-                else { findNext() }
-                return
-            default: break
-            }
-        }
+        // Note: Cmd+D (Add Annotation), Cmd+B (Show Annotations), Cmd+F
+        // (Toggle Find Bar), Cmd+G (Find Next), and Cmd+Shift+G (Find
+        // Previous) are NOT handled here. They're routed once, from the
+        // "Reader" CommandMenu in AmbrosiaApp.swift (with live-updating
+        // shortcuts driven by ReaderPreferences.shared.keyBindings), through
+        // the responder chain to the @objc methods below. Keeping a second,
+        // independent case here for the same keys previously meant hardcoded
+        // copies of the same binding that could silently diverge if only one
+        // was ever changed (see design-philosophy audit, Finding 2; Find/
+        // Find-Next/Find-Previous were migrated into this same scheme in
+        // Pass A rather than left as a separate, undocumented exception).
         if event.keyCode == 53 && findBarHostingView != nil { hideFindBar(); return }
         super.keyDown(with: event)
     }
@@ -1431,6 +1478,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     @objc func addAnnotation(_ sender: Any?) { savePointAnnotationAtCurrentPosition() }
     @objc func showAnnotationSidebar(_ sender: Any?) { toggleAnnotationSidebar() }
     @objc func showTOCSidebar(_ sender: Any?) { toggleTOCSidebar() }
+    @objc func toggleFindBarAction(_ sender: Any?) { toggleFindBar() }
+    @objc func findNextAction(_ sender: Any?) { findNext() }
+    @objc func findPreviousAction(_ sender: Any?) { findPrevious() }
 
     // MARK: - Point annotations (⌘D)
 

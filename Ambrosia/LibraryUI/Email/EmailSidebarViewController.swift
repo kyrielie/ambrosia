@@ -309,7 +309,7 @@ final class EmailSidebarViewController: NSViewController,
 
         menu.addItem(.separator())
 
-        let collectionItem = NSMenuItem(title: "Add to Collection...", action: #selector(contextShowCollectionPicker(_:)), keyEquivalent: "")
+        let collectionItem = NSMenuItem(title: "Add to Collection…", action: #selector(contextShowCollectionPicker(_:)), keyEquivalent: "")
         collectionItem.target = self
         collectionItem.representedObject = ["books": selectedBooks, "row": row] as [String: Any]
         menu.addItem(collectionItem)
@@ -575,7 +575,19 @@ final class EmailBookCellView: NSTableCellView {
             progressLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 42),
 
             progressTrack.leadingAnchor.constraint(equalTo: progressLabel.trailingAnchor, constant: 8),
-            progressTrack.trailingAnchor.constraint(lessThanOrEqualTo: titleLabel.trailingAnchor),
+            // Not tied to titleLabel.trailing: that anchor is squeezed by the
+            // like/read-later icon row above (title row only), which has no
+            // bearing on this row's own layout. Tying progressTrack's ≥56pt
+            // minimum width to that already-constrained anchor produced an
+            // unsatisfiable pair of constraints at the cell's fixed 168pt
+            // width (progressLabel ≥42 + 8pt gap + progressTrack ≥56 needs
+            // more horizontal room than titleLabel.trailing left available),
+            // which AppKit could only resolve by breaking the ≥56 constraint
+            // at runtime. Pinning to the cell's own trailing edge (matching
+            // likeButton's -10 inset) gives this row the same margin as every
+            // other row without inheriting a constraint that belongs to a
+            // different row.
+            progressTrack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
             progressTrack.centerYAnchor.constraint(equalTo: progressLabel.centerYAnchor),
             progressTrack.widthAnchor.constraint(greaterThanOrEqualToConstant: 56),
             progressTrack.heightAnchor.constraint(equalToConstant: 4),

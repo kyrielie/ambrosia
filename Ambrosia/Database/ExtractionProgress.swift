@@ -9,6 +9,6 @@ final class ExtractionProgress {
 
     var statusText: String? {
         guard isRunning else { return nil }
-        return total > 0 ? "Enriching library \(completed)/\(total)" : "Enriching library..."
+        return total > 0 ? "Enriching library \(completed)/\(total)" : "Enriching library…"
     }
 }

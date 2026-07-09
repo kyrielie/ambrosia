@@ -69,7 +69,14 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         window.toolbarStyle    = .unified
         window.minSize = NSSize(width: 700, height: 500)
         window.isReleasedWhenClosed = false
-        window.center()
+        // Finding 1: restore window position/size across launches via the
+        // standard AppKit mechanism. setFrameAutosaveName must be set before
+        // the window is shown; center() only runs as a fallback the first
+        // time there's no saved frame to restore.
+        window.setFrameAutosaveName("AmbrosiaLibraryWindow")
+        if !window.setFrameUsingName("AmbrosiaLibraryWindow") {
+            window.center()
+        }
         super.init(window: window)
 
         let libraryVC = LibraryViewController(
@@ -250,7 +257,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
         menu.addItem(NSMenuItem.separator())
 
-        let feedItem = NSMenuItem(title: "RSS Feed Server...", action: #selector(showRSSPanel), keyEquivalent: "")
+        let feedItem = NSMenuItem(title: "RSS Feed Server…", action: #selector(showRSSPanel), keyEquivalent: "")
         feedItem.target = self
         menu.addItem(feedItem)
 
@@ -778,10 +785,9 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             onPublish: { [weak self] in
                 guard let self, let session = self.session else { return }
                 self.dismissRSSSheet()
-                session.startFeedServer()
-                // Give the async Task a moment to bind before reading isRunning/config.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                    guard let self, let feedServer = session.feedServer else { return }
+                Task { @MainActor in
+                    await session.startFeedServerAndWaitUntilListening()
+                    guard let feedServer = session.feedServer else { return }
                     self.showManageFeedsSheet(feedServer: feedServer)
                 }
             },
@@ -879,42 +885,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             guard let anchorView = self.window?.contentView else { return }
             let picker = NSSharingServicePicker(items: [tmp as NSURL])
             picker.show(relativeTo: .zero, of: anchorView, preferredEdge: .minY)
-        }
-    }
-
-    @objc private func triggerRSSFeed() {
-        guard let session else { return }
-        if session.feedServer?.isRunning == true {
-            session.stopFeedServer()
-            refreshExportMenu()
-        } else {
-            session.startFeedServer()
-            // Give the async Task a moment to bind before we read isRunning / config.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                self?.refreshExportMenu()
-                self?.showFeedServerStartedAlert()
-            }
-        }
-    }
-
-    @MainActor
-    private func showFeedServerStartedAlert() {
-        guard let feedServer = session?.feedServer else { return }
-        let url = feedServer.localNetworkURLSync ?? "http://localhost:\(feedServer.port)"
-        let alert = NSAlert()
-        alert.messageText = "RSS Feed Server Started"
-        alert.informativeText = """
-            Connect from another device on your local network:
-
-            \(url)
-
-            The server runs while Ambrosia is open. Stop it via the Export menu.
-            """
-        alert.addButton(withTitle: "Copy URL")
-        alert.addButton(withTitle: "OK")
-        if alert.runModal() == .alertFirstButtonReturn {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(url, forType: .string)
         }
     }
 

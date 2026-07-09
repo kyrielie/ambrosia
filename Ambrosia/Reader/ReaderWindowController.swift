@@ -62,6 +62,17 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         super.init(window: window)
         window.delegate = self
 
+        // Finding 1: restore this window's individual frame if one was saved
+        // for this book/target, keyed the same way `openWindows` already is.
+        // If there's no saved frame (first time opening this book), the
+        // placeholder size above stands until applyDefaultWindowSizeIfNeeded
+        // runs in windowDidLoad.
+        let autosaveName = "AmbrosiaReaderWindow.\(target.windowKey)"
+        window.setFrameAutosaveName(autosaveName)
+        if window.setFrameUsingName(autosaveName) {
+            didApplyInitialWindowSize = true
+        }
+
         let vc = ReaderViewController(target: target, modelContainer: modelContainer)
         window.contentViewController = vc
 
