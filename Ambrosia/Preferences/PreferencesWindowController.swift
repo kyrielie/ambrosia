@@ -797,11 +797,10 @@ private struct DataTab: View {
 
                 Text("""
                     Starting the feed server makes your library reachable by \
-                    any device on your local network. Feed URLs include a \
-                    private token, so only devices you've shared a link with \
-                    can read your feeds — anyone with a link can, though, so \
-                    treat it like a password. The restart option above takes \
-                    effect next time you start the server.
+                    any device on your local network. Feeds are \
+                    unauthenticated — anyone on the network who knows or \
+                    guesses a feed URL can read it. The restart option above \
+                    takes effect next time you start the server.
                     """)
                     .font(.caption)
                     .foregroundStyle(.secondary)

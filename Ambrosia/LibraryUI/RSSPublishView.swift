@@ -19,9 +19,9 @@ struct RSSPublishWarningView: View {
 
             Text("""
                 The feed server runs a local HTTP server on this Mac while \
-                Ambrosia is open. Feed URLs include a private token, so only \
-                devices you've shared a link with can read your feeds — but \
-                anyone with a link can, so treat it like a password.
+                Ambrosia is open. Feeds are unauthenticated: anyone on your \
+                local network who knows or guesses a feed URL can read it, \
+                not just people you've shared a link with.
 
                 All collections will be published as live feeds that update \
                 immediately whenever collection membership changes. You can \
@@ -75,10 +75,6 @@ struct ManageFeedsView: View {
 
     let collections: [(id: String, name: String)]
     let baseURL: String
-    /// Shared-secret token required by every route on the server. Appended
-    /// to every displayed/copied feed URL so subscribing apps authenticate
-    /// automatically; see LocalFeedServer's `isAuthorized`.
-    let authToken: String
     let hasSearchSnapshot: Bool
     let initialSnapshotLabel: String?
     let onPublishSearch: () -> Void
@@ -94,7 +90,6 @@ struct ManageFeedsView: View {
 
     init(collections: [(id: String, name: String)],
          baseURL: String,
-         authToken: String,
          hasSearchSnapshot: Bool,
          snapshotLabel: String?,
          onPublishSearch: @escaping () -> Void,
@@ -103,7 +98,6 @@ struct ManageFeedsView: View {
          onDone: @escaping () -> Void) {
         self.collections = collections
         self.baseURL = baseURL
-        self.authToken = authToken
         self.hasSearchSnapshot = hasSearchSnapshot
         self.initialSnapshotLabel = snapshotLabel
         self.onPublishSearch = onPublishSearch
@@ -122,18 +116,14 @@ struct ManageFeedsView: View {
         return targets
     }
 
-    private var tokenSuffix: String {
-        authToken.isEmpty ? "" : "?token=\(authToken)"
-    }
-
     private func feedURL(for target: FeedTarget) -> String {
         switch target {
         case .currentSearch:
-            return "\(baseURL)/feed/search.xml\(tokenSuffix)"
+            return "\(baseURL)/feed/search.xml"
         case .collection(let id, _):
-            return "\(baseURL)/feed/collection/\(id).xml\(tokenSuffix)"
+            return "\(baseURL)/feed/collection/\(id).xml"
         case .dailyStory:
-            return "\(baseURL)/feed/random-daily.xml\(tokenSuffix)"
+            return "\(baseURL)/feed/random-daily.xml"
         }
     }
 
