@@ -819,9 +819,12 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
                 onPublishSearch: { [weak self] in
                     Task { await self?.publishCurrentSearchSnapshot() }
                 },
-                onExportOPML: { [weak self, weak host] in
-                    guard let anchorView = host?.view else { return }
-                    self?.exportOPML(feedServer: feedServer, anchorView: anchorView)
+                onExportOPML: { [weak self] in
+                    guard let self,
+                          let window = self.window,
+                          let anchorView = window.attachedSheet?.contentView
+                    else { return }
+                    self.exportOPML(feedServer: feedServer, anchorView: anchorView)
                 },
                 onStopServer: { [weak self] in
                     self?.dismissRSSSheet()
