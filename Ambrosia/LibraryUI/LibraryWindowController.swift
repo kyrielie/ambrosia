@@ -819,8 +819,9 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
                 onPublishSearch: { [weak self] in
                     Task { await self?.publishCurrentSearchSnapshot() }
                 },
-                onExportOPML: { [weak self] in
-                    self?.exportOPML(feedServer: feedServer)
+                onExportOPML: { [weak self, weak host] in
+                    guard let anchorView = host?.view else { return }
+                    self?.exportOPML(feedServer: feedServer, anchorView: anchorView)
                 },
                 onStopServer: { [weak self] in
                     self?.dismissRSSSheet()
@@ -879,14 +880,29 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     /// feeds, when applicable) as an OPML file and presents the system share
     /// sheet so the user can AirDrop, email, or save it.
     @MainActor
-    private func exportOPML(feedServer: LocalFeedServer) {
+    private func exportOPML(feedServer: LocalFeedServer, anchorView: NSView) {
         Task { @MainActor in
             let baseURL = feedServer.localNetworkURLSync ?? "http://localhost:\(feedServer.port)"
             let opml = await feedServer.generateOPML(baseURL: baseURL)
             let tmp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("ambrosia-feeds.opml")
-            try? opml.write(to: tmp, atomically: true, encoding: .utf8)
-            guard let anchorView = self.window?.contentView else { return }
+            do {
+                try opml.write(to: tmp, atomically: true, encoding: .utf8)
+            } catch {
+                #if DEBUG
+                print("OPML export failed: \(error)")
+                #endif
+                let alert = NSAlert()
+                alert.messageText = "Export Failed"
+                alert.informativeText = "The OPML file could not be written: \(error.localizedDescription)"
+                alert.runModal()
+                return
+            }
+            // Anchor to the sheet's own content view, not self.window?.contentView:
+            // this method is invoked from a button inside the Manage Feeds sheet, and
+            // self.window is the *parent* window, which has that sheet modally attached
+            // at this point. Anchoring to the parent's content view puts the picker
+            // beneath the active sheet, where it renders but cannot receive events.
             let picker = NSSharingServicePicker(items: [tmp as NSURL])
             picker.show(relativeTo: .zero, of: anchorView, preferredEdge: .minY)
         }
