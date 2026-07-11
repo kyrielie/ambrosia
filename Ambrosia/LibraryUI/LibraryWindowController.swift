@@ -806,14 +806,12 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         Task { @MainActor in
             let collections = await feedServer.collectionList()
             let baseURL = feedServer.localNetworkURLSync ?? "http://localhost:\(feedServer.port)"
-            let token = await feedServer.currentAuthToken()
             let libHash = self.session?.activePath.map { libraryHash(for: URL(fileURLWithPath: $0)) } ?? ""
             let snapshot = CurrentSearchSnapshot.load(libraryHash: libHash)
 
             let host = NSHostingController(rootView: ManageFeedsView(
                 collections: collections,
                 baseURL: baseURL,
-                authToken: token,
                 hasSearchSnapshot: snapshot != nil,
                 snapshotLabel: snapshot?.label,
                 onPublishSearch: { [weak self] in
