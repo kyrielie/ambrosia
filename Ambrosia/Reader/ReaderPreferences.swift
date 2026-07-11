@@ -241,10 +241,21 @@ final class ReaderPreferences: ObservableObject {
         feedServerEnableDailyStory = ud.object(forKey: feedKey(Keys.feedServerEnableDailyStory)) != nil
             ? ud.bool(forKey: feedKey(Keys.feedServerEnableDailyStory))
             : false
-        let excludedRaw = ud.string(forKey: feedKey(Keys.feedServerExcludedCollectionIDs)) ?? ""
-        feedServerExcludedCollectionIDs = excludedRaw.isEmpty
-            ? []
-            : Set(excludedRaw.split(separator: ",").map(String.init))
+        if let storedExcluded = ud.string(forKey: feedKey(Keys.feedServerExcludedCollectionIDs)) {
+            feedServerExcludedCollectionIDs = storedExcluded.isEmpty
+                ? []
+                : Set(storedExcluded.split(separator: ",").map(String.init))
+        } else {
+            // No stored value for this library yet — apply the default
+            // exclusion set and persist it immediately. LocalFeedServer
+            // reads this UserDefaults key directly (not through this
+            // property), so the default must be written here, not just
+            // held in memory, or the server won't see it until the user
+            // toggles a collection.
+            let defaults = Defaults.feedServerExcludedCollectionIDs
+            feedServerExcludedCollectionIDs = defaults
+            ud.set(defaults.sorted().joined(separator: ","), forKey: feedKey(Keys.feedServerExcludedCollectionIDs))
+        }
     }
 
     // MARK: - Derived: resolved library colour for current appearance
@@ -382,6 +393,18 @@ final class ReaderPreferences: ObservableObject {
         static let hideNonAO3PublisherBooks    = false
         static let hideAnthologyBooks          = true
         static let emailPillsShowCollections   = false
+        // Default set of system collections excluded from RSS/JSON feed
+        // publishing. Applied whenever no per-library exclusion value has
+        // ever been stored (see reloadFeedPrefs/init) — these are reading-
+        // state or app-generated groupings, not curated collections someone
+        // would want broadcast on the local network by default.
+        static let feedServerExcludedCollectionIDs: Set<String> = [
+            SystemCollectionID.skipped,
+            SystemCollectionID.finished,
+            SystemCollectionID.inProgress,
+            SystemCollectionID.hasAnnotations,
+            SystemCollectionID.seriesOrMerged,
+        ]
         static let groupBySeries               = false
         static let defaultReadingMode          = ReadingMode.scroll
 
@@ -500,10 +523,15 @@ final class ReaderPreferences: ObservableObject {
         feedServerEnableDailyStory = ud.object(forKey: Keys.feedServerEnableDailyStory) != nil
             ? ud.bool(forKey: Keys.feedServerEnableDailyStory)
             : false
-        let excludedRaw = ud.string(forKey: Keys.feedServerExcludedCollectionIDs) ?? ""
-        feedServerExcludedCollectionIDs = excludedRaw.isEmpty
-            ? []
-            : Set(excludedRaw.split(separator: ",").map(String.init))
+        if let storedExcluded = ud.string(forKey: Keys.feedServerExcludedCollectionIDs) {
+            feedServerExcludedCollectionIDs = storedExcluded.isEmpty
+                ? []
+                : Set(storedExcluded.split(separator: ",").map(String.init))
+        } else {
+            let defaults = Defaults.feedServerExcludedCollectionIDs
+            feedServerExcludedCollectionIDs = defaults
+            ud.set(defaults.sorted().joined(separator: ","), forKey: Keys.feedServerExcludedCollectionIDs)
+        }
         feedServerAutoRestart = ud.object(forKey: Keys.feedServerAutoRestart) != nil
             ? ud.bool(forKey: Keys.feedServerAutoRestart)
             : false
