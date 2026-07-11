@@ -90,6 +90,7 @@ actor CalibreLibrary {
         // state, no version plumbing needed (see LRUCache note above pageCache).
         pageCache.removeAll()
         countCache.removeAll()
+        groupAwareCountCache.removeAll()
     }
 
     /// §6.2: last error from a search/count query, if any. Set by `bookCount(query:)`
@@ -129,6 +130,7 @@ actor CalibreLibrary {
     //  - Random reshuffle: covered by randomSeed being part of the key.
     var pageCache: LRUCache<PageCacheKey, (page: [CalibreBook], hasMore: Bool)> = LRUCache(limit: 48)
     var countCache: LRUCache<CountCacheKey, Int> = LRUCache(limit: 48)
+    var groupAwareCountCache: LRUCache<GroupAwareCountCacheKey, Int> = LRUCache(limit: 48)
 
     // MARK: - Count
 
@@ -427,6 +429,43 @@ actor CalibreLibrary {
         let result = (page, end < sortedIDs.count)
         pageCache.set(result, for: cacheKey)
         return result
+    }
+
+    /// Group-aware total: the count of matching books that would actually be
+    /// shown once skip/series-grouping/AO3-publisher/anthology visibility is
+    /// applied — not the raw SQL row count `fetchAllMatchingIDs` alone would
+    /// give (which double-counts collapsed series members and ignores the
+    /// publisher/anthology toggles). Used for "Page X of Y" in grouped mode.
+    ///
+    /// This is pure ID-set arithmetic, not a hydration cost: `visibility`'s
+    /// `isVisible(_ id: Int)` form already resolves `hideNonAO3PublisherBooks`/
+    /// `hideAnthologyBooks` against the pre-computed `ao3PublisherIDs`/
+    /// `anthologyIDs` sets the caller passes in (see LibraryVisibilityPolicy),
+    /// so no `CalibreBook` hydration is required — matching IDs in, visible
+    /// IDs out.
+    func visibleBookCount(
+        query: SearchQuery,
+        filter: FilterExpression?,
+        restrictIDs: [Int]?,
+        visibility: LibraryVisibilityPolicy,
+        filterTagExpansions: [String: [String]] = [:],
+        visibilityVersion: Int = 0
+    ) -> Int {
+        let cacheKey = GroupAwareCountCacheKey(
+            querySignature: LibraryFilterDebug.summary(query: query),
+            filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
+            tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
+            visibilityVersion: visibilityVersion,
+            showSkippedCollection: visibility.showSkippedCollection,
+            hideNonAO3PublisherBooks: visibility.hideNonAO3PublisherBooks,
+            hideAnthologyBooks: visibility.hideAnthologyBooks
+        )
+        if let cached = groupAwareCountCache[cacheKey] { return cached }
+        let matchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
+                                              filterTagExpansions: filterTagExpansions)
+        let count = visibility.filter(matchedIDs).count
+        groupAwareCountCache.set(count, for: cacheKey)
+        return count
     }
 
     /// Random-sorted page, analogous to wordCountSortedPage.

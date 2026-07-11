@@ -97,6 +97,13 @@ struct LibraryRootView: View {
     @State private var fullTextTask: Task<Void, Never>? = nil
     @State private var filterCountTask: Task<Void, Never>? = nil
     @State private var rebuildTask: Task<Void, Never>? = nil
+    // F.3: series-grouped, visibility-aware total, computed by
+    // CalibreLibrary.visibleBookCount and used for "Page X of Y" in the
+    // footer while shouldGroupSeriesRows is true. nil is the "not yet
+    // computed" sentinel — the footer must not show a stale/wrong number
+    // while a recompute (triggered by loadPage()) is in flight.
+    @State private var groupAwareTotalCount: Int? = nil
+    @State private var groupAwareCountTask: Task<Void, Never>? = nil
     // Every `Task { await loadPage() }` call site below now goes through this
     // instead of being fire-and-forget. Previously ~20 sites (sort/filter/page
     // changes) could each spawn an untracked Task, and nothing cancelled a
@@ -753,6 +760,7 @@ struct LibraryRootView: View {
         rebuildItems()
         loadAO3MetadataForCurrentPage()
         pruneSelection()
+        refreshGroupAwareCountIfNeeded(query: query)
         LibraryFilterDebug.log("loadPage.end", [
             "surface": "list",
             "rows": books.count,
@@ -1112,6 +1120,72 @@ struct LibraryRootView: View {
             // be called from inside a synchronous MainActor closure — call it here
             // instead, still sequential within this same Task.
             await loadPage()
+        }
+    }
+
+    /// Recomputes `groupAwareTotalCount` whenever grouping is on. Mirrors
+    /// `scheduleDeferredSQLFilterCount`'s restrictIDs/filterForSQL derivation
+    /// so the count matches whatever `loadPage()` actually fetched, and uses
+    /// the same staleness-guard shape (Invariant 23): every write into
+    /// `groupAwareTotalCount` is gated on the query/filter signature still
+    /// matching what was true when the task was kicked off, not just the
+    /// "final" success path.
+    private func refreshGroupAwareCountIfNeeded(query: SearchQuery) {
+        groupAwareCountTask?.cancel()
+        guard shouldGroupSeriesRows, let library = session.library else {
+            groupAwareTotalCount = nil
+            return
+        }
+
+        let restrictIDs: [Int]?
+        let filterForSQL: FilterExpression?
+        if let result = toolbarState.activeFilterResult, result.isSQLBacked {
+            restrictIDs = nil
+            filterForSQL = toolbarState.filterExpression
+        } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
+            restrictIDs = intersect(result.calibreIDs, with: query.ftsMatchedIDs)
+            filterForSQL = nil
+        } else if toolbarState.activeFilterResult != nil {
+            groupAwareTotalCount = 0
+            return
+        } else {
+            restrictIDs = nil
+            filterForSQL = nil
+        }
+
+        // "Not yet computed" sentinel while the recompute is in flight, so the
+        // footer falls back to the per-page item count rather than showing a
+        // stale total from the previous filter/page.
+        groupAwareTotalCount = nil
+
+        let visibility = currentVisibilityPolicy
+        let membershipVersion = session.membershipVersion
+        let tagExpansions = cachedFilterTagExpansions
+        let querySignature = LibraryFilterDebug.summary(query: query)
+        let filterSignature = filterForSQL.map { LibraryFilterDebug.summary(expression: $0) } ?? ""
+
+        groupAwareCountTask = Task {
+            let count = await library.visibleBookCount(
+                query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                visibility: visibility, filterTagExpansions: tagExpansions,
+                visibilityVersion: membershipVersion
+            )
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                let currentFilterForSQL: FilterExpression? = {
+                    if let result = toolbarState.activeFilterResult, result.isSQLBacked {
+                        return toolbarState.filterExpression
+                    }
+                    return nil
+                }()
+                let currentFilterSignature = currentFilterForSQL.map { LibraryFilterDebug.summary(expression: $0) } ?? ""
+                guard !toolbarState.isListSurfaceTornDown,
+                      shouldGroupSeriesRows,
+                      LibraryFilterDebug.summary(query: query) == querySignature,
+                      currentFilterSignature == filterSignature
+                else { return }
+                groupAwareTotalCount = count
+            }
         }
     }
 
@@ -1858,14 +1932,17 @@ struct LibraryRootView: View {
             Spacer()
             if session.isOpen {
                 if shouldGroupSeriesRows {
-                    // offsetState.currentPage * pageSize no longer corresponds to a real SQL offset
-                    // once grouping drains a variable number of raw rows per page, and
-                    // displayCount is the raw SQL row count (not the collapsed item
-                    // count) until the count query itself is made group-aware. Showing
-                    // "X-Y of N" with stale arithmetic would be misleading, so show just
-                    // the current page's item count instead.
-                    Text("\(items.count) item\(items.count == 1 ? "" : "s") on this page")
-                        .font(.callout).foregroundStyle(.secondary)
+                    if let total = groupAwareTotalCount {
+                        let totalPages = max(1, Int(ceil(Double(total) / Double(pageSize))))
+                        Text("Page \(offsetState.currentPage + 1) of \(totalPages)")
+                            .font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        // Count still loading (or grouping just turned on) —
+                        // keep today's fallback rather than showing a stale
+                        // or wrong number.
+                        Text("\(items.count) item\(items.count == 1 ? "" : "s") on this page")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
                 } else {
                     let start = books.isEmpty ? 0 : offsetState.currentPage * pageSize + 1
                     let end   = offsetState.currentPage * pageSize + books.count

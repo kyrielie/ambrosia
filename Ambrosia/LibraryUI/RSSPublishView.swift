@@ -10,6 +10,8 @@ struct RSSPublishWarningView: View {
     let onPublish: () -> Void
     let onCancel: () -> Void
 
+    @ObservedObject private var prefs = ReaderPreferences.shared
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Start RSS Feed Server?")
@@ -17,8 +19,9 @@ struct RSSPublishWarningView: View {
 
             Text("""
                 The feed server runs a local HTTP server on this Mac while \
-                Ambrosia is open. Any device on your network will be able to \
-                subscribe to your library feeds — no authentication is required.
+                Ambrosia is open. Feed URLs include a private token, so only \
+                devices you've shared a link with can read your feeds — but \
+                anyone with a link can, so treat it like a password.
 
                 All collections will be published as live feeds that update \
                 immediately whenever collection membership changes. You can \
@@ -30,6 +33,10 @@ struct RSSPublishWarningView: View {
                 """)
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
+
+            Toggle("Restart automatically when I reopen this library",
+                   isOn: $prefs.feedServerAutoRestart)
+                .font(.callout)
 
             HStack {
                 Spacer()
@@ -68,6 +75,10 @@ struct ManageFeedsView: View {
 
     let collections: [(id: String, name: String)]
     let baseURL: String
+    /// Shared-secret token required by every route on the server. Appended
+    /// to every displayed/copied feed URL so subscribing apps authenticate
+    /// automatically; see LocalFeedServer's `isAuthorized`.
+    let authToken: String
     let hasSearchSnapshot: Bool
     let initialSnapshotLabel: String?
     let onPublishSearch: () -> Void
@@ -83,6 +94,7 @@ struct ManageFeedsView: View {
 
     init(collections: [(id: String, name: String)],
          baseURL: String,
+         authToken: String,
          hasSearchSnapshot: Bool,
          snapshotLabel: String?,
          onPublishSearch: @escaping () -> Void,
@@ -91,6 +103,7 @@ struct ManageFeedsView: View {
          onDone: @escaping () -> Void) {
         self.collections = collections
         self.baseURL = baseURL
+        self.authToken = authToken
         self.hasSearchSnapshot = hasSearchSnapshot
         self.initialSnapshotLabel = snapshotLabel
         self.onPublishSearch = onPublishSearch
@@ -109,14 +122,18 @@ struct ManageFeedsView: View {
         return targets
     }
 
+    private var tokenSuffix: String {
+        authToken.isEmpty ? "" : "?token=\(authToken)"
+    }
+
     private func feedURL(for target: FeedTarget) -> String {
         switch target {
         case .currentSearch:
-            return "\(baseURL)/feed/search.xml"
+            return "\(baseURL)/feed/search.xml\(tokenSuffix)"
         case .collection(let id, _):
-            return "\(baseURL)/feed/collection/\(id).xml"
+            return "\(baseURL)/feed/collection/\(id).xml\(tokenSuffix)"
         case .dailyStory:
-            return "\(baseURL)/feed/random-daily.xml"
+            return "\(baseURL)/feed/random-daily.xml\(tokenSuffix)"
         }
     }
 
@@ -185,8 +202,11 @@ struct ManageFeedsView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Button("Publish Current Search") {
                         onPublishSearch()
-                        // Reload the snapshot label from UserDefaults now that it's been written.
-                        snapshotLabel = CurrentSearchSnapshot.load()?.label
+                        // onPublishSearch is async work on the caller's side (it writes
+                        // the snapshot then the caller re-presents this sheet), so the
+                        // label shown here is just optimistic UI until the next reload;
+                        // the caller passes the authoritative label back in via
+                        // `snapshotLabel` on next sheet presentation.
                     }
                     if let label = snapshotLabel {
                         Text("Last snapshot: \"\(label)\"")

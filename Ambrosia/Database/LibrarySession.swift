@@ -199,9 +199,18 @@ final class LibrarySession {
             refreshAO3MetaCaches()
             // Load persisted search history for this library.
             SearchActivityLog.shared.load(libraryHash: Ambrosia.libraryHash(for: url))
-            // TODO(§4): Restart feed server with new library if it was already running
+            // Re-point the per-library feed prefs (excluded collections, daily
+            // story toggle) at this library before anything reads them.
+            ReaderPreferences.shared.reloadFeedPrefs(forLibraryHash: Ambrosia.libraryHash(for: url))
             if let server = feedServer, let cs = collectionStore {
+                // Server object already exists (survived a library switch,
+                // not a relaunch) — just repoint it at the new library.
                 Task { await server.updateLibrary(newLibrary, metaDB: newMetaDB, collectionStore: cs) }
+            } else {
+                // No server running yet this session — if one was running for
+                // *this* library when the app last quit, and the user opted
+                // into auto-restart, bring it back now.
+                autoRestartFeedServerIfNeeded(path: url.path)
             }
             #if DEBUG
             print("[LibrarySession] Opened \(url.lastPathComponent) — \(totalCount) books")
@@ -255,6 +264,7 @@ final class LibrarySession {
             SearchActivityLog.shared.save(libraryHash: Ambrosia.libraryHash(for: URL(fileURLWithPath: path)))
         }
         activePath = nil
+        ReaderPreferences.shared.reloadFeedPrefs(forLibraryHash: nil)
         resolvedFulltextCache.removeAll()
         resolvedFulltextCacheOrder.removeAll()           // §7
         filterResultCache.removeAll()                    // §7
@@ -417,17 +427,41 @@ final class LibrarySession {
     }
 
     // MARK: - §4: Feed server lifecycle
+    //
+    // Whether the server was running is persisted per-library
+    // ("feedServer.enabled.<hash>") so it can be restarted automatically on
+    // next launch — but only when the user has opted into
+    // ReaderPreferences.feedServerAutoRestart (see `open(url:)`). Off by
+    // default: a server that reappears on the LAN without a fresh
+    // confirmation each launch would be a quiet posture change.
+
+    private func feedServerEnabledKey(for path: String) -> String {
+        "feedServer.enabled.\(libraryHash(for: URL(fileURLWithPath: path)))"
+    }
+
+    private func feedServerPortKey(for path: String) -> String {
+        "feedServer.port.\(libraryHash(for: URL(fileURLWithPath: path)))"
+    }
+
+    private func persistFeedServerRunning(_ running: Bool, port: UInt16) {
+        guard let path = activePath else { return }
+        let ud = UserDefaults.standard
+        ud.set(running, forKey: feedServerEnabledKey(for: path))
+        if running { ud.set(Int(port), forKey: feedServerPortKey(for: path)) }
+    }
 
     func startFeedServer(port: UInt16 = 8765) {
         guard let library, let metaDB, let collectionStore else { return }
         if feedServer == nil { feedServer = LocalFeedServer() }
         guard let server = feedServer else { return }
+        let config = LocalFeedServer.Config(port: port)
+        persistFeedServerRunning(true, port: port)
         Task {
             await server.start(
                 library: library,
                 metaDB: metaDB,
                 collectionStore: collectionStore,
-                config: LocalFeedServer.Config(port: port)
+                config: config
             )
         }
     }
@@ -441,19 +475,36 @@ final class LibrarySession {
         guard let library, let metaDB, let collectionStore else { return false }
         if feedServer == nil { feedServer = LocalFeedServer() }
         guard let server = feedServer else { return false }
-        return await server.startAndWaitUntilListening(
+        let config = LocalFeedServer.Config(port: port)
+        let didStart = await server.startAndWaitUntilListening(
             library: library,
             metaDB: metaDB,
             collectionStore: collectionStore,
-            config: LocalFeedServer.Config(port: port),
+            config: config,
             timeout: timeout
         )
+        if didStart { persistFeedServerRunning(true, port: port) }
+        return didStart
     }
 
     func stopFeedServer() {
         let server = feedServer
         feedServer = nil
+        persistFeedServerRunning(false, port: 8765)
         Task { await server?.stop() }
+    }
+
+    /// If the feed server was running for this library last time and the
+    /// user has opted into auto-restart, start it again now. Called from
+    /// `open(url:)` after the library/collectionStore are ready.
+    private func autoRestartFeedServerIfNeeded(path: String) {
+        guard ReaderPreferences.shared.feedServerAutoRestart else { return }
+        let ud = UserDefaults.standard
+        guard ud.object(forKey: feedServerEnabledKey(for: path)) != nil,
+              ud.bool(forKey: feedServerEnabledKey(for: path)) else { return }
+        let savedPort = ud.object(forKey: feedServerPortKey(for: path)).flatMap { _ in ud.integer(forKey: feedServerPortKey(for: path)) }
+        let port = savedPort.flatMap { UInt16(exactly: $0) } ?? 8765
+        startFeedServer(port: port)
     }
 
     private func fulltextCacheKey(_ phrase: String) -> String {

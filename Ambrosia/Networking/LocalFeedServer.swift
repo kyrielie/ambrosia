@@ -28,9 +28,12 @@ import FlyingFox
 
 // MARK: - Current-search snapshot persistence (§4 point 8)
 //
-// A tiny UserDefaults key: "feedServer.currentSearchSnapshot"
+// A tiny UserDefaults key, namespaced per-library: "feedServer.currentSearchSnapshot.<hash>"
 // Stored as JSON: { "ids": [Int], "timestamp": ISO8601 String, "label": String }
 // Explicitly a snapshot — not re-queried on every poll.
+//
+// Namespaced by libraryHash so switching libraries doesn't surface a stale
+// snapshot published from a different library's search.
 
 struct CurrentSearchSnapshot: Codable {
     let calibreIDs: [Int]
@@ -39,25 +42,66 @@ struct CurrentSearchSnapshot: Codable {
 }
 
 extension CurrentSearchSnapshot {
-    private static let defaultsKey = "feedServer.currentSearchSnapshot"
+    private static let defaultsKeyBase = "feedServer.currentSearchSnapshot"
 
-    static func load() -> CurrentSearchSnapshot? {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey) else { return nil }
+    private static func defaultsKey(libraryHash: String) -> String {
+        "\(defaultsKeyBase).\(libraryHash)"
+    }
+
+    static func load(libraryHash: String) -> CurrentSearchSnapshot? {
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey(libraryHash: libraryHash)) else { return nil }
         return try? JSONDecoder().decode(CurrentSearchSnapshot.self, from: data)
     }
 
-    func save() {
+    func save(libraryHash: String) {
         let data = try? JSONEncoder().encode(self)
-        UserDefaults.standard.set(data, forKey: CurrentSearchSnapshot.defaultsKey)
+        UserDefaults.standard.set(data, forKey: CurrentSearchSnapshot.defaultsKey(libraryHash: libraryHash))
     }
 
-    static func publish(calibreIDs: [Int], label: String) {
+    static func publish(calibreIDs: [Int], label: String, libraryHash: String) {
         let snapshot = CurrentSearchSnapshot(
             calibreIDs: calibreIDs,
             publishedAt: ISO8601DateFormatter().string(from: Date()),
             label: label.isEmpty ? "Current Search" : label
         )
-        snapshot.save()
+        snapshot.save(libraryHash: libraryHash)
+    }
+}
+
+// MARK: - Feed server auth token (§4 point "no auth")
+//
+// A per-library shared-secret token, generated once and persisted under
+// "feedServer.authToken.<hash>". Every route except the plain HTML index
+// requires it, either as `?token=` or an `X-Ambrosia-Token` header, so the
+// feed URLs are not fetchable by anything on the LAN that hasn't been given
+// the link. This is a shared secret, not real auth (no per-device identity,
+// no revocation UI beyond regenerating it) — a deliberate scope tradeoff for
+// a single-user local feed server, not a substitute for a network you trust.
+
+enum FeedServerAuthToken {
+    private static func defaultsKey(libraryHash: String) -> String {
+        "feedServer.authToken.\(libraryHash)"
+    }
+
+    /// Returns the existing token for this library, generating and persisting
+    /// a new one on first use.
+    static func token(libraryHash: String) -> String {
+        let key = defaultsKey(libraryHash: libraryHash)
+        if let existing = UserDefaults.standard.string(forKey: key), !existing.isEmpty {
+            return existing
+        }
+        let generated = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        UserDefaults.standard.set(generated, forKey: key)
+        return generated
+    }
+
+    /// Invalidates the current token; the next `token(libraryHash:)` call
+    /// generates a fresh one. Exposed so the user can rotate it from
+    /// Preferences if a URL leaked.
+    static func regenerate(libraryHash: String) -> String {
+        let generated = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        UserDefaults.standard.set(generated, forKey: defaultsKey(libraryHash: libraryHash))
+        return generated
     }
 }
 
@@ -127,6 +171,37 @@ actor LocalFeedServer {
     private var library: CalibreLibrary?
     private var metaDB: AmbrosiaMetaDB?
     private var collectionStore: CollectionStore?
+
+    /// Per-library namespace for UserDefaults-backed prefs (excluded
+    /// collections, daily-story toggle, search snapshot, auth token).
+    /// Empty when no library is set (server shouldn't be running then anyway).
+    private var libraryNamespace: String {
+        library.map { libraryHash(for: $0.root) } ?? ""
+    }
+
+    /// The current library's feed-server auth token, generating one on
+    /// first access. Empty (no auth enforced) if no library is set.
+    private var authToken: String {
+        let ns = libraryNamespace
+        guard !ns.isEmpty else { return "" }
+        return FeedServerAuthToken.token(libraryHash: ns)
+    }
+
+    /// Validates the request's token against the current library's token.
+    /// Checks `?token=` query param first, then `X-Ambrosia-Token` header.
+    private func isAuthorized(_ request: HTTPRequest) -> Bool {
+        let expected = authToken
+        guard !expected.isEmpty else { return true }   // no library set — nothing to protect yet
+        if let queryToken = request.query["token"], queryToken == expected { return true }
+        if let headerToken = request.headers[HTTPHeader("X-Ambrosia-Token")], headerToken == expected { return true }
+        return false
+    }
+
+    private func unauthorizedResponse() -> HTTPResponse {
+        HTTPResponse(statusCode: .unauthorized,
+                    headers: [.contentType: "text/plain; charset=utf-8"],
+                    body: Data("Missing or invalid token.".utf8))
+    }
 
     // MARK: - Init
 
@@ -231,29 +306,48 @@ actor LocalFeedServer {
         let port = config.port
         serverTask = Task {
             do {
+                // Starting the server always makes it reachable on the local
+                // network — that's the whole point of "Start". A loopback-only
+                // mode was tried and removed: it let Start silently not do
+                // that, which contradicted the feature's own contract.
                 let server = HTTPServer(address: .inet(port: port))
                 httpServer = server
-                await server.appendRoute("GET /") { [capturedSelf] _ in
+
+                // Every route (including the index) requires a valid token —
+                // see `isAuthorized`/`FeedServerAuthToken`. This is a shared
+                // secret embedded in the URLs Ambrosia hands out, not
+                // per-device auth, but it means the feed is no longer
+                // fetchable by anything on the LAN that hasn't been given a link.
+                func gated(_ handler: @Sendable @escaping (HTTPRequest) async throws -> HTTPResponse) -> @Sendable (HTTPRequest) async throws -> HTTPResponse {
+                    { request in
+                        guard await capturedSelf.isAuthorized(request) else {
+                            return await capturedSelf.unauthorizedResponse()
+                        }
+                        return try await handler(request)
+                    }
+                }
+
+                await server.appendRoute("GET /", handler: gated { [capturedSelf] _ in
                     try await capturedSelf.handleIndex()
-                }
-                await server.appendRoute("GET /feed/collection/*") { [capturedSelf] request in
+                })
+                await server.appendRoute("GET /feed/collection/*", handler: gated { [capturedSelf] request in
                     try await capturedSelf.handleCollectionFeed(request: request)
-                }
-                await server.appendRoute("GET /feed/search.xml") { [capturedSelf] request in
+                })
+                await server.appendRoute("GET /feed/search.xml", handler: gated { [capturedSelf] request in
                     try await capturedSelf.handleSearchFeed(format: .rss, request: request)
-                }
-                await server.appendRoute("GET /feed/search.json") { [capturedSelf] request in
+                })
+                await server.appendRoute("GET /feed/search.json", handler: gated { [capturedSelf] request in
                     try await capturedSelf.handleSearchFeed(format: .json, request: request)
-                }
-                await server.appendRoute("GET /feed/random-daily.xml") { [capturedSelf] request in
+                })
+                await server.appendRoute("GET /feed/random-daily.xml", handler: gated { [capturedSelf] request in
                     try await capturedSelf.handleRandomDailyFeed(format: .rss, request: request)
-                }
-                await server.appendRoute("GET /feed/random-daily.json") { [capturedSelf] request in
+                })
+                await server.appendRoute("GET /feed/random-daily.json", handler: gated { [capturedSelf] request in
                     try await capturedSelf.handleRandomDailyFeed(format: .json, request: request)
-                }
-                await server.appendRoute("GET /feeds.opml") { [capturedSelf] _ in
+                })
+                await server.appendRoute("GET /feeds.opml", handler: gated { [capturedSelf] _ in
                     try await capturedSelf.handleOPML()
-                }
+                })
                 try await server.run()
             } catch {
                 if !Task.isCancelled {
@@ -277,9 +371,9 @@ actor LocalFeedServer {
 
     private func handleIndex() async throws -> HTTPResponse {
         let ud = UserDefaults.standard
-        let excludedRaw = ud.string(forKey: "rp.feedServerExcludedCollectionIDs") ?? ""
+        let excludedRaw = ud.string(forKey: "rp.feedServerExcludedCollectionIDs.\(libraryNamespace)") ?? ""
         let excluded = excludedRaw.isEmpty ? Set<String>() : Set(excludedRaw.split(separator: ",").map(String.init))
-        let dailyEnabled = ud.object(forKey: "rp.feedServerEnableDailyStory").flatMap { _ in ud.bool(forKey: "rp.feedServerEnableDailyStory") as Bool? } ?? false
+        let dailyEnabled = ud.object(forKey: "rp.feedServerEnableDailyStory.\(libraryNamespace)").flatMap { _ in ud.bool(forKey: "rp.feedServerEnableDailyStory.\(libraryNamespace)") as Bool? } ?? false
 
         let collections = ((try? await collectionStore?.collections()) ?? [])
             .filter { !excluded.contains($0.id) }
@@ -293,7 +387,7 @@ actor LocalFeedServer {
                      "(<a href=\"/feed/random-daily.json\">JSON</a>)</li>"
         }
 
-        if let snapshot = CurrentSearchSnapshot.load() {
+        if let snapshot = CurrentSearchSnapshot.load(libraryHash: libraryNamespace) {
             links += "\n<li><a href=\"/feed/search.xml\">Current Search: \(htmlEscape(snapshot.label))</a> " +
                      "(<a href=\"/feed/search.json\">JSON</a>)</li>"
         }
@@ -343,7 +437,7 @@ actor LocalFeedServer {
         }
 
         // Return 404 if this collection has been excluded in Preferences.
-        let excludedRaw = UserDefaults.standard.string(forKey: "rp.feedServerExcludedCollectionIDs") ?? ""
+        let excludedRaw = UserDefaults.standard.string(forKey: "rp.feedServerExcludedCollectionIDs.\(libraryNamespace)") ?? ""
         let excluded = excludedRaw.isEmpty ? Set<String>() : Set(excludedRaw.split(separator: ",").map(String.init))
         guard !excluded.contains(collectionID) else {
             return HTTPResponse(statusCode: .notFound)
@@ -377,7 +471,7 @@ actor LocalFeedServer {
     }
 
     private func handleSearchFeed(format: FeedFormat, request: HTTPRequest) async throws -> HTTPResponse {
-        guard let snapshot = CurrentSearchSnapshot.load() else {
+        guard let snapshot = CurrentSearchSnapshot.load(libraryHash: libraryNamespace) else {
             switch format {
             case .rss:
                 let empty = buildEmptyFeed(title: "Ambrosia — Current Search",
@@ -426,7 +520,7 @@ actor LocalFeedServer {
     /// the next UTC midnight.
     private func handleRandomDailyFeed(format: FeedFormat, request: HTTPRequest) async throws -> HTTPResponse {
         let ud = UserDefaults.standard
-        let dailyEnabled = ud.object(forKey: "rp.feedServerEnableDailyStory").flatMap { _ in ud.bool(forKey: "rp.feedServerEnableDailyStory") as Bool? } ?? false
+        let dailyEnabled = ud.object(forKey: "rp.feedServerEnableDailyStory.\(libraryNamespace)").flatMap { _ in ud.bool(forKey: "rp.feedServerEnableDailyStory.\(libraryNamespace)") as Bool? } ?? false
         guard dailyEnabled else {
             return HTTPResponse(statusCode: .notFound)
         }
@@ -480,20 +574,21 @@ actor LocalFeedServer {
     /// always available once a library is open.
     func generateOPML(baseURL: String) async -> String {
         let ud = UserDefaults.standard
-        let excludedRaw = ud.string(forKey: "rp.feedServerExcludedCollectionIDs") ?? ""
+        let excludedRaw = ud.string(forKey: "rp.feedServerExcludedCollectionIDs.\(libraryNamespace)") ?? ""
         let excluded = excludedRaw.isEmpty ? Set<String>() : Set(excludedRaw.split(separator: ",").map(String.init))
-        let dailyEnabled = ud.object(forKey: "rp.feedServerEnableDailyStory").flatMap { _ in ud.bool(forKey: "rp.feedServerEnableDailyStory") as Bool? } ?? false
+        let dailyEnabled = ud.object(forKey: "rp.feedServerEnableDailyStory.\(libraryNamespace)").flatMap { _ in ud.bool(forKey: "rp.feedServerEnableDailyStory.\(libraryNamespace)") as Bool? } ?? false
 
         let collections = ((try? await collectionStore?.collections()) ?? [])
             .filter { !excluded.contains($0.id) }
         let now = ISO8601DateFormatter().string(from: Date())
 
+        let tokenSuffix = authToken.isEmpty ? "" : "?token=\(authToken)"
         var outlines = collections.map { col in
             """
             <outline type="rss"
                      text="\(xmlEscape(col.name))"
                      title="\(xmlEscape(col.name))"
-                     xmlUrl="\(xmlEscape("\(baseURL)/feed/collection/\(col.id).xml"))"/>
+                     xmlUrl="\(xmlEscape("\(baseURL)/feed/collection/\(col.id).xml\(tokenSuffix)"))"/>
             """
         }
 
@@ -502,11 +597,11 @@ actor LocalFeedServer {
             <outline type="rss"
                      text="Daily Story"
                      title="Daily Story"
-                     xmlUrl="\(xmlEscape("\(baseURL)/feed/random-daily.xml"))"/>
+                     xmlUrl="\(xmlEscape("\(baseURL)/feed/random-daily.xml\(tokenSuffix)"))"/>
             """)
         }
 
-        if let snapshot = CurrentSearchSnapshot.load() {
+        if let snapshot = CurrentSearchSnapshot.load(libraryHash: libraryNamespace) {
             outlines.append("""
             <outline type="rss"
                      text="\(xmlEscape("Search: \(snapshot.label)"))"
@@ -966,6 +1061,12 @@ actor LocalFeedServer {
     }
 
     // MARK: - UI helpers (called from LibraryWindowController)
+
+    /// The current library's feed-server auth token, for UI display/copy.
+    /// Exposed so ManageFeedsView/RSSPublishView can build shareable URLs
+    /// that include it (the server itself resolves the same token via
+    /// the private `authToken` property).
+    func currentAuthToken() async -> String { authToken }
 
     /// Returns all collections. ManageFeedsView uses this for its picker;
     /// per-collection exclusion display is handled in the view using ReaderPreferences.

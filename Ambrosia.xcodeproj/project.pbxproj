@@ -15,6 +15,7 @@
 		289A4ED0240F4884963BAF9AF /* LibraryViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 289A4ED0240F4884963BAF9A /* LibraryViewController.swift */; };
 		2FC91CA366334CFE8E8EAD54F /* FilterDrawerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FC91CA366334CFE8E8EAD54 /* FilterDrawerView.swift */; };
 		3752F8ABCEECBBFFEC4065BBF /* PreferencesWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCF05383F236D5093B604921 /* PreferencesWindowController.swift */; };
+		555C867C3A564690BA53424C /* FontPanelCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CC9E75C1B63444980752428 /* FontPanelCoordinator.swift */; };
 		3EF30D6D00BA40B691EA8110F /* EPUBParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EF30D6D00BA40B691EA8110 /* EPUBParser.swift */; };
 		4D1E361C90E1497DA1CD75E2F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D1E361C90E1497DA1CD75E2 /* AppDelegate.swift */; };
 		5037BC30F5C947B49D7196AEF /* LibraryWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5037BC30F5C947B49D7196AE /* LibraryWindowController.swift */; };
@@ -146,6 +147,7 @@
 		C5CF7F5D87034F05895A4539 /* HighlightBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightBridge.swift; sourceTree = "<group>"; };
 		CC11223344556677889900CC /* FindBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FindBarView.swift; sourceTree = "<group>"; };
 		CCF05383F236D5093B604921 /* PreferencesWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindowController.swift; sourceTree = "<group>"; };
+		3CC9E75C1B63444980752428 /* FontPanelCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontPanelCoordinator.swift; sourceTree = "<group>"; };
 		CEBC17F1F03A4885B33CC0E1 /* FlowLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlowLayout.swift; sourceTree = "<group>"; };
 		D100000000000001 /* LibraryToolbarState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryToolbarState.swift; sourceTree = "<group>"; };
 		D100000000000002 /* EmailSidebarViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailSidebarViewController.swift; sourceTree = "<group>"; };
@@ -205,6 +207,7 @@
 			isa = PBXGroup;
 			children = (
 				CCF05383F236D5093B604921 /* PreferencesWindowController.swift */,
+				3CC9E75C1B63444980752428 /* FontPanelCoordinator.swift */,
 			);
 			path = Preferences;
 			sourceTree = "<group>";
@@ -558,6 +561,7 @@
 				BB99887766554433221100BBF /* AnnotationPopover.swift in Sources */,
 				CC11223344556677889900CCF /* FindBarView.swift in Sources */,
 				3752F8ABCEECBBFFEC4065BBF /* PreferencesWindowController.swift in Sources */,
+				555C867C3A564690BA53424C /* FontPanelCoordinator.swift in Sources */,
 				BB11223344556677889900CCF /* ContextMenuPreferences.swift in Sources */,
 				D100000000000001F /* LibraryToolbarState.swift in Sources */,
 				D100000000000002F /* EmailSidebarViewController.swift in Sources */,

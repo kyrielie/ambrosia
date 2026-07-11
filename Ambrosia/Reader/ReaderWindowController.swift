@@ -13,20 +13,6 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
     private static var openWindows: [String: ReaderWindowController] = [:]
 
     @MainActor
-    static func saveFrontWindowSizeAsDefault() -> NSSize? {
-        let readerWindows = Set(openWindows.values.compactMap(\.window))
-        let frontWindow = NSApp.orderedWindows.first { readerWindows.contains($0) }
-            ?? openWindows.values.compactMap(\.window).first
-
-        guard let size = frontWindow?.frame.size else { return nil }
-        let prefs = ReaderPreferences.shared
-        prefs.defaultWindowWidth = size.width.rounded()
-        prefs.defaultWindowHeight = size.height.rounded()
-        prefs.useScreenFraction = false
-        return size
-    }
-
-    @MainActor
     static func open(book: CalibreBook, modelContainer: ModelContainer) {
         open(target: .singleBook(book), modelContainer: modelContainer)
     }
@@ -101,24 +87,18 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         applyDefaultWindowSize()
     }
 
-    /// Sets new reader windows to either the half-screen portrait preset or the
-    /// persisted custom size from Preferences.
+    /// Sets new reader windows to a half-screen portrait size. This only runs
+    /// for windows with no saved per-book frame (see the setFrameUsingName
+    /// check in init); a book that's been opened before keeps its own
+    /// remembered frame regardless. There is no customizable-default-size
+    /// preference anymore — half-screen-portrait is the only formula.
     private func applyDefaultWindowSize() {
         guard let window else { return }
-        let rp      = ReaderPreferences.shared
         let screen  = window.screen ?? NSScreen.main ?? NSScreen.screens[0]
         let visible = screen.visibleFrame
 
-        let width: CGFloat
-        let height: CGFloat
-        if rp.useScreenFraction {
-            // Portrait: half the screen width, 90% of screen height
-            width  = (visible.width * 0.50).rounded()
-            height = (visible.height * 0.90).rounded()
-        } else {
-            width  = rp.defaultWindowWidth
-            height = rp.defaultWindowHeight
-        }
+        let width  = (visible.width * 0.50).rounded()
+        let height = (visible.height * 0.90).rounded()
 
         let x = visible.minX + (visible.width - width) / 2
         let y = visible.minY + (visible.height - height) / 2

@@ -52,10 +52,6 @@ private struct PreferencesRootView: View {
                 .tabItem { Label("Library", systemImage: "books.vertical") }
                 .tag(PrefTab.library)
 
-            WindowTab()
-                .tabItem { Label("Window", systemImage: "macwindow") }
-                .tag(PrefTab.window)
-
             DataTab()
                 .tabItem { Label("Data", systemImage: "externaldrive") }
                 .tag(PrefTab.data)
@@ -73,7 +69,7 @@ private struct PreferencesRootView: View {
     }
 }
 
-private enum PrefTab: String { case reader, library, window, data, shortcuts }
+private enum PrefTab: String { case reader, library, data, shortcuts }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MARK: - Reader Tab
@@ -81,10 +77,13 @@ private enum PrefTab: String { case reader, library, window, data, shortcuts }
 
 private struct ReaderTab: View {
     @ObservedObject private var prefs = ReaderPreferences.shared
+    @Namespace private var a11y
 
     // Reader colour local state
     @State private var readerBgColor:   Color = Color(hex: ReaderPreferences.shared.readerBackgroundColor) ?? .white
     @State private var readerTextColor: Color = Color(hex: ReaderPreferences.shared.readerTextColor) ?? .black
+    @State private var isPresentingSaveThemeSheet = false
+    @State private var newThemeName = ""
 
     var body: some View {
         Form {
@@ -121,6 +120,9 @@ private struct ReaderTab: View {
                 )
             } header: {
                 Label("Reader Colours", systemImage: "paintbrush").font(.headline)
+            }
+            .sheet(isPresented: $isPresentingSaveThemeSheet) {
+                saveThemeSheet
             }
 
             // ── Default reading mode ──────────────────────────────────────
@@ -235,6 +237,17 @@ private struct ReaderTab: View {
                 }
             }
 
+            HStack {
+                Spacer()
+                Button("More Fonts…") {
+                    NSFontManager.shared.target = FontPanelCoordinator.shared
+                    NSFontManager.shared.action = #selector(FontPanelCoordinator.changeFont(_:))
+                    NSFontPanel.shared.orderFront(nil)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
             // Live preview
             Text("The quick brown fox jumps over the lazy dog.")
                 .font(.custom(prefs.displayFontFamily, size: CGFloat(prefs.fontSize)))
@@ -255,15 +268,85 @@ private struct ReaderTab: View {
 
     @ViewBuilder
     private func themePresetRow(onPick: @escaping (String, String) -> Void) -> some View {
-        HStack(spacing: 8) {
-            Text("Preset")
-            Spacer()
-            ForEach(ReaderTheme.allCases) { theme in
-                Button(theme.label) { onPick(theme.bg, theme.fg) }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("Preset")
+                Spacer()
+                ForEach(ReaderTheme.allCases) { theme in
+                    Button(theme.label) { onPick(theme.bg, theme.fg) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+            }
+            if !prefs.savedThemes.isEmpty {
+                HStack(spacing: 8) {
+                    Text("Saved")
+                    Spacer()
+                    ForEach(prefs.savedThemes) { theme in
+                        HStack(spacing: 2) {
+                            Button(theme.name) { onPick(theme.bg, theme.fg) }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            Button {
+                                confirmDeleteTheme(theme)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Delete theme \(theme.name)")
+                        }
+                    }
+                }
+            }
+            HStack {
+                Spacer()
+                Button("Save as New Theme…") {
+                    newThemeName = ""
+                    isPresentingSaveThemeSheet = true
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
         }
+    }
+
+    @ViewBuilder
+    private var saveThemeSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Save Current Theme")
+                .font(.headline)
+            TextField("Theme name", text: $newThemeName)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 260)
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    isPresentingSaveThemeSheet = false
+                }
+                Button("Save") {
+                    guard let bg = readerBgColor.hexString, let fg = readerTextColor.hexString else { return }
+                    let trimmed = newThemeName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let name = trimmed.isEmpty ? "Untitled Theme" : trimmed
+                    prefs.savedThemes.append(ReaderPreferences.SavedTheme(id: UUID(), name: name, bg: bg, fg: fg))
+                    isPresentingSaveThemeSheet = false
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(newThemeName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+    }
+
+    private func confirmDeleteTheme(_ theme: ReaderPreferences.SavedTheme) {
+        let alert = NSAlert()
+        alert.messageText = "Delete Theme?"
+        alert.informativeText = "\"\(theme.name)\" will be permanently deleted."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        prefs.savedThemes.removeAll { $0.id == theme.id }
     }
 
     @ViewBuilder
@@ -271,8 +354,10 @@ private struct ReaderTab: View {
                              range: ClosedRange<Int>, step: Int, unit: String) -> some View {
         HStack {
             Text(label)
+                .accessibilityLabeledPair(role: .label, id: label, in: a11y)
             Spacer()
             Stepper("\(value.wrappedValue) \(unit)", value: value, in: range, step: step)
+                .accessibilityLabeledPair(role: .content, id: label, in: a11y)
         }
     }
 
@@ -281,8 +366,10 @@ private struct ReaderTab: View {
                              range: ClosedRange<Double>, step: Double) -> some View {
         HStack {
             Text(label)
+                .accessibilityLabeledPair(role: .label, id: label, in: a11y)
             Spacer()
             Stepper(String(format: "%.1f", value.wrappedValue), value: value, in: range, step: step)
+                .accessibilityLabeledPair(role: .content, id: label, in: a11y)
         }
     }
 }
@@ -294,6 +381,7 @@ private struct ReaderTab: View {
 private struct LibraryTab: View {
     @ObservedObject private var prefs = ReaderPreferences.shared
     @Environment(\.colorScheme) private var systemScheme
+    @Namespace private var a11y
 
     // Local colour state for the custom pickers
     @State private var lightBG:   Color = Color(hex: ReaderPreferences.shared.libraryLightBackgroundColor) ?? .white
@@ -321,10 +409,7 @@ private struct LibraryTab: View {
             }
 
             Section {
-                Toggle("Group series", isOn: Binding(
-                    get: { UserDefaults.standard.bool(forKey: "groupBySeries") },
-                    set: { UserDefaults.standard.set($0, forKey: "groupBySeries") }
-                ))
+                Toggle("Group series", isOn: $prefs.groupBySeries)
             } header: {
                 Label("Series", systemImage: "link").font(.headline)
             } footer: {
@@ -472,14 +557,20 @@ private struct LibraryTab: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Background").font(.caption).foregroundStyle(.tertiary)
+                    .accessibilityLabeledPair(role: .label, id: "\(label)-bg", in: a11y)
                 ColorPicker("", selection: bg, supportsOpacity: false).labelsHidden()
+                    .accessibilityLabel("\(label) mode background color")
+                    .accessibilityLabeledPair(role: .content, id: "\(label)-bg", in: a11y)
                     .onChange(of: bg.wrappedValue) { _, c in
                         if let hex = c.hexString { onBGChange(hex) }
                     }
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Text").font(.caption).foregroundStyle(.tertiary)
+                    .accessibilityLabeledPair(role: .label, id: "\(label)-text", in: a11y)
                 ColorPicker("", selection: text, supportsOpacity: false).labelsHidden()
+                    .accessibilityLabel("\(label) mode text color")
+                    .accessibilityLabeledPair(role: .content, id: "\(label)-text", in: a11y)
                     .onChange(of: text.wrappedValue) { _, c in
                         if let hex = c.hexString { onTextChange(hex) }
                     }
@@ -569,91 +660,6 @@ private struct LibraryPreviewRows: View {
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.05), radius: 4, y: 2)
         .padding(.vertical, 4)
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MARK: - Window Tab
-// ─────────────────────────────────────────────────────────────────────────────
-
-private struct WindowTab: View {
-    @ObservedObject private var prefs = ReaderPreferences.shared
-    @State private var savedSizeMessage: String?
-
-    var body: some View {
-        Form {
-            Section {
-                Toggle("Half-screen portrait", isOn: $prefs.useScreenFraction)
-
-                if prefs.useScreenFraction {
-                    HStack(spacing: 6) {
-                        Image(systemName: "info.circle")
-                            .foregroundStyle(.secondary)
-                        Text("New reader windows open at half the visible screen width and 90% of the visible screen height.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    HStack {
-                        Text("Width")
-                        Spacer()
-                        Stepper(
-                            "\(Int(prefs.defaultWindowWidth)) px",
-                            value: Binding(
-                                get: { Int(prefs.defaultWindowWidth) },
-                                set: { prefs.defaultWindowWidth = CGFloat($0) }
-                            ),
-                            in: 480...3000, step: 20
-                        )
-                    }
-                    HStack {
-                        Text("Height")
-                        Spacer()
-                        Stepper(
-                            "\(Int(prefs.defaultWindowHeight)) px",
-                            value: Binding(
-                                get: { Int(prefs.defaultWindowHeight) },
-                                set: { prefs.defaultWindowHeight = CGFloat($0) }
-                            ),
-                            in: 400...2000, step: 20
-                        )
-                    }
-                }
-            } header: {
-                Label("Reader Window Default Size", systemImage: "macwindow").font(.headline)
-            } footer: {
-                Text("Applies to new reader windows only.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section {
-                HStack {
-                    Button {
-                        if let size = ReaderWindowController.saveFrontWindowSizeAsDefault() {
-                            savedSizeMessage = "Saved \(Int(size.width)) x \(Int(size.height)) px"
-                        } else {
-                            savedSizeMessage = "Open a reader window first"
-                        }
-                    } label: {
-                        Label("Save Current Reader Window Size", systemImage: "square.and.arrow.down")
-                    }
-                    Spacer()
-                }
-
-                if let savedSizeMessage {
-                    Text(savedSizeMessage)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            } header: {
-                Label("Custom Size", systemImage: "rectangle.inset.filled").font(.headline)
-            } footer: {
-                Text("Saving a reader window switches new windows to the custom width and height above.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-        .padding(.bottom, 8)
     }
 }
 
@@ -774,11 +780,11 @@ private struct DataTab: View {
             }
 
             Section {
-                Toggle("Correct &amp; to &", isOn: $prefs.correctCalibreAmpEntities)
+                Toggle("Fix garbled ampersands (&amp;) from Calibre", isOn: $prefs.correctCalibreAmpEntities)
             } header: {
                 Label("Calibre Display Cleanup", systemImage: "wand.and.stars").font(.headline)
             } footer: {
-                Text("Applies to displayed titles and descriptions only. Stored Calibre metadata is not changed.")
+                Text("Calibre sometimes stores &amp; instead of & in titles and descriptions; turn this on to display it correctly. Applies to displayed titles and descriptions only — stored Calibre metadata is not changed.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -786,9 +792,16 @@ private struct DataTab: View {
             Section {
                 Toggle("Enable Daily Story feed", isOn: $prefs.feedServerEnableDailyStory)
 
+                Toggle("Restart automatically when I reopen this library",
+                       isOn: $prefs.feedServerAutoRestart)
+
                 Text("""
-                    The feed server is reachable by any device on your local network \
-                    while running — no authentication is required.
+                    Starting the feed server makes your library reachable by \
+                    any device on your local network. Feed URLs include a \
+                    private token, so only devices you've shared a link with \
+                    can read your feeds — anyone with a link can, though, so \
+                    treat it like a password. The restart option above takes \
+                    effect next time you start the server.
                     """)
                     .font(.caption)
                     .foregroundStyle(.secondary)

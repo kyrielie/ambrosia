@@ -190,22 +190,61 @@ final class ReaderPreferences: ObservableObject {
     }
 
     // MARK: - Feed server
+    //
+    // feedServerEnableDailyStory / feedServerExcludedCollectionIDs are
+    // per-library settings. They're namespaced by `activeFeedNamespace`
+    // (the target library's `libraryHash`) so that excluding "Skipped" in
+    // one library doesn't silently exclude it in every other library, and
+    // switching libraries doesn't drag along the wrong collection-ID set.
+    // Call `reloadFeedPrefs(forLibraryHash:)` whenever the active library
+    // changes (LibrarySession.open()/close() do this).
 
-    /// Whether the random daily-story feed (/feed/random-daily.xml) is enabled.
-    /// Off by default, consistent with the architecture doc's "off by default" posture.
-    @Published var feedServerEnableDailyStory: Bool {
-        didSet { UserDefaults.standard.set(feedServerEnableDailyStory, forKey: Keys.feedServerEnableDailyStory) }
+    private var activeFeedNamespace: String = ""
+
+    private func feedKey(_ base: String) -> String {
+        activeFeedNamespace.isEmpty ? base : "\(base).\(activeFeedNamespace)"
     }
 
-    /// Collection IDs excluded from the RSS feed server. Stored as a
-    /// comma-delimited string to match the pattern used by other multi-value prefs.
+    /// Whether the random daily-story feed (/feed/random-daily.xml) is enabled
+    /// for the currently active library. Off by default.
+    @Published var feedServerEnableDailyStory: Bool {
+        didSet { UserDefaults.standard.set(feedServerEnableDailyStory, forKey: feedKey(Keys.feedServerEnableDailyStory)) }
+    }
+
+    /// Collection IDs excluded from the RSS feed server, for the currently
+    /// active library. Stored as a comma-delimited string to match the
+    /// pattern used by other multi-value prefs.
     @Published var feedServerExcludedCollectionIDs: Set<String> {
         didSet {
             UserDefaults.standard.set(
                 feedServerExcludedCollectionIDs.sorted().joined(separator: ","),
-                forKey: Keys.feedServerExcludedCollectionIDs
+                forKey: feedKey(Keys.feedServerExcludedCollectionIDs)
             )
         }
+    }
+
+    /// If true, reopening a library whose feed server was running when the
+    /// app last quit will automatically restart it (see
+    /// `LibrarySession.open()`). Off by default — restarting a server that
+    /// broadcasts on the LAN without the user re-confirming each launch
+    /// would be a quiet posture change.
+    @Published var feedServerAutoRestart: Bool {
+        didSet { UserDefaults.standard.set(feedServerAutoRestart, forKey: Keys.feedServerAutoRestart) }
+    }
+
+    /// Re-point the per-library feed prefs at a new library and reload their
+    /// values from UserDefaults under that library's namespace. Pass nil
+    /// when no library is open (falls back to the global/legacy key).
+    func reloadFeedPrefs(forLibraryHash hash: String?) {
+        activeFeedNamespace = hash ?? ""
+        let ud = UserDefaults.standard
+        feedServerEnableDailyStory = ud.object(forKey: feedKey(Keys.feedServerEnableDailyStory)) != nil
+            ? ud.bool(forKey: feedKey(Keys.feedServerEnableDailyStory))
+            : false
+        let excludedRaw = ud.string(forKey: feedKey(Keys.feedServerExcludedCollectionIDs)) ?? ""
+        feedServerExcludedCollectionIDs = excludedRaw.isEmpty
+            ? []
+            : Set(excludedRaw.split(separator: ",").map(String.init))
     }
 
     // MARK: - Derived: resolved library colour for current appearance
@@ -264,16 +303,16 @@ final class ReaderPreferences: ObservableObject {
         }
     }
 
-    // MARK: - Window size
+    // MARK: - Library grouping
 
-    @Published var useScreenFraction: Bool {
-        didSet { UserDefaults.standard.set(useScreenFraction, forKey: Keys.useScreenFraction) }
-    }
-    @Published var defaultWindowWidth: CGFloat {
-        didSet { UserDefaults.standard.set(Double(defaultWindowWidth), forKey: Keys.defaultWindowWidth) }
-    }
-    @Published var defaultWindowHeight: CGFloat {
-        didSet { UserDefaults.standard.set(Double(defaultWindowHeight), forKey: Keys.defaultWindowHeight) }
+    /// Mirrors the exact same `"groupBySeries"` raw `UserDefaults` key that
+    /// `LibraryToolbarState` reads/writes directly. This is intentionally the
+    /// same storage, not a new key — `LibraryRootView`'s existing
+    /// `UserDefaults.didChangeNotification` bridge already keeps the two in
+    /// sync for free. Do not migrate this to a new key or add a second sync
+    /// mechanism.
+    @Published var groupBySeries: Bool {
+        didSet { UserDefaults.standard.set(groupBySeries, forKey: Keys.groupBySeries) }
     }
 
     /// Context menu configuration — not persisted.
@@ -290,6 +329,29 @@ final class ReaderPreferences: ObservableObject {
         didSet {
             if let data = try? JSONEncoder().encode(keyBindings) {
                 UserDefaults.standard.set(data, forKey: Keys.keyBindings)
+            }
+        }
+    }
+
+    /// A user-named background/text colour pair, saved from the reader's
+    /// custom `ColorPicker`s. Deliberately separate from `ReaderTheme` (the
+    /// fixed built-in enum) rather than a unification of the two — both
+    /// coexist and render side by side in `themePresetRow`.
+    struct SavedTheme: Codable, Identifiable, Equatable {
+        let id: UUID
+        var name: String
+        var bg: String   // "#RRGGBB", same hex string shape as readerBackgroundColor
+        var fg: String
+    }
+
+    /// User-authored data (closer to `CollectionStore` collections than to a
+    /// single-value preference), so it's deliberately NOT part of
+    /// `isReaderCustomized`/`resetReaderToDefaults()` — there's no "default"
+    /// saved-theme list to reset to.
+    @Published var savedThemes: [SavedTheme] {
+        didSet {
+            if let data = try? JSONEncoder().encode(savedThemes) {
+                UserDefaults.standard.set(data, forKey: Keys.savedThemes)
             }
         }
     }
@@ -320,9 +382,7 @@ final class ReaderPreferences: ObservableObject {
         static let hideNonAO3PublisherBooks    = false
         static let hideAnthologyBooks          = true
         static let emailPillsShowCollections   = false
-        static let useScreenFraction           = true
-        static let defaultWindowWidth          = CGFloat(960)
-        static let defaultWindowHeight         = CGFloat(1080)
+        static let groupBySeries               = false
         static let defaultReadingMode          = ReadingMode.scroll
 
         // showTOCSidebar is intentionally absent — see keyBindings' doc comment.
@@ -362,11 +422,13 @@ final class ReaderPreferences: ObservableObject {
         static let emailPillsShowCollections   = "rp.emailPillsShowCollections"
         static let feedServerEnableDailyStory  = "rp.feedServerEnableDailyStory"
         static let feedServerExcludedCollectionIDs = "rp.feedServerExcludedCollectionIDs"
-        static let useScreenFraction           = "pref.useScreenFraction"
-        static let defaultWindowWidth          = "pref.windowWidth"
-        static let defaultWindowHeight         = "pref.windowHeight"
+        static let feedServerAutoRestart       = "rp.feedServerAutoRestart"
+        // Deliberately the same literal key `LibraryToolbarState` already uses —
+        // not a new namespaced key. See the `groupBySeries` property comment.
+        static let groupBySeries               = "groupBySeries"
         static let defaultReadingMode          = "rp.defaultReadingMode"
         static let keyBindings                 = "rp.keyBindings"
+        static let savedThemes                 = "rp.savedThemes"
     }
 
     private init() {
@@ -433,6 +495,8 @@ final class ReaderPreferences: ObservableObject {
             ? ud.bool(forKey: Keys.emailPillsShowCollections)
             : Defaults.emailPillsShowCollections
 
+        // Loaded unnamespaced at init (no library open yet); LibrarySession calls
+        // reloadFeedPrefs(forLibraryHash:) once a library is opened or closed.
         feedServerEnableDailyStory = ud.object(forKey: Keys.feedServerEnableDailyStory) != nil
             ? ud.bool(forKey: Keys.feedServerEnableDailyStory)
             : false
@@ -440,16 +504,13 @@ final class ReaderPreferences: ObservableObject {
         feedServerExcludedCollectionIDs = excludedRaw.isEmpty
             ? []
             : Set(excludedRaw.split(separator: ",").map(String.init))
+        feedServerAutoRestart = ud.object(forKey: Keys.feedServerAutoRestart) != nil
+            ? ud.bool(forKey: Keys.feedServerAutoRestart)
+            : false
 
-        if ud.object(forKey: Keys.useScreenFraction) != nil {
-            useScreenFraction = ud.bool(forKey: Keys.useScreenFraction)
-        } else {
-            useScreenFraction = Defaults.useScreenFraction
-        }
-        let sw = ud.double(forKey: Keys.defaultWindowWidth)
-        let sh = ud.double(forKey: Keys.defaultWindowHeight)
-        defaultWindowWidth  = sw > 0 ? CGFloat(sw) : Defaults.defaultWindowWidth
-        defaultWindowHeight = sh > 0 ? CGFloat(sh) : Defaults.defaultWindowHeight
+        groupBySeries = ud.object(forKey: Keys.groupBySeries) != nil
+            ? ud.bool(forKey: Keys.groupBySeries)
+            : Defaults.groupBySeries
 
         let rawMode = ud.string(forKey: Keys.defaultReadingMode) ?? Defaults.defaultReadingMode.rawValue
         defaultReadingMode = ReadingMode(rawValue: rawMode) ?? .scroll
@@ -459,6 +520,13 @@ final class ReaderPreferences: ObservableObject {
             keyBindings = decoded
         } else {
             keyBindings = Defaults.keyBindings
+        }
+
+        if let data = ud.data(forKey: Keys.savedThemes),
+           let decoded = try? JSONDecoder().decode([SavedTheme].self, from: data) {
+            savedThemes = decoded
+        } else {
+            savedThemes = []
         }
     }
 
@@ -767,6 +835,7 @@ final class ReaderPreferences: ObservableObject {
             || hideNonAO3PublisherBooks != Defaults.hideNonAO3PublisherBooks
             || hideAnthologyBooks != Defaults.hideAnthologyBooks
             || emailPillsShowCollections != Defaults.emailPillsShowCollections
+            || groupBySeries != Defaults.groupBySeries
     }
 
     func resetReaderToDefaults() {
@@ -810,6 +879,7 @@ final class ReaderPreferences: ObservableObject {
         hideNonAO3PublisherBooks    = Defaults.hideNonAO3PublisherBooks
         hideAnthologyBooks          = Defaults.hideAnthologyBooks
         emailPillsShowCollections   = Defaults.emailPillsShowCollections
+        groupBySeries               = Defaults.groupBySeries
     }
 }
 

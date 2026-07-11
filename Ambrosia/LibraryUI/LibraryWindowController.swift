@@ -806,11 +806,14 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         Task { @MainActor in
             let collections = await feedServer.collectionList()
             let baseURL = feedServer.localNetworkURLSync ?? "http://localhost:\(feedServer.port)"
-            let snapshot = CurrentSearchSnapshot.load()
+            let token = await feedServer.currentAuthToken()
+            let libHash = self.session?.activePath.map { libraryHash(for: URL(fileURLWithPath: $0)) } ?? ""
+            let snapshot = CurrentSearchSnapshot.load(libraryHash: libHash)
 
             let host = NSHostingController(rootView: ManageFeedsView(
                 collections: collections,
                 baseURL: baseURL,
+                authToken: token,
                 hasSearchSnapshot: snapshot != nil,
                 snapshotLabel: snapshot?.label,
                 onPublishSearch: { [weak self] in
@@ -868,7 +871,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
                 : SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
             ids = await session.library?.fetchAllMatchingIDs(query: q, filter: nil, restrictIDs: nil) ?? []
         }
-        CurrentSearchSnapshot.publish(calibreIDs: ids, label: label)
+        let libHash = session.activePath.map { libraryHash(for: URL(fileURLWithPath: $0)) } ?? ""
+        CurrentSearchSnapshot.publish(calibreIDs: ids, label: label, libraryHash: libHash)
     }
 
     /// Exports all collection feeds (plus the daily-story and current-search
