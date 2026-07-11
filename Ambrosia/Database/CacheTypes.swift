@@ -61,7 +61,21 @@ func tagExpansionsDigest(_ expansions: [String: [String]]) -> String {
     }.joined(separator: "|")
 }
 
-// MARK: - LRU container
+/// Cache key for `visibleBookCount` — the series-grouped, visibility-aware
+/// total. Deliberately NOT `CountCacheKey`: that key's `visibilityVersion`
+/// tracks membership changes (skip/like/series-cache) but does not change
+/// when `hideNonAO3PublisherBooks`/`hideAnthologyBooks` are toggled, since
+/// those are plain `ReaderPreferences` bools, not membership events. Reusing
+/// `CountCacheKey` here would let a toggle flip return a stale cached count.
+struct GroupAwareCountCacheKey: Hashable {
+    let querySignature: String
+    let filterSignature: String
+    let tagExpansionsDigest: String
+    let visibilityVersion: Int
+    let showSkippedCollection: Bool
+    let hideNonAO3PublisherBooks: Bool
+    let hideAnthologyBooks: Bool
+}
 
 /// A simple bounded LRU dictionary. The oldest-inserted entry is evicted when `limit` is reached.
 /// Not thread-safe — must be accessed from a single actor (MainActor via LibrarySession).

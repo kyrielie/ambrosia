@@ -458,6 +458,9 @@ private extension LibraryItem {
 // MARK: - EmailBookCellView
 
 /// Fixed 90pt table cell: title / author+metadata / AO3 pills / inline progress row.
+/// `likeButton`/`readLaterButton` are 34×34pt and centered on the cell's own
+/// `centerYAnchor` (not `titleLabel`'s) so they sit in the middle of the full
+/// row height rather than clustering near the top edge next to the title.
 final class EmailBookCellView: NSTableCellView {
 
     private let titleLabel    = NSTextField(labelWithString: "")
@@ -544,18 +547,18 @@ final class EmailBookCellView: NSTableCellView {
 
         NSLayoutConstraint.activate([
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            titleLabel.trailingAnchor.constraint(equalTo: readLaterButton.leadingAnchor, constant: -6),
+            titleLabel.trailingAnchor.constraint(equalTo: readLaterButton.leadingAnchor, constant: -9),
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 9),
 
-            readLaterButton.trailingAnchor.constraint(equalTo: likeButton.leadingAnchor, constant: -4),
-            readLaterButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            readLaterButton.widthAnchor.constraint(equalToConstant: 18),
-            readLaterButton.heightAnchor.constraint(equalToConstant: 18),
+            readLaterButton.trailingAnchor.constraint(equalTo: likeButton.leadingAnchor, constant: -7),
+            readLaterButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            readLaterButton.widthAnchor.constraint(equalToConstant: 34),
+            readLaterButton.heightAnchor.constraint(equalToConstant: 34),
 
             likeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            likeButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            likeButton.widthAnchor.constraint(equalToConstant: 18),
-            likeButton.heightAnchor.constraint(equalToConstant: 18),
+            likeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            likeButton.widthAnchor.constraint(equalToConstant: 34),
+            likeButton.heightAnchor.constraint(equalToConstant: 34),
 
             authorLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             authorLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
@@ -614,9 +617,11 @@ final class EmailBookCellView: NSTableCellView {
         representedBook = item.primaryBook
         self.onToggleLiked = onToggleLiked
         self.onToggleReadLater = onToggleReadLater
-        likeButton.image = NSImage(systemSymbolName: isLiked ? "star.fill" : "star", accessibilityDescription: isLiked ? "Unlike" : "Like")
+        likeButton.image = NSImage(systemSymbolName: isLiked ? "star.fill" : "star", accessibilityDescription: isLiked ? "Unlike" : "Like")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 16, weight: .regular))
         likeButton.contentTintColor = isLiked ? .systemYellow : .secondaryLabelColor
-        readLaterButton.image = NSImage(systemSymbolName: isInReadLater ? "bookmark.fill" : "bookmark", accessibilityDescription: isInReadLater ? "Remove from Read Later" : "Add to Read Later")
+        readLaterButton.image = NSImage(systemSymbolName: isInReadLater ? "bookmark.fill" : "bookmark", accessibilityDescription: isInReadLater ? "Remove from Read Later" : "Add to Read Later")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 16, weight: .regular))
         readLaterButton.contentTintColor = isInReadLater ? .controlAccentColor : .secondaryLabelColor
         switch item {
         case .book(let book):
