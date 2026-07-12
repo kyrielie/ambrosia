@@ -574,29 +574,47 @@ actor LocalFeedServer {
     /// Callers fetch this once, use it to compute an ETag, and only proceed to the
     /// (expensive — full merged HTML per item) builder call if the client's
     /// `If-None-Match` doesn't already match.
-    private func fetchFeedBooks(calibreIDs: [Int]) async -> [(book: CalibreBook, ao3: AO3MetadataRecord?)] {
+    /// Named once so RSS and JSON Feed generation (and their shared ETag/pagination
+    /// helpers) don't each repeat a three-element tuple type. `seriesEntries` is
+    /// every `series_cache` row for this book — legitimately zero, one, or more
+    /// (a work can be a non-leading member of more than one series at once; see
+    /// `AmbrosiaMetaDB.singletonNonLeadingSeriesEntries`), fetched once per feed
+    /// build rather than per item.
+    private typealias FeedBookPair = (book: CalibreBook, ao3: AO3MetadataRecord?, seriesEntries: [SeriesCacheEntry])
+
+    private func fetchFeedBooks(calibreIDs: [Int]) async -> [FeedBookPair] {
         guard let library, let metaDB, !calibreIDs.isEmpty else { return [] }
         let ao3Map = (try? await metaDB.ao3Metadata(for: calibreIDs)) ?? [:]
+        // Batched the same way as ao3Map above — one query for every book in this
+        // build rather than a per-item lookup — so per-book series membership is
+        // available to both the RSS and JSON Feed item builders without either of
+        // them touching series_cache directly.
+        let seriesRows = (try? await metaDB.seriesEntries(for: calibreIDs)) ?? []
+        let seriesByBook = Dictionary(grouping: seriesRows, by: \.calibreID)
         // No cap here — callers decide how many IDs to pass in. RSS passes the
         // full list (no pagination protocol exists for RSS); JSON Feed passes
         // one page's worth (see buildJSONFeed's page/per_page handling).
         let books = await library.books(ids: calibreIDs, offset: 0, limit: calibreIDs.count,
                                    sort: .title, ascending: true)
-        return books.map { ($0, ao3Map[$0.id]) }
+        return books.map { ($0, ao3Map[$0.id], seriesByBook[$0.id] ?? []) }
     }
 
     /// A cheap ETag over the fetched pairs plus any pagination/format params that
     /// affect the response shape. Reflects collection-membership changes (the pair
-    /// list itself) and AO3 re-extraction (`ao3.updatedDate`) — it does not reflect
-    /// a bare Calibre comment/tag edit made outside AO3 extraction, since that has
-    /// no cheap-to-read "last modified" signal available here. Good enough to skip
-    /// the expensive per-item work on a repeat poll where nothing relevant changed;
-    /// not a substitute for a real content-hash if that gap matters later.
-    private func computeFeedETag(pairs: [(book: CalibreBook, ao3: AO3MetadataRecord?)],
-                                  extra: String) -> String {
+    /// list itself), AO3 re-extraction (`ao3.updatedDate`), and series_cache changes
+    /// that can happen independently of re-extraction (e.g. a Calibre-fallback series
+    /// row inserted later, or the anthology-hide toggle) — it does not reflect a bare
+    /// Calibre comment/tag edit made outside AO3 extraction, since that has no
+    /// cheap-to-read "last modified" signal available here. Good enough to skip the
+    /// expensive per-item work on a repeat poll where nothing relevant changed; not a
+    /// substitute for a real content-hash if that gap matters later.
+    private func computeFeedETag(pairs: [FeedBookPair], extra: String) -> String {
         var combined = extra
-        for (book, ao3) in pairs {
+        for (book, ao3, seriesEntries) in pairs {
             combined += "|\(book.id):\(ao3?.updatedDate ?? "")"
+            for entry in seriesEntries.sorted(by: { $0.seriesName < $1.seriesName }) {
+                combined += ":\(entry.seriesName):\(entry.ao3SeriesID ?? ""):\(entry.isAnthology)"
+            }
         }
         return "\"\(String(combined.hashValue, radix: 16))\""
     }
@@ -642,14 +660,14 @@ actor LocalFeedServer {
         }
 
         var items: [String] = []
-        for (book, ao3) in pairs {
-            let itemXML = await buildRSSItem(book: book, ao3: ao3, library: library)
+        for (book, ao3, seriesEntries) in pairs {
+            let itemXML = await buildRSSItem(book: book, ao3: ao3, seriesEntries: seriesEntries, library: library)
             items.append(itemXML)
         }
 
         let xml = """
         <?xml version="1.0" encoding="UTF-8"?>
-        <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+        <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:ambrosia="https://ambrosia.app/rss-extension">
           <channel>
             <title>\(xmlEscape(title))</title>
             <description>\(xmlEscape(feedDescription))</description>
@@ -676,6 +694,7 @@ actor LocalFeedServer {
 
     private func buildRSSItem(book: CalibreBook,
                                ao3: AO3MetadataRecord?,
+                               seriesEntries: [SeriesCacheEntry],
                                library: CalibreLibrary) async -> String {
         // §4 point 3: description = stripped comment + AO3 stats line
         let strippedComment = book.comment.map { HTMLStripper.strip($0) } ?? ""
@@ -716,6 +735,21 @@ actor LocalFeedServer {
         }
         if !contentEncoded.isEmpty {
             xml += "\n      <content:encoded><![CDATA[\(contentEncoded)]]></content:encoded>"
+        }
+        // Read-state identity for clients that need to dedup a book across feeds/
+        // re-subscriptions — never repurposes <guid> itself, since ao3.workID may
+        // only become known after a later re-extraction, and changing <guid> once
+        // set would look like a brand-new article to any client polling this feed.
+        if let workID = ao3?.workID, !workID.isEmpty {
+            xml += "\n      <ambrosia:workID>\(xmlEscape(workID))</ambrosia:workID>"
+        }
+        if let anthologyEntry = anthologySeriesEntry(for: book, seriesEntries: seriesEntries) {
+            xml += "\n      <ambrosia:isAnthology>true</ambrosia:isAnthology>"
+            if let seriesID = anthologyEntry.ao3SeriesID, !seriesID.isEmpty {
+                xml += "\n      <ambrosia:ao3SeriesID>\(xmlEscape(seriesID))</ambrosia:ao3SeriesID>"
+            } else {
+                xml += "\n      <ambrosia:seriesName>\(xmlEscape(anthologyEntry.seriesName))</ambrosia:seriesName>"
+            }
         }
         xml += "\n    </item>"
         return xml
@@ -770,6 +804,21 @@ actor LocalFeedServer {
         var categories: [String]?
         var series: [JSONFeedSeriesEntry]?
         var date_modified: String?
+        // Read-state identity fields (client-side cross-feed/re-subscription dedup;
+        // not part of JSON Feed 1.1 itself). Deliberately separate from the item's
+        // own `id`, which stays "ambrosia-book-<calibre_id>" forever: `ao3_work_id`
+        // may only become known after a later re-extraction, and an `id` that can
+        // change would look like a brand-new article to any client polling this feed.
+        var ao3_work_id: String?
+        // True only when this Calibre book's own description is a merge-plugin
+        // "Anthology containing:" comment — i.e. this book IS an entire compiled
+        // series, not a normal work that happens to belong to one. Unrelated to
+        // series_cache's own per-series-name anthology-hide display setting.
+        var is_anthology: Bool?
+        // Populated only when is_anthology is true. ao3_series_id is preferred;
+        // series_name is the Calibre-derived fallback when no AO3 series id exists.
+        var ao3_series_id: String?
+        var series_name: String?
     }
 
     private struct JSONFeedItem: Codable {
@@ -823,7 +872,7 @@ actor LocalFeedServer {
         let clampedPerPage = min(max(perPage, 1), Self.jsonFeedMaxPerPage)
         let clampedPage = max(page, 1)
         let start = (clampedPage - 1) * clampedPerPage
-        let pagePairs: [(book: CalibreBook, ao3: AO3MetadataRecord?)]
+        let pagePairs: [FeedBookPair]
         if start < allPairs.count {
             pagePairs = Array(allPairs[start..<min(start + clampedPerPage, allPairs.count)])
         } else {
@@ -837,8 +886,8 @@ actor LocalFeedServer {
         }
 
         var items: [JSONFeedItem] = []
-        for (book, ao3) in pagePairs {
-            items.append(await buildJSONFeedItem(book: book, ao3: ao3, library: library))
+        for (book, ao3, seriesEntries) in pagePairs {
+            items.append(await buildJSONFeedItem(book: book, ao3: ao3, seriesEntries: seriesEntries, library: library))
         }
 
         let nextURL: String?
@@ -868,6 +917,7 @@ actor LocalFeedServer {
 
     private func buildJSONFeedItem(book: CalibreBook,
                                     ao3: AO3MetadataRecord?,
+                                    seriesEntries: [SeriesCacheEntry],
                                     library: CalibreLibrary) async -> JSONFeedItem {
         // summary is just the stripped comment now — word count, chapters,
         // completion, fandoms/rating/warnings/categories/series all ride as
@@ -916,6 +966,7 @@ actor LocalFeedServer {
         let categories = dedup(buckets.categories + (ao3?.categories ?? []))
 
         let dateModified = ao3?.updatedDate.flatMap { $0.isEmpty ? nil : iso8601DateString(from: $0) }
+        let anthologyEntry = anthologySeriesEntry(for: book, seriesEntries: seriesEntries)
 
         let ambrosiaExtension = JSONFeedAmbrosiaExtension(
             word_count: ao3?.wordCount ?? book.wordCount,
@@ -929,7 +980,11 @@ actor LocalFeedServer {
             warnings: buckets.warnings.isEmpty ? nil : buckets.warnings,
             categories: categories.isEmpty ? nil : categories,
             series: ao3?.series.map { JSONFeedSeriesEntry(name: $0.name, index: $0.index, ao3_id: $0.ao3ID) },
-            date_modified: dateModified
+            date_modified: dateModified,
+            ao3_work_id: ao3?.workID.flatMap { $0.isEmpty ? nil : $0 },
+            is_anthology: anthologyEntry != nil ? true : nil,
+            ao3_series_id: anthologyEntry?.ao3SeriesID,
+            series_name: anthologyEntry != nil && (anthologyEntry?.ao3SeriesID?.isEmpty ?? true) ? anthologyEntry?.seriesName : nil
         )
 
         return JSONFeedItem(
@@ -943,6 +998,33 @@ actor LocalFeedServer {
             tags: tags.isEmpty ? nil : tags,
             _ambrosia: ambrosiaExtension
         )
+    }
+
+    /// The `series_cache` row to treat as "the series this book is" for read-state
+    /// identity purposes — distinct from ordinary series *membership* (a normal
+    /// standalone work that happens to be "Part 3 of Series X"), which must NOT be
+    /// used to key read-state, since different parts of a series are different
+    /// works with independent read progress.
+    ///
+    /// Only relevant when `book.isDescriptionAnthology` is true — i.e. Calibre's
+    /// EPUB-merge plugin wrote this book's own description, meaning this specific
+    /// Calibre row is an entire merged series compiled into one file with no single
+    /// AO3 work URL of its own. Do not confuse this with `SeriesCacheEntry.isAnthology`,
+    /// which is an unrelated per-series-name *display* toggle (hides individual-work
+    /// entries in list views once a merged compilation exists to replace them) and
+    /// says nothing about which book the compilation actually is.
+    ///
+    /// A merged-compilation book is expected to have exactly one meaningful series
+    /// row. If more than one somehow exists, take the first by `seriesIndex` and log
+    /// rather than silently guessing — this hasn't been observed and may indicate a
+    /// bug in how the row got created.
+    private func anthologySeriesEntry(for book: CalibreBook, seriesEntries: [SeriesCacheEntry]) -> SeriesCacheEntry? {
+        guard book.isDescriptionAnthology else { return nil }
+        let sorted = seriesEntries.sorted { $0.seriesIndex < $1.seriesIndex }
+        if sorted.count > 1 {
+            print("[LocalFeedServer] anthology book \(book.id) has \(sorted.count) series_cache rows; using \(sorted[0].seriesName)")
+        }
+        return sorted.first
     }
 
     private func buildStatsLine(book: CalibreBook, ao3: AO3MetadataRecord?) -> String {
