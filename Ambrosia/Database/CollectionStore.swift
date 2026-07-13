@@ -149,7 +149,7 @@ actor CollectionStore {
 
     func members(of collectionID: String) async throws -> [Int] {
         let rows = try await db.prepare(
-            "SELECT calibre_id FROM collection_members WHERE collection_id = ? ORDER BY added_at",
+            "SELECT calibre_id FROM collection_members WHERE collection_id = ? ORDER BY added_at, calibre_id ASC",
             [collectionID]
         )
         return rows.compactMap { row in
