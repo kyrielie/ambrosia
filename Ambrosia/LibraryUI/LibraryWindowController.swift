@@ -855,7 +855,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         if let ts = toolbarState, !ts.searchText.isEmpty {
             label = ts.searchText
         } else if let ts = toolbarState, ts.filterExpression.hasCompleteRules {
-            label = LibraryFilterDebug.summary(expression: ts.filterExpression)
+            label = FilterSummary.humanReadable(expression: ts.filterExpression)
         } else {
             label = "All books"
         }

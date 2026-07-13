@@ -375,7 +375,7 @@ actor LocalFeedServer {
         switch format {
         case .rss:
             let result = try await buildRSSFeed(
-                title: "Ambrosia — \(collection.name)",
+                title: "\(collection.name)",
                 feedDescription: "Books in the \(collection.name) collection",
                 calibreIDs: memberIDs,
                 ifNoneMatch: ifNoneMatchHeader(request)
@@ -388,7 +388,7 @@ actor LocalFeedServer {
             // serves the whole collection in that case.
             let perPage: Int? = request.query["per_page"].flatMap { Int($0) }
             let result = try await buildJSONFeed(
-                title: "Ambrosia — \(collection.name)",
+                title: "\(collection.name)",
                 feedDescription: "Books in the \(collection.name) collection",
                 calibreIDs: memberIDs,
                 feedURL: "\(baseURL)/feed/collection/\(collectionID).json",
@@ -404,13 +404,13 @@ actor LocalFeedServer {
         guard let snapshot = CurrentSearchSnapshot.load(libraryHash: libraryNamespace) else {
             switch format {
             case .rss:
-                let empty = buildEmptyFeed(title: "Ambrosia — Current Search",
+                let empty = buildEmptyFeed(title: "Current Search",
                                            message: "No search has been published yet.")
                 return HTTPResponse(statusCode: .ok,
                                     headers: [.contentType: "application/rss+xml; charset=utf-8"],
                                     body: Data(empty.utf8))
             case .json:
-                let empty = buildEmptyJSONFeed(title: "Ambrosia — Current Search",
+                let empty = buildEmptyJSONFeed(title: "Current Search",
                                                feedDescription: "No search has been published yet.",
                                                feedURL: "\(localNetworkURLSync ?? "http://localhost:\(_port)")/feed/search.json")
                 return HTTPResponse(statusCode: .ok,
@@ -421,7 +421,7 @@ actor LocalFeedServer {
         switch format {
         case .rss:
             let result = try await buildRSSFeed(
-                title: "Ambrosia — \(snapshot.label)",
+                title: "\(snapshot.label)",
                 feedDescription: "Published search snapshot from \(snapshot.publishedAt)",
                 calibreIDs: snapshot.calibreIDs,
                 ifNoneMatch: ifNoneMatchHeader(request)
@@ -432,7 +432,7 @@ actor LocalFeedServer {
             let page = request.query["page"].flatMap { Int($0) } ?? 1
             let perPage: Int? = request.query["per_page"].flatMap { Int($0) }
             let result = try await buildJSONFeed(
-                title: "Ambrosia — \(snapshot.label)",
+                title: "\(snapshot.label)",
                 feedDescription: "Published search snapshot from \(snapshot.publishedAt)",
                 calibreIDs: snapshot.calibreIDs,
                 feedURL: "\(baseURL)/feed/search.json",
@@ -463,10 +463,10 @@ actor LocalFeedServer {
             case .rss:
                 return HTTPResponse(statusCode: .ok,
                     headers: [.contentType: "application/rss+xml; charset=utf-8"],
-                    body: Data(buildEmptyFeed(title: "Ambrosia — Daily Story",
+                    body: Data(buildEmptyFeed(title: "Daily Story",
                                              message: "No books in library.").utf8))
             case .json:
-                let empty = buildEmptyJSONFeed(title: "Ambrosia — Daily Story",
+                let empty = buildEmptyJSONFeed(title: "Daily Story",
                                                feedDescription: "No books in library.",
                                                feedURL: "\(localNetworkURLSync ?? "http://localhost:\(_port)")/feed/random-daily.json")
                 return HTTPResponse(statusCode: .ok,
@@ -479,7 +479,7 @@ actor LocalFeedServer {
         switch format {
         case .rss:
             let result = try await buildRSSFeed(
-                title: "Ambrosia — Daily Story",
+                title: "Daily Story",
                 feedDescription: "A random story from your library, refreshed each day.",
                 calibreIDs: [picked],
                 ifNoneMatch: ifNoneMatchHeader(request)
@@ -488,7 +488,7 @@ actor LocalFeedServer {
         case .json:
             let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
             let result = try await buildJSONFeed(
-                title: "Ambrosia — Daily Story",
+                title: "Daily Story",
                 feedDescription: "A random story from your library, refreshed each day.",
                 calibreIDs: [picked],
                 feedURL: "\(baseURL)/feed/random-daily.json",
