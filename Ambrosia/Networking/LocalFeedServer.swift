@@ -766,16 +766,26 @@ actor LocalFeedServer {
             return .body(etag: "\"empty\"", data: buildEmptyFeed(title: title, message: "No library open."))
         }
 
+        // RSS has no pagination protocol (unlike JSON Feed) — the full list is
+        // always passed in, so grouping here has no page-cap interaction to
+        // worry about. Concatenating every member's HTML for a large grouped
+        // item is an accepted tradeoff (infrequent fetches, no objection to long
+        // load times) rather than something this patch needs to bound.
         let pairs = await fetchFeedBooks(calibreIDs: calibreIDs)
-        let etag = computeFeedETag(pairs: pairs, extra: "rss")
+        let units = await groupedDisplayUnits(from: pairs)
+        let etag = computeFeedETag(units: units, extra: "rss")
         if let ifNoneMatch, ifNoneMatch == etag {
             return .notModified(etag: etag)
         }
 
         var items: [String] = []
-        for (book, ao3, seriesEntries) in pairs {
-            let itemXML = await buildRSSItem(book: book, ao3: ao3, seriesEntries: seriesEntries, library: library)
-            items.append(itemXML)
+        for unit in units {
+            switch unit {
+            case .book(let pair):
+                items.append(await buildRSSItem(book: pair.book, ao3: pair.ao3, seriesEntries: pair.seriesEntries, library: library))
+            case .series(let group, let members):
+                items.append(await buildGroupedRSSItem(group: group, members: members, library: library))
+            }
         }
 
         let xml = """
@@ -864,6 +874,65 @@ actor LocalFeedServer {
                 xml += "\n      <ambrosia:seriesName>\(xmlEscape(anthologyEntry.seriesName))</ambrosia:seriesName>"
             }
         }
+        xml += "\n    </item>"
+        return xml
+    }
+
+    /// RSS analog of buildGroupedJSONFeedItem. Same <hr/>-joined HTML
+    /// concatenation and no-per-member-failure-handling rationale (see that
+    /// function's doc comment). RSS gets no tags field for grouped items, same
+    /// as singleton RSS items today (buildRSSItem has no tag/category concept at
+    /// all) — this is not a gap introduced by grouping, it matches existing RSS
+    /// shape and was an explicit confirmed decision (normal RSS readers won't
+    /// support tags anyway).
+    private func buildGroupedRSSItem(
+        group: SeriesGroup,
+        members: [FeedBookPair],
+        library: CalibreLibrary
+    ) async -> String {
+        var htmlParts: [String] = []
+        for pair in members {
+            let html = await cachedMergedHTML(book: pair.book, library: library)
+            if html.isEmpty {
+                #if DEBUG
+                print("[LocalFeedServer] grouped RSS item \(group.seriesKey): member \(pair.book.id) (\"\(pair.book.displayTitle)\") produced empty merged HTML")
+                #endif
+            }
+            htmlParts.append(html)
+        }
+        let contentEncoded = htmlParts.joined(separator: "\n<hr/>\n")
+
+        let description = group.allDescriptions.joined(separator: "\n\n")
+
+        var xml = """
+            <item>
+              <title>\(xmlEscape(group.seriesName))</title>
+              <guid isPermaLink="false">ambrosia-series-\(group.seriesKey)</guid>
+        """
+        let leaderAO3 = members.first?.ao3
+        // Same url fallback as the JSON Feed path: real AO3 series URL when
+        // ao3:-keyed, else the leading work's own story URL for calibre:-keyed
+        // groups (not a constructed URL, not omitted).
+        let link: String?
+        if group.seriesKey.hasPrefix("ao3:") {
+            link = "https://archiveofourown.org/series/\(group.seriesKey.dropFirst("ao3:".count))"
+        } else {
+            link = leaderAO3?.storyURL
+        }
+        if let link {
+            xml += "\n      <link>\(xmlEscape(link))</link>"
+        }
+        xml += "\n      <description>\(xmlEscape(description))</description>"
+        if !group.allAuthors.isEmpty {
+            xml += "\n      <author>\(xmlEscape(group.allAuthors.joined(separator: ", ")))</author>"
+        }
+        if let latest = group.latestUpdated {
+            xml += "\n      <pubDate>\(rfc822Date(from: latest))</pubDate>"
+        }
+        if !contentEncoded.isEmpty {
+            xml += "\n      <content:encoded><![CDATA[\(contentEncoded)]]></content:encoded>"
+        }
+        // No <ambrosia:workID> — a group has no single AO3 work id.
         xml += "\n    </item>"
         return xml
     }
