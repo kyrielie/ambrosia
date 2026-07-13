@@ -49,6 +49,37 @@ enum LibraryFilterDebug {
     }
 }
 
+// MARK: - Human-readable filter summary
+//
+// Used for user-facing labels (feed titles, published-search display) where
+// LibraryFilterDebug.summary's "field.op=value" dump reads as raw internal
+// state, not something a feed reader's title bar should show.
+enum FilterSummary {
+    /// Feed titles shouldn't run unbounded with many rules -- clip and mark truncated.
+    private static let maxLength = 80
+
+    static func humanReadable(expression: FilterExpression) -> String {
+        let groupSummaries = expression.groups.compactMap { group -> String? in
+            let ruleSummaries = group.completeRules.map { rule -> String in
+                if rule.op.label.contains("rating") {
+                    // "min rating Explicit" reads better than "Rating min rating Explicit".
+                    return "\(rule.op.label) \(rule.value)"
+                }
+                return "\(rule.field.label) \(rule.op.label) \(rule.value)"
+            }
+            guard !ruleSummaries.isEmpty else { return nil }
+            let joiner = group.conjunction == .and ? " and " : " or "
+            return ruleSummaries.joined(separator: joiner)
+        }
+        guard !groupSummaries.isEmpty else { return "All books" }
+        let joiner = expression.groupConjunction == .and ? " and " : " or "
+        let full = groupSummaries.joined(separator: joiner)
+        guard full.count > maxLength else { return full }
+        let clipped = full.prefix(maxLength).trimmingCharacters(in: .whitespaces)
+        return "\(clipped)…"
+    }
+}
+
 // MARK: - FilterResult
 
 struct FilterResult {
