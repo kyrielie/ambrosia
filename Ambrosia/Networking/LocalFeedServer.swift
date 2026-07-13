@@ -691,12 +691,31 @@ actor LocalFeedServer {
             pairByID[book.id] ?? (book, seriesMetadata[book.id], allSeriesEntriesByBook[book.id] ?? [])
         }
 
+        // Precomputed once, outside the loop, rather than re-deriving an
+        // unordered `groupedByKey.values.flatMap.filter` slice per pair:
+        //   - Correctness: `.values` iteration order isn't part of Swift's
+        //     Dictionary contract, so a book leading two+ series could see its
+        //     entries in a different relative order between calls, changing
+        //     which series-group item gets emitted first and shifting that
+        //     book across a page boundary on a later next_url fetch. Sorting
+        //     by seriesKey (with seriesIndex as tiebreak) fixes the order.
+        //   - Performance: avoids an O(entries) rescan of the full grouped
+        //     set for every one of `pairs`, i.e. O(pairs x entries) overall.
+        let sortedEntriesByBookID: [Int: [SeriesCacheEntry]] = Dictionary(
+            grouping: groupedByKey.values.flatMap { $0 },
+            by: \.calibreID
+        ).mapValues { entries in
+            entries.sorted {
+                $0.seriesKey != $1.seriesKey
+                    ? $0.seriesKey < $1.seriesKey
+                    : $0.seriesIndex < $1.seriesIndex
+            }
+        }
+
         var emittedSeriesKeys = Set<String>()
         var units: [FeedDisplayUnit] = []
         for pair in pairs {
-            let bookEntries = groupedByKey.values
-                .flatMap { $0 }
-                .filter { $0.calibreID == pair.book.id }
+            let bookEntries = sortedEntriesByBookID[pair.book.id] ?? []
             var emittedAny = false
             for entry in bookEntries {
                 guard let group = seriesByKey[entry.seriesKey],
