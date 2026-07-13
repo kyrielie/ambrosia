@@ -707,12 +707,26 @@ actor LocalFeedServer {
     /// cheap-to-read "last modified" signal available here. Good enough to skip the
     /// expensive per-item work on a repeat poll where nothing relevant changed; not a
     /// substitute for a real content-hash if that gap matters later.
-    private func computeFeedETag(pairs: [FeedBookPair], extra: String) -> String {
+    /// Folds in `groupBySeries` plus enough of each unit's identity (member
+    /// calibre ids and their `ao3.updatedDate`, plus the series key for grouped
+    /// units) that toggling the setting or a group-membership change invalidates
+    /// the ETag, per the confirmed decision to fold grouping identity into the
+    /// cache key.
+    private func computeFeedETag(units: [FeedDisplayUnit], extra: String) -> String {
         var combined = extra
-        for (book, ao3, seriesEntries) in pairs {
-            combined += "|\(book.id):\(ao3?.updatedDate ?? "")"
-            for entry in seriesEntries.sorted(by: { $0.seriesName < $1.seriesName }) {
-                combined += ":\(entry.seriesName):\(entry.ao3SeriesID ?? ""):\(entry.isAnthology)"
+        combined += "|groupBySeries:\(UserDefaults.standard.bool(forKey: "groupBySeries"))"
+        for unit in units {
+            switch unit {
+            case .book(let pair):
+                combined += "|b:\(pair.book.id):\(pair.ao3?.updatedDate ?? "")"
+                for entry in pair.seriesEntries.sorted(by: { $0.seriesName < $1.seriesName }) {
+                    combined += ":\(entry.seriesName):\(entry.ao3SeriesID ?? ""):\(entry.isAnthology)"
+                }
+            case .series(let group, let members):
+                combined += "|s:\(group.seriesKey)"
+                for pair in members {
+                    combined += ":\(pair.book.id):\(pair.ao3?.updatedDate ?? "")"
+                }
             }
         }
         return "\"\(String(combined.hashValue, radix: 16))\""
@@ -951,11 +965,60 @@ actor LocalFeedServer {
     private static let jsonFeedDefaultPerPage = 100 // used whenever the client omits per_page or sends an unparseable value
     private static let jsonFeedMaxPerPage = 500
 
+    /// Cap on cumulative *underlying book count* per page, not item count. A
+    /// grouped item can hide an arbitrary number of member EPUB-parses (one
+    /// series with 40 members is one item), so capping by item count alone could
+    /// still reintroduce the FlyingFox 15s-timeout risk this was designed around,
+    /// just hidden behind a small-looking per_page number. Applied
+    /// unconditionally — a client-supplied `per_page` no longer directly bounds
+    /// page size once grouping can multiply the per-item cost; this constant is
+    /// the real bound on server-side work per request instead.
+    private static let jsonFeedMaxBooksPerPage = 30
+
+    /// Splits `units` into pages bounded by cumulative underlying book count
+    /// (`maxBooksPerPage`), not item count. A single unit that alone exceeds the
+    /// cap (e.g. a 40-member series) still gets its own page rather than being
+    /// split — a feed item must stay whole — so a page can exceed the cap by at
+    /// most one unit's worth of books; the cap prevents *accumulating* many such
+    /// units onto one page, not a single oversized one.
+    private func paginate(_ units: [FeedDisplayUnit], page: Int, maxBooksPerPage: Int) -> (units: [FeedDisplayUnit], hasMore: Bool) {
+        func bookCount(_ unit: FeedDisplayUnit) -> Int {
+            switch unit {
+            case .book: return 1
+            case .series(_, let members): return members.count
+            }
+        }
+
+        var pages: [[FeedDisplayUnit]] = []
+        var current: [FeedDisplayUnit] = []
+        var currentCount = 0
+        for unit in units {
+            let count = bookCount(unit)
+            if !current.isEmpty && currentCount + count > maxBooksPerPage {
+                pages.append(current)
+                current = []
+                currentCount = 0
+            }
+            current.append(unit)
+            currentCount += count
+        }
+        if !current.isEmpty { pages.append(current) }
+
+        let index = max(page, 1) - 1
+        guard index < pages.count else { return ([], false) }
+        return (pages[index], index + 1 < pages.count)
+    }
+
     private func buildJSONFeed(title: String,
                                 feedDescription: String,
                                 calibreIDs: [Int],
                                 feedURL: String,
                                 page: Int = 1,
+                                // Accepted for backward source-compatibility with existing call
+                                // sites/query-string parsing, but intentionally unused for page
+                                // sizing (see jsonFeedMaxBooksPerPage) — confirmed decision: the
+                                // book-count cap applies unconditionally, so a client-supplied
+                                // per_page no longer controls page size even when grouping is off.
                                 perPage: Int? = nil,
                                 ifNoneMatch: String?) async throws -> FeedBuildResult<Data> {
         guard let library else {
@@ -963,38 +1026,41 @@ actor LocalFeedServer {
                         data: buildEmptyJSONFeed(title: title, feedDescription: "No library open.", feedURL: feedURL))
         }
 
-        // Cheap SQL fetch returns every matching book, title-sorted. Only the
-        // current page's slice gets the expensive per-item work below (full
-        // merged EPUB HTML), so payload size stays bounded no matter how large
-        // the underlying collection is. Omitted/unparseable per_page defaults
-        // to jsonFeedDefaultPerPage, per the documented API contract -- it does
-        // not mean "no pagination" or "clamp to the collection's own size."
+        // Cheap SQL fetch returns every matching book, title-sorted. Then, when
+        // groupBySeries is on, series members collapse into single display units
+        // before pagination — see groupedDisplayUnits. Only the current page's
+        // slice gets the expensive per-item work below (full merged EPUB HTML per
+        // book, concatenated across every member for a grouped item), so payload
+        // size and per-request parse cost stay bounded no matter how large the
+        // underlying collection or an individual series is. `perPage` is
+        // deliberately unused for the page-size cap now (see
+        // jsonFeedMaxBooksPerPage) since a client-supplied item count no longer
+        // bounds per-request EPUB-parse work once a single item can represent an
+        // arbitrary number of books.
         let allPairs = await fetchFeedBooks(calibreIDs: calibreIDs)
-        let clampedPerPage = min(max(perPage ?? Self.jsonFeedDefaultPerPage, 1), Self.jsonFeedMaxPerPage)
+        let allUnits = await groupedDisplayUnits(from: allPairs)
         let clampedPage = max(page, 1)
-        let start = (clampedPage - 1) * clampedPerPage
-        let pagePairs: [FeedBookPair]
-        if start < allPairs.count {
-            pagePairs = Array(allPairs[start..<min(start + clampedPerPage, allPairs.count)])
-        } else {
-            pagePairs = []
-        }
+        let (pageUnits, hasMore) = paginate(allUnits, page: clampedPage, maxBooksPerPage: Self.jsonFeedMaxBooksPerPage)
 
-        let hasMore = start + clampedPerPage < allPairs.count
-        let etag = computeFeedETag(pairs: pagePairs, extra: "json:\(allPairs.count):\(clampedPage):\(clampedPerPage):\(hasMore)")
+        let etag = computeFeedETag(units: pageUnits, extra: "json:\(allUnits.count):\(clampedPage):\(hasMore)")
         if let ifNoneMatch, ifNoneMatch == etag {
             return .notModified(etag: etag)
         }
 
         var items: [JSONFeedItem] = []
-        for (book, ao3, seriesEntries) in pagePairs {
-            items.append(await buildJSONFeedItem(book: book, ao3: ao3, seriesEntries: seriesEntries, library: library))
+        for unit in pageUnits {
+            switch unit {
+            case .book(let pair):
+                items.append(await buildJSONFeedItem(book: pair.book, ao3: pair.ao3, seriesEntries: pair.seriesEntries, library: library))
+            case .series(let group, let members):
+                items.append(await buildGroupedJSONFeedItem(group: group, members: members, library: library))
+            }
         }
 
         let nextURL: String?
         if hasMore {
             let separator = feedURL.contains("?") ? "&" : "?"
-            nextURL = "\(feedURL)\(separator)page=\(clampedPage + 1)&per_page=\(clampedPerPage)"
+            nextURL = "\(feedURL)\(separator)page=\(clampedPage + 1)"
         } else {
             nextURL = nil
         }
@@ -1092,6 +1158,117 @@ actor LocalFeedServer {
             id: "ambrosia-book-\(book.id)",
             url: ao3?.storyURL,
             title: book.displayTitle,
+            content_html: contentHTML.isEmpty ? nil : contentHTML,
+            summary: summary.isEmpty ? nil : summary,
+            date_published: datePublished,
+            authors: authors,
+            tags: tags.isEmpty ? nil : tags,
+            _ambrosia: ambrosiaExtension
+        )
+    }
+
+    /// One JSON Feed item for a whole series group. Sourced from `SeriesGroup`'s
+    /// aggregation fields (word/chapter totals, dates, isComplete) plus each
+    /// member's own `FeedBookPair` (for merged HTML and raw tags, neither of
+    /// which `SeriesGroup` itself carries).
+    private func buildGroupedJSONFeedItem(
+        group: SeriesGroup,
+        members: [FeedBookPair],
+        library: CalibreLibrary
+    ) async -> JSONFeedItem {
+        // Concatenate every member's merged HTML in group order, joined by <hr/>.
+        // No per-member failure handling: cachedMergedHTML already swallows parse
+        // errors into "" internally and never throws to its caller, so there is
+        // no per-book exception to propagate here. Log the empty-result case so a
+        // genuinely corrupt EPUB in a series is traceable instead of silently
+        // just missing from the concatenated text.
+        var htmlParts: [String] = []
+        for pair in members {
+            let html = await cachedMergedHTML(book: pair.book, library: library)
+            if html.isEmpty {
+                #if DEBUG
+                print("[LocalFeedServer] grouped item \(group.seriesKey): member \(pair.book.id) (\"\(pair.book.displayTitle)\") produced empty merged HTML")
+                #endif
+            }
+            htmlParts.append(html)
+        }
+        let contentHTML = htmlParts.joined(separator: "\n<hr/>\n")
+
+        let summary = group.allDescriptions.joined(separator: "\n\n")
+
+        // Tag buckets: recompute from the union of every member's raw Calibre
+        // tags via AO3TagBuckets.from(tags:) — the same function
+        // buildJSONFeedItem uses for singletons — rather than reusing
+        // SeriesGroup.allTags/allRatings/allWarnings/allCategories, which are
+        // classified via the UI's separate AO3TagKind.classify pipeline and are
+        // not guaranteed bucket-exclusive the same way. Reusing SeriesGroup's own
+        // fields would let ratings/warnings/categories leak into a grouped
+        // item's plain `tags` array while also appearing correctly bucketed in
+        // `_ambrosia`, inconsistent with every singleton item in the same feed.
+        let unionTags = members.flatMap { $0.book.tags }
+        let buckets = AO3TagBuckets.from(tags: unionTags)
+        var seenTags = Set<String>()
+        var tags: [String] = []
+        for tag in buckets.regular + group.allAdditionalTags {
+            if seenTags.insert(tag).inserted { tags.append(tag) }
+        }
+        func dedup(_ values: [String]) -> [String] {
+            var seen = Set<String>()
+            return values.filter { seen.insert($0).inserted }
+        }
+        let categories = dedup(buckets.categories + group.allCategories)
+
+        let leaderAO3 = members.first?.ao3
+        let datePublished = group.earliestPublished.map { iso8601DateString(from: $0) }
+        let dateModified = group.latestUpdated.map { iso8601DateString(from: $0) }
+
+        let authors: [JSONFeedAuthor]? = group.allAuthors.isEmpty ? nil : group.allAuthors.map { name in
+            let url = (group.allAuthors.count == 1 ? leaderAO3?.authorUsername : nil)
+                .map { "https://archiveofourown.org/users/\($0)" }
+            return JSONFeedAuthor(name: name, url: url)
+        }
+
+        // url: the real AO3 series URL when this group is ao3:-keyed. For a
+        // calibre:-keyed group (no AO3 series id), fall back to the leading
+        // work's own story URL rather than a constructed URL or nil — per the
+        // confirmed decision, since non-AO3 books essentially don't form these
+        // groups in practice.
+        let url: String?
+        if group.seriesKey.hasPrefix("ao3:") {
+            let ao3SeriesID = String(group.seriesKey.dropFirst("ao3:".count))
+            url = "https://archiveofourown.org/series/\(ao3SeriesID)"
+        } else {
+            url = leaderAO3?.storyURL
+        }
+
+        // series: omitted entirely for grouped items. JSONFeedSeriesEntry.index
+        // is a per-work index that has no group-level meaning, and this item's
+        // own id/title/url already carry the group's series identity — a
+        // single-element series array embedding a placeholder index would be
+        // misleading rather than merely redundant, per the confirmed decision.
+        let ambrosiaExtension = JSONFeedAmbrosiaExtension(
+            word_count: group.totalWordCount,
+            chapter_current: group.chapterCurrentTotal,
+            chapter_total: group.chapterTotalTotal,
+            is_complete: group.isComplete,
+            fandoms: group.allFandoms.isEmpty ? nil : group.allFandoms,
+            relationships: group.allRelationships.isEmpty ? nil : group.allRelationships,
+            characters: group.allCharacters.isEmpty ? nil : group.allCharacters,
+            ratings: buckets.ratings.isEmpty ? nil : buckets.ratings,
+            warnings: buckets.warnings.isEmpty ? nil : buckets.warnings,
+            categories: categories.isEmpty ? nil : categories,
+            series: nil,
+            date_modified: dateModified,
+            ao3_work_id: nil,   // a group has no single AO3 work id
+            is_anthology: nil,  // group members are already filtered clear of anthology rows
+            ao3_series_id: group.seriesKey.hasPrefix("ao3:") ? String(group.seriesKey.dropFirst(4)) : nil,
+            series_name: group.seriesKey.hasPrefix("ao3:") ? nil : group.seriesName
+        )
+
+        return JSONFeedItem(
+            id: "ambrosia-series-\(group.seriesKey)",
+            url: url,
+            title: group.seriesName,
             content_html: contentHTML.isEmpty ? nil : contentHTML,
             summary: summary.isEmpty ? nil : summary,
             date_published: datePublished,
