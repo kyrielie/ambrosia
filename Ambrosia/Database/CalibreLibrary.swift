@@ -788,13 +788,22 @@ actor CalibreLibrary {
     }
 
     /// Fetch from an explicit ID set with optional additional SearchQuery filtering.
+    ///
+    /// `context` is a short caller label (e.g. "feed:collection/<id>",
+    /// "ui:libraryRootView") attached to the `books.page.end` debug log below.
+    /// It exists because this method is called concurrently from unrelated
+    /// subsystems that all contend for the same SQLite connection — the feed
+    /// server and the app's own UI browsing chief among them — and without it
+    /// a slow `books.page.end` line can't be attributed to its caller from the
+    /// log alone.
     func books(
         ids: [Int]?,
         offset: Int,
         limit: Int,
         sort: SortField,
         ascending: Bool,
-        query: SearchQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+        query: SearchQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: []),
+        context: String = "unknown"
     ) -> [CalibreBook] {
         let start = LibraryFilterDebug.now()
         do {
@@ -821,6 +830,7 @@ actor CalibreLibrary {
                 break
             }
             LibraryFilterDebug.log("books.page.end", [
+                "context": context,
                 "mode": ids == nil ? "unfilteredIDs" : "explicitIDs",
                 "candidateIDs": ids?.count,
                 "offset": offset,

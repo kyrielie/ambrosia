@@ -594,7 +594,12 @@ actor LocalFeedServer {
     /// build rather than per item.
     private typealias FeedBookPair = (book: CalibreBook, ao3: AO3MetadataRecord?, seriesEntries: [SeriesCacheEntry])
 
-    private func fetchFeedBooks(calibreIDs: [Int]) async -> [FeedBookPair] {
+    /// `context` is a short caller label (e.g. "feed:collection/<id>",
+    /// "feed:search", "feed:random-daily") forwarded to
+    /// `CalibreLibrary.books(ids:...)` so its `books.page.end` debug log can
+    /// be attributed to this feed build rather than lumped in with the app's
+    /// own concurrent UI browsing.
+    private func fetchFeedBooks(calibreIDs: [Int], context: String) async -> [FeedBookPair] {
         guard let library, let metaDB, !calibreIDs.isEmpty else { return [] }
         let ao3Map = (try? await metaDB.ao3Metadata(for: calibreIDs)) ?? [:]
         // Batched the same way as ao3Map above — one query for every book in this
@@ -608,7 +613,7 @@ actor LocalFeedServer {
         // one page's worth (see buildJSONFeed's book-count page cap,
         // jsonFeedMaxBooksPerPage).
         let books = await library.books(ids: calibreIDs, offset: 0, limit: calibreIDs.count,
-                                   sort: .title, ascending: true)
+                                   sort: .title, ascending: true, context: context)
         return books.map { ($0, ao3Map[$0.id], seriesByBook[$0.id] ?? []) }
     }
 
@@ -806,8 +811,21 @@ actor LocalFeedServer {
         // worry about. Concatenating every member's HTML for a large grouped
         // item is an accepted tradeoff (infrequent fetches, no objection to long
         // load times) rather than something this patch needs to bound.
-        let pairs = await fetchFeedBooks(calibreIDs: calibreIDs)
+        let pairs = await fetchFeedBooks(calibreIDs: calibreIDs, context: "feed:rss:\(title)")
         let units = await groupedDisplayUnits(from: pairs)
+
+        // One line per RSS build — there's no page loop to summarize later, so
+        // this is both the per-response and "walk complete" log in one. See the
+        // matching "feed.page.end" / "feed.walk.complete" pair on the JSON Feed
+        // side for the paginated equivalent.
+        LibraryFilterDebug.log("feed.rss.end", [
+            "feed": title,
+            "candidates": calibreIDs.count,
+            "groupedTotal": units.count,
+            "rawBooks": rawBookCount(in: units),
+            "ids": flatItemIDs(in: units).map(String.init).joined(separator: ",")
+        ])
+
         let etag = computeFeedETag(units: units, extra: "rss")
         if let ifNoneMatch, ifNoneMatch == etag {
             return .notModified(etag: etag)
@@ -1110,6 +1128,66 @@ actor LocalFeedServer {
         return (pages[index], index + 1 < pages.count)
     }
 
+    // MARK: - Feed logging helpers
+
+    /// Sum of underlying books represented by `units` — 1 per `.book`,
+    /// `members.count` per `.series`. Same accounting as `paginate`'s local
+    /// `bookCount`, exposed here for logging so the two never drift apart.
+    private func rawBookCount(in units: [FeedDisplayUnit]) -> Int {
+        units.reduce(0) { total, unit in
+            switch unit {
+            case .book: return total + 1
+            case .series(_, let members): return total + members.count
+            }
+        }
+    }
+
+    /// Every `calibreID` represented in `units` — the book itself for `.book`,
+    /// every member for `.series` — so a log line can answer "is this ID on
+    /// this page" without re-deriving it from the response body.
+    private func flatItemIDs(in units: [FeedDisplayUnit]) -> [Int] {
+        units.flatMap { unit -> [Int] in
+            switch unit {
+            case .book(let pair): return [pair.book.id]
+            case .series(_, let members): return members.map { $0.book.id }
+            }
+        }
+    }
+
+    /// Per-feed-walk state accumulated across paginated JSON Feed requests,
+    /// keyed by `feedWalkKey(for:)`. Each page of a `next_url` walk is an
+    /// independent HTTP request, so this is the only place that can answer
+    /// "how did this whole refresh add up" — flushed and removed by
+    /// `flushFeedWalkSummary` once a page comes back with `hasMore == false`.
+    private var feedWalkAccumulators: [String: (pages: Int, groupedItems: Int, rawBooks: Int)] = [:]
+
+    /// `feedURL` with any `page=`/`per_page=` query stripped, so every page of
+    /// the same walk accumulates under one key regardless of which page
+    /// number is embedded in its own `feedURL`.
+    private func feedWalkKey(for feedURL: String) -> String {
+        guard let qIndex = feedURL.firstIndex(of: "?") else { return feedURL }
+        return String(feedURL[..<qIndex])
+    }
+
+    private func recordFeedWalkPage(key: String, pageItems: Int, rawBooks: Int) {
+        var entry = feedWalkAccumulators[key] ?? (pages: 0, groupedItems: 0, rawBooks: 0)
+        entry.pages += 1
+        entry.groupedItems += pageItems
+        entry.rawBooks += rawBooks
+        feedWalkAccumulators[key] = entry
+    }
+
+    private func flushFeedWalkSummary(key: String, feed: String) {
+        guard let entry = feedWalkAccumulators.removeValue(forKey: key) else { return }
+        LibraryFilterDebug.log("feed.walk.complete", [
+            "feed": feed,
+            "feedURL": key,
+            "pages": entry.pages,
+            "groupedItems": entry.groupedItems,
+            "rawBooks": entry.rawBooks
+        ])
+    }
+
     private func buildJSONFeed(title: String,
                                 feedDescription: String,
                                 calibreIDs: [Int],
@@ -1138,10 +1216,35 @@ actor LocalFeedServer {
         // jsonFeedMaxBooksPerPage) since a client-supplied item count no longer
         // bounds per-request EPUB-parse work once a single item can represent an
         // arbitrary number of books.
-        let allPairs = await fetchFeedBooks(calibreIDs: calibreIDs)
+        let walkKey = feedWalkKey(for: feedURL)
+        let allPairs = await fetchFeedBooks(calibreIDs: calibreIDs, context: "feed:json:\(walkKey)")
         let allUnits = await groupedDisplayUnits(from: allPairs)
         let clampedPage = max(page, 1)
         let (pageUnits, hasMore) = paginate(allUnits, page: clampedPage, maxBooksPerPage: Self.jsonFeedMaxBooksPerPage)
+
+        // One structured line per page response — this is the one place that
+        // simultaneously knows the page number, pre/post-grouping counts,
+        // hasMore, and exactly which book/series-member IDs are in this
+        // response, so a "did page 3 actually contain what it should"
+        // question can be answered by grepping this one line instead of
+        // manually cross-referencing FlyingFox's access log with
+        // books.page.end.
+        let pageRawBooks = rawBookCount(in: pageUnits)
+        LibraryFilterDebug.log("feed.page.end", [
+            "feed": title,
+            "feedURL": feedURL,
+            "page": clampedPage,
+            "candidates": calibreIDs.count,
+            "groupedTotal": allUnits.count,
+            "pageItems": pageUnits.count,
+            "pageBooks": pageRawBooks,
+            "hasMore": hasMore,
+            "ids": flatItemIDs(in: pageUnits).map(String.init).joined(separator: ",")
+        ])
+        recordFeedWalkPage(key: walkKey, pageItems: pageUnits.count, rawBooks: pageRawBooks)
+        if !hasMore {
+            flushFeedWalkSummary(key: walkKey, feed: title)
+        }
 
         let etag = computeFeedETag(units: pageUnits, extra: "json:\(allUnits.count):\(clampedPage):\(hasMore)")
         if let ifNoneMatch, ifNoneMatch == etag {
