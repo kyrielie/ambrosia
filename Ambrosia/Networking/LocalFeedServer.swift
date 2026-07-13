@@ -657,7 +657,12 @@ actor LocalFeedServer {
             grouping: entries.filter { !anthologyIDs.contains($0.calibreID) },
             by: \.seriesKey
         )
-        let seriesKeys = Array(groupedByKey.keys)
+        // Sorted rather than raw `.keys`: Dictionary iteration order isn't part of
+        // Swift's contract, and this feeds into which series get grouped in what
+        // order on every next_url page of a paginated refresh -- same class of
+        // non-determinism as the SQL ORDER BY tiebreak above, just at the
+        // series-grouping layer instead of the row-ordering layer.
+        let seriesKeys = Array(groupedByKey.keys).sorted()
         guard !seriesKeys.isEmpty else { return pairs.map { .book($0) } }
 
         let allEntries = (try? await metaDB.seriesEntries(keys: seriesKeys)) ?? []

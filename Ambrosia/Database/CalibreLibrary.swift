@@ -256,31 +256,40 @@ actor CalibreLibrary {
     // SQL only needs a stable title-order baseline here; the cross-database JOIN that was
     // previously attempted here against ao3_metadata was always invalid (ao3_metadata lives
     // in ambrosia_meta.db, not metadata.db) and caused _fetchBooks to throw, returning [].
+    //
+    // Every case ends with `, b.id ASC` (book id is unique and already indexed) so ties on
+    // the primary sort key -- e.g. two books sharing a title, the same kudos count, or the
+    // same series_index -- resolve to a fixed order. Without this, a JSON feed's next_url
+    // pagination re-runs this full query from scratch on every page; SQLite doesn't guarantee
+    // tied rows come back in the same relative order across separate executions of the same
+    // query, so the page boundaries computed by paginate(_:page:maxBooksPerPage:) could shift
+    // between page N and page N+1 of the same refresh, letting a book fall into the gap
+    // between two pages (never returned in any page) or appear in two different pages.
     func orderByClause(sort: SortField, direction: String) -> String {
         switch sort {
         case .title:
-            return "b.title \(direction)"
+            return "b.title \(direction), b.id ASC"
         case .author:
-            return "MIN(a.sort) \(direction), b.title ASC"
+            return "MIN(a.sort) \(direction), b.title ASC, b.id ASC"
         case .wordCount:
             // Word-count sort is resolved entirely in Swift via wordCountSortedPage.
             // SQL only needs a stable baseline order here.
-            return "b.title \(direction)"
+            return "b.title \(direction), b.id ASC"
         case .kudos:
-            return "COALESCE(k.value, 0) \(direction)"
+            return "COALESCE(k.value, 0) \(direction), b.id ASC"
         case .published:
-            return "b.pubdate \(direction)"
+            return "b.pubdate \(direction), b.id ASC"
         case .series:
-            return "s.name \(direction), b.series_index ASC"
+            return "s.name \(direction), b.series_index ASC, b.id ASC"
         case .ao3Published:
             // In-memory sort via sortedByAO3Date; SQL baseline only.
-            return "b.title ASC"
+            return "b.title ASC, b.id ASC"
         case .ao3Updated:
             // In-memory sort via sortedByAO3Date; SQL baseline only.
-            return "b.title ASC"
+            return "b.title ASC, b.id ASC"
         case .random:
             // Seeded random is handled post-fetch in the caller (sortedRandomly).
-            return "b.title ASC"
+            return "b.title ASC, b.id ASC"
         }
     }
 
