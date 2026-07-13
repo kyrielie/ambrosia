@@ -384,8 +384,8 @@ actor LocalFeedServer {
         case .json:
             let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
             let page = request.query["page"].flatMap { Int($0) } ?? 1
-            // nil perPage means "no pagination requested" -- buildJSONFeed
-            // serves the whole collection in that case.
+            // Omitted/unparseable per_page falls back to jsonFeedDefaultPerPage
+            // inside buildJSONFeed, not "no pagination" -- see there.
             let perPage: Int? = request.query["per_page"].flatMap { Int($0) }
             let result = try await buildJSONFeed(
                 title: "\(collection.name)",
@@ -851,7 +851,7 @@ actor LocalFeedServer {
         return encoder
     }()
 
-    private static let jsonFeedDefaultPerPage = 100 // fallback only when a client sends per_page without a value
+    private static let jsonFeedDefaultPerPage = 100 // used whenever the client omits per_page or sends an unparseable value
     private static let jsonFeedMaxPerPage = 500
 
     private func buildJSONFeed(title: String,
@@ -869,10 +869,11 @@ actor LocalFeedServer {
         // Cheap SQL fetch returns every matching book, title-sorted. Only the
         // current page's slice gets the expensive per-item work below (full
         // merged EPUB HTML), so payload size stays bounded no matter how large
-        // the underlying collection is -- unless no pagination was requested,
-        // in which case we serve everything in one response (see perPage above).
+        // the underlying collection is. Omitted/unparseable per_page defaults
+        // to jsonFeedDefaultPerPage, per the documented API contract -- it does
+        // not mean "no pagination" or "clamp to the collection's own size."
         let allPairs = await fetchFeedBooks(calibreIDs: calibreIDs)
-        let clampedPerPage = perPage.map { min(max($0, 1), Self.jsonFeedMaxPerPage) } ?? max(allPairs.count, 1)
+        let clampedPerPage = min(max(perPage ?? Self.jsonFeedDefaultPerPage, 1), Self.jsonFeedMaxPerPage)
         let clampedPage = max(page, 1)
         let start = (clampedPage - 1) * clampedPerPage
         let pagePairs: [FeedBookPair]
