@@ -601,6 +601,103 @@ actor LocalFeedServer {
         return books.map { ($0, ao3Map[$0.id], seriesByBook[$0.id] ?? []) }
     }
 
+    // MARK: - Series grouping for feeds
+    //
+    // Mirrors LibraryRootView/EmailLibraryViewController's "Group series" toggle
+    // (ReaderPreferences.shared.groupBySeries, backed by UserDefaults key
+    // "groupBySeries") using the same buildSeriesGroups(...) function
+    // (Ambrosia/LibraryUI/SeriesGroupBuilder.swift) they use, so a feed's item
+    // count matches the app's own series-card count for the same collection.
+    //
+    // Unlike the UI path, there is no `.orphanedSeriesEntry` case here: a feed
+    // item is either one book or one whole series group. A book that's a solo,
+    // non-leading member of a series with no group (no other visible members)
+    // simply falls through to `.book`, since a feed has no UI-only "flag this
+    // membership" concept worth inventing. Multi-series leadership is not
+    // special-cased either — a book leading two series produces two grouped
+    // feed items, matching assignSeriesItems' behavior.
+
+    /// A page-resident book, or the series group it anchors (when it leads a
+    /// >1-member series and grouping is on). Serialization-agnostic — consumed by
+    /// both the JSON Feed and RSS builders.
+    private enum FeedDisplayUnit {
+        case book(FeedBookPair)
+        case series(SeriesGroup, members: [FeedBookPair])
+    }
+
+    /// Groups `pairs` into display units when `groupBySeries` is on; otherwise
+    /// returns one `.book` unit per pair, unchanged.
+    ///
+    /// `members` on the `.series` case carries every group member's own
+    /// `FeedBookPair` (book + its ao3 record + its own seriesEntries), not just
+    /// `SeriesGroup.works` ([CalibreBook] only) — content-HTML concatenation and
+    /// tag-bucket reconstruction both need each member's AO3 record, which
+    /// `SeriesGroup` itself doesn't carry.
+    private func groupedDisplayUnits(from pairs: [FeedBookPair]) async -> [FeedDisplayUnit] {
+        guard UserDefaults.standard.bool(forKey: "groupBySeries"), let library, let metaDB else {
+            return pairs.map { .book($0) }
+        }
+
+        let pairByID = Dictionary(uniqueKeysWithValues: pairs.map { ($0.book.id, $0) })
+        let entries = pairs.flatMap { $0.seriesEntries }
+        let anthologyIDs = Set(pairs.filter { $0.book.isDescriptionAnthology }.map { $0.book.id })
+
+        let groupedByKey = Dictionary(
+            grouping: entries.filter { !anthologyIDs.contains($0.calibreID) },
+            by: \.seriesKey
+        )
+        let seriesKeys = Array(groupedByKey.keys)
+        guard !seriesKeys.isEmpty else { return pairs.map { .book($0) } }
+
+        let allEntries = (try? await metaDB.seriesEntries(keys: seriesKeys)) ?? []
+        let allIDs = Array(Set(allEntries.map(\.calibreID)))
+        // A group's members can extend beyond this page/collection (e.g. book 3
+        // of a 5-book series where only 1, 2, 4, 5 matched the feed's collection
+        // filter) — fetch every member so the group is complete, not just the
+        // page-local subset.
+        let allBooks = await library.booksForIDs(allIDs)
+        let byID = Dictionary(uniqueKeysWithValues: allBooks.map { ($0.id, $0) })
+        let seriesMetadata = (try? await metaDB.ao3Metadata(for: allIDs)) ?? [:]
+
+        let seriesByKey = buildSeriesGroups(
+            allEntries: allEntries,
+            byID: byID,
+            seriesMetadata: seriesMetadata,
+            anthologyIDs: anthologyIDs
+        )
+
+        // Members resolved only via allBooks/seriesMetadata (i.e. outside the
+        // original `pairs`/collection filter) need a synthesized FeedBookPair so
+        // downstream item-building has a uniform (book, ao3, seriesEntries) shape
+        // regardless of whether the member was already present in `pairs`.
+        let allSeriesEntriesByBook = Dictionary(grouping: allEntries, by: \.calibreID)
+        func pairFor(_ book: CalibreBook) -> FeedBookPair {
+            pairByID[book.id] ?? (book, seriesMetadata[book.id], allSeriesEntriesByBook[book.id] ?? [])
+        }
+
+        var emittedSeriesKeys = Set<String>()
+        var units: [FeedDisplayUnit] = []
+        for pair in pairs {
+            let bookEntries = groupedByKey.values
+                .flatMap { $0 }
+                .filter { $0.calibreID == pair.book.id }
+            var emittedAny = false
+            for entry in bookEntries {
+                guard let group = seriesByKey[entry.seriesKey],
+                      !emittedSeriesKeys.contains(entry.seriesKey),
+                      group.works.first?.id == pair.book.id else { continue }
+                let memberPairs = group.works.map(pairFor)
+                units.append(.series(group, members: memberPairs))
+                emittedSeriesKeys.insert(entry.seriesKey)
+                emittedAny = true
+            }
+            if !emittedAny {
+                units.append(.book(pair))
+            }
+        }
+        return units
+    }
+
     /// A cheap ETag over the fetched pairs plus any pagination/format params that
     /// affect the response shape. Reflects collection-membership changes (the pair
     /// list itself), AO3 re-extraction (`ao3.updatedDate`), and series_cache changes
