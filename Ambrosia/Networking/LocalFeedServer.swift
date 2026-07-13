@@ -94,6 +94,9 @@ actor LocalFeedServer {
     private var serverTask: Task<Void, Never>?
     private var httpServer: HTTPServer?
     private var htmlCache: [HTMLCacheKey: String] = [:]
+    private var htmlCacheOrder: [HTMLCacheKey] = []       // oldest first, for eviction
+    private var htmlCacheTotalBytes: Int = 0
+    private let htmlCacheMaxBytes = 2_000_000_000          // ~2GB budget
 
     /// Calibre's null-pubdate sentinel: 2000-12-31 00:00:00 UTC.
     /// `CalibreLibrary.parseDate` parses this successfully into a `Date`, so any
@@ -225,6 +228,8 @@ actor LocalFeedServer {
         metaDB  = nil
         collectionStore = nil
         htmlCache.removeAll()
+        htmlCacheOrder.removeAll()
+        htmlCacheTotalBytes = 0
     }
 
     /// Replace library references on a library switch without restarting the task.
@@ -235,6 +240,8 @@ actor LocalFeedServer {
         self.metaDB  = metaDB
         self.collectionStore = collectionStore
         htmlCache.removeAll()   // stale EPUB cache
+        htmlCacheOrder.removeAll()
+        htmlCacheTotalBytes = 0
     }
 
     // MARK: - Private: server task
@@ -1414,6 +1421,19 @@ actor LocalFeedServer {
         }.value
 
         htmlCache[cacheKey] = html
+        htmlCacheOrder.append(cacheKey)
+        htmlCacheTotalBytes += html.utf8.count
+
+        // Evict oldest entries until we're back under budget, so a long-running
+        // server (client stalls, retries, or an unusually large refresh) can't
+        // grow this cache without bound and starve SQLite's own page cache.
+        while htmlCacheTotalBytes > htmlCacheMaxBytes, !htmlCacheOrder.isEmpty {
+            let evictKey = htmlCacheOrder.removeFirst()
+            if let evicted = htmlCache.removeValue(forKey: evictKey) {
+                htmlCacheTotalBytes -= evicted.utf8.count
+            }
+        }
+
         return html
     }
 
