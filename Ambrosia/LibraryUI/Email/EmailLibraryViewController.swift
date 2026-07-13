@@ -1350,51 +1350,18 @@ final class EmailLibraryViewController: NSViewController {
                 degraded = true
             }
             let byID = Dictionary(uniqueKeysWithValues: allBooks.map { ($0.id, $0) })
-            let entriesBySeries = Dictionary(grouping: allEntries.filter { !anthologyIDs.contains($0.calibreID) }, by: \.seriesKey)
-            var groups: [String: SeriesGroup] = [:]
-
-            for (seriesKey, entries) in entriesBySeries {
-                let sortedEntries = sortedSeriesEntries(entries)
-                let works = sortedEntries.compactMap { byID[$0.calibreID] }
-                guard works.count > 1, works.allSatisfy({ !($0.isDescriptionAnthology) }) else { continue }
-                let seriesMetadata = works.compactMap { metadata[$0.id] }
-                let chapterRecords = seriesMetadata.filter { $0.chapterCurrent != nil }
-                let chapterTotalKnownForAll = !chapterRecords.isEmpty && chapterRecords.count == works.count && chapterRecords.allSatisfy { $0.chapterTotal != nil }
-                let indices = sortedEntries.map(\.seriesIndex)
-                let ratings = Array(Set(works.flatMap(\.tags).filter { if case .rating = AO3TagKind.classify($0) { return true }; return false })).sorted()
-                let warnings = Array(Set(works.flatMap(\.tags).filter { if case .warning = AO3TagKind.classify($0) { return true }; return false })).sorted()
-                let categories = Array(Set(seriesMetadata.flatMap(\.categories) + works.flatMap(\.tags).filter { if case .category = AO3TagKind.classify($0) { return true }; return false })).sorted()
-                let fandoms = Array(Set(seriesMetadata.flatMap(\.fandoms))).sorted()
-                let relationships = Array(Set(seriesMetadata.flatMap(\.relationships))).sorted()
-                let characters = Array(Set(seriesMetadata.flatMap(\.characters))).sorted()
-                let additionalTags = Array(Set(seriesMetadata.flatMap(\.additionalTags))).sorted()
-                groups[seriesKey] = SeriesGroup(
-                    id: seriesKey,
-                    seriesKey: seriesKey,
-                    seriesName: sortedEntries.first?.seriesName ?? seriesKey,
-                    works: sortedSeriesWorks(works, using: sortedEntries),
-                    allFandoms: fandoms,
-                    allRelationships: relationships,
-                    allCharacters: characters,
-                    allCategories: categories,
-                    allWarnings: warnings,
-                    allRatings: ratings,
-                    allAdditionalTags: additionalTags,
-                    allTags: Array(Set(works.flatMap(\.tags) + additionalTags)).sorted(),
-                    allAuthors: Array(Set(works.flatMap(\.authors))).sorted(),
-                    allDescriptions: works.compactMap(\.displayComment),
-                    totalWordCount: works.reduce(0) { $0 + (metadata[$1.id]?.wordCount ?? $1.wordCount ?? 0) },
-                    chapterCurrentTotal: chapterRecords.isEmpty ? nil : chapterRecords.reduce(0) { $0 + ($1.chapterCurrent ?? 0) },
-                    chapterTotalTotal: chapterTotalKnownForAll ? chapterRecords.reduce(0) { $0 + ($1.chapterTotal ?? 0) } : nil,
-                    hasUnknownChapterTotal: !chapterRecords.isEmpty && !chapterTotalKnownForAll,
-                    earliestPublished: seriesMetadata.compactMap { parseISODate($0.publishedDate) }.min(),
-                    latestUpdated: seriesMetadata.compactMap { parseISODate($0.updatedDate) }.max(),
-                    workIndices: indices,
-                    missingIndices: missingIndices(in: indices),
-                    placeholders: placeholders[seriesKey] ?? [],
-                    isComplete: !seriesMetadata.isEmpty && seriesMetadata.allSatisfy(\.isComplete)
-                )
-            }
+            // Shared with LibraryRootView.rebuildItems via buildSeriesGroups
+            // (SeriesGroupBuilder.swift) — this used to be a near-duplicate loop
+            // with slightly different plumbing (no anthology filtering carried
+            // through to indices/placeholders bookkeeping the way LibraryRootView's
+            // copy did); both call sites now agree on one implementation.
+            let groups = buildSeriesGroups(
+                allEntries: allEntries,
+                byID: byID,
+                seriesMetadata: metadata,
+                anthologyIDs: anthologyIDs,
+                placeholders: placeholders
+            )
 
             // Build collapsedIDs so books subsumed into an emitted series row are not
             // also emitted as standalone .book rows. Mirrors rebuildItems in LibraryRootView.
