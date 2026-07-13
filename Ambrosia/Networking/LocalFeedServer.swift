@@ -384,8 +384,11 @@ actor LocalFeedServer {
         case .json:
             let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
             let page = request.query["page"].flatMap { Int($0) } ?? 1
-            // Omitted/unparseable per_page falls back to jsonFeedDefaultPerPage
-            // inside buildJSONFeed, not "no pagination" -- see there.
+            // per_page is still parsed for backward source-compatibility but no
+            // longer controls page size — see jsonFeedMaxBooksPerPage in
+            // buildJSONFeed for why (a client-supplied item count no longer
+            // bounds per-request EPUB-parse work once grouping can multiply the
+            // cost of a single item).
             let perPage: Int? = request.query["per_page"].flatMap { Int($0) }
             let result = try await buildJSONFeed(
                 title: "\(collection.name)",
@@ -595,7 +598,8 @@ actor LocalFeedServer {
         let seriesByBook = Dictionary(grouping: seriesRows, by: \.calibreID)
         // No cap here — callers decide how many IDs to pass in. RSS passes the
         // full list (no pagination protocol exists for RSS); JSON Feed passes
-        // one page's worth (see buildJSONFeed's page/per_page handling).
+        // one page's worth (see buildJSONFeed's book-count page cap,
+        // jsonFeedMaxBooksPerPage).
         let books = await library.books(ids: calibreIDs, offset: 0, limit: calibreIDs.count,
                                    sort: .title, ascending: true)
         return books.map { ($0, ao3Map[$0.id], seriesByBook[$0.id] ?? []) }
@@ -1030,9 +1034,6 @@ actor LocalFeedServer {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return encoder
     }()
-
-    private static let jsonFeedDefaultPerPage = 100 // used whenever the client omits per_page or sends an unparseable value
-    private static let jsonFeedMaxPerPage = 500
 
     /// Cap on cumulative *underlying book count* per page, not item count. A
     /// grouped item can hide an arbitrary number of member EPUB-parses (one
