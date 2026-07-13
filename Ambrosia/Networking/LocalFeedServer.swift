@@ -383,8 +383,10 @@ actor LocalFeedServer {
             return httpResponse(for: result, contentType: "application/rss+xml; charset=utf-8") { Data($0.utf8) }
         case .json:
             let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
-            let page = Int(request.query["page"] ?? "") ?? 1
-            let perPage = Int(request.query["per_page"] ?? "") ?? Self.jsonFeedDefaultPerPage
+            let page = request.query["page"].flatMap { Int($0) } ?? 1
+            // nil perPage means "no pagination requested" -- buildJSONFeed
+            // serves the whole collection in that case.
+            let perPage: Int? = request.query["per_page"].flatMap { Int($0) }
             let result = try await buildJSONFeed(
                 title: "Ambrosia — \(collection.name)",
                 feedDescription: "Books in the \(collection.name) collection",
@@ -427,8 +429,8 @@ actor LocalFeedServer {
             return httpResponse(for: result, contentType: "application/rss+xml; charset=utf-8") { Data($0.utf8) }
         case .json:
             let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
-            let page = Int(request.query["page"] ?? "") ?? 1
-            let perPage = Int(request.query["per_page"] ?? "") ?? Self.jsonFeedDefaultPerPage
+            let page = request.query["page"].flatMap { Int($0) } ?? 1
+            let perPage: Int? = request.query["per_page"].flatMap { Int($0) }
             let result = try await buildJSONFeed(
                 title: "Ambrosia — \(snapshot.label)",
                 feedDescription: "Published search snapshot from \(snapshot.publishedAt)",
@@ -849,7 +851,7 @@ actor LocalFeedServer {
         return encoder
     }()
 
-    private static let jsonFeedDefaultPerPage = 100
+    private static let jsonFeedDefaultPerPage = 100 // fallback only when a client sends per_page without a value
     private static let jsonFeedMaxPerPage = 500
 
     private func buildJSONFeed(title: String,
@@ -857,7 +859,7 @@ actor LocalFeedServer {
                                 calibreIDs: [Int],
                                 feedURL: String,
                                 page: Int = 1,
-                                perPage: Int = jsonFeedDefaultPerPage,
+                                perPage: Int? = nil,
                                 ifNoneMatch: String?) async throws -> FeedBuildResult<Data> {
         guard let library else {
             return .body(etag: "\"empty\"",
@@ -867,9 +869,10 @@ actor LocalFeedServer {
         // Cheap SQL fetch returns every matching book, title-sorted. Only the
         // current page's slice gets the expensive per-item work below (full
         // merged EPUB HTML), so payload size stays bounded no matter how large
-        // the underlying collection is.
+        // the underlying collection is -- unless no pagination was requested,
+        // in which case we serve everything in one response (see perPage above).
         let allPairs = await fetchFeedBooks(calibreIDs: calibreIDs)
-        let clampedPerPage = min(max(perPage, 1), Self.jsonFeedMaxPerPage)
+        let clampedPerPage = perPage.map { min(max($0, 1), Self.jsonFeedMaxPerPage) } ?? max(allPairs.count, 1)
         let clampedPage = max(page, 1)
         let start = (clampedPage - 1) * clampedPerPage
         let pagePairs: [FeedBookPair]
