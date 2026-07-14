@@ -1161,6 +1161,36 @@ actor LocalFeedServer {
     /// `flushFeedWalkSummary` once a page comes back with `hasMore == false`.
     private var feedWalkAccumulators: [String: (pages: Int, groupedItems: Int, rawBooks: Int)] = [:]
 
+    /// Caches the expensive fetch+group result for one pagination walk so that
+    /// `buildJSONFeed` does the full-collection `fetchFeedBooks` +
+    /// `groupedDisplayUnits` work exactly once per walk instead of once per
+    /// page. Before this cache existed, every `next_url` page re-fetched and
+    /// re-grouped the *entire* candidate set (full CalibreBook rows, authors,
+    /// tags, comments, AO3 metadata for every ID) only to discard all but one
+    /// page's worth — for a 763-book collection paginated in ~30-book pages,
+    /// that's ~41x the necessary DB work per full refresh, and per-page latency
+    /// climbed with it until slow pages started missing the client's 15s
+    /// timeout, aborting the walk partway through (see `isPartial` handling on
+    /// the NetNewsWire side).
+    ///
+    /// Keyed by `feedWalkKey(for:)` (the feed URL with `page`/`per_page`
+    /// stripped) — the same key `feedWalkAccumulators` uses — so this lives and
+    /// dies with the same walk.
+    private struct FeedUnitsCacheEntry {
+        let candidateIDs: Set<Int>   // fingerprint: which IDs this grouping was computed from
+        let units: [FeedDisplayUnit]
+        let computedAt: Date
+    }
+
+    private var feedUnitsCache: [String: FeedUnitsCacheEntry] = [:]
+
+    /// Walk cache entries older than this are treated as stale and recomputed
+    /// rather than reused — protects against serving a page from a walk that
+    /// never finished (client crashed, network dropped) indefinitely, and bounds
+    /// how long a genuinely-changed collection can serve stale grouping to a
+    /// slow walk.
+    private static let feedUnitsCacheTTL: TimeInterval = 120
+
     /// `feedURL` with any `page=`/`per_page=` query stripped, so every page of
     /// the same walk accumulates under one key regardless of which page
     /// number is embedded in its own `feedURL`.
@@ -1179,6 +1209,7 @@ actor LocalFeedServer {
 
     private func flushFeedWalkSummary(key: String, feed: String) {
         guard let entry = feedWalkAccumulators.removeValue(forKey: key) else { return }
+        feedUnitsCache.removeValue(forKey: key)
         LibraryFilterDebug.log("feed.walk.complete", [
             "feed": feed,
             "feedURL": key,
@@ -1186,6 +1217,60 @@ actor LocalFeedServer {
             "groupedItems": entry.groupedItems,
             "rawBooks": entry.rawBooks
         ])
+    }
+
+    /// Returns the full grouped `FeedDisplayUnit` list for `calibreIDs`, reusing
+    /// a cached result from an earlier page of the same walk when one exists,
+    /// still matches `calibreIDs`, and isn't stale. Falls through to the full
+    /// `fetchFeedBooks` + `groupedDisplayUnits` computation (and caches the
+    /// result) on a cache miss, a candidate-set change (collection/search
+    /// membership shifted between pages of the same walk), or an expired entry.
+    ///
+    /// Known limitation (documented, not fixed here): if two overlapping
+    /// pagination walks of the *same* feed run concurrently (the NetNewsWire-side
+    /// concurrent-refresh issue observed separately), the second walk's page-1
+    /// request will recompute and overwrite the cache entry the first walk's
+    /// later pages are relying on. This doesn't break correctness — the first
+    /// walk's next page will just also get a (possibly slightly different,
+    /// since the collection could have changed) cache miss and recompute — but
+    /// it does mean the cache benefit degrades under concurrent duplicate
+    /// walks. This should be fixed on the client side (NetNewsWire's
+    /// `LocalAccountRefresher` re-entrancy guard) rather than by adding locking
+    /// here, since locking here would only convert "wasted recompute" into
+    /// "one walk blocking on another's full recompute," which is worse for
+    /// latency.
+    private func groupedUnitsForWalk(walkKey: String, calibreIDs: [Int]) async -> [FeedDisplayUnit] {
+        let candidateSet = Set(calibreIDs)
+        let now = Date()
+
+        if let cached = feedUnitsCache[walkKey],
+           cached.candidateIDs == candidateSet,
+           now.timeIntervalSince(cached.computedAt) < Self.feedUnitsCacheTTL {
+            LibraryFilterDebug.log("feed.unitsCache", [
+                "walkKey": walkKey,
+                "hit": true,
+                "candidateCount": calibreIDs.count
+            ])
+            return cached.units
+        }
+
+        let allPairs = await fetchFeedBooks(calibreIDs: calibreIDs, context: "feed:json:\(walkKey)")
+        let allUnits = await groupedDisplayUnits(from: allPairs)
+        feedUnitsCache[walkKey] = FeedUnitsCacheEntry(candidateIDs: candidateSet, units: allUnits, computedAt: now)
+        pruneStaleFeedUnitsCacheEntries(now: now)
+        LibraryFilterDebug.log("feed.unitsCache", [
+            "walkKey": walkKey,
+            "hit": false,
+            "candidateCount": calibreIDs.count
+        ])
+        return allUnits
+    }
+
+    /// Bounds cache growth for walks that never reach `hasMore == false` (client
+    /// disconnects mid-walk, crashes, etc.) — `flushFeedWalkSummary` already
+    /// evicts on a clean finish; this is the backstop for the unclean case.
+    private func pruneStaleFeedUnitsCacheEntries(now: Date) {
+        feedUnitsCache = feedUnitsCache.filter { now.timeIntervalSince($0.value.computedAt) < Self.feedUnitsCacheTTL }
     }
 
     private func buildJSONFeed(title: String,
@@ -1217,8 +1302,7 @@ actor LocalFeedServer {
         // bounds per-request EPUB-parse work once a single item can represent an
         // arbitrary number of books.
         let walkKey = feedWalkKey(for: feedURL)
-        let allPairs = await fetchFeedBooks(calibreIDs: calibreIDs, context: "feed:json:\(walkKey)")
-        let allUnits = await groupedDisplayUnits(from: allPairs)
+        let allUnits = await groupedUnitsForWalk(walkKey: walkKey, calibreIDs: calibreIDs)
         let clampedPage = max(page, 1)
         let (pageUnits, hasMore) = paginate(allUnits, page: clampedPage, maxBooksPerPage: Self.jsonFeedMaxBooksPerPage)
 
