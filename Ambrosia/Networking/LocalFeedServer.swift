@@ -1176,20 +1176,20 @@ actor LocalFeedServer {
     /// Keyed by `feedWalkKey(for:)` (the feed URL with `page`/`per_page`
     /// stripped) — the same key `feedWalkAccumulators` uses — so this lives and
     /// dies with the same walk.
-    private struct FeedUnitsCacheEntry {
+    struct FeedUnitsCacheEntry {
         let candidateIDs: Set<Int>   // fingerprint: which IDs this grouping was computed from
         let units: [FeedDisplayUnit]
         let computedAt: Date
     }
 
-    private var feedUnitsCache: [String: FeedUnitsCacheEntry] = [:]
+    private(set) var feedUnitsCache: [String: FeedUnitsCacheEntry] = [:]
 
     /// Walk cache entries older than this are treated as stale and recomputed
     /// rather than reused — protects against serving a page from a walk that
     /// never finished (client crashed, network dropped) indefinitely, and bounds
     /// how long a genuinely-changed collection can serve stale grouping to a
     /// slow walk.
-    private static let feedUnitsCacheTTL: TimeInterval = 120
+    static let feedUnitsCacheTTL: TimeInterval = 120
 
     /// `feedURL` with any `page=`/`per_page=` query stripped, so every page of
     /// the same walk accumulates under one key regardless of which page
@@ -1239,7 +1239,7 @@ actor LocalFeedServer {
     /// here, since locking here would only convert "wasted recompute" into
     /// "one walk blocking on another's full recompute," which is worse for
     /// latency.
-    private func groupedUnitsForWalk(walkKey: String, calibreIDs: [Int]) async -> [FeedDisplayUnit] {
+    func groupedUnitsForWalk(walkKey: String, calibreIDs: [Int]) async -> [FeedDisplayUnit] {
         let candidateSet = Set(calibreIDs)
         let now = Date()
 
