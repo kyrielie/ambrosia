@@ -807,16 +807,20 @@ actor LocalFeedServer {
         //     by seriesKey (with seriesIndex as tiebreak) fixes the order.
         //   - Performance: avoids an O(entries) rescan of the full grouped
         //     set for every one of `pairs`, i.e. O(pairs x entries) overall.
-        let sortedEntriesByBookID: [Int: [SeriesCacheEntry]] = Dictionary(
-            grouping: groupedByKey.values.flatMap { $0 },
-            by: \.calibreID
-        ).mapValues { entries in
-            entries.sorted {
-                $0.seriesKey != $1.seriesKey
-                    ? $0.seriesKey < $1.seriesKey
-                    : $0.seriesIndex < $1.seriesIndex
+        // Broken into typed sub-steps (rather than one grouping/flatMap/
+        // mapValues/ternary-sort chain) because the compiler couldn't
+        // type-check the single-expression version in reasonable time.
+        let allGroupedEntries: [SeriesCacheEntry] = groupedByKey.values.flatMap { $0 }
+        let entriesByBookID: [Int: [SeriesCacheEntry]] = Dictionary(grouping: allGroupedEntries, by: \.calibreID)
+        func orderedBySeries(_ entries: [SeriesCacheEntry]) -> [SeriesCacheEntry] {
+            entries.sorted { lhs, rhs in
+                if lhs.seriesKey != rhs.seriesKey {
+                    return lhs.seriesKey < rhs.seriesKey
+                }
+                return lhs.seriesIndex < rhs.seriesIndex
             }
         }
+        let sortedEntriesByBookID: [Int: [SeriesCacheEntry]] = entriesByBookID.mapValues(orderedBySeries)
 
         var emittedSeriesKeys = Set<String>()
         var units: [FeedDisplayUnit] = []
@@ -1616,7 +1620,7 @@ actor LocalFeedServer {
     /// transfer DB rather than an error, so a client polling this route while
     /// no library is open gets a well-formed (empty) response, not a 5xx.
     private func buildSQLiteTransferResponse(calibreIDs: [Int]) async throws -> HTTPResponse {
-        guard let library, let metaDB else {
+        guard let library, metaDB != nil else {
             return try await sqliteResponse(for: [])
         }
 
