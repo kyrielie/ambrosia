@@ -1,6 +1,7 @@
 import Foundation
 import Darwin
 import FlyingFox
+import SwiftData
 
 // MARK: - §9 / §4: LocalFeedServer
 //
@@ -138,6 +139,17 @@ actor LocalFeedServer {
     private var metaDB: AmbrosiaMetaDB?
     private var collectionStore: CollectionStore?
 
+    /// App-scoped, not library-scoped — unlike `library`/`metaDB`/
+    /// `collectionStore` this isn't replaced by `updateLibrary(_:metaDB:
+    /// collectionStore:)` on a library switch, since the SwiftData store
+    /// backing `BookState` is shared across every library. Used only by the
+    /// Phase 2 `.sqlite` route to read `totalReadPercent` for the wire
+    /// schema's `reading_progress` column. Optional because `LibrarySession`
+    /// itself may not have one yet in edge-case startup ordering; the
+    /// `.sqlite` route treats a nil container as "no progress data
+    /// available" rather than failing the whole request.
+    private var modelContainer: ModelContainer?
+
     /// Per-library namespace for UserDefaults-backed prefs (excluded
     /// collections, daily-story toggle, search snapshot).
     /// Empty when no library is set (server shouldn't be running then anyway).
@@ -186,10 +198,12 @@ actor LocalFeedServer {
     func start(library: CalibreLibrary,
                metaDB: AmbrosiaMetaDB,
                collectionStore: CollectionStore,
+               modelContainer: ModelContainer? = nil,
                config: Config = Config()) {
         self.library = library
         self.metaDB  = metaDB
         self.collectionStore = collectionStore
+        self.modelContainer = modelContainer
         self.config  = config
         _port = config.port
         restartServerTask()
@@ -206,9 +220,11 @@ actor LocalFeedServer {
     func startAndWaitUntilListening(library: CalibreLibrary,
                                      metaDB: AmbrosiaMetaDB,
                                      collectionStore: CollectionStore,
+                                     modelContainer: ModelContainer? = nil,
                                      config: Config = Config(),
                                      timeout: TimeInterval = 5) async -> Bool {
-        start(library: library, metaDB: metaDB, collectionStore: collectionStore, config: config)
+        start(library: library, metaDB: metaDB, collectionStore: collectionStore,
+              modelContainer: modelContainer, config: config)
         guard let server = httpServer else { return _isRunning }
         do {
             try await server.waitUntilListening(timeout: timeout)
@@ -280,6 +296,30 @@ actor LocalFeedServer {
                 await server.appendRoute("GET /feed/random-daily.json", handler: { [capturedSelf] request in
                     try await capturedSelf.handleRandomDailyFeed(format: .json, request: request)
                 })
+                // Phase 2: SQLite transfer routes (Wire Contract). Additive
+                // only, alongside the .xml/.json siblings above — those are
+                // untouched.
+                //
+                // /feed/collection/<id>.sqlite is dispatched from inside
+                // handleCollectionFeed (the existing "GET /feed/collection/*"
+                // route above), not a second wildcard route registered here:
+                // FlyingFox's route-matching precedence between two
+                // overlapping wildcard patterns ("*" vs "*.sqlite") isn't
+                // confirmed anywhere in the dump, so adding a second wildcard
+                // risks silently never firing (or shadowing the existing one)
+                // depending on match order — extending the one proven route's
+                // own suffix-dispatch is the safe option here.
+                //
+                // /feed/search.sqlite and /feed/random-daily.sqlite have no
+                // such ambiguity — the existing .xml/.json routes for these
+                // are exact literal paths, not wildcards, so a third exact
+                // path alongside them is unambiguous.
+                await server.appendRoute("GET /feed/search.sqlite", handler: { [capturedSelf] request in
+                    try await capturedSelf.handleSearchSQLiteFeed(request: request)
+                })
+                await server.appendRoute("GET /feed/random-daily.sqlite", handler: { [capturedSelf] request in
+                    try await capturedSelf.handleRandomDailySQLiteFeed(request: request)
+                })
                 await server.appendRoute("GET /feeds.opml", handler: { [capturedSelf] _ in
                     try await capturedSelf.handleOPML()
                 })
@@ -302,6 +342,7 @@ actor LocalFeedServer {
     private enum FeedFormat {
         case rss
         case json
+        case sqlite
     }
 
     private func handleIndex() async throws -> HTTPResponse {
@@ -352,9 +393,18 @@ actor LocalFeedServer {
             return HTTPResponse(statusCode: .notFound)
         }
         let suffix = String(path.dropFirst("/feed/collection/".count))
-        let format: FeedFormat = suffix.hasSuffix(".json") ? .json : .rss
+        let format: FeedFormat
+        if suffix.hasSuffix(".sqlite") {
+            format = .sqlite
+        } else if suffix.hasSuffix(".json") {
+            format = .json
+        } else {
+            format = .rss
+        }
         let collectionID: String
-        if suffix.hasSuffix(".json") {
+        if suffix.hasSuffix(".sqlite") {
+            collectionID = String(suffix.dropLast(7))
+        } else if suffix.hasSuffix(".json") {
             collectionID = String(suffix.dropLast(5))
         } else if suffix.hasSuffix(".xml") {
             collectionID = String(suffix.dropLast(4))
@@ -407,6 +457,8 @@ actor LocalFeedServer {
                 ifNoneMatch: ifNoneMatchHeader(request)
             )
             return httpResponse(for: result, contentType: "application/feed+json; charset=utf-8") { $0 }
+        case .sqlite:
+            return try await buildSQLiteTransferResponse(calibreIDs: memberIDs)
         }
     }
 
@@ -426,6 +478,11 @@ actor LocalFeedServer {
                 return HTTPResponse(statusCode: .ok,
                                     headers: [.contentType: "application/feed+json; charset=utf-8"],
                                     body: empty)
+            case .sqlite:
+                // Never reached: the .sqlite route is served by
+                // handleSearchSQLiteFeed, not this function.
+                assertionFailure("handleSearchFeed(.sqlite) — use handleSearchSQLiteFeed")
+                return HTTPResponse(statusCode: .notFound)
             }
         }
         switch format {
@@ -451,6 +508,9 @@ actor LocalFeedServer {
                 ifNoneMatch: ifNoneMatchHeader(request)
             )
             return httpResponse(for: result, contentType: "application/feed+json; charset=utf-8") { $0 }
+        case .sqlite:
+            assertionFailure("handleSearchFeed(.sqlite) — use handleSearchSQLiteFeed")
+            return HTTPResponse(statusCode: .notFound)
         }
     }
 
@@ -482,6 +542,9 @@ actor LocalFeedServer {
                 return HTTPResponse(statusCode: .ok,
                     headers: [.contentType: "application/feed+json; charset=utf-8"],
                     body: empty)
+            case .sqlite:
+                assertionFailure("handleRandomDailyFeed(.sqlite) — use handleRandomDailySQLiteFeed")
+                return HTTPResponse(statusCode: .notFound)
             }
         }
         let seed = Int(Date().timeIntervalSince1970 / 86400)
@@ -505,10 +568,48 @@ actor LocalFeedServer {
                 ifNoneMatch: ifNoneMatchHeader(request)
             )
             return httpResponse(for: result, contentType: "application/feed+json; charset=utf-8") { $0 }
+        case .sqlite:
+            assertionFailure("handleRandomDailyFeed(.sqlite) — use handleRandomDailySQLiteFeed")
+            return HTTPResponse(statusCode: .notFound)
         }
     }
 
-    /// Generates an OPML 2.0 outline of every collection feed, plus the
+    // MARK: - Phase 2: SQLite transfer route handlers
+    //
+    // Unlike the RSS/JSON Feed routes, there is no series-grouping pass here —
+    // the Wire Contract's `items` table is deliberately one flat row per book
+    // (Phase 2a: "populate one row per book"); Nectar's client does its own
+    // presentation-level grouping if it wants any, this route just hands over
+    // the raw per-book data.
+
+    private func handleSearchSQLiteFeed(request: HTTPRequest) async throws -> HTTPResponse {
+        guard let snapshot = CurrentSearchSnapshot.load(libraryHash: libraryNamespace) else {
+            return try await buildSQLiteTransferResponse(calibreIDs: [])
+        }
+        return try await buildSQLiteTransferResponse(calibreIDs: snapshot.calibreIDs)
+    }
+
+    private func handleRandomDailySQLiteFeed(request: HTTPRequest) async throws -> HTTPResponse {
+        let ud = UserDefaults.standard
+        let dailyEnabled = ud.object(forKey: "rp.feedServerEnableDailyStory.\(libraryNamespace)").flatMap { _ in ud.bool(forKey: "rp.feedServerEnableDailyStory.\(libraryNamespace)") as Bool? } ?? false
+        guard dailyEnabled else {
+            return HTTPResponse(statusCode: .notFound)
+        }
+        guard let library else {
+            return HTTPResponse(statusCode: .serviceUnavailable)
+        }
+        let allIDs = await library.allBookIDs()
+        guard !allIDs.isEmpty else {
+            return try await buildSQLiteTransferResponse(calibreIDs: [])
+        }
+        // Same daily-seed derivation as handleRandomDailyFeed — kept in sync
+        // by both reading from the day-index seed rather than a stored value,
+        // so a client polling both the .json and .sqlite routes on the same
+        // UTC day always gets the same picked book from either.
+        let seed = Int(Date().timeIntervalSince1970 / 86400)
+        let picked = allIDs[seed % allIDs.count]
+        return try await buildSQLiteTransferResponse(calibreIDs: [picked])
+    }
     /// current-search snapshot feed when one has been published. The random
     /// daily feed is a permanent entry — it has no collection ID and is
     /// always available once a library is open.
@@ -1505,6 +1606,214 @@ actor LocalFeedServer {
     private func buildEmptyJSONFeed(title: String, feedDescription: String, feedURL: String) -> Data {
         let doc = JSONFeedDocument(title: title, description: feedDescription, home_page_url: nil, feed_url: feedURL, items: [])
         return (try? Self.jsonFeedEncoder.encode(doc)) ?? Data("{}".utf8)
+    }
+
+    // MARK: - Phase 2: SQLite transfer route (build + compress + serve)
+
+    /// One flat `items` row per book — no series grouping here (unlike the
+    /// RSS/JSON Feed builders), per Phase 2a. `library`/`metaDB` guards mirror
+    /// `buildRSSFeed`'s "no library open" handling: an empty-but-valid
+    /// transfer DB rather than an error, so a client polling this route while
+    /// no library is open gets a well-formed (empty) response, not a 5xx.
+    private func buildSQLiteTransferResponse(calibreIDs: [Int]) async throws -> HTTPResponse {
+        guard let library, let metaDB else {
+            return try await sqliteResponse(for: [])
+        }
+
+        // Wire Contract: skipped books are excluded from `items` entirely.
+        // fetchFeedBooks/CollectionStore.members(of:) does NOT already filter
+        // these out (confirmed against the dump — see
+        // docs/ambrosia-feed-transfer-phase0-findings.md), so it's done
+        // explicitly here rather than assumed.
+        let skippedIDs = Set((try? await collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
+        let filteredIDs = calibreIDs.filter { !skippedIDs.contains($0) }
+        guard !filteredIDs.isEmpty else {
+            return try await sqliteResponse(for: [])
+        }
+
+        let pairs = await fetchFeedBooks(calibreIDs: filteredIDs, context: "feed:sqlite")
+
+        // Status columns: collection membership, batched the same way
+        // fetchFeedBooks batches ao3Map/seriesRows above — one membership
+        // query per system collection for this whole build, not per book.
+        let readLaterIDs = Set((try? await collectionStore?.members(of: SystemCollectionID.readLater)) ?? [])
+        let likedIDs = Set((try? await collectionStore?.members(of: SystemCollectionID.liked)) ?? [])
+        let finishedIDs = Set((try? await collectionStore?.members(of: SystemCollectionID.finished)) ?? [])
+        let progressByID = await readingProgressByCalibreID(for: filteredIDs)
+
+        var rows: [TransferDatabaseBuilder.Row] = []
+        rows.reserveCapacity(pairs.count)
+        for pair in pairs {
+            rows.append(await transferRow(
+                for: pair,
+                library: library,
+                isReadLater: readLaterIDs.contains(pair.book.id),
+                isLiked: likedIDs.contains(pair.book.id),
+                isFinished: finishedIDs.contains(pair.book.id),
+                readingProgress: progressByID[pair.book.id]
+            ))
+        }
+
+        LibraryFilterDebug.log("feed.sqlite.end", [
+            "candidates": calibreIDs.count,
+            "filtered": filteredIDs.count,
+            "rows": rows.count,
+        ])
+
+        return try await sqliteResponse(for: rows)
+    }
+
+    /// `BookState.totalReadPercent` for a batch of calibre IDs, keyed by
+    /// calibre ID. Returns an empty map (not a thrown error) when there's no
+    /// `ModelContainer` yet or the fetch fails — a missing SwiftData store
+    /// means "no progress data available," not "fail the whole route."
+    private func readingProgressByCalibreID(for calibreIDs: [Int]) async -> [Int: Double] {
+        guard let modelContainer, !calibreIDs.isEmpty else { return [:] }
+        let idSet = Set(calibreIDs)
+        return await Task.detached(priority: .utility) {
+            let context = ModelContext(modelContainer)
+            var descriptor = FetchDescriptor<BookState>(
+                predicate: #Predicate { idSet.contains($0.calibreID) }
+            )
+            descriptor.propertiesToFetch = [\.calibreID, \.totalReadPercent]
+            guard let states = try? context.fetch(descriptor) else { return [:] }
+            return states.reduce(into: [Int: Double]()) { partial, state in
+                partial[state.calibreID] = state.totalReadPercent
+            }
+        }.value
+    }
+
+    /// Builds one `items` row. Field-for-field mirrors `buildJSONFeedItem`'s
+    /// mapping (same source data: `CalibreBook`, `AO3MetadataRecord`,
+    /// `AO3TagBuckets`, `anthologySeriesEntry`) so the two wire formats never
+    /// silently disagree about what a given book's metadata is — the only
+    /// difference is JSON arrays are Swift `[String]` there and
+    /// pre-serialized JSON-text columns here (Wire Contract: `*_json`
+    /// columns), since SQLite has no native array type.
+    private func transferRow(for pair: FeedBookPair,
+                              library: CalibreLibrary,
+                              isReadLater: Bool,
+                              isLiked: Bool,
+                              isFinished: Bool,
+                              readingProgress: Double?) async -> TransferDatabaseBuilder.Row {
+        let book = pair.book
+        let ao3 = pair.ao3
+
+        let summary = book.comment.map { HTMLStripper.strip($0) } ?? ""
+        let contentHTML = await cachedMergedHTML(book: book, library: library)
+
+        let datePublished: String?
+        if let ao3Date = ao3?.publishedDate, !ao3Date.isEmpty {
+            datePublished = iso8601DateString(from: ao3Date)
+        } else if let calibreDate = book.publishedDate,
+                  calibreDate > Self.calibrePubdateSentinel {
+            datePublished = iso8601DateString(from: calibreDate)
+        } else {
+            datePublished = nil
+        }
+        let dateModified = ao3?.updatedDate.flatMap { $0.isEmpty ? nil : iso8601DateString(from: $0) }
+
+        let authors: [JSONFeedAuthor] = book.authors.map { name in
+            let url = (book.authors.count == 1 ? ao3?.authorUsername : nil)
+                .map { "https://archiveofourown.org/users/\($0)" }
+            return JSONFeedAuthor(name: name, url: url)
+        }
+
+        let buckets = AO3TagBuckets.from(tags: book.tags)
+        var seenTags = Set<String>()
+        var tags: [String] = []
+        for tag in buckets.regular + (ao3?.additionalTags ?? []) {
+            if seenTags.insert(tag).inserted { tags.append(tag) }
+        }
+        func dedup(_ values: [String]) -> [String] {
+            var seen = Set<String>()
+            return values.filter { seen.insert($0).inserted }
+        }
+        let categories = dedup(buckets.categories + (ao3?.categories ?? []))
+        let anthologyEntry = anthologySeriesEntry(for: book, seriesEntries: pair.seriesEntries)
+        let seriesEntries = ao3?.series.map { JSONFeedSeriesEntry(name: $0.name, index: $0.index, ao3_id: $0.ao3ID) } ?? []
+
+        func json<T: Encodable>(_ value: T) -> String {
+            (try? String(data: Self.jsonFeedEncoder.encode(value), encoding: .utf8)) ?? "[]"
+        }
+
+        return TransferDatabaseBuilder.Row(
+            calibreID: book.id,
+            ao3WorkID: ao3?.workID.flatMap { $0.isEmpty ? nil : $0 },
+            isAnthology: anthologyEntry != nil,
+            ao3SeriesID: anthologyEntry?.ao3SeriesID,
+            seriesName: anthologyEntry != nil && (anthologyEntry?.ao3SeriesID?.isEmpty ?? true) ? anthologyEntry?.seriesName : nil,
+            url: ao3?.storyURL,
+            title: book.displayTitle,
+            contentHTML: contentHTML,
+            summary: summary.isEmpty ? nil : summary,
+            datePublished: datePublished,
+            dateModified: dateModified,
+            authorsJSON: json(authors),
+            tagsJSON: json(tags),
+            wordCount: ao3?.wordCount ?? book.wordCount,
+            chapterCurrent: ao3?.chapterCurrent,
+            chapterTotal: ao3?.chapterTotal,
+            isComplete: ao3?.isComplete,
+            fandomsJSON: json(ao3?.fandoms.compactMap { $0.isEmpty ? nil : $0 } ?? []),
+            relationshipsJSON: json(ao3?.relationships.compactMap { $0.isEmpty ? nil : $0 } ?? []),
+            charactersJSON: json(ao3?.characters.compactMap { $0.isEmpty ? nil : $0 } ?? []),
+            ratingsJSON: json(buckets.ratings),
+            warningsJSON: json(buckets.warnings),
+            categoriesJSON: json(categories),
+            seriesJSON: json(seriesEntries),
+            isReadLater: isReadLater,
+            isLiked: isLiked,
+            isFinished: isFinished,
+            readingProgress: readingProgress
+        )
+    }
+
+    /// Writes `rows` to a fresh temp-file SQLite DB, LZFSE-compresses the
+    /// file's raw bytes, and returns the HTTP response. Per the Wire
+    /// Contract: no `Content-Encoding` header — LZFSE isn't a registered
+    /// HTTP content-coding, so this is a deliberate route-specific payload
+    /// contract, not content negotiation. A failed build/compress is a hard
+    /// error (503) here, not a silent empty-body fallback, since a
+    /// truncated/garbled `.sqlite` payload the client can't tell apart from a
+    /// valid one is worse than an explicit failure.
+    private func sqliteResponse(for rows: [TransferDatabaseBuilder.Row]) async throws -> HTTPResponse {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ambrosia-feed-transfer-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        do {
+            try TransferDatabaseBuilder.build(rows: rows, at: tempURL)
+        } catch {
+            #if DEBUG
+            print("[LocalFeedServer] sqlite transfer build failed: \(error)")
+            #endif
+            return HTTPResponse(statusCode: .internalServerError)
+        }
+
+        let fileData: Data
+        do {
+            fileData = try Data(contentsOf: tempURL)
+        } catch {
+            return HTTPResponse(statusCode: .internalServerError)
+        }
+
+        // NSData.compressed(using:), per the Wire Contract's reference
+        // implementation (matches Nectar's CloudKitArticlesZone.swift
+        // exactly) — plain Foundation, no `import Compression` needed for
+        // this half (unlike Phase 1's gzip work). Unlike the reference's
+        // `try?`-swallowed-failure pattern, a failed compress here is a hard
+        // error, not a silent fallback (Wire Contract: Compression section).
+        let nsData = fileData as NSData
+        guard let compressed = try? nsData.compressed(using: .lzfse) else {
+            return HTTPResponse(statusCode: .internalServerError)
+        }
+
+        return HTTPResponse(
+            statusCode: .ok,
+            headers: [.contentType: "application/x-ambrosia-feed-transfer"],
+            body: compressed as Data
+        )
     }
 
     private func buildJSONFeedItem(book: CalibreBook,
