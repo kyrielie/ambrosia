@@ -21,6 +21,7 @@ struct AmbrosiaApp: App {
             sharedModelContainer = container
             appDelegate.modelContainer = container
             appDelegate.session = session
+            session.modelContainer = container
         } catch {
             #if DEBUG
             print("[Ambrosia] SwiftData store incompatible: \(error)")
@@ -37,6 +38,7 @@ struct AmbrosiaApp: App {
                 sharedModelContainer = container
                 appDelegate.modelContainer = container
                 appDelegate.session = session
+                session.modelContainer = container
             } catch {
                 fatalError("Could not create temporary ModelContainer: \(error)")
             }

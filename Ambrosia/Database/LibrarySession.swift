@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftData
 
 extension Notification.Name {
     static let seriesOrMergedCollectionDidChange = Notification.Name("Ambrosia.seriesOrMergedCollectionDidChange")
@@ -30,6 +31,16 @@ final class LibrarySession {
 
     // §4: Local RSS feed server. nil when disabled in Preferences (off by default).
     private(set) var feedServer: LocalFeedServer?
+
+    /// Set once from `AmbrosiaApp.init()` alongside `appDelegate.modelContainer`.
+    /// Not library-scoped (unlike `metaDB`/`collectionStore`) — the SwiftData
+    /// store is shared across every Calibre library the app opens, so this
+    /// doesn't need to be replaced on a library switch the way those are.
+    /// Needed by the Phase 2 `.sqlite` feed route to read `BookState.
+    /// totalReadPercent` for the wire schema's `reading_progress` column;
+    /// `LocalFeedServer` has no other path to a `ModelContainer` (see
+    /// docs/ambrosia-feed-transfer-phase0-findings.md).
+    var modelContainer: ModelContainer?
 
     /// Cached total book count from metadata.db. Refreshed on library open
     /// and on search input (debounced). Never recomputed on page turns.
@@ -461,6 +472,7 @@ final class LibrarySession {
                 library: library,
                 metaDB: metaDB,
                 collectionStore: collectionStore,
+                modelContainer: modelContainer,
                 config: config
             )
         }
@@ -480,6 +492,7 @@ final class LibrarySession {
             library: library,
             metaDB: metaDB,
             collectionStore: collectionStore,
+            modelContainer: modelContainer,
             config: config,
             timeout: timeout
         )
