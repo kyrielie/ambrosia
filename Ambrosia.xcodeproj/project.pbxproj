@@ -23,6 +23,7 @@
 		622978622FEE18E900F0D47A /* FlyingFox in Frameworks */ = {isa = PBXBuildFile; productRef = 622978612FEE18E900F0D47A /* FlyingFox */; };
 		622978642FEE18E900F0D47A /* FlyingSocks in Frameworks */ = {isa = PBXBuildFile; productRef = 622978632FEE18E900F0D47A /* FlyingSocks */; };
 		6229786E2FEE318600F0D47A /* LocalFeedServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6229786C2FEE318600F0D47A /* LocalFeedServer.swift */; };
+		9A00000000000000000001F /* SeriesGroupBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A00000000000000000001 /* SeriesGroupBuilder.swift */; };
 		622978712FEE322100F0D47A /* CacheTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6229786F2FEE322100F0D47A /* CacheTypes.swift */; };
 		627CB5F02FFE06A00045C09E /* LibraryVisibilityPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 627CB5EF2FFE06A00045C09E /* LibraryVisibilityPolicy.swift */; };
 		62BD17022FDA2B7000BBB857 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 62BD17012FDA2B7000BBB857 /* Assets.xcassets */; };
@@ -110,6 +111,7 @@
 		4D1E361C90E1497DA1CD75E2 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		5037BC30F5C947B49D7196AE /* LibraryWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryWindowController.swift; sourceTree = "<group>"; };
 		6229786C2FEE318600F0D47A /* LocalFeedServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalFeedServer.swift; sourceTree = "<group>"; };
+		9A00000000000000000001 /* SeriesGroupBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeriesGroupBuilder.swift; sourceTree = "<group>"; };
 		6229786F2FEE322100F0D47A /* CacheTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CacheTypes.swift; sourceTree = "<group>"; };
 		627CB5EF2FFE06A00045C09E /* LibraryVisibilityPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryVisibilityPolicy.swift; sourceTree = "<group>"; };
 		62BD17012FDA2B7000BBB857 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -303,6 +305,7 @@
 			isa = PBXGroup;
 			children = (
 				62E763022FF2266E00B84049 /* RSSPublishView.swift */,
+				9A00000000000000000001 /* SeriesGroupBuilder.swift */,
 				1C4325980DE54054B34FA01C /* FilterDrawer */,
 				D100000000000010 /* Email */,
 				5037BC30F5C947B49D7196AE /* LibraryWindowController.swift */,
@@ -549,6 +552,7 @@
 				FC001122334455667788DDEE3 /* LibrarySession.swift in Sources */,
 				DCB818E84DEF4B2BBC8A8147 /* AO3Metadata.swift in Sources */,
 				6229786E2FEE318600F0D47A /* LocalFeedServer.swift in Sources */,
+				9A00000000000000000001F /* SeriesGroupBuilder.swift in Sources */,
 				622978712FEE322100F0D47A /* CacheTypes.swift in Sources */,
 				AA2000000000000000000001 /* AO3MetadataExtractor.swift in Sources */,
 				AA2000000000000000000002 /* ExtractionProgress.swift in Sources */,
