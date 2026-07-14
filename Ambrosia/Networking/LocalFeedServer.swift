@@ -1179,16 +1179,30 @@ actor LocalFeedServer {
     private struct FeedUnitsCacheEntry {
         let candidateIDs: Set<Int>   // fingerprint: which IDs this grouping was computed from
         let units: [FeedDisplayUnit]
-        let computedAt: Date
+        var lastAccessedAt: Date     // sliding TTL anchor — see groupedUnitsForWalk
     }
 
     private var feedUnitsCache: [String: FeedUnitsCacheEntry] = [:]
 
-    /// Walk cache entries older than this are treated as stale and recomputed
-    /// rather than reused — protects against serving a page from a walk that
-    /// never finished (client crashed, network dropped) indefinitely, and bounds
-    /// how long a genuinely-changed collection can serve stale grouping to a
-    /// slow walk.
+    /// Walk cache entries idle longer than this are treated as stale and
+    /// recomputed rather than reused — protects against serving a page from a
+    /// walk that never finished (client crashed, network dropped) indefinitely.
+    ///
+    /// This is a *sliding* window measured from the entry's last access, not
+    /// its creation: `groupedUnitsForWalk` bumps `lastAccessedAt` on every hit.
+    /// An earlier version measured from creation time only, which meant a
+    /// walk slow enough to take longer than the TTL to page through (observed
+    /// in practice: a 763-book/41-page collection walk interleaved with a
+    /// 453-book/28-page search walk on the same connection) would have its
+    /// entry expire mid-walk even though it was being actively read every few
+    /// hundred milliseconds. That forced a silent recompute partway through
+    /// pagination — wasteful on its own, but worse, nothing guarantees
+    /// `groupedDisplayUnits` reproduces the exact same ordering on a second
+    /// call (SQLite tie-breaking among same-titled books, etc.), so pages
+    /// straddling the recompute boundary could duplicate or skip items
+    /// relative to the client's already-fetched pages. A sliding TTL means an
+    /// actively-progressing walk never expires on its own; only a genuinely
+    /// abandoned one does.
     private static let feedUnitsCacheTTL: TimeInterval = 120
 
     /// `feedURL` with any `page=`/`per_page=` query stripped, so every page of
@@ -1243,24 +1257,48 @@ actor LocalFeedServer {
         let candidateSet = Set(calibreIDs)
         let now = Date()
 
-        if let cached = feedUnitsCache[walkKey],
-           cached.candidateIDs == candidateSet,
-           now.timeIntervalSince(cached.computedAt) < Self.feedUnitsCacheTTL {
+        if var cached = feedUnitsCache[walkKey] {
+            let age = now.timeIntervalSince(cached.lastAccessedAt)
+            if cached.candidateIDs == candidateSet, age < Self.feedUnitsCacheTTL {
+                cached.lastAccessedAt = now
+                feedUnitsCache[walkKey] = cached
+                LibraryFilterDebug.log("feed.unitsCache", [
+                    "walkKey": walkKey,
+                    "hit": true,
+                    "candidateCount": calibreIDs.count,
+                    "ageSeconds": age
+                ])
+                return cached.units
+            }
+            // Miss with an existing entry: distinguish *why* for anyone reading
+            // the log later — a candidate-set change and a TTL expiry look
+            // identical as a bare "hit=false" and used to be logged the same
+            // way, which made this exact bug (TTL expiring mid-walk) invisible
+            // without manually diffing candidateCount across surrounding lines.
+            let reason = cached.candidateIDs != candidateSet ? "candidateChanged" : "ttlExpired"
             LibraryFilterDebug.log("feed.unitsCache", [
                 "walkKey": walkKey,
-                "hit": true,
-                "candidateCount": calibreIDs.count
+                "hit": false,
+                "reason": reason,
+                "candidateCount": calibreIDs.count,
+                "previousCandidateCount": cached.candidateIDs.count,
+                "ageSeconds": age
             ])
-            return cached.units
+            let allPairs = await fetchFeedBooks(calibreIDs: calibreIDs, context: "feed:json:\(walkKey)")
+            let allUnits = await groupedDisplayUnits(from: allPairs)
+            feedUnitsCache[walkKey] = FeedUnitsCacheEntry(candidateIDs: candidateSet, units: allUnits, lastAccessedAt: now)
+            pruneStaleFeedUnitsCacheEntries(now: now)
+            return allUnits
         }
 
         let allPairs = await fetchFeedBooks(calibreIDs: calibreIDs, context: "feed:json:\(walkKey)")
         let allUnits = await groupedDisplayUnits(from: allPairs)
-        feedUnitsCache[walkKey] = FeedUnitsCacheEntry(candidateIDs: candidateSet, units: allUnits, computedAt: now)
+        feedUnitsCache[walkKey] = FeedUnitsCacheEntry(candidateIDs: candidateSet, units: allUnits, lastAccessedAt: now)
         pruneStaleFeedUnitsCacheEntries(now: now)
         LibraryFilterDebug.log("feed.unitsCache", [
             "walkKey": walkKey,
             "hit": false,
+            "reason": "newWalk",
             "candidateCount": calibreIDs.count
         ])
         return allUnits
@@ -1269,8 +1307,10 @@ actor LocalFeedServer {
     /// Bounds cache growth for walks that never reach `hasMore == false` (client
     /// disconnects mid-walk, crashes, etc.) — `flushFeedWalkSummary` already
     /// evicts on a clean finish; this is the backstop for the unclean case.
+    /// Uses the same sliding `lastAccessedAt` as `groupedUnitsForWalk`, so an
+    /// actively-progressing walk is never pruned out from under itself.
     private func pruneStaleFeedUnitsCacheEntries(now: Date) {
-        feedUnitsCache = feedUnitsCache.filter { now.timeIntervalSince($0.value.computedAt) < Self.feedUnitsCacheTTL }
+        feedUnitsCache = feedUnitsCache.filter { now.timeIntervalSince($0.value.lastAccessedAt) < Self.feedUnitsCacheTTL }
     }
 
 #if DEBUG
