@@ -719,6 +719,48 @@ actor LocalFeedServer {
 
         var emittedSeriesKeys = Set<String>()
         var units: [FeedDisplayUnit] = []
+
+        // A series group is only emitted as a `.series` unit when its leading
+        // work is itself present in `pairs` — matching the existing, correct
+        // behavior for a leader excluded from this page/collection (its
+        // followers still fall through to standalone `.book` units in that
+        // case, since the group can't be represented without a leader).
+        // Precompute which groups clear that bar, and the full set of member
+        // IDs those groups will consume, *before* the per-pair pass below.
+        // This has to happen up front rather than incrementally during the
+        // pass, since `pairs` is title-sorted, not series-order — a follower
+        // can be iterated before its leader, so there's no single forward
+        // pass that can both discover a group and suppress its followers'
+        // standalone emission at the same time.
+        //
+        // Before this existed: every non-leading series member fell through
+        // to `if !emittedAny { units.append(.book(pair)) }` regardless of
+        // whether its group had already been (or was about to be) emitted,
+        // because the condition above only ever matches a *leader* against
+        // itself. Followers were counted twice — once nested in the group's
+        // `members`, once as their own top-level unit — which is why grouped
+        // totals came out at or above the raw candidate count instead of
+        // collapsing multi-member series into one item apiece.
+        var consumedMemberIDs = Set<Int>()
+        for group in seriesByKey.values {
+            guard let leader = group.works.first, pairByID[leader.id] != nil else { continue }
+            for work in group.works { consumedMemberIDs.insert(work.id) }
+        }
+
+        // Diagnostic only, alongside the emission loop below — does not
+        // change what gets emitted. `consumedMemberIDs` only suppresses the
+        // standalone `.book` fallback for a follower whose *own* leading
+        // group got emitted; it does not stop that same follower from also
+        // being pulled into a second, *different* emitted group's `members`
+        // list when it's a non-leading member of more than one series at
+        // once (e.g. a crossover work). That case is legitimate per
+        // assignSeriesItems' multi-series behavior, but it's
+        // indistinguishable downstream from an actual duplication bug —
+        // both put the same calibre ID on two different feed pages — so log
+        // which one actually happened instead of requiring it to be
+        // reconstructed by hand from paginated `ids=` lines later.
+        var memberSeriesKeys: [Int: Set<String>] = [:]
+
         for pair in pairs {
             let bookEntries = sortedEntriesByBookID[pair.book.id] ?? []
             var emittedAny = false
@@ -730,10 +772,22 @@ actor LocalFeedServer {
                 units.append(.series(group, members: memberPairs))
                 emittedSeriesKeys.insert(entry.seriesKey)
                 emittedAny = true
+                for member in memberPairs { memberSeriesKeys[member.book.id, default: []].insert(entry.seriesKey) }
             }
-            if !emittedAny {
+            if !emittedAny && !consumedMemberIDs.contains(pair.book.id) {
                 units.append(.book(pair))
             }
+        }
+
+        let crossSeriesDuplicates = memberSeriesKeys.filter { $0.value.count > 1 }
+        if !crossSeriesDuplicates.isEmpty {
+            LibraryFilterDebug.log("feed.grouping.crossSeriesMember", [
+                "count": crossSeriesDuplicates.count,
+                "ids": crossSeriesDuplicates.keys.sorted().map(String.init).joined(separator: ","),
+                "detail": crossSeriesDuplicates.sorted(by: { $0.key < $1.key })
+                    .map { "\($0.key):\($0.value.sorted().joined(separator: "+"))" }
+                    .joined(separator: ",")
+            ])
         }
         return units
     }
@@ -783,6 +837,15 @@ actor LocalFeedServer {
         case body(etag: String, data: Body)
     }
 
+    /// Phase 1: gzip every `.xml`/`.json` feed body before it goes on the wire
+    /// (Wire Contract → Compression). `URLSession` on the Nectar side decodes
+    /// `Content-Encoding: gzip` transparently — no client-side coordination
+    /// needed, this is standard HTTP, unlike the `.sqlite` route's LZFSE
+    /// (Phase 2), which deliberately does NOT set this header.
+    ///
+    /// If compression fails for any reason, falls back to serving the
+    /// uncompressed body with no `Content-Encoding` header rather than
+    /// dropping the response — a slightly bigger response beats a broken one.
     private func httpResponse<Body>(for result: FeedBuildResult<Body>,
                                      contentType: String,
                                      toData: (Body) -> Data) -> HTTPResponse {
@@ -790,9 +853,19 @@ actor LocalFeedServer {
         case .notModified(let etag):
             return HTTPResponse(statusCode: .notModified, headers: [.eTag: etag])
         case .body(let etag, let data):
+            let uncompressed = toData(data)
+            guard let gzipped = try? GzipEncoder.gzip(uncompressed) else {
+                return HTTPResponse(statusCode: .ok,
+                                    headers: [.contentType: contentType, .eTag: etag],
+                                    body: uncompressed)
+            }
             return HTTPResponse(statusCode: .ok,
-                                headers: [.contentType: contentType, .eTag: etag],
-                                body: toData(data))
+                                headers: [
+                                    .contentType: contentType,
+                                    .eTag: etag,
+                                    HTTPHeader("Content-Encoding"): "gzip",
+                                ],
+                                body: gzipped)
         }
     }
 
@@ -1080,7 +1153,7 @@ actor LocalFeedServer {
 
     private static let jsonFeedEncoder: JSONEncoder = {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.outputFormatting = [.sortedKeys]
         return encoder
     }()
 
