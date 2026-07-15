@@ -1044,6 +1044,55 @@ actor AmbrosiaMetaDB {
         }
     }
 
+    /// Expands a raw set of matched calibre IDs to include every member of any
+    /// qualifying series touched by the match. "Qualifying" mirrors
+    /// `neverLeadsSeriesIDs()`/`leadsAtLeastOneSeriesIDs()`: more than one
+    /// member and not anthology-flagged — a match against a singleton or an
+    /// anthology series is left as-is.
+    ///
+    /// This is series-grouping's Phase 1 fix: today a search hit on a
+    /// non-leading member (e.g. book 3 of a series) never pulls in the
+    /// series leader, so `LibraryVisibilityPolicy`'s existing
+    /// `seriesOrMergedIDs` deny-list strips the only matched row and the
+    /// whole series silently disappears from grouped results. Unioning the
+    /// full member set into the matched IDs before that filter runs means
+    /// the leader survives the deny-list check as it would for any other
+    /// query, restoring the series row.
+    ///
+    /// Returns the union of `calibreIDs` and every expansion; never removes
+    /// an ID that was passed in, including ones that don't belong to any
+    /// series.
+    func expandedSeriesMemberIDs(for calibreIDs: [Int]) throws -> Set<Int> {
+        guard !calibreIDs.isEmpty else { return [] }
+        let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")
+        let args = calibreIDs.map { $0 as Binding? }
+        let sql = """
+        WITH keyed AS (
+            SELECT calibre_id,
+                   COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name) AS series_key,
+                   is_anthology
+            FROM series_cache
+        ),
+        matched_keys AS (
+            SELECT DISTINCT series_key FROM keyed WHERE calibre_id IN (\(placeholders))
+        ),
+        qualifying_keys AS (
+            SELECT series_key
+            FROM keyed
+            GROUP BY series_key
+            HAVING COUNT(*) > 1 AND MAX(is_anthology) = 0
+        )
+        SELECT calibre_id
+        FROM keyed
+        WHERE series_key IN (SELECT series_key FROM matched_keys)
+          AND series_key IN (SELECT series_key FROM qualifying_keys)
+        """
+        let rows = try prepare(sql, args)
+        var result = Set(calibreIDs)
+        result.formUnion(rows.compactMap { $0.int(at: 0) })
+        return result
+    }
+
     /// Returns every orphaned/non-leading singleton series membership per book, keyed by
     /// calibreID. A book that is a solo, non-leading member of more than one series (e.g.
     /// orphaned #3 of series B and orphaned #5 of series C) gets one entry per series here —
