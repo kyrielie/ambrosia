@@ -894,6 +894,20 @@ actor LocalFeedServer {
                     .joined(separator: ",")
             ])
         }
+        // §SeriesGrouping Phase 3: `pairs` arrives title-sorted per-book
+        // (fetchFeedBooks always fetches with sort: .title), which is fine
+        // for standalone books but leaves a grouped series wherever its
+        // leading book's own title happens to alphabetize — the same
+        // mis-ordering Phase 2 fixed for the in-app title sort. Re-sort the
+        // built units by the same key: the series' own name for a `.series`
+        // unit, the book's own title for a standalone `.book` unit.
+        func displayTitleKey(_ unit: FeedDisplayUnit) -> String {
+            switch unit {
+            case .book(let pair): return pair.book.title
+            case .series(let group, _): return group.seriesName
+            }
+        }
+        units.sort { displayTitleKey($0) < displayTitleKey($1) }
         return units
     }
 

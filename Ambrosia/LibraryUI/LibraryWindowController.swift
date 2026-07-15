@@ -876,7 +876,20 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             ids = await session.library?.fetchAllMatchingIDs(query: q, filter: nil, restrictIDs: nil) ?? []
         }
         let libHash = session.activePath.map { libraryHash(for: URL(fileURLWithPath: $0)) } ?? ""
-        CurrentSearchSnapshot.publish(calibreIDs: ids, label: label, libraryHash: libHash)
+        // §SeriesGrouping Phase 3: this is the same fetchAllMatchingIDs raw
+        // result the paging methods used to publish ungrouped — a match on
+        // a non-leading series member would previously publish that one
+        // book with no series context, instead of the whole series. Expand
+        // it the same way Phase 1 does for the in-app paging paths, so
+        // /feed/search.xml's grouping (in groupedDisplayUnits) has the full
+        // membership to work with once it also switches to this ID set's
+        // expanded form.
+        let expandedIDs = await SeriesMatchExpansion.expand(
+            matchedIDs: ids,
+            shouldGroupSeriesRows: toolbarState?.groupBySeries ?? false,
+            metaDB: session.metaDB
+        )
+        CurrentSearchSnapshot.publish(calibreIDs: expandedIDs, label: label, libraryHash: libHash)
     }
 
     /// Exports all collection feeds (plus the daily-story and current-search
