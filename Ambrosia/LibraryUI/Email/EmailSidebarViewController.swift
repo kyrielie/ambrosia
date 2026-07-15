@@ -32,8 +32,8 @@ final class EmailSidebarViewController: NSViewController,
     var onContextMenuOpen:             (([CalibreBook]) -> Void)?
     var onContextMenuReadLater:        (([CalibreBook]) -> Void)?
     var onContextMenuCollectionPicker: (([CalibreBook], NSView, NSRect) -> Void)?
-    var onToggleLiked:                 ((CalibreBook) -> Void)?
-    var onToggleReadLater:             ((CalibreBook) -> Void)?
+    var onToggleLiked:                 (([CalibreBook]) -> Void)?
+    var onToggleReadLater:             (([CalibreBook]) -> Void)?
 
     // MARK: - Dependencies
 
@@ -199,11 +199,11 @@ final class EmailSidebarViewController: NSViewController,
             isInReadLater: readLaterIDs.contains(items[row].primaryBook.id),
             collectionPills: manualCollectionPills(for: items[row]),
             showCollectionPills: ReaderPreferences.shared.emailPillsShowCollections,
-            onToggleLiked: { [weak self] book in
-                self?.onToggleLiked?(book)
+            onToggleLiked: { [weak self] books in
+                self?.onToggleLiked?(books)
             },
-            onToggleReadLater: { [weak self] book in
-                self?.onToggleReadLater?(book)
+            onToggleReadLater: { [weak self] books in
+                self?.onToggleReadLater?(books)
             }
         )
         return cell
@@ -472,9 +472,9 @@ final class EmailBookCellView: NSTableCellView {
     private let progressFill  = NSView()
     private let likeButton = NSButton()
     private let readLaterButton = NSButton()
-    private var representedBook: CalibreBook?
-    private var onToggleLiked: ((CalibreBook) -> Void)?
-    private var onToggleReadLater: ((CalibreBook) -> Void)?
+    private var representedContextBooks: [CalibreBook] = []
+    private var onToggleLiked: (([CalibreBook]) -> Void)?
+    private var onToggleReadLater: (([CalibreBook]) -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -611,10 +611,10 @@ final class EmailBookCellView: NSTableCellView {
         isInReadLater: Bool,
         collectionPills: [String],
         showCollectionPills: Bool,
-        onToggleLiked: @escaping (CalibreBook) -> Void,
-        onToggleReadLater: @escaping (CalibreBook) -> Void
+        onToggleLiked: @escaping ([CalibreBook]) -> Void,
+        onToggleReadLater: @escaping ([CalibreBook]) -> Void
     ) {
-        representedBook = item.primaryBook
+        representedContextBooks = item.contextBooks
         self.onToggleLiked = onToggleLiked
         self.onToggleReadLater = onToggleReadLater
         likeButton.image = NSImage(systemSymbolName: isLiked ? "star.fill" : "star", accessibilityDescription: isLiked ? "Unlike" : "Like")?
@@ -664,13 +664,13 @@ final class EmailBookCellView: NSTableCellView {
     }
 
     @objc private func toggleLiked() {
-        guard let representedBook else { return }
-        onToggleLiked?(representedBook)
+        guard !representedContextBooks.isEmpty else { return }
+        onToggleLiked?(representedContextBooks)
     }
 
     @objc private func toggleReadLaterAction() {
-        guard let representedBook else { return }
-        onToggleReadLater?(representedBook)
+        guard !representedContextBooks.isEmpty else { return }
+        onToggleReadLater?(representedContextBooks)
     }
 
     private func configureCollectionPills(_ names: [String]) {

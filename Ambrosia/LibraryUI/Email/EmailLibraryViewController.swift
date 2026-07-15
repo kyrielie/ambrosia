@@ -271,16 +271,17 @@ final class EmailLibraryViewController: NSViewController {
                 await self.refreshCollectionSnapshots()
             }
         }
-        sidebarVC.onToggleLiked = { [weak self] book in
-            guard let self else { return }
-        sidebarVC.onToggleReadLater = { [weak self] book in
-            self?.toggleReadLater(for: book)
-        }
+        sidebarVC.onToggleLiked = { [weak self] books in
+            guard let self, !books.isEmpty else { return }
             Task {
-                try? await self.session.collectionStore?.toggleLiked(calibreID: book.id)
+                let shouldLike = !books.allSatisfy { self.likedIDs.contains($0.id) }
+                try? await self.session.collectionStore?.setLiked(calibreIDs: books.map(\.id), liked: shouldLike)
                 self.session.bumpMembershipVersion()  // §7
                 await self.refreshCollectionSnapshots()
             }
+        }
+        sidebarVC.onToggleReadLater = { [weak self] books in
+            self?.toggleReadLater(for: books)
         }
         sidebarVC.onContextMenuReadLater = { [weak self] books in
             guard let self else { return }
@@ -1524,18 +1525,16 @@ final class EmailLibraryViewController: NSViewController {
         return ids
     }
 
-    private func toggleReadLater(for book: CalibreBook) {
-        let isCurrentlyInReadLater = readLaterIDs.contains(book.id)
+    /// "All satisfy" mirrors LibraryRootView's `toggleReadLater(for series:)`
+    /// semantics: a series only shows as read-later once every work is, so a
+    /// partially-added group adds the rest rather than removing the ones
+    /// already in. For a single-book `books` array this reduces to the
+    /// original book-level toggle.
+    private func toggleReadLater(for books: [CalibreBook]) {
+        guard !books.isEmpty else { return }
+        let shouldAdd = !books.allSatisfy { readLaterIDs.contains($0.id) }
         Task {
-            if isCurrentlyInReadLater {
-                try? await session.collectionStore?.remove(calibreID: book.id, from: SystemCollectionID.readLater)
-            } else {
-                try? await session.collectionStore?.bulkAdd(calibreIDs: [book.id], to: SystemCollectionID.readLater)
-            }
-            // §Phase1: bumpMembershipVersion() removed here — it is now called
-            // by session.refreshCollectionSnapshots() itself (invoked by the
-            // line below) exactly when it detects the read-later set actually
-            // changed, so an explicit call here would double-bump.
+            try? await session.collectionStore?.setReadLater(calibreIDs: books.map(\.id), inReadLater: shouldAdd)
             await refreshCollectionSnapshots()
         }
     }
