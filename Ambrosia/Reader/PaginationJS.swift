@@ -199,9 +199,24 @@ enum PaginationJS {
         var col = Math.max(0, Math.min(Math.round(n), max));
         var target = col * _colAndGap;
         window.scrollTo({ left: target, top: 0, behavior: 'instant' });
+
+        // WebKit undercounts html's trailing padding-right in scrollWidth once
+        // content overflows (see ambrosiaColumnCount comment above), so the
+        // native scroll clamp can land short of `target` — visible only on the
+        // terminal column of a spine, where target actually reaches that edge.
+        // Measure the real shortfall (don't assume it equals marginH — a
+        // partially filled final screen at colsPerScreen > 1 can add more) and
+        // compensate visually by shifting the multicol container itself.
+        // html is the unfragmented column container (unlike body, which gets
+        // fragmented per-column) so this is a pure repaint offset, not a relayout.
+        var shortfall = target - window.scrollX;
+        document.documentElement.style.transform = shortfall > 0
+            ? 'translateX(-' + shortfall + 'px)'
+            : '';
+
         console.log('[ambrosiaScrollToColumn] requested=' + n + ' clamped=' + col +
             ' target=' + target + ' actualScrollX=' + window.scrollX +
-            ' delta=' + (window.scrollX - target));
+            ' delta=' + (window.scrollX - target) + ' shortfall=' + shortfall);
     };
 
     // ─── Progress fraction (0–1) ──────────────────────────────────────────────
