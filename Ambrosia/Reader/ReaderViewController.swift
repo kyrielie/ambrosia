@@ -362,6 +362,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             guard let self,
                   self.currentMode == .paginated,
                   event.window === self.view.window else { return event }
+            // §email-steal fix: the reader pane and (in Email view) the card
+            // list sidebar are sibling views in the same window, so matching
+            // on `event.window` alone intercepts scroll input meant for the
+            // sidebar too. Scroll events are position-based, not focus-based
+            // — only claim events whose location actually falls inside this
+            // view's own bounds.
+            let localPoint = self.view.convert(event.locationInWindow, from: nil)
+            guard self.view.bounds.contains(localPoint) else { return event }
 
             switch event.phase {
             case .began:
@@ -405,6 +413,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             guard let self,
                   self.currentMode == .paginated,
                   event.window === self.view.window else { return event }
+            // §email-steal fix: same sibling-view problem as the scroll
+            // monitor above, but keyboard input is focus-based rather than
+            // position-based — only claim the event if this reader pane (or
+            // one of its descendants, e.g. the web view) is actually first
+            // responder. Otherwise let it fall through to whichever view
+            // (e.g. the Email card list) is actually focused.
+            guard let responder = self.view.window?.firstResponder as? NSView,
+                  responder.isDescendant(of: self.view) else { return event }
 
             switch event.keyCode {
             case 123, 126:       // ← ↑
@@ -1147,32 +1163,13 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private func loadNextSpineItem() {
         guard currentSpineIndex + 1 < spineMap.count else { return }
         savePaginatedProgress()
-        let crossesWork = spineMap.isLastItemInWork(currentSpineIndex)
         loadSpineItem(index: currentSpineIndex + 1, restorePosition: .start)
-        if crossesWork { announceWorkBoundaryIfNeeded() }
     }
 
     private func loadPreviousSpineItem() {
         guard currentSpineIndex > 0 else { return }
         savePaginatedProgress()
-        let crossesWork = spineMap.isFirstItemInWork(currentSpineIndex)
         loadSpineItem(index: currentSpineIndex - 1, restorePosition: .end)
-        if crossesWork { announceWorkBoundaryIfNeeded() }
-    }
-
-    /// Paged mode has no visible "ambrosia-series-break" marker the way
-    /// scroll mode's merged HTML does (each spine item is loaded as its own
-    /// standalone document, so there's nothing to inject a marker into ahead
-    /// of time) — a HUD toast is the paged-mode equivalent visible boundary
-    /// cue, shown after loadSpineItem has already updated currentSpineIndex
-    /// to the new work. See ambrosia_series_fix_plan.md Task 2b step 5.
-    private func announceWorkBoundaryIfNeeded() {
-        guard case .series(let series) = target,
-              let ref = spineMap.ref(atGlobalIndex: currentSpineIndex),
-              series.works.indices.contains(ref.workIndex) else { return }
-        let work = series.works[ref.workIndex]
-        let index = series.displayIndex(for: work) ?? ref.workIndex + 1
-        showHUD("Now reading Work \(index): \(work.displayTitle)")
     }
 
     private func savePaginatedProgress() {
