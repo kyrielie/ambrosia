@@ -87,4 +87,14 @@ struct SeriesSpineMap {
         guard let ref = ref(atGlobalIndex: globalIndex) else { return false }
         return ref.localIndex == 0
     }
+
+    /// Total number of spine items in the given work (not the series-wide
+    /// `count`). Used by paginated mode's whole-book progress estimate,
+    /// which has no per-character weighting available (each spine loads in
+    /// isolation — see ReaderViewController.savePaginatedProgress) and so
+    /// approximates position as (localIndex + fraction) / spineCount.
+    func spineCount(forWorkIndex workIndex: Int) -> Int? {
+        guard spineCounts.indices.contains(workIndex) else { return nil }
+        return spineCounts[workIndex]
+    }
 }
