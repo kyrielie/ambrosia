@@ -581,6 +581,45 @@ struct LibraryRootView: View {
             guard !Task.isCancelled else { return }
             books = page
             hasNextPage = hasMore
+        } else if toolbarState.sortField == .title && shouldGroupSeriesRows {
+            // §SeriesGrouping Phase 2: title sort needs the same
+            // materialize-then-sort treatment as word count once grouping is
+            // on, so a series' representative row sorts under the series'
+            // name rather than the leading book's own title, and a match on
+            // a non-leading member still pulls the leader in. Ungrouped
+            // title sort keeps using the plain SQL-windowed path below.
+            let restrictIDs: [Int]?
+            let filterForSQL: FilterExpression?
+            if let result = toolbarState.activeFilterResult, result.isSQLBacked {
+                restrictIDs = nil
+                filterForSQL = toolbarState.filterExpression
+            } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
+                restrictIDs = intersect(result.calibreIDs, with: query.ftsMatchedIDs)
+                filterForSQL = nil
+            } else if toolbarState.activeFilterResult != nil {
+                books = []; items = []; hasNextPage = false
+                rebuildItems(); loadAO3MetadataForCurrentPage(); pruneSelection()
+                return
+            } else {
+                restrictIDs = nil
+                filterForSQL = nil
+            }
+            LibraryFilterDebug.log("loadPage.start", [
+                "surface": "list", "mode": "titleSortedGrouped", "page": offsetState.currentPage,
+                "query": LibraryFilterDebug.summary(query: query)
+            ])
+            let (page, hasMore) = await library.groupAwareTitleSortedPage(
+                offset: offsetState.currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
+                query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                visibility: currentVisibilityPolicy,
+                filterTagExpansions: cachedFilterTagExpansions,
+                visibilityVersion: session.membershipVersion,
+                metaDB: session.metaDB
+            )
+            guard !toolbarState.isListSurfaceTornDown else { return }
+            guard !Task.isCancelled else { return }
+            books = page
+            hasNextPage = hasMore
         } else if let result = toolbarState.activeFilterResult, result.isSQLBacked {
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "list",

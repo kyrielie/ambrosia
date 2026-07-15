@@ -1042,6 +1042,53 @@ final class EmailLibraryViewController: NSViewController {
                 wordCountHasMore = hasMore
             }
             raw = []
+        } else if toolbarState.sortField == .title && shouldGroupSidebarRows {
+            // §SeriesGrouping Phase 2: mirrors LibraryRootView's equivalent
+            // branch — title sort needs materialize-then-sort once grouping
+            // is on, same as word count, so a series' representative row
+            // sorts under the series' name and a match on a non-leading
+            // member still pulls the leader in. Reuses the wordCountPage/
+            // wordCountHasMore sink (see the comment above their
+            // declaration) rather than adding a fifth "already computed its
+            // own page" variable.
+            let restrictIDs: [Int]?
+            let filterForSQL: FilterExpression?
+            var isEmptyExplicitIDs = false
+            if let result = toolbarState.activeFilterResult, result.isSQLBacked {
+                restrictIDs = nil
+                filterForSQL = toolbarState.filterExpression
+            } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
+                restrictIDs = intersect(result.calibreIDs, with: query.ftsMatchedIDs)
+                filterForSQL = nil
+            } else if toolbarState.activeFilterResult != nil {
+                restrictIDs = nil
+                filterForSQL = nil
+                isEmptyExplicitIDs = true
+            } else {
+                restrictIDs = nil
+                filterForSQL = nil
+            }
+            LibraryFilterDebug.log("loadPage.start", [
+                "surface": "email", "mode": "titleSortedGrouped", "page": offsetState.currentPage,
+                "query": LibraryFilterDebug.summary(query: query)
+            ])
+            if isEmptyExplicitIDs {
+                wordCountPage = []
+                wordCountHasMore = false
+            } else {
+                let (page, hasMore) = await library.groupAwareTitleSortedPage(
+                    offset: offsetState.currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
+                    query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                    visibility: currentVisibilityPolicy,
+                    filterTagExpansions: cachedFilterTagExpansions,
+                    visibilityVersion: session.membershipVersion,
+                    metaDB: session.metaDB
+                )
+                guard !isTornDown, !Task.isCancelled else { return }
+                wordCountPage = page
+                wordCountHasMore = hasMore
+            }
+            raw = []
         } else if let result = toolbarState.activeFilterResult, result.isSQLBacked {
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "email",
