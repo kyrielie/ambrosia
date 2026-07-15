@@ -1184,7 +1184,29 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             let state = self.bookState(for: calibreID)
             state.lastSpineIndex = ref.localIndex
             state.lastScrollOffset = fraction
-            state.totalReadPercent = fraction
+
+            // Paginated mode loads one spine item at a time, so unlike scroll
+            // mode (which measures scrollY against the whole merged
+            // document's scrollHeight — see injectScrollTracker's
+            // globalPercent) there is no single scrollable container spanning
+            // the whole book to read a true percentage from. `fraction` here
+            // is only ever progress within the current spine item, so it
+            // cannot be written into totalReadPercent directly (that was the
+            // bug — every spine reported 0-100% independently). Approximate
+            // whole-book position by treating every spine item as equal
+            // weight: (spines fully before this one, plus how far through
+            // this one) / (total spines in this work). This ignores relative
+            // spine length (a one-paragraph spine counts the same as a
+            // twenty-page one), so it's an estimate, not exact — acceptable
+            // per product decision, since exact weighting would require
+            // caching a length metric (e.g. character count) per spine item,
+            // which nothing currently computes or stores.
+            if let spineCount = self.spineMap.spineCount(forWorkIndex: ref.workIndex), spineCount > 0 {
+                let overallPercent = (Double(ref.localIndex) + fraction) / Double(spineCount)
+                state.totalReadPercent = min(max(overallPercent, 0), 1)
+            } else {
+                state.totalReadPercent = fraction
+            }
             self.onReadingProgressChanged?()
         }
     }
