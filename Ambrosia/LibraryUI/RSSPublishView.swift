@@ -78,7 +78,12 @@ struct ManageFeedsView: View {
     let hasSearchSnapshot: Bool
     let initialSnapshotLabel: String?
     let onPublishSearch: () -> Void
-    let onExportOPML: () -> Void
+    /// Passed the OPML share button's own `NSView` so the caller can anchor
+    /// `NSSharingServicePicker` directly to it — anchoring to the sheet's
+    /// content view (the previous approach) positioned the popover at the
+    /// sheet's corner rather than over the button.
+    let onExportOPML: (NSView) -> Void
+    let onSaveOPML: () -> Void
     let onStopServer: () -> Void
     let onDone: () -> Void
 
@@ -93,7 +98,8 @@ struct ManageFeedsView: View {
          hasSearchSnapshot: Bool,
          snapshotLabel: String?,
          onPublishSearch: @escaping () -> Void,
-         onExportOPML: @escaping () -> Void,
+         onExportOPML: @escaping (NSView) -> Void,
+         onSaveOPML: @escaping () -> Void,
          onStopServer: @escaping () -> Void,
          onDone: @escaping () -> Void) {
         self.collections = collections
@@ -102,6 +108,7 @@ struct ManageFeedsView: View {
         self.initialSnapshotLabel = snapshotLabel
         self.onPublishSearch = onPublishSearch
         self.onExportOPML = onExportOPML
+        self.onSaveOPML = onSaveOPML
         self.onStopServer = onStopServer
         self.onDone = onDone
         _snapshotLabel = State(initialValue: snapshotLabel)
@@ -218,9 +225,10 @@ struct ManageFeedsView: View {
                     onStopServer()
                 }
                 .foregroundStyle(.red)
-                Button("Export OPML…") {
-                    onExportOPML()
+                Button("Save OPML…") {
+                    onSaveOPML()
                 }
+                OPMLShareAnchorButton(title: "Share OPML…", action: onExportOPML)
                 Spacer()
                 Button("Done", action: onDone)
                     .keyboardShortcut(.defaultAction)
@@ -228,5 +236,47 @@ struct ManageFeedsView: View {
         }
         .padding(20)
         .frame(width: 460)
+    }
+}
+
+/// A push button that hands its own `NSButton` instance back to `action`,
+/// instead of firing a plain no-argument closure. Needed specifically for
+/// the OPML share button: `NSSharingServicePicker` must be anchored
+/// (`show(relativeTo:of:preferredEdge:)`) to the *button that was clicked*
+/// to render in the right place — anchoring to an ancestor container (e.g.
+/// the sheet's content view, or `.zero` in that view's coordinate space)
+/// positions the popover at that container's corner rather than over the
+/// button. A plain SwiftUI `Button` has no way to expose the underlying
+/// `NSView` it's backed by, so this wraps a real `NSButton` via
+/// `NSViewRepresentable` to get a stable, correctly-positioned anchor.
+private struct OPMLShareAnchorButton: NSViewRepresentable {
+    let title: String
+    let action: (NSView) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(action: action) }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(title: title, target: context.coordinator, action: #selector(Coordinator.fire(_:)))
+        button.bezelStyle = .rounded
+        context.coordinator.button = button
+        return button
+    }
+
+    func updateNSView(_ nsView: NSButton, context: Context) {
+        nsView.title = title
+        context.coordinator.action = action
+    }
+
+    final class Coordinator: NSObject {
+        var action: (NSView) -> Void
+        weak var button: NSButton?
+
+        init(action: @escaping (NSView) -> Void) {
+            self.action = action
+        }
+
+        @objc func fire(_ sender: NSButton) {
+            action(sender)
+        }
     }
 }

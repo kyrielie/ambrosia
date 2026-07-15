@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 // MARK: - Toolbar item identifiers
 
@@ -817,12 +818,13 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
                 onPublishSearch: { [weak self] in
                     Task { await self?.publishCurrentSearchSnapshot() }
                 },
-                onExportOPML: { [weak self] in
-                    guard let self,
-                          let window = self.window,
-                          let anchorView = window.attachedSheet?.contentView
-                    else { return }
+                onExportOPML: { [weak self] anchorView in
+                    guard let self else { return }
                     self.exportOPML(feedServer: feedServer, anchorView: anchorView)
+                },
+                onSaveOPML: { [weak self] in
+                    guard let self else { return }
+                    self.saveOPML(feedServer: feedServer)
                 },
                 onStopServer: { [weak self] in
                     self?.dismissRSSSheet()
@@ -879,34 +881,77 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
     /// Exports all collection feeds (plus the daily-story and current-search
     /// feeds, when applicable) as an OPML file and presents the system share
-    /// sheet so the user can AirDrop, email, or save it.
+    /// sheet so the user can AirDrop, email, or otherwise send it.
+    ///
+    /// `anchorView` is the actual "Share OPML…" `NSButton` (see
+    /// `OPMLShareAnchorButton` in RSSPublishView.swift) — anchoring to the
+    /// Manage Feeds sheet's whole content view previously positioned the
+    /// popover at the sheet's corner instead of over the button; anchoring to
+    /// the button itself fixes the position while keeping the earlier fix
+    /// (using the sheet's own view, not `self.window`'s, so the picker
+    /// doesn't render beneath the active sheet).
     @MainActor
     private func exportOPML(feedServer: LocalFeedServer, anchorView: NSView) {
         Task { @MainActor in
-            let baseURL = feedServer.localNetworkURLSync ?? "http://localhost:\(feedServer.port)"
-            let opml = await feedServer.generateOPML(baseURL: baseURL)
-            let tmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("ambrosia-feeds.opml")
-            do {
-                try opml.write(to: tmp, atomically: true, encoding: .utf8)
-            } catch {
-                #if DEBUG
-                print("OPML export failed: \(error)")
-                #endif
-                let alert = NSAlert()
-                alert.messageText = "Export Failed"
-                alert.informativeText = "The OPML file could not be written: \(error.localizedDescription)"
-                alert.runModal()
-                return
-            }
-            // Anchor to the sheet's own content view, not self.window?.contentView:
-            // this method is invoked from a button inside the Manage Feeds sheet, and
-            // self.window is the *parent* window, which has that sheet modally attached
-            // at this point. Anchoring to the parent's content view puts the picker
-            // beneath the active sheet, where it renders but cannot receive events.
+            guard let tmp = await writeOPMLToTemporaryFile(feedServer: feedServer) else { return }
             let picker = NSSharingServicePicker(items: [tmp as NSURL])
-            picker.show(relativeTo: .zero, of: anchorView, preferredEdge: .minY)
+            picker.show(relativeTo: anchorView.bounds, of: anchorView, preferredEdge: .minY)
         }
+    }
+
+    /// Exports all collection feeds as an OPML file via a save panel, so the
+    /// user can put it wherever they like on disk without going through the
+    /// system share sheet at all.
+    @MainActor
+    private func saveOPML(feedServer: LocalFeedServer) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "opml") ?? .xml]
+        panel.nameFieldStringValue = "ambrosia-feeds.opml"
+        panel.message = "Choose a location to save the OPML export."
+        panel.prompt = "Save"
+
+        guard let sheetWindow = window?.attachedSheet else {
+            panel.begin { [weak self] response in
+                guard response == .OK, let url = panel.url else { return }
+                Task { @MainActor in await self?.writeOPML(feedServer: feedServer, to: url) }
+            }
+            return
+        }
+        panel.beginSheetModal(for: sheetWindow) { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            Task { @MainActor in await self?.writeOPML(feedServer: feedServer, to: url) }
+        }
+    }
+
+    /// Shared OPML-generation + write-with-alert-on-failure, used by both
+    /// `saveOPML` (writes directly to the user-chosen `url`) and `exportOPML`
+    /// (writes to a temp file first, since the share sheet needs a file URL).
+    /// Returns `true` on success.
+    @discardableResult
+    @MainActor
+    private func writeOPML(feedServer: LocalFeedServer, to url: URL) async -> Bool {
+        let baseURL = feedServer.localNetworkURLSync ?? "http://localhost:\(feedServer.port)"
+        let opml = await feedServer.generateOPML(baseURL: baseURL)
+        do {
+            try opml.write(to: url, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            #if DEBUG
+            print("OPML export failed: \(error)")
+            #endif
+            let alert = NSAlert()
+            alert.messageText = "Export Failed"
+            alert.informativeText = "The OPML file could not be written: \(error.localizedDescription)"
+            alert.runModal()
+            return false
+        }
+    }
+
+    @MainActor
+    private func writeOPMLToTemporaryFile(feedServer: LocalFeedServer) async -> URL? {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ambrosia-feeds.opml")
+        return await writeOPML(feedServer: feedServer, to: tmp) ? tmp : nil
     }
 
     @objc private func reshuffleSort() {
