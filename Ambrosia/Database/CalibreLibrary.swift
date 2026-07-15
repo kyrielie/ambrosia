@@ -389,7 +389,8 @@ actor CalibreLibrary {
                               restrictIDs: [Int]?,
                               visibility: LibraryVisibilityPolicy = .allowAll,
                               filterTagExpansions: [String: [String]] = [:],
-                              visibilityVersion: Int = 0) -> (page: [CalibreBook], hasMore: Bool) {
+                              visibilityVersion: Int = 0,
+                              metaDB: AmbrosiaMetaDB? = nil) async -> (page: [CalibreBook], hasMore: Bool) {
         let cacheKey = PageCacheKey(
             querySignature: LibraryFilterDebug.summary(query: query),
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
@@ -406,8 +407,17 @@ actor CalibreLibrary {
         // apply the visibility policy (skip/series-grouping/AO3-publisher-only/
         // anthology) once, here, instead of callers pre-intersecting restrictIDs
         // with individual ID sets at each call site.
-        let matchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
+        let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
                                          filterTagExpansions: filterTagExpansions)
+        // §SeriesGrouping Phase 1: a hit on a non-leading series member
+        // (e.g. book 3) must pull in the rest of the series so its leader
+        // survives the seriesOrMergedIDs deny-list below, instead of the
+        // whole group silently disappearing. No-op when grouping is off.
+        let matchedIDs = await SeriesMatchExpansion.expand(
+            matchedIDs: rawMatchedIDs,
+            shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
+            metaDB: metaDB
+        )
         let allIDs = visibility.filter(matchedIDs)
 
         // 2. Bulk-fetch word counts for this ID set only.
@@ -458,8 +468,9 @@ actor CalibreLibrary {
         restrictIDs: [Int]?,
         visibility: LibraryVisibilityPolicy,
         filterTagExpansions: [String: [String]] = [:],
-        visibilityVersion: Int = 0
-    ) -> Int {
+        visibilityVersion: Int = 0,
+        metaDB: AmbrosiaMetaDB? = nil
+    ) async -> Int {
         let cacheKey = GroupAwareCountCacheKey(
             querySignature: LibraryFilterDebug.summary(query: query),
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
@@ -470,8 +481,13 @@ actor CalibreLibrary {
             hideAnthologyBooks: visibility.hideAnthologyBooks
         )
         if let cached = groupAwareCountCache[cacheKey] { return cached }
-        let matchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
+        let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
                                               filterTagExpansions: filterTagExpansions)
+        let matchedIDs = await SeriesMatchExpansion.expand(
+            matchedIDs: rawMatchedIDs,
+            shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
+            metaDB: metaDB
+        )
         let count = visibility.filter(matchedIDs).count
         groupAwareCountCache.set(count, for: cacheKey)
         return count
@@ -484,7 +500,8 @@ actor CalibreLibrary {
                            restrictIDs: [Int]?,
                            visibility: LibraryVisibilityPolicy = .allowAll,
                            filterTagExpansions: [String: [String]] = [:],
-                           visibilityVersion: Int = 0) -> (page: [CalibreBook], hasMore: Bool) {
+                           visibilityVersion: Int = 0,
+                           metaDB: AmbrosiaMetaDB? = nil) async -> (page: [CalibreBook], hasMore: Bool) {
         let cacheKey = PageCacheKey(
             querySignature: LibraryFilterDebug.summary(query: query),
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
@@ -497,8 +514,13 @@ actor CalibreLibrary {
             limit: limit
         )
         if let cached = pageCache[cacheKey] { return cached }
-        let matchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
+        let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
                                          filterTagExpansions: filterTagExpansions)
+        let matchedIDs = await SeriesMatchExpansion.expand(
+            matchedIDs: rawMatchedIDs,
+            shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
+            metaDB: metaDB
+        )
         let allIDs = visibility.filter(matchedIDs)
         let sortedIDs = sortedRandomly(allIDs)
         let start = min(offset, sortedIDs.count)
