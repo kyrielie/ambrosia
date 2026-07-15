@@ -1093,6 +1093,50 @@ actor AmbrosiaMetaDB {
         return result
     }
 
+    /// Maps each of `calibreIDs` that belongs to a qualifying series (>1
+    /// member, non-anthology — the same rule as `expandedSeriesMemberIDs`/
+    /// `neverLeadsSeriesIDs`) to that series' display name. IDs that don't
+    /// belong to a qualifying series are simply absent from the result —
+    /// callers fall back to the book's own title as the sort key for those.
+    ///
+    /// Used by `CalibreLibrary.groupAwareTitleSortedPage` so that, once
+    /// series grouping has collapsed a series down to one representative
+    /// row, that row sorts alongside other titles by the *series'* name
+    /// rather than by the leading book's own (often differently-worded)
+    /// title — e.g. so "Some Series, Book 1" sorts under "Some Series" next
+    /// to other "S"-titled entries, not wherever "Some Series, Book 1"
+    /// alphabetizes on its own.
+    func qualifyingSeriesNames(for calibreIDs: [Int]) throws -> [Int: String] {
+        guard !calibreIDs.isEmpty else { return [:] }
+        let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")
+        let args = calibreIDs.map { $0 as Binding? }
+        let sql = """
+        WITH keyed AS (
+            SELECT calibre_id, series_name,
+                   COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name) AS series_key,
+                   is_anthology
+            FROM series_cache
+        ),
+        qualifying_keys AS (
+            SELECT series_key
+            FROM keyed
+            GROUP BY series_key
+            HAVING COUNT(*) > 1 AND MAX(is_anthology) = 0
+        )
+        SELECT calibre_id, series_name
+        FROM keyed
+        WHERE calibre_id IN (\(placeholders))
+          AND series_key IN (SELECT series_key FROM qualifying_keys)
+        """
+        let rows = try prepare(sql, args)
+        var result: [Int: String] = [:]
+        for row in rows {
+            guard let calibreID = row.int(at: 0), let seriesName = row[safe: 1] as? String else { continue }
+            result[calibreID] = seriesName
+        }
+        return result
+    }
+
     /// Returns every orphaned/non-leading singleton series membership per book, keyed by
     /// calibreID. A book that is a solo, non-leading member of more than one series (e.g.
     /// orphaned #3 of series B and orphaned #5 of series C) gets one entry per series here —

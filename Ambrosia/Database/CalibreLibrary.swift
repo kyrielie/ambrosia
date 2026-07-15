@@ -450,6 +450,99 @@ actor CalibreLibrary {
         return result
     }
 
+    /// Bulk-fetch just `title` for a set of IDs — analogous to `ao3WordCounts`/
+    /// `bulkCustomColumnInts`, used where sorting needs every matched book's
+    /// title but hydrating full `CalibreBook`s (authors/tags/comments) for
+    /// the whole matched set, not just the final page, would be wasteful.
+    func bulkTitles(ids: [Int]) -> [Int: String] {
+        guard !ids.isEmpty else { return [:] }
+        let placeholders = ids.map { _ in "?" }.joined(separator: ",")
+        let sql = "SELECT id, title FROM books WHERE id IN (\(placeholders))"
+        guard let rows = try? db.prepare(sql, ids.map { $0 as Binding? }).map({ $0 }) else { return [:] }
+        var result: [Int: String] = [:]
+        for row in rows {
+            guard let id = (row[0] as? Int64).map(Int.init), let title = row[1] as? String else { continue }
+            result[id] = title
+        }
+        return result
+    }
+
+    /// Group-aware title-sorted page. `orderByClause(.title)` alone can't do
+    /// this: it sorts SQL rows by `b.title`, one book at a time, which is
+    /// fine per-book but scatters a grouped series' representative row
+    /// wherever its own title alphabetizes rather than under the series'
+    /// name — and (like the plain SQL-windowed path used for other sorts)
+    /// a query match on a non-leading member never pulls in the leader, so
+    /// the whole series can silently vanish from a filtered/searched page.
+    /// `series_cache` also lives in `AmbrosiaMetaDB`, a separate connection
+    /// from this actor's own `db`, so the sort key can't be produced by a
+    /// single-database SQL `ORDER BY` the way `.series` sort is — hence the
+    /// materialize-then-sort-in-Swift shape shared with `wordCountSortedPage`/
+    /// `randomSortedPage`, rather than a change to `orderByClause`.
+    ///
+    /// Sort key per visible ID: the qualifying series' name if the ID
+    /// belongs to one (so the group sorts as a unit under that name),
+    /// otherwise the book's own title. Grouping-off callers should keep
+    /// using `books()`; this is only correct to call when
+    /// `visibility.shouldGroupSeriesRows` is true.
+    func groupAwareTitleSortedPage(offset: Int, limit: Int, ascending: Bool,
+                                    query: SearchQuery, filter: FilterExpression?,
+                                    restrictIDs: [Int]?,
+                                    visibility: LibraryVisibilityPolicy,
+                                    filterTagExpansions: [String: [String]] = [:],
+                                    visibilityVersion: Int = 0,
+                                    metaDB: AmbrosiaMetaDB?) async -> (page: [CalibreBook], hasMore: Bool) {
+        let cacheKey = PageCacheKey(
+            querySignature: LibraryFilterDebug.summary(query: query),
+            filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
+            tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
+            visibilityVersion: visibilityVersion,
+            sortField: .title,
+            ascending: ascending,
+            randomSeed: randomSeed,
+            offset: offset,
+            limit: limit
+        )
+        if let cached = pageCache[cacheKey] { return cached }
+
+        let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
+                                                 filterTagExpansions: filterTagExpansions)
+        let matchedIDs = await SeriesMatchExpansion.expand(
+            matchedIDs: rawMatchedIDs,
+            shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
+            metaDB: metaDB
+        )
+        let allIDs = visibility.filter(matchedIDs)
+
+        let seriesNames: [Int: String]
+        if let metaDB {
+            seriesNames = (try? await metaDB.qualifyingSeriesNames(for: allIDs)) ?? [:]
+        } else {
+            seriesNames = [:]
+        }
+        let titles = bulkTitles(ids: allIDs)
+        func sortKey(_ id: Int) -> String {
+            seriesNames[id] ?? titles[id] ?? ""
+        }
+        let sortedIDs = allIDs.sorted { a, b in
+            let ka = sortKey(a), kb = sortKey(b)
+            if ka == kb { return ascending ? a < b : a > b }
+            return ascending ? ka < kb : ka > kb
+        }
+
+        let start = min(offset, sortedIDs.count)
+        let end   = min(offset + limit, sortedIDs.count)
+        guard start < end else {
+            pageCache.set(([], false), for: cacheKey)
+            return ([], false)
+        }
+        let pageIDs = Array(sortedIDs[start..<end])
+        let page = booksForIDs(pageIDs)
+        let result = (page, end < sortedIDs.count)
+        pageCache.set(result, for: cacheKey)
+        return result
+    }
+
     /// Group-aware total: the count of matching books that would actually be
     /// shown once skip/series-grouping/AO3-publisher/anthology visibility is
     /// applied — not the raw SQL row count `fetchAllMatchingIDs` alone would
