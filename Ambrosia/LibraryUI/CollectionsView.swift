@@ -1,5 +1,19 @@
 import SwiftUI
 
+/// Distinguishes "none of the selected books are members" from "some" from
+/// "all", so a series selection under grouping (where membership is only
+/// tracked per individual work, never per series) can render a mixed state
+/// instead of collapsing "3 of 5" into the same empty state as "0 of 5".
+enum MembershipState { case none, partial, all }
+
+func membershipState(for members: Set<Int>, selected: Set<Int>) -> MembershipState {
+    guard !selected.isEmpty else { return .none }
+    let intersection = selected.intersection(members)
+    if intersection.isEmpty { return .none }
+    if intersection.count == selected.count { return .all }
+    return .partial
+}
+
 struct CollectionsView: View {
     @Environment(LibrarySession.self) private var session
     @Environment(\.dismiss) private var dismiss
@@ -152,7 +166,7 @@ struct CollectionsView: View {
         let isRenaming = renamingID == collection.id
         let count = membership[collection.id]?.count ?? 0
         let selected = Set(selectedCalibreIDs)
-        let isMember = !selected.isEmpty && selected.isSubset(of: membership[collection.id] ?? [])
+        let state = membershipState(for: membership[collection.id] ?? [], selected: selected)
 
         HStack {
             if isRenaming {
@@ -174,8 +188,8 @@ struct CollectionsView: View {
                 } label: {
                     HStack {
                         if !selectedCalibreIDs.isEmpty {
-                            Image(systemName: isMember ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(isMember ? Color.accentColor : .secondary)
+                            Image(systemName: state == .all ? "checkmark.circle.fill" : (state == .partial ? "minus.circle.fill" : "circle"))
+                                .foregroundStyle(state == .none ? .secondary : Color.accentColor)
                         }
 
                         VStack(alignment: .leading, spacing: 2) {
@@ -291,6 +305,13 @@ struct CollectionsView: View {
         Task {
             let selected = Set(selectedCalibreIDs)
             let members = membership[collection.id] ?? []
+            // Deliberate choice, not an oversight: a .partial row (e.g. 3 of
+            // 5 works in a series already members) toggles to .all by adding
+            // the remaining works, rather than removing the existing
+            // members. This matches the existing .none -> .all "toggle to
+            // full membership" semantics and is the less surprising of the
+            // two options -- removing books the user didn't ask to remove
+            // would be worse.
             if selected.isSubset(of: members) {
                 try? await session.collectionStore?.bulkRemove(calibreIDs: selectedCalibreIDs, from: collection.id)
             } else {
@@ -397,7 +418,7 @@ struct CollectionSearchPickerView: View {
 
     private func collectionButton(_ collection: CollectionRow) -> some View {
         let selected = Set(calibreIDs)
-        let isMember = !selected.isEmpty && selected.isSubset(of: membership[collection.id] ?? [])
+        let state = membershipState(for: membership[collection.id] ?? [], selected: selected)
         return Button {
             toggleMembership(collection)
         } label: {
@@ -405,8 +426,11 @@ struct CollectionSearchPickerView: View {
                 Text(collection.name)
                     .lineLimit(1)
                 Spacer()
-                if isMember {
+                if state == .all {
                     Image(systemName: "checkmark")
+                        .foregroundStyle(Color.accentColor)
+                } else if state == .partial {
+                    Image(systemName: "minus.circle.fill")
                         .foregroundStyle(Color.accentColor)
                 }
             }
@@ -427,6 +451,9 @@ struct CollectionSearchPickerView: View {
         Task {
             let selected = Set(calibreIDs)
             let members = membership[collection.id] ?? []
+            // See CollectionsView.toggleMembership: a .partial selection
+            // toggles to .all (adds the remaining works) rather than
+            // removing the existing members.
             if selected.isSubset(of: members) {
                 try? await session.collectionStore?.bulkRemove(calibreIDs: calibreIDs, from: collection.id)
             } else {
