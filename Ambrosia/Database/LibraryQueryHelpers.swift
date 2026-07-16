@@ -65,7 +65,7 @@ enum LibraryQueryHelpers {
             $0.field == rule.field && $0.value == rule.value && $0.op == rule.op
         }
         guard !isDuplicate else { return }
-        if rule.field == .authorName || rule.field == .series {
+        if rule.field == .authorName || rule.field == .series || rule.field == .collection {
             expression.groups[0].rules.removeAll { $0.field == rule.field }
         }
         expression.groups[0].rules.append(rule)
