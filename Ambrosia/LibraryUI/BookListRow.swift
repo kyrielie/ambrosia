@@ -31,6 +31,7 @@ struct BookListRow: View, Equatable {
     let selectedIDs: [Int]
     let activeCollectionID: String?
     let onRemoveFromCollection: (String) -> Void
+    let isSelected: Bool
     @State private var showCollectionPicker = false
 
     static func == (lhs: BookListRow, rhs: BookListRow) -> Bool {
@@ -55,6 +56,7 @@ struct BookListRow: View, Equatable {
             && lhs.selectedCount               == rhs.selectedCount
             && lhs.selectedIDs                 == rhs.selectedIDs
             && lhs.activeCollectionID          == rhs.activeCollectionID
+            && lhs.isSelected                  == rhs.isSelected
     }
 
     init(book: CalibreBook, bookState: BookState?, ao3Metadata: AO3MetadataRecord?, ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?, singletonSeriesWarnings: [SingletonSeriesWarning], isLiked: Bool, hideFanworksTagPill: Bool, correctCalibreAmpEntities: Bool, modelContext: ModelContext,
@@ -74,7 +76,8 @@ struct BookListRow: View, Equatable {
          selectedCount: Int,
          selectedIDs: [Int],
          activeCollectionID: String?,
-         onRemoveFromCollection: @escaping (String) -> Void) {
+         onRemoveFromCollection: @escaping (String) -> Void,
+         isSelected: Bool) {
         self.book         = book
         self.bookState    = bookState
         self.ao3Metadata  = ao3Metadata
@@ -101,6 +104,7 @@ struct BookListRow: View, Equatable {
         self.selectedIDs = selectedIDs
         self.activeCollectionID = activeCollectionID
         self.onRemoveFromCollection = onRemoveFromCollection
+        self.isSelected = isSelected
     }
 
     var body: some View {
@@ -216,7 +220,7 @@ struct BookListRow: View, Equatable {
                     Button {
                         onTagTap(pill.label, pill.field)
                     } label: {
-                        tagPill(pill.label, color: pill.color)
+                        tagPill(pill.label, color: pill.color, isSelected: isSelected)
                     }
                     .buttonStyle(.plain)
                     .help("Filter by \(pill.label)")
@@ -290,17 +294,18 @@ struct BookListRow: View, Equatable {
         count >= 1_000 ? String(format: "%.1fk kudos", Double(count) / 1_000) : "\(count) kudos"
     }
 
-    private func tagPill(_ label: String, color: Color?) -> some View {
+    private func tagPill(_ label: String, color: Color?, isSelected: Bool) -> some View {
         Text(label)
             .font(.caption2)
             .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(
-                color.map { $0.opacity(0.18) }
-                    ?? Color(NSColor.controlBackgroundColor)
+                isSelected
+                    ? (color ?? .secondary).opacity(0.35)
+                    : (color.map { $0.opacity(0.18) } ?? Color(NSColor.controlBackgroundColor))
             )
-            .foregroundStyle(color ?? .secondary)
+            .foregroundStyle(isSelected ? Color.primary : (color ?? .secondary))
             .clipShape(Capsule())
     }
 
