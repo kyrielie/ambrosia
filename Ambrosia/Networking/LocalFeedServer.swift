@@ -458,7 +458,13 @@ actor LocalFeedServer {
             )
             return httpResponse(for: result, contentType: "application/feed+json; charset=utf-8") { $0 }
         case .sqlite:
-            return try await buildSQLiteTransferResponse(calibreIDs: memberIDs)
+            let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
+            let page = request.query["page"].flatMap { Int($0) } ?? 1
+            return try await buildSQLiteTransferResponse(
+                calibreIDs: memberIDs,
+                feedURL: "\(baseURL)/feed/collection/\(collectionID).sqlite",
+                page: page
+            )
         }
     }
 
@@ -583,13 +589,19 @@ actor LocalFeedServer {
     // the raw per-book data.
 
     private func handleSearchSQLiteFeed(request: HTTPRequest) async throws -> HTTPResponse {
+        let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
+        let feedURL = "\(baseURL)/feed/search.sqlite"
+        let page = request.query["page"].flatMap { Int($0) } ?? 1
         guard let snapshot = CurrentSearchSnapshot.load(libraryHash: libraryNamespace) else {
-            return try await buildSQLiteTransferResponse(calibreIDs: [])
+            return try await buildSQLiteTransferResponse(calibreIDs: [], feedURL: feedURL, page: page)
         }
-        return try await buildSQLiteTransferResponse(calibreIDs: snapshot.calibreIDs)
+        return try await buildSQLiteTransferResponse(calibreIDs: snapshot.calibreIDs, feedURL: feedURL, page: page)
     }
 
     private func handleRandomDailySQLiteFeed(request: HTTPRequest) async throws -> HTTPResponse {
+        let baseURL = localNetworkURLSync ?? "http://localhost:\(_port)"
+        let feedURL = "\(baseURL)/feed/random-daily.sqlite"
+        let page = request.query["page"].flatMap { Int($0) } ?? 1
         let ud = UserDefaults.standard
         let dailyEnabled = ud.object(forKey: "rp.feedServerEnableDailyStory.\(libraryNamespace)").flatMap { _ in ud.bool(forKey: "rp.feedServerEnableDailyStory.\(libraryNamespace)") as Bool? } ?? false
         guard dailyEnabled else {
@@ -600,7 +612,7 @@ actor LocalFeedServer {
         }
         let allIDs = await library.allBookIDs()
         guard !allIDs.isEmpty else {
-            return try await buildSQLiteTransferResponse(calibreIDs: [])
+            return try await buildSQLiteTransferResponse(calibreIDs: [], feedURL: feedURL, page: page)
         }
         // Same daily-seed derivation as handleRandomDailyFeed — kept in sync
         // by both reading from the day-index seed rather than a stored value,
@@ -608,7 +620,7 @@ actor LocalFeedServer {
         // UTC day always gets the same picked book from either.
         let seed = Int(Date().timeIntervalSince1970 / 86400)
         let picked = allIDs[seed % allIDs.count]
-        return try await buildSQLiteTransferResponse(calibreIDs: [picked])
+        return try await buildSQLiteTransferResponse(calibreIDs: [picked], feedURL: feedURL, page: page)
     }
     /// current-search snapshot feed when one has been published. The random
     /// daily feed is a permanent entry — it has no collection ID and is
@@ -1286,6 +1298,15 @@ actor LocalFeedServer {
     /// the real bound on server-side work per request instead.
     private static let jsonFeedMaxBooksPerPage = 30
 
+    /// Analogous cap for the `.sqlite` transfer route, but tuned lower than
+    /// `jsonFeedMaxBooksPerPage`: every row here costs a full EPUB parse
+    /// (`cachedMergedHTML`) on a cache miss, a materially heavier per-row cost
+    /// than the JSON route's lighter per-item serialization. 150 is a starting
+    /// value, not a validated one — measure real per-page wall-clock time
+    /// against an actual multi-thousand-book library using the `feed.page.end`
+    /// logging below before adjusting.
+    private static let sqliteFeedMaxBooksPerPage = 150
+
     /// Splits `units` into pages bounded by cumulative underlying book count
     /// (`maxBooksPerPage`), not item count. A single unit that alone exceeds the
     /// cap (e.g. a 40-member series) still gets its own page rather than being
@@ -1505,6 +1526,77 @@ actor LocalFeedServer {
         feedUnitsCache = feedUnitsCache.filter { now.timeIntervalSince($0.value.lastAccessedAt) < Self.feedUnitsCacheTTL }
     }
 
+    // MARK: - Phase 2: `.sqlite` route walk cache
+    //
+    // Reuses the JSON route's walk-key/cache/TTL *scaffolding* (feedWalkKey,
+    // the sliding feedUnitsCacheTTL, per-walk logging) but not
+    // groupedUnitsForWalk itself: that function calls groupedDisplayUnits,
+    // which collapses series members into one unit whenever the
+    // "groupBySeries" UserDefaults preference is on — a global toggle, not
+    // specific to the JSON route. The `.sqlite` route's `items` table is
+    // deliberately one flat row per book with no grouping pass (see the
+    // Phase 2 comment on the route handlers below), so it needs its own
+    // cache of flat `FeedBookPair` lists that is never subject to that
+    // preference, rather than reusing FeedDisplayUnit-shaped results that
+    // could silently start grouping the moment a user flips that toggle.
+    private struct SQLiteWalkCacheEntry {
+        let candidateIDs: Set<Int>
+        let pairs: [FeedBookPair]
+        var lastAccessedAt: Date
+        let walkID: String
+    }
+
+    private var sqliteWalkCache: [String: SQLiteWalkCacheEntry] = [:]
+
+    /// Returns the full flat `FeedBookPair` list for `calibreIDs` for this
+    /// walk key, reusing a cached result from an earlier page of the same
+    /// walk when the candidate set still matches and the entry hasn't gone
+    /// stale (same sliding-TTL semantics as `groupedUnitsForWalk`). Also
+    /// returns the walk's `walk_id`, generated fresh whenever a new entry is
+    /// computed (cache miss, candidate-set change, or TTL expiry) and reused
+    /// on a cache hit — this is the value written into every page's
+    /// `transfer_manifest` table so the client can detect a server-side walk
+    /// restart between pages.
+    private func pairsForSQLiteWalk(walkKey: String, calibreIDs: [Int]) async -> (pairs: [FeedBookPair], walkID: String) {
+        let candidateSet = Set(calibreIDs)
+        let now = Date()
+
+        if var cached = sqliteWalkCache[walkKey] {
+            let age = now.timeIntervalSince(cached.lastAccessedAt)
+            if cached.candidateIDs == candidateSet, age < Self.feedUnitsCacheTTL {
+                cached.lastAccessedAt = now
+                sqliteWalkCache[walkKey] = cached
+                return (cached.pairs, cached.walkID)
+            }
+        }
+
+        // Cache miss (no entry, candidate-set change, or TTL expiry): always
+        // a new walk_id — a client resuming with the old one will see the
+        // mismatch and know to discard its progress and restart at page 1.
+        let pairs = await fetchFeedBooks(calibreIDs: calibreIDs, context: "feed:sqlite:\(walkKey)")
+        let walkID = UUID().uuidString
+        sqliteWalkCache[walkKey] = SQLiteWalkCacheEntry(candidateIDs: candidateSet, pairs: pairs, lastAccessedAt: now, walkID: walkID)
+        pruneStaleSQLiteWalkCacheEntries(now: now)
+        return (pairs, walkID)
+    }
+
+    private func pruneStaleSQLiteWalkCacheEntries(now: Date) {
+        sqliteWalkCache = sqliteWalkCache.filter { now.timeIntervalSince($0.value.lastAccessedAt) < Self.feedUnitsCacheTTL }
+    }
+
+    /// Book-count-bounded pagination over a flat pair list — simpler than
+    /// `paginate(_:page:maxBooksPerPage:)` since every element here is
+    /// exactly one book (no series units that can't be split), so page
+    /// boundaries are plain index slices.
+    private func paginatePairs(_ pairs: [FeedBookPair], page: Int, maxPerPage: Int) -> (pairs: [FeedBookPair], hasMore: Bool) {
+        guard maxPerPage > 0 else { return (pairs, false) }
+        let index = max(page, 1) - 1
+        let start = index * maxPerPage
+        guard start < pairs.count else { return ([], false) }
+        let end = min(start + maxPerPage, pairs.count)
+        return (Array(pairs[start..<end]), end < pairs.count)
+    }
+
 #if DEBUG
     // MARK: - Test hooks (AmbrosiaTests only, via @testable import)
     //
@@ -1633,9 +1725,22 @@ actor LocalFeedServer {
     /// `buildRSSFeed`'s "no library open" handling: an empty-but-valid
     /// transfer DB rather than an error, so a client polling this route while
     /// no library is open gets a well-formed (empty) response, not a 5xx.
-    private func buildSQLiteTransferResponse(calibreIDs: [Int]) async throws -> HTTPResponse {
+    private func buildSQLiteTransferResponse(calibreIDs: [Int], feedURL: String, page: Int) async throws -> HTTPResponse {
+        let clampedPage = max(page, 1)
+        let walkKey = feedWalkKey(for: feedURL)
+
+        // A fresh page=1 request always starts a new walk — clear any
+        // existing entry for this key rather than reusing it, so "page=1
+        // always means start over" stays an unambiguous rule for the client.
+        // (Matches the JSON route's implicit behavior: a fresh page=1
+        // request has no special-cased "reuse an in-progress walk" logic
+        // there either.)
+        if clampedPage == 1 {
+            sqliteWalkCache.removeValue(forKey: walkKey)
+        }
+
         guard let library, metaDB != nil else {
-            return try await sqliteResponse(for: [])
+            return try await sqliteResponse(for: [], manifest: emptySQLiteManifest())
         }
 
         // Wire Contract: skipped books are excluded from `items` entirely.
@@ -1646,10 +1751,28 @@ actor LocalFeedServer {
         let skippedIDs = Set((try? await collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
         let filteredIDs = calibreIDs.filter { !skippedIDs.contains($0) }
         guard !filteredIDs.isEmpty else {
-            return try await sqliteResponse(for: [])
+            return try await sqliteResponse(for: [], manifest: emptySQLiteManifest())
         }
 
-        let pairs = await fetchFeedBooks(calibreIDs: filteredIDs, context: "feed:sqlite")
+        let (allPairs, walkID) = await pairsForSQLiteWalk(walkKey: walkKey, calibreIDs: filteredIDs)
+        let (pagePairs, hasMore) = paginatePairs(allPairs, page: clampedPage, maxPerPage: Self.sqliteFeedMaxBooksPerPage)
+
+        LibraryFilterDebug.log("feed.page.end", [
+            "feed": "sqlite",
+            "feedURL": feedURL,
+            "page": clampedPage,
+            "candidates": calibreIDs.count,
+            "groupedTotal": allPairs.count,
+            "pageItems": pagePairs.count,
+            "pageBooks": pagePairs.count,
+            "hasMore": hasMore,
+            "ids": pagePairs.map { String($0.book.id) }.joined(separator: ",")
+        ])
+        recordFeedWalkPage(key: walkKey, pageItems: pagePairs.count, rawBooks: pagePairs.count)
+        if !hasMore {
+            flushFeedWalkSummary(key: walkKey, feed: "sqlite")
+            sqliteWalkCache.removeValue(forKey: walkKey)
+        }
 
         // Status columns: collection membership, batched the same way
         // fetchFeedBooks batches ao3Map/seriesRows above — one membership
@@ -1657,20 +1780,38 @@ actor LocalFeedServer {
         let readLaterIDs = Set((try? await collectionStore?.members(of: SystemCollectionID.readLater)) ?? [])
         let likedIDs = Set((try? await collectionStore?.members(of: SystemCollectionID.liked)) ?? [])
         let finishedIDs = Set((try? await collectionStore?.members(of: SystemCollectionID.finished)) ?? [])
-        let progressByID = await readingProgressByCalibreID(for: filteredIDs)
+        let progressByID = await readingProgressByCalibreID(for: pagePairs.map { $0.book.id })
 
-        var rows: [TransferDatabaseBuilder.Row] = []
-        rows.reserveCapacity(pairs.count)
-        for pair in pairs {
-            rows.append(await transferRow(
-                for: pair,
-                library: library,
-                isReadLater: readLaterIDs.contains(pair.book.id),
-                isLiked: likedIDs.contains(pair.book.id),
-                isFinished: finishedIDs.contains(pair.book.id),
-                readingProgress: progressByID[pair.book.id]
-            ))
+        // Per-book EPUB parsing (cachedMergedHTML) is independent CPU-bound
+        // work; a TaskGroup lets these run concurrently instead of the
+        // previous strictly-serial `await` loop. Results are re-sorted by
+        // original index before building the DB — order doesn't matter for
+        // correctness (`items` has no ordering guarantee consumed by the
+        // client), but deterministic output keeps `feed.page.end`'s `ids`
+        // field diffable across requests, same reasoning as the logging
+        // above.
+        var indexedRows: [(Int, TransferDatabaseBuilder.Row)] = []
+        indexedRows.reserveCapacity(pagePairs.count)
+        await withTaskGroup(of: (Int, TransferDatabaseBuilder.Row).self) { group in
+            for (index, pair) in pagePairs.enumerated() {
+                group.addTask {
+                    let row = await self.transferRow(
+                        for: pair,
+                        library: library,
+                        isReadLater: readLaterIDs.contains(pair.book.id),
+                        isLiked: likedIDs.contains(pair.book.id),
+                        isFinished: finishedIDs.contains(pair.book.id),
+                        readingProgress: progressByID[pair.book.id]
+                    )
+                    return (index, row)
+                }
+            }
+            for await result in group {
+                indexedRows.append(result)
+            }
         }
+        indexedRows.sort { $0.0 < $1.0 }
+        let rows = indexedRows.map { $0.1 }
 
         LibraryFilterDebug.log("feed.sqlite.end", [
             "candidates": calibreIDs.count,
@@ -1678,7 +1819,22 @@ actor LocalFeedServer {
             "rows": rows.count,
         ])
 
-        return try await sqliteResponse(for: rows)
+        let manifest = TransferDatabaseBuilder.ManifestRow(
+            walkID: walkID,
+            pageNumber: clampedPage,
+            hasMore: hasMore,
+            pageRowCount: rows.count,
+            expectedTotalRowCount: allPairs.count
+        )
+        return try await sqliteResponse(for: rows, manifest: manifest)
+    }
+
+    /// Manifest for the "no library open" / "nothing left after skip
+    /// filtering" cases — a well-formed, single-page, zero-row walk rather
+    /// than an error, mirroring the empty-rows contract these guards already
+    /// had before pagination existed.
+    private func emptySQLiteManifest() -> TransferDatabaseBuilder.ManifestRow {
+        TransferDatabaseBuilder.ManifestRow(walkID: UUID().uuidString, pageNumber: 1, hasMore: false, pageRowCount: 0, expectedTotalRowCount: 0)
     }
 
     /// `BookState.totalReadPercent` for a batch of calibre IDs, keyed by
@@ -1795,13 +1951,13 @@ actor LocalFeedServer {
     /// error (503) here, not a silent empty-body fallback, since a
     /// truncated/garbled `.sqlite` payload the client can't tell apart from a
     /// valid one is worse than an explicit failure.
-    private func sqliteResponse(for rows: [TransferDatabaseBuilder.Row]) async throws -> HTTPResponse {
+    private func sqliteResponse(for rows: [TransferDatabaseBuilder.Row], manifest: TransferDatabaseBuilder.ManifestRow) async throws -> HTTPResponse {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("ambrosia-feed-transfer-\(UUID().uuidString).sqlite")
         defer { try? FileManager.default.removeItem(at: tempURL) }
 
         do {
-            try TransferDatabaseBuilder.build(rows: rows, at: tempURL)
+            try TransferDatabaseBuilder.build(rows: rows, manifest: manifest, at: tempURL)
         } catch {
             #if DEBUG
             print("[LocalFeedServer] sqlite transfer build failed: \(error)")
