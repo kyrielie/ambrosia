@@ -161,6 +161,21 @@ final class LibraryQueryHelpersTests: XCTestCase {
         XCTAssertEqual(expression.groups[0].rules.count, 2)
     }
 
+    func testAddOrReplaceRuleReplacesExistingCollectionField() {
+        // Regression test: picking a second collection from CollectionsView
+        // used to append a second .collection rule into the same AND'd
+        // group, which could only match books that were members of both
+        // collections simultaneously -- silently producing an empty result
+        // set. .collection must behave as a single-value field, same as
+        // .authorName and .series.
+        var expression = FilterExpression()
+        expression.groups[0].rules = [FilterRule(field: .collection, op: .equals, value: "A")]
+        let rule = FilterRule(field: .collection, op: .equals, value: "B")
+        LibraryQueryHelpers.addOrReplaceRule(rule, in: &expression)
+        XCTAssertEqual(expression.groups[0].rules.count, 1)
+        XCTAssertEqual(expression.groups[0].rules[0].value, "B")
+    }
+
     func testAddOrReplaceRuleSkipsExactDuplicate() {
         var expression = FilterExpression()
         let rule = FilterRule(field: .tag, op: .contains, value: "Fluff")
