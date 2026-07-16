@@ -306,6 +306,7 @@ struct LibraryRootView: View {
                         toolbarState.filterExpression = FilterExpression()
                         toolbarState.activeFilterResult = nil
                         toolbarState.cancelLibraryFilterApplication()
+                        selectedItemIDs.removeAll()
                         offsetState.resetForNewFilter(); Task { await loadPage() }
                     }
                 )
@@ -1553,6 +1554,7 @@ struct LibraryRootView: View {
                     toolbarState.filterExpression = FilterExpression()
                     toolbarState.activeFilterResult = nil
                     toolbarState.cancelLibraryFilterApplication()
+                    selectedItemIDs.removeAll()
                     offsetState.resetForNewFilter(); Task { await loadPage() }
                 } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
