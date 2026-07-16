@@ -16,6 +16,7 @@ struct SeriesListRow: View, Equatable {
     let onCollectionChanged: () -> Void
     let activeCollectionID: String?
     let onRemoveFromCollection: (String) -> Void
+    let isSelected: Bool
 
     @State private var showIndex = false
     @State private var showCollectionPicker = false
@@ -30,6 +31,7 @@ struct SeriesListRow: View, Equatable {
             && lhs.isLiked             == rhs.isLiked
             && lhs.isInReadLater       == rhs.isInReadLater
             && lhs.activeCollectionID  == rhs.activeCollectionID
+            && lhs.isSelected          == rhs.isSelected
     }
 
     var body: some View {
@@ -127,7 +129,7 @@ struct SeriesListRow: View, Equatable {
                     Button {
                         onTagTap(pill.label, pill.field)
                     } label: {
-                        tagPill(pill.label, color: pill.color)
+                        tagPill(pill.label, color: pill.color, isSelected: isSelected)
                     }
                     .buttonStyle(.plain)
                     .help("Filter by \(pill.label)")
@@ -154,17 +156,18 @@ struct SeriesListRow: View, Equatable {
         return formatter.string(from: date)
     }
 
-    private func tagPill(_ label: String, color: Color?) -> some View {
+    private func tagPill(_ label: String, color: Color?, isSelected: Bool) -> some View {
         Text(label)
             .font(.caption2)
             .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(
-                color.map { $0.opacity(0.18) }
-                    ?? Color(NSColor.controlBackgroundColor)
+                isSelected
+                    ? (color ?? .secondary).opacity(0.35)
+                    : (color.map { $0.opacity(0.18) } ?? Color(NSColor.controlBackgroundColor))
             )
-            .foregroundStyle(color ?? .secondary)
+            .foregroundStyle(isSelected ? Color.primary : (color ?? .secondary))
             .clipShape(Capsule())
     }
 

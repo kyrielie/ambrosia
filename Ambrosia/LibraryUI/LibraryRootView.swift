@@ -1651,15 +1651,15 @@ struct LibraryRootView: View {
     private func itemRow(_ item: LibraryItem) -> some View {
         switch item {
         case .book(let book):
-            bookRow(book, warningsOverride: nil)
+            bookRow(book, warningsOverride: nil, id: item.id)
         case .series(let series):
-            seriesRow(series)
+            seriesRow(series, id: item.id)
         case .orphanedSeriesEntry(let book, let warning):
-            bookRow(book, warningsOverride: [warning])
+            bookRow(book, warningsOverride: [warning], id: item.id)
         }
     }
 
-    private func bookRow(_ book: CalibreBook, warningsOverride: [SingletonSeriesWarning]?) -> some View {
+    private func bookRow(_ book: CalibreBook, warningsOverride: [SingletonSeriesWarning]?, id: String) -> some View {
         BookListRow(
             book: book,
             bookState: bookStates[book.id],
@@ -1696,14 +1696,15 @@ struct LibraryRootView: View {
             activeCollectionID: activeCollectionID,
             onRemoveFromCollection: { collectionName in
                 removeFromCollection(named: collectionName, calibreIDs: selectedBookIDs(fallback: book))
-            }
+            },
+            isSelected: selectedItemIDs.contains(id)
         )
         .equatable()
         .listRowSeparator(.visible)
         .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
     }
 
-    private func seriesRow(_ series: SeriesGroup) -> some View {
+    private func seriesRow(_ series: SeriesGroup, id: String) -> some View {
         SeriesListRow(
             series: series,
             hideFanworksTagPill: prefs.hideFanworksTagPill,
@@ -1726,7 +1727,8 @@ struct LibraryRootView: View {
             activeCollectionID: activeCollectionID,
             onRemoveFromCollection: { collectionName in
                 removeFromCollection(named: collectionName, calibreIDs: series.works.map(\.id))
-            }
+            },
+            isSelected: selectedItemIDs.contains(id)
         )
         .equatable()
         .listRowSeparator(.visible)
