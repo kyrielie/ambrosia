@@ -1636,6 +1636,17 @@ struct LibraryRootView: View {
         .listStyle(.plain)
     }
 
+    /// The single collection this list is currently filtered to, or nil if
+    /// zero or more than one `.collection` rule is active. Computed once per
+    /// render rather than passed as a whole `FilterExpression` down into the
+    /// row views, since rows shouldn't know about filter internals.
+    private var activeCollectionID: String? {
+        let collectionRules = toolbarState.filterExpression.groups.flatMap(\.rules)
+            .filter { $0.field == .collection && $0.op == .equals }
+        guard collectionRules.count == 1 else { return nil }
+        return collectionRules[0].value
+    }
+
     @ViewBuilder
     private func itemRow(_ item: LibraryItem) -> some View {
         switch item {
@@ -1681,7 +1692,11 @@ struct LibraryRootView: View {
                 }
             },
             selectedCount: selectedBooks(fallback: book).count,
-            selectedIDs: selectedBookIDs(fallback: book)
+            selectedIDs: selectedBookIDs(fallback: book),
+            activeCollectionID: activeCollectionID,
+            onRemoveFromCollection: { collectionName in
+                removeFromCollection(named: collectionName, calibreIDs: selectedBookIDs(fallback: book))
+            }
         )
         .equatable()
         .listRowSeparator(.visible)
@@ -1707,11 +1722,31 @@ struct LibraryRootView: View {
                 CollectionAssignment.didAssign(session: session) {
                     refreshBookStates()
                 }
+            },
+            activeCollectionID: activeCollectionID,
+            onRemoveFromCollection: { collectionName in
+                removeFromCollection(named: collectionName, calibreIDs: series.works.map(\.id))
             }
         )
         .equatable()
         .listRowSeparator(.visible)
         .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+    }
+
+    /// The active `.collection` filter rule's value is the collection's
+    /// *name* (see `addOrReplaceRule(FilterRule(field: .collection, …,
+    /// value: collection.name))`), while `CollectionStore.bulkRemove(from:)`
+    /// takes the collection's id. Resolve name -> id against the current
+    /// collections list before removing.
+    private func removeFromCollection(named collectionName: String, calibreIDs: [Int]) {
+        Task {
+            guard let collections = try? await session.collectionStore?.collections(),
+                  let match = collections.first(where: { $0.name == collectionName }) else { return }
+            try? await session.collectionStore?.bulkRemove(calibreIDs: calibreIDs, from: match.id)
+            CollectionAssignment.didAssign(session: session) {
+                Task { await refreshVisibilitySnapshots(resetPage: false) }
+            }
+        }
     }
 
     private func toggleLike(for book: CalibreBook) {

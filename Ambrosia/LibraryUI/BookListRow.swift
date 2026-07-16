@@ -29,6 +29,8 @@ struct BookListRow: View, Equatable {
     let onCollectionChanged: () -> Void
     let selectedCount: Int
     let selectedIDs: [Int]
+    let activeCollectionID: String?
+    let onRemoveFromCollection: (String) -> Void
     @State private var showCollectionPicker = false
 
     static func == (lhs: BookListRow, rhs: BookListRow) -> Bool {
@@ -52,6 +54,7 @@ struct BookListRow: View, Equatable {
             && lhs.bookState?.totalReadPercent == rhs.bookState?.totalReadPercent
             && lhs.selectedCount               == rhs.selectedCount
             && lhs.selectedIDs                 == rhs.selectedIDs
+            && lhs.activeCollectionID          == rhs.activeCollectionID
     }
 
     init(book: CalibreBook, bookState: BookState?, ao3Metadata: AO3MetadataRecord?, ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?, singletonSeriesWarnings: [SingletonSeriesWarning], isLiked: Bool, hideFanworksTagPill: Bool, correctCalibreAmpEntities: Bool, modelContext: ModelContext,
@@ -69,7 +72,9 @@ struct BookListRow: View, Equatable {
          onResetProgress: @escaping () -> Void,
          onCollectionChanged: @escaping () -> Void,
          selectedCount: Int,
-         selectedIDs: [Int]) {
+         selectedIDs: [Int],
+         activeCollectionID: String?,
+         onRemoveFromCollection: @escaping (String) -> Void) {
         self.book         = book
         self.bookState    = bookState
         self.ao3Metadata  = ao3Metadata
@@ -94,6 +99,8 @@ struct BookListRow: View, Equatable {
         self.onCollectionChanged = onCollectionChanged
         self.selectedCount = selectedCount
         self.selectedIDs = selectedIDs
+        self.activeCollectionID = activeCollectionID
+        self.onRemoveFromCollection = onRemoveFromCollection
     }
 
     var body: some View {
@@ -126,6 +133,9 @@ struct BookListRow: View, Equatable {
             Button(selectedCount == 1 ? "Skip" : "Skip Selected") { onSkip() }
             Divider()
             Button("Add to Collection…") { showCollectionPicker = true }
+            if let activeCollectionID {
+                Button("Remove from Collection") { onRemoveFromCollection(activeCollectionID) }
+            }
         }
         .popover(isPresented: $showCollectionPicker, arrowEdge: .trailing) {
             CollectionSearchPickerView(

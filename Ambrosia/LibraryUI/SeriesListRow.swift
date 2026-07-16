@@ -14,6 +14,8 @@ struct SeriesListRow: View, Equatable {
     let onMarkRead: () -> Void
     let onResetProgress: () -> Void
     let onCollectionChanged: () -> Void
+    let activeCollectionID: String?
+    let onRemoveFromCollection: (String) -> Void
 
     @State private var showIndex = false
     @State private var showCollectionPicker = false
@@ -27,6 +29,7 @@ struct SeriesListRow: View, Equatable {
             && lhs.hideFanworksTagPill == rhs.hideFanworksTagPill
             && lhs.isLiked             == rhs.isLiked
             && lhs.isInReadLater       == rhs.isInReadLater
+            && lhs.activeCollectionID  == rhs.activeCollectionID
     }
 
     var body: some View {
@@ -92,6 +95,9 @@ struct SeriesListRow: View, Equatable {
             Button("Skip Series", action: onSkip)
             Divider()
             Button("Add to Collection…") { showCollectionPicker = true }
+            if let activeCollectionID {
+                Button("Remove from Collection") { onRemoveFromCollection(activeCollectionID) }
+            }
         }
         .popover(isPresented: $showCollectionPicker, arrowEdge: .trailing) {
             CollectionSearchPickerView(
