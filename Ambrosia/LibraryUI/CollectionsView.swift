@@ -16,6 +16,7 @@ struct CollectionsView: View {
     @State private var renamingID: String?
     @State private var renameText = ""
     @State private var searchText = ""
+    @State private var pendingDeleteCollection: CollectionRow?
 
     private var selectedCalibreIDs: [Int] {
         if !calibreIDsToAdd.isEmpty { return calibreIDsToAdd }
@@ -67,6 +68,25 @@ struct CollectionsView: View {
         }
         .frame(minWidth: 380, minHeight: 320)
         .task { await reload() }
+        .confirmationDialog(
+            "Delete “\(pendingDeleteCollection?.name ?? "")”?",
+            isPresented: Binding(
+                get: { pendingDeleteCollection != nil },
+                set: { if !$0 { pendingDeleteCollection = nil } }
+            ),
+            presenting: pendingDeleteCollection
+        ) { collection in
+            Button("Delete", role: .destructive) {
+                Task {
+                    try? await session.collectionStore?.deleteCollection(id: collection.id)
+                    session.bumpMembershipVersion()  // §7
+                    if renamingID == collection.id { renamingID = nil }
+                    await reload()
+                }
+            }
+        } message: { collection in
+            Text("This removes \(membership[collection.id]?.count ?? 0) book(s) from this collection. The books themselves are not deleted.")
+        }
     }
 
     private var visibleCollections: [CollectionRow] {
@@ -183,7 +203,7 @@ struct CollectionsView: View {
                 }
                 Divider()
                 Button("Delete", role: .destructive) {
-                    Task { try? await session.collectionStore?.deleteCollection(id: collection.id); await reload() }
+                    pendingDeleteCollection = collection
                 }
             }
         }
