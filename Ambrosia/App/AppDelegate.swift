@@ -99,6 +99,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // necessary or safe to run synchronously during termination, so save
         // directly instead of calling close(). Force-quit bypasses this, same
         // as it bypasses the rest of applicationWillTerminate.
+        session?.cancelExtractionTaskIfRunning()
         if let path = LibraryRegistry.shared.activePath {
             SearchActivityLog.shared.save(libraryHash: Ambrosia.libraryHash(for: URL(fileURLWithPath: path)))
         }
