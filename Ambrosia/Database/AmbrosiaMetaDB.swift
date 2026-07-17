@@ -41,6 +41,25 @@ actor AmbrosiaMetaDB {
     /// queries are never queued behind AO3 extraction inserts.
     private let readDB: Connection
 
+    // MARK: - Per-ID / per-key caches
+    //
+    // AmbrosiaMetaDB is the sole owner of ambrosia_meta.db reads and writes
+    // (Invariant 10); these caches live here rather than in a view-level
+    // cache so both LibraryRootView and EmailLibraryViewController share a
+    // single source of truth. Keyed per-row (by calibreID, or by series
+    // key), not by the requested ID *set* — callers' page-ID-set and
+    // all-series-ID-set requests overlap heavily but are rarely identical,
+    // so a set-keyed cache (like CalibreLibrary.PageCacheKey) would rarely
+    // hit. Every write site that touches ao3_metadata,
+    // ao3_extraction_diagnostics, series_cache, or series_placeholders must
+    // evict the corresponding entries below.
+    private var ao3MetadataCache: [Int: AO3MetadataRecord] = [:]
+    private var ao3DiagnosticsCache: [Int: AO3ExtractionDiagnostic] = [:]
+    private var seriesEntriesCache: [Int: [SeriesCacheEntry]] = [:]
+    private var seriesEntriesByKeyCache: [String: [SeriesCacheEntry]] = [:]
+    private var singletonWarningsCache: [Int: [SingletonSeriesWarning]] = [:]
+    private var placeholdersCache: [String: [SeriesPlaceholder]] = [:]
+
     init(libraryURL: URL) throws {
         self.libraryHash = Ambrosia.libraryHash(for: libraryURL)
         let dir = try Self.databaseDirectory(for: libraryHash)
@@ -822,6 +841,20 @@ actor AmbrosiaMetaDB {
 
     func ao3ExtractionDiagnostics(for calibreIDs: [Int]) throws -> [Int: AO3ExtractionDiagnostic] {
         guard !calibreIDs.isEmpty else { return [:] }
+        let missing = calibreIDs.filter { ao3DiagnosticsCache[$0] == nil }
+        if !missing.isEmpty {
+            let fetched = try fetchAO3ExtractionDiagnostics(for: missing)
+            for (id, diagnostic) in fetched { ao3DiagnosticsCache[id] = diagnostic }
+        }
+        var result: [Int: AO3ExtractionDiagnostic] = [:]
+        for id in calibreIDs {
+            if let cached = ao3DiagnosticsCache[id] { result[id] = cached }
+        }
+        return result
+    }
+
+    private func fetchAO3ExtractionDiagnostics(for calibreIDs: [Int]) throws -> [Int: AO3ExtractionDiagnostic] {
+        guard !calibreIDs.isEmpty else { return [:] }
         let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")
         let sql = """
         SELECT calibre_id, status, reason, epub_path, epub_filename, spine_items_checked, attempted_at
@@ -848,6 +881,20 @@ actor AmbrosiaMetaDB {
     }
 
     func ao3Metadata(for calibreIDs: [Int]) throws -> [Int: AO3MetadataRecord] {
+        guard !calibreIDs.isEmpty else { return [:] }
+        let missing = calibreIDs.filter { ao3MetadataCache[$0] == nil }
+        if !missing.isEmpty {
+            let fetched = try fetchAO3Metadata(for: missing)
+            for (id, record) in fetched { ao3MetadataCache[id] = record }
+        }
+        var result: [Int: AO3MetadataRecord] = [:]
+        for id in calibreIDs {
+            if let cached = ao3MetadataCache[id] { result[id] = cached }
+        }
+        return result
+    }
+
+    private func fetchAO3Metadata(for calibreIDs: [Int]) throws -> [Int: AO3MetadataRecord] {
         guard !calibreIDs.isEmpty else { return [:] }
         let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")
         let sql = """
@@ -952,6 +999,15 @@ actor AmbrosiaMetaDB {
                 )
             }
         }
+
+        ao3MetadataCache[calibreID] = nil
+        // series_cache rows for this calibreID were replaced wholesale above
+        // (by-key and singleton-warning entries derived from them may now be
+        // stale for series this book participates in), so drop all series
+        // caches rather than try to reconstruct exactly which keys changed.
+        seriesEntriesCache[calibreID] = nil
+        seriesEntriesByKeyCache.removeAll()
+        singletonWarningsCache.removeAll()
     }
 
     func insert(_ diagnostic: AO3ExtractionDiagnostic) throws {
@@ -971,6 +1027,7 @@ actor AmbrosiaMetaDB {
                 diagnostic.attemptedAt,
             ]
         )
+        ao3DiagnosticsCache[diagnostic.calibreID] = nil
     }
 
     /// Flush a batch of extraction results in a single transaction.
@@ -996,9 +1053,32 @@ actor AmbrosiaMetaDB {
             try run("DELETE FROM ao3_extraction_diagnostics")
             try run("DELETE FROM series_cache")
         }
+        ao3MetadataCache.removeAll()
+        ao3DiagnosticsCache.removeAll()
+        seriesEntriesCache.removeAll()
+        seriesEntriesByKeyCache.removeAll()
+        singletonWarningsCache.removeAll()
     }
 
     func seriesEntries(for calibreIDs: [Int]) throws -> [SeriesCacheEntry] {
+        guard !calibreIDs.isEmpty else { return [] }
+        let missing = calibreIDs.filter { seriesEntriesCache[$0] == nil }
+        if !missing.isEmpty {
+            let fetched = try fetchSeriesEntries(for: missing)
+            // Every requested ID gets a cache entry, even ones with no rows,
+            // so a book with no series membership isn't re-queried on every call.
+            var byID: [Int: [SeriesCacheEntry]] = Dictionary(grouping: fetched, by: { $0.calibreID })
+            for id in missing where byID[id] == nil { byID[id] = [] }
+            for (id, entries) in byID { seriesEntriesCache[id] = entries }
+        }
+        var result: [SeriesCacheEntry] = []
+        for id in calibreIDs {
+            result.append(contentsOf: seriesEntriesCache[id] ?? [])
+        }
+        return result.sorted { $0.seriesName != $1.seriesName ? $0.seriesName < $1.seriesName : $0.seriesIndex < $1.seriesIndex }
+    }
+
+    private func fetchSeriesEntries(for calibreIDs: [Int]) throws -> [SeriesCacheEntry] {
         guard !calibreIDs.isEmpty else { return [] }
         let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")
         let sql = """
@@ -1022,6 +1102,25 @@ actor AmbrosiaMetaDB {
     }
 
     func seriesEntries(keys: [String]) throws -> [SeriesCacheEntry] {
+        guard !keys.isEmpty else { return [] }
+        let missing = keys.filter { seriesEntriesByKeyCache[$0] == nil }
+        if !missing.isEmpty {
+            let fetched = try fetchSeriesEntries(keys: missing)
+            var byKey: [String: [SeriesCacheEntry]] = [:]
+            for entry in fetched {
+                byKey[entry.seriesKey, default: []].append(entry)
+            }
+            for key in missing where byKey[key] == nil { byKey[key] = [] }
+            for (key, entries) in byKey { seriesEntriesByKeyCache[key] = entries }
+        }
+        var result: [SeriesCacheEntry] = []
+        for key in keys {
+            result.append(contentsOf: seriesEntriesByKeyCache[key] ?? [])
+        }
+        return result.sorted { $0.seriesName != $1.seriesName ? $0.seriesName < $1.seriesName : $0.seriesIndex < $1.seriesIndex }
+    }
+
+    private func fetchSeriesEntries(keys: [String]) throws -> [SeriesCacheEntry] {
         guard !keys.isEmpty else { return [] }
         let placeholders = keys.map { _ in "?" }.joined(separator: ",")
         let sql = """
@@ -1144,6 +1243,20 @@ actor AmbrosiaMetaDB {
     /// that was the root cause of silently dropping all but one orphaned membership per book.
     func singletonNonLeadingSeriesEntries(for calibreIDs: [Int]) throws -> [Int: [SingletonSeriesWarning]] {
         guard !calibreIDs.isEmpty else { return [:] }
+        let missing = calibreIDs.filter { singletonWarningsCache[$0] == nil }
+        if !missing.isEmpty {
+            let fetched = try fetchSingletonNonLeadingSeriesEntries(for: missing)
+            for id in missing { singletonWarningsCache[id] = fetched[id] ?? [] }
+        }
+        var result: [Int: [SingletonSeriesWarning]] = [:]
+        for id in calibreIDs {
+            if let cached = singletonWarningsCache[id], !cached.isEmpty { result[id] = cached }
+        }
+        return result
+    }
+
+    private func fetchSingletonNonLeadingSeriesEntries(for calibreIDs: [Int]) throws -> [Int: [SingletonSeriesWarning]] {
+        guard !calibreIDs.isEmpty else { return [:] }
         let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")
         let sql = """
         WITH counted AS (
@@ -1181,6 +1294,20 @@ actor AmbrosiaMetaDB {
 
     func placeholders(for seriesKeys: [String]) throws -> [String: [SeriesPlaceholder]] {
         guard !seriesKeys.isEmpty else { return [:] }
+        let missing = seriesKeys.filter { placeholdersCache[$0] == nil }
+        if !missing.isEmpty {
+            let fetched = try fetchPlaceholders(for: missing)
+            for key in missing { placeholdersCache[key] = fetched[key] ?? [] }
+        }
+        var result: [String: [SeriesPlaceholder]] = [:]
+        for key in seriesKeys {
+            if let cached = placeholdersCache[key], !cached.isEmpty { result[key] = cached }
+        }
+        return result
+    }
+
+    private func fetchPlaceholders(for seriesKeys: [String]) throws -> [String: [SeriesPlaceholder]] {
+        guard !seriesKeys.isEmpty else { return [:] }
         let placeholders = seriesKeys.map { _ in "?" }.joined(separator: ",")
         let sql = """
         SELECT series_key, series_name, part_index, note
@@ -1208,6 +1335,7 @@ actor AmbrosiaMetaDB {
             """,
             [seriesName, seriesKey, partIndex, note]
         )
+        placeholdersCache[seriesKey] = nil
     }
 
     func setAnthology(seriesName: String, isAnthology: Bool) throws {
@@ -1215,6 +1343,12 @@ actor AmbrosiaMetaDB {
             "UPDATE series_cache SET is_anthology = ? WHERE series_name = ?",
             [isAnthology ? 1 : 0, seriesName]
         )
+        // Keyed by series_name, which can span many calibreIDs and series
+        // keys — no cheap way to compute exactly which cache entries are
+        // affected, so drop all series-derived caches.
+        seriesEntriesCache.removeAll()
+        seriesEntriesByKeyCache.removeAll()
+        singletonWarningsCache.removeAll()
     }
 
     /// Inserts Calibre-derived series fallback entries, but only for books that
@@ -1254,6 +1388,12 @@ actor AmbrosiaMetaDB {
                 )
             }
         }
+        // WHERE NOT EXISTS means only calibreIDs with no prior series_cache
+        // row are actually written; conservatively evict all of them along
+        // with the by-key/singleton caches they can affect.
+        for entry in entries { seriesEntriesCache[entry.calibreID] = nil }
+        seriesEntriesByKeyCache.removeAll()
+        singletonWarningsCache.removeAll()
     }
 
     /// Books that do not lead *any* series they belong to. Used to populate
