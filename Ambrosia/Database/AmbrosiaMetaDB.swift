@@ -257,9 +257,17 @@ actor AmbrosiaMetaDB {
             category_json TEXT,
             ao3_collections_json TEXT,
             series_json TEXT,
+            rating TEXT,
+            warnings_json TEXT,
             extracted_at TEXT NOT NULL
         );
-
+        """)
+        // Additive columns for libraries whose ao3_metadata table predates rating/
+        // warnings extraction. CREATE TABLE IF NOT EXISTS above only applies to
+        // brand-new tables, so existing tables need these added explicitly.
+        _ = try? db.run("ALTER TABLE ao3_metadata ADD COLUMN rating TEXT")
+        _ = try? db.run("ALTER TABLE ao3_metadata ADD COLUMN warnings_json TEXT")
+        try db.execute("""
         CREATE TABLE IF NOT EXISTS series_cache (
             calibre_id INTEGER NOT NULL,
             series_name TEXT NOT NULL,
@@ -901,7 +909,7 @@ actor AmbrosiaMetaDB {
         SELECT calibre_id, story_url, ao3_work_id, ao3_author_username, kudos_count, word_count,
                chapter_current, chapter_total, is_complete, language, published_date, updated_date,
                fandoms_json, relationships_json, characters_json, additional_tags_json, category_json,
-               ao3_collections_json, series_json, extracted_at
+               ao3_collections_json, series_json, rating, warnings_json, extracted_at
         FROM ao3_metadata
         WHERE calibre_id IN (\(placeholders))
         """
@@ -918,7 +926,7 @@ actor AmbrosiaMetaDB {
         var result: [Int: AO3MetadataRecord] = [:]
         for row in try prepare(sql, calibreIDs.map { $0 as Binding? }) {
             guard let id = row.int(at: 0),
-                  let extractedAt = row[safe: 19] as? String else { continue }
+                  let extractedAt = row[safe: 21] as? String else { continue }
             result[id] = AO3MetadataRecord(
                 storyURL: row[safe: 1] as? String,
                 workID: row[safe: 2] as? String,
@@ -938,6 +946,8 @@ actor AmbrosiaMetaDB {
                 categories: decodeStrings(row.binding(at: 16)),
                 ao3Collections: decodeStrings(row.binding(at: 17)),
                 series: decodeSeries(row.binding(at: 18)),
+                rating: row[safe: 19] as? String,
+                warnings: decodeStrings(row.binding(at: 20)),
                 extractedAt: extractedAt
             )
         }
@@ -960,8 +970,8 @@ actor AmbrosiaMetaDB {
                 (calibre_id, story_url, ao3_work_id, ao3_author_username, kudos_count, word_count,
                  chapter_current, chapter_total, is_complete, language, published_date, updated_date,
                  fandoms_json, relationships_json, characters_json, additional_tags_json, category_json,
-                 ao3_collections_json, series_json, extracted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ao3_collections_json, series_json, rating, warnings_json, extracted_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     calibreID,
@@ -983,6 +993,8 @@ actor AmbrosiaMetaDB {
                     json(metadata.categories),
                     json(metadata.ao3Collections),
                     seriesJSON,
+                    metadata.rating,
+                    json(metadata.warnings),
                     metadata.extractedAt,
                 ]
             )

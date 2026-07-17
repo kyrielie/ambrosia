@@ -26,6 +26,8 @@ struct AO3MetadataRecord: Codable, Equatable, Sendable {
     var categories: [String]
     var ao3Collections: [String]
     var series: [SeriesEntry]
+    var rating: String?
+    var warnings: [String]
     var extractedAt: String
 }
 
@@ -64,6 +66,8 @@ enum AO3MetadataExtractor {
                 categories: [],
                 ao3Collections: [],
                 series: [],
+                rating: nil,
+                warnings: [],
                 extractedAt: ISO8601DateFormatter().string(from: Date())
             )
 
@@ -126,8 +130,12 @@ enum AO3MetadataExtractor {
             record.characters = linkTexts(in: element)
         case "additional tag", "additional tags":
             record.additionalTags = linkTexts(in: element)
-        case "category":
-            record.categories = linkTexts(in: element)
+        case "category", "categories":
+            record.categories = linkTexts(in: element).compactMap(canonicalCategoryText)
+        case "rating", "ratings":
+            record.rating = (try? element.text()).flatMap(\.nilIfEmpty).flatMap(canonicalRatingText)
+        case "archive warning", "archive warnings", "warning", "warnings":
+            record.warnings = linkTexts(in: element).compactMap(canonicalWarningText)
         case "collection", "collections":
             record.ao3Collections = linkTexts(in: element)
         case "series":
@@ -186,6 +194,29 @@ enum AO3MetadataExtractor {
 
     private static func linkTexts(in element: Element) -> [String] {
         (try? element.select("a").array().compactMap { try $0.text().nilIfEmpty }) ?? []
+    }
+
+    /// Validates preface rating text against the closed AO3Rating set. Unrecognized
+    /// text (a wording change upstream, or malformed markup) is dropped rather than
+    /// stored as an unvalidated free string.
+    private static func canonicalRatingText(_ text: String) -> String? {
+        AO3Rating(rawValue: text)?.rawValue
+    }
+
+    /// Validates preface category text against the closed AO3Category set.
+    private static func canonicalCategoryText(_ text: String) -> String? {
+        AO3Category(rawValue: text)?.rawValue
+    }
+
+    /// Validates preface warning text against the closed AO3Warning set, folding the
+    /// preface-only spelling "Creator Chose Not To Use Archive Warnings" into the
+    /// single canonical `.chooseNotTo` value ("Choose Not To Use Archive Warnings")
+    /// also used by Calibre tags, so both sources agree on one string.
+    private static func canonicalWarningText(_ text: String) -> String? {
+        let normalized = text == "Creator Chose Not To Use Archive Warnings"
+            ? "Choose Not To Use Archive Warnings"
+            : text
+        return AO3Warning(rawValue: normalized)?.rawValue
     }
 
     private static func parseInt(_ value: String?) -> Int? {

@@ -312,6 +312,16 @@ final class LibrarySession {
         stopFeedServer()                                     // §4
     }
 
+    /// Cancels the AO3 extraction task without the rest of close()'s teardown
+    /// (library/metaDB/caches). Task cancellation is a cheap, synchronous flag
+    /// set — safe to call from applicationWillTerminate, unlike close() as a
+    /// whole. Does not flush pendingSuccess/pendingFailure; any work not yet
+    /// flushed to the DB is simply re-attempted on next launch, since `missing`
+    /// in startAO3Extraction is always recomputed from what's actually stored.
+    func cancelExtractionTaskIfRunning() {
+        extractionTask?.cancel()
+    }
+
     // MARK: - Count refresh
 
     func refreshCount(query: SearchQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])) async {
@@ -614,9 +624,20 @@ final class LibrarySession {
         // then flush accumulated results to the DB in one transaction per batch.
         // Yielding between batches lets higher-priority actor calls (e.g. filter
         // queries from the UI) cut in without waiting for the full extraction run.
-        let batchSize = 50
+        //
+        // Quitting (applicationWillTerminate) does not cancel or flush this task —
+        // that's deliberate, since flushing is async and not safe to force
+        // synchronously during termination. Instead, batchSize and flushInterval
+        // together bound how much already-completed work a quit can discard: at
+        // most batchSize books, or flushInterval seconds' worth, whichever comes
+        // first. Anything not flushed simply gets re-attempted on next launch,
+        // since `missing` above is always recomputed from what's actually in the
+        // DB — there is no separate "resume point" to track.
+        let batchSize = 10
+        let flushInterval: TimeInterval = 2
         var pendingSuccess: [(AO3MetadataRecord, Int)] = []
         var pendingFailure: [AO3ExtractionDiagnostic] = []
+        var lastFlushAt = Date()
 
         func flushBatch() async {
             guard !pendingSuccess.isEmpty || !pendingFailure.isEmpty else { return }
@@ -625,10 +646,27 @@ final class LibrarySession {
             pendingSuccess.removeAll()
             pendingFailure.removeAll()
             try? await metaDB.insertBatch(toInsertSuccess, diagnostics: toInsertFailure)
+            lastFlushAt = Date()
         }
 
-        for (batchStart, id) in missing.enumerated() {
-            if Task.isCancelled { break }
+        // A single book's parse + extract, factored out so it can run as an
+        // independent task in the group below. Identical logic to the former
+        // serial loop body — only the fan-out changed, not what each book does.
+        enum ExtractionOutcome {
+            case success(AO3MetadataRecord, Int)
+            case failure(AO3ExtractionDiagnostic)
+        }
+
+        // Concurrency is capped rather than unbounded: each task holds a parsed
+        // EPUB DOM in memory for the duration of its parse, so fanning out to
+        // every available core on a large library risks memory pressure rather
+        // than a proportional speedup. 8 is a conservative starting cap.
+        let concurrency = max(1, min(ProcessInfo.processInfo.activeProcessorCount, 8))
+        var nextIndex = 0
+        var completedCount = 0
+
+        @Sendable
+        func extractOneBook(id: Int) async -> ExtractionOutcome {
             var failureReason: String?
             var failureStatus = "skipped"
             var diagnosticEPUB: URL?
@@ -644,15 +682,21 @@ final class LibrarySession {
                     do {
                         var parser = EPUBParser(epubURL: epub)
                         try parser.parse()
-                        let checkedItems = Array(parser.spine.prefix(5))
-                        spineItemsChecked = checkedItems.count
-                        for item in checkedItems {
+                        // AO3 EPUBs always place the preface (dl.tags metadata block) in
+                        // spine[0]. Try it first as the fast path; only continue scanning
+                        // up to 4 more items for non-standard EPUBs where something (a
+                        // cover, a TOC page) precedes the preface.
+                        var checked = 0
+                        for item in parser.spine.prefix(5) {
+                            checked += 1
                             let html = try parser.html(for: item, userCSS: "")
                             if let metadata = AO3MetadataExtractor.extract(from: html) {
+                                spineItemsChecked = checked
                                 return metadata
                             }
                         }
-                        failureReason = "no dl.tags AO3 preface metadata in first \(min(parser.spine.count, 5)) spine items"
+                        spineItemsChecked = checked
+                        failureReason = "no dl.tags AO3 preface metadata in first \(checked) spine items"
                         return nil
                     } catch {
                         failureStatus = "failed"
@@ -665,9 +709,9 @@ final class LibrarySession {
                 metadata = nil
             }
             if let metadata {
-                pendingSuccess.append((metadata, id))
+                return .success(metadata, id)
             } else {
-                let diagnostic = AO3ExtractionDiagnostic(
+                return .failure(AO3ExtractionDiagnostic(
                     calibreID: id,
                     status: failureStatus,
                     reason: failureReason ?? "unknown reason",
@@ -675,19 +719,42 @@ final class LibrarySession {
                     epubFilename: diagnosticEPUB?.lastPathComponent,
                     spineItemsChecked: spineItemsChecked,
                     attemptedAt: ISO8601DateFormatter().string(from: Date())
-                )
-                pendingFailure.append(diagnostic)
-                #if DEBUG
-                print("[LibrarySession] AO3 extraction skipped calibreID=\(id): \(failureReason ?? "unknown reason")")
-                #endif
+                ))
             }
-            DispatchQueue.main.async { [weak self] in
-                self?.extractionProgress.completed += 1
+        }
+
+        await withTaskGroup(of: ExtractionOutcome.self) { group in
+            func addNextTask() {
+                guard !Task.isCancelled, nextIndex < missing.count else { return }
+                let id = missing[nextIndex]
+                nextIndex += 1
+                group.addTask { await extractOneBook(id: id) }
             }
-            // Flush and yield every batchSize books so read queries can cut in.
-            if (batchStart + 1).isMultiple(of: batchSize) {
-                await flushBatch()
-                await Task.yield()
+
+            for _ in 0..<concurrency { addNextTask() }
+
+            while let result = await group.next() {
+                switch result {
+                case .success(let metadata, let id):
+                    pendingSuccess.append((metadata, id))
+                case .failure(let diagnostic):
+                    pendingFailure.append(diagnostic)
+                    #if DEBUG
+                    print("[LibrarySession] AO3 extraction skipped calibreID=\(diagnostic.calibreID): \(diagnostic.reason)")
+                    #endif
+                }
+                completedCount += 1
+                DispatchQueue.main.async { [weak self] in
+                    self?.extractionProgress.completed += 1
+                }
+                // Flush and yield every batchSize books, or every flushInterval
+                // seconds if a batch of slow-parsing EPUBs takes longer than that,
+                // so read queries can cut in and a quit mid-run loses little.
+                if completedCount.isMultiple(of: batchSize) || Date().timeIntervalSince(lastFlushAt) >= flushInterval {
+                    await flushBatch()
+                    await Task.yield()
+                }
+                addNextTask()
             }
         }
         // Flush any remaining records.

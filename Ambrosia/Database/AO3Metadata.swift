@@ -45,11 +45,11 @@ enum AO3Rating: String, CaseIterable {
 
 enum AO3Warning: String, CaseIterable {
     case noWarnings           = "No Archive Warnings Apply"
-    case creatorChoseNot      = "Creator Chose Not To Use Archive Warnings"
-    // "Choose Not To Use Archive Warnings" is a real alternate spelling that appears in
-    // some AO3 EPUB exports (observed in the wild). It is intentionally kept alongside
-    // `creatorChoseNot` so both spellings match in filter UI and extraction. If future
-    // sampling shows it never appears in practice, remove this case.
+    // AO3 EPUB preface HTML spells this "Creator Chose Not To Use Archive Warnings",
+    // but Calibre tags (the source for AO3TagKind.classify) spell it "Choose Not To
+    // Use Archive Warnings". This case is the single canonical value for both.
+    // AO3MetadataExtractor normalizes the preface spelling to this one before
+    // constructing the enum, so both sources always resolve to `.chooseNotTo`.
     case chooseNotTo          = "Choose Not To Use Archive Warnings"
     case graphicViolence      = "Graphic Depictions Of Violence"
     case majorCharDeath       = "Major Character Death"
