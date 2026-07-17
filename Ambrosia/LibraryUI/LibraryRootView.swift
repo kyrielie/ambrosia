@@ -1670,10 +1670,49 @@ struct LibraryRootView: View {
         // list rather than a plain scroll of tappable rows: click-to-select,
         // Cmd/Shift-click range selection, arrow-key navigation, and type-ahead
         // all come from this binding, not from anything we implement ourselves.
+        //
+        // Double-click-to-open used to be a `TapGesture(count: 2)` on each row
+        // (BookListRow/SeriesListRow), which competed with the selection above
+        // and broke click/shift-click/cmd-click. It's now a single window-level
+        // monitor (see LibraryListDoubleClickMonitor.swift) that never touches
+        // mouseDown, plus Return-key as the keyboard equivalent.
         List(items, selection: $selectedItemIDs) { item in
             itemRow(item)
         }
         .listStyle(.plain)
+        .background(
+            LibraryListDoubleClickMonitor { row in
+                guard items.indices.contains(row) else { return }
+                openItem(items[row])
+            }
+        )
+        .onKeyPress(.return) {
+            openSelection()
+            return .handled
+        }
+    }
+
+    /// Opens a single item the same way its context menu's "Open" / "Open
+    /// Selected" / "Open Series" action already does. For a `.book`, this
+    /// expands to the full current selection via `selectedBooks(fallback:)`
+    /// (matching "Open Selected"), not just the double-clicked row.
+    private func openItem(_ item: LibraryItem) {
+        switch item {
+        case .book(let book):
+            open(selectedBooks(fallback: book))
+        case .orphanedSeriesEntry(let book, _):
+            open(selectedBooks(fallback: book))
+        case .series(let series):
+            AppDelegate.shared?.openReaderWindow(target: .series(series), modelContext: modelContext)
+        }
+    }
+
+    /// Return-key equivalent of double-click: opens the current selection.
+    /// No-op if nothing is selected.
+    private func openSelection() {
+        guard let firstID = selectedItemIDs.first,
+              let item = items.first(where: { $0.id == firstID }) else { return }
+        openItem(item)
     }
 
     /// The single collection this list is currently filtered to, or nil if

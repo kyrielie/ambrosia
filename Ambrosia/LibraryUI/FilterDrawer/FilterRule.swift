@@ -139,7 +139,7 @@ enum FilterConjunction: String, CaseIterable, Identifiable, Codable {
 
 // MARK: - FilterRule
 
-struct FilterRule: Identifiable, Codable {
+struct FilterRule: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     var field: FilterField
     var op: FilterOperator
@@ -195,7 +195,7 @@ struct FilterRule: Identifiable, Codable {
 ///
 /// The top-level conjunction is stored on the first group; it is the conjunction
 /// used *between* groups (not within them). Within a group, `conjunction` applies.
-struct FilterGroup: Identifiable, Codable {
+struct FilterGroup: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     var rules: [FilterRule]
     /// How rules within this group are joined.
@@ -213,7 +213,7 @@ struct FilterGroup: Identifiable, Codable {
 // MARK: - FilterExpression
 
 /// The full filter state: a list of groups joined by `groupConjunction`.
-struct FilterExpression: Codable {
+struct FilterExpression: Codable, Equatable {
     var groups: [FilterGroup]
     /// How groups are joined to each other.
     var groupConjunction: FilterConjunction

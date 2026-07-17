@@ -58,16 +58,19 @@ class LibraryViewController: NSViewController {
 
     private func applyViewMode(_ mode: LibraryViewMode) {
         // §list-teardown fix: tell the outgoing List surface (if any) to stop
-        // reloading before it's torn down. LibraryRootView's reload paths are
+        // reloading before it's hidden. LibraryRootView's reload paths are
         // unstructured Task { } blocks kicked off from .onChange, which are not
-        // cancelled just because the NSHostingView is removed from the hierarchy —
-        // see LibraryToolbarState.isListSurfaceTornDown and LibraryRootView's
+        // cancelled just by the NSHostingView being hidden — see
+        // LibraryToolbarState.isListSurfaceTornDown and LibraryRootView's
         // guards in loadPage()/rebuildItems()/refreshBookStates().
         if listHostingView != nil, mode != .list {
             toolbarState.isListSurfaceTornDown = true
         }
 
-        // Remove existing child VCs
+        // Remove existing non-list child VCs. Unlike the list surface below,
+        // email/ranking are still rebuilt fresh on every switch — they were
+        // not reported as slow, so widening this fix to them isn't justified
+        // yet.
         children.forEach {
             // §switch-flicker fix: stop EmailLibraryViewController's observation
             // loop before it's removed, so it doesn't keep reacting to shared
@@ -76,46 +79,68 @@ class LibraryViewController: NSViewController {
             $0.view.removeFromSuperview()
             $0.removeFromParent()
         }
-        // Remove any NSHostingView used directly (list mode)
-        listHostingView?.removeFromSuperview()
-        listHostingView = nil
 
         switch mode {
         case .list:
-            // Use NSHostingView directly so we control sizing entirely via constraints.
+            // §mode-switch-latency fix: reuse the existing NSHostingView
+            // instead of destroying and reconstructing LibraryRootView from
+            // scratch on every switch into list mode. LibraryRootView owns a
+            // large amount of @State (items, books, bookStates, ao3Metadata,
+            // selectedItemIDs, ...) that used to reset to empty on every
+            // switch — even though session-level caches (cachedFilterResult,
+            // cachedFulltextIDs, cachedLikedIDs, ...) made the underlying
+            // AmbrosiaMetaDB fetch cheap, SwiftUI still had to reconstruct and
+            // lay out every visible BookListRow (including FlowLayout's
+            // tag-pill layout) from nothing on every single switch. Keeping
+            // the NSHostingView (and therefore the List's NSTableView and all
+            // of LibraryRootView's @State) alive and just hiding/showing it
+            // means a switch back to list mode is just an unhide.
             //
-            // The {inf, 88} intrinsicContentSize crash happens because NSHostingView's
-            // default sizingOptions (.intrinsicContentSize) makes Auto Layout ask SwiftUI
-            // for its natural size during a layout pass triggered by state changes (e.g.
-            // a tag tap mutating toolbarState).  SwiftUI returns {inf, 88} because it
-            // hasn't been given a concrete width yet, and AppKit rejects the size.
-            //
-            // Fix: set sizingOptions = [] so the hosting view is purely constraint-driven
-            // and never participates in intrinsic-size negotiation.
-            let root = AnyView(
-                LibraryRootView()
-                    .environment(toolbarState)
-                    .modelContainer(modelContainer)
-                    .environment(session)
-            )
-            let hv = NSHostingView(rootView: root)
-            hv.sizingOptions = []                             // ← the real fix
-            hv.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
-            hv.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(hv)
-            NSLayoutConstraint.activate([
-                hv.topAnchor.constraint(equalTo: view.topAnchor),
-                hv.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-                hv.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                hv.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            ])
-            listHostingView = hv
-            // Fresh List instance: clear the teardown flag so its .onAppear /
-            // .onChange-triggered reloads run normally. Must happen after the
-            // new hosting view is attached, not before.
+            // Trade-off: a hidden listHostingView keeps its last-loaded page
+            // of books/bookStates/ao3Metadata resident in memory for as long
+            // as this window stays open in another mode. Acceptable for the
+            // page sizes this view already deals with; revisit if very large
+            // collections make that footprint a problem.
+            if let hv = listHostingView {
+                hv.isHidden = false
+                view.addSubview(hv) // already a subview; this just re-fronts it
+            } else {
+                // Use NSHostingView directly so we control sizing entirely via constraints.
+                //
+                // The {inf, 88} intrinsicContentSize crash happens because NSHostingView's
+                // default sizingOptions (.intrinsicContentSize) makes Auto Layout ask SwiftUI
+                // for its natural size during a layout pass triggered by state changes (e.g.
+                // a tag tap mutating toolbarState).  SwiftUI returns {inf, 88} because it
+                // hasn't been given a concrete width yet, and AppKit rejects the size.
+                //
+                // Fix: set sizingOptions = [] so the hosting view is purely constraint-driven
+                // and never participates in intrinsic-size negotiation.
+                let root = AnyView(
+                    LibraryRootView()
+                        .environment(toolbarState)
+                        .modelContainer(modelContainer)
+                        .environment(session)
+                )
+                let hv = NSHostingView(rootView: root)
+                hv.sizingOptions = []                             // ← the real fix
+                hv.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
+                hv.translatesAutoresizingMaskIntoConstraints = false
+                view.addSubview(hv)
+                NSLayoutConstraint.activate([
+                    hv.topAnchor.constraint(equalTo: view.topAnchor),
+                    hv.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                    hv.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                    hv.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                ])
+                listHostingView = hv
+            }
+            // Resume (or start) LibraryRootView's .onAppear / .onChange-triggered
+            // reloads now that it's the visible surface again. Must happen after
+            // the hosting view is attached/unhidden, not before.
             toolbarState.isListSurfaceTornDown = false
 
         case .email:
+            listHostingView?.isHidden = true
             let childVC = EmailLibraryViewController(
                 modelContainer: modelContainer,
                 session: session,
@@ -133,6 +158,7 @@ class LibraryViewController: NSViewController {
             ])
 
         case .ranking:
+            listHostingView?.isHidden = true
             let placeholder = AnyView(
                 ActivityFeedView(session: session, modelContainer: modelContainer)
                     .environment(session)
