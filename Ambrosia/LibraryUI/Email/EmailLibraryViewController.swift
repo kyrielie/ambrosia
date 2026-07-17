@@ -1378,8 +1378,13 @@ final class EmailLibraryViewController: NSViewController {
             let placeholders: [String: [SeriesPlaceholder]]
             let singletonWarnings: [Int: [SingletonSeriesWarning]]
             var degraded = false
+
+            // entries and singletonWarnings both only depend on pageIDs.
+            async let entriesTask = metaDB.seriesEntries(for: pageIDs)
+            async let singletonWarningsTask = metaDB.singletonNonLeadingSeriesEntries(for: pageIDs)
+
             guard !Task.isCancelled else { return }
-            do { entries = try await metaDB.seriesEntries(for: pageIDs) }
+            do { entries = try await entriesTask }
             catch {
                 entries = []
                 #if DEBUG
@@ -1389,8 +1394,13 @@ final class EmailLibraryViewController: NSViewController {
             }
             let groupedEntries = Dictionary(grouping: entries.filter { !anthologyIDs.contains($0.calibreID) && !duplicateLoserIDs.contains($0.calibreID) }, by: \.seriesKey)
             let seriesKeys = groupedEntries.keys.sorted()
+
+            // allEntries and placeholders both only depend on seriesKeys.
+            async let allEntriesTask = metaDB.seriesEntries(keys: seriesKeys)
+            async let placeholdersTask = metaDB.placeholders(for: seriesKeys)
+
             guard !Task.isCancelled else { return }
-            do { allEntries = try await metaDB.seriesEntries(keys: seriesKeys) }
+            do { allEntries = try await allEntriesTask }
             catch {
                 allEntries = []
                 #if DEBUG
@@ -1406,9 +1416,14 @@ final class EmailLibraryViewController: NSViewController {
             // to guard against is no longer possible — the actor itself is
             // CalibreLibrary.db's only access path. See the matching fix in
             // LibraryRootView.rebuildItems.
-            let allBooks = await library.booksForIDs(allIDs)
+            //
+            // allBooks and metadata both only depend on allIDs.
+            async let allBooksTask = library.booksForIDs(allIDs)
+            async let metadataTask = metaDB.ao3Metadata(for: allIDs)
+
+            let allBooks = await allBooksTask
             guard !Task.isCancelled else { return }
-            do { metadata = try await metaDB.ao3Metadata(for: allIDs) }
+            do { metadata = try await metadataTask }
             catch {
                 metadata = [:]
                 #if DEBUG
@@ -1417,7 +1432,7 @@ final class EmailLibraryViewController: NSViewController {
                 degraded = true
             }
             guard !Task.isCancelled else { return }
-            do { placeholders = try await metaDB.placeholders(for: seriesKeys) }
+            do { placeholders = try await placeholdersTask }
             catch {
                 placeholders = [:]
                 #if DEBUG
@@ -1426,7 +1441,7 @@ final class EmailLibraryViewController: NSViewController {
                 degraded = true
             }
             guard !Task.isCancelled else { return }
-            do { singletonWarnings = try await metaDB.singletonNonLeadingSeriesEntries(for: pageIDs) }
+            do { singletonWarnings = try await singletonWarningsTask }
             catch {
                 singletonWarnings = [:]
                 #if DEBUG
