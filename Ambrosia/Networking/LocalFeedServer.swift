@@ -716,15 +716,27 @@ actor LocalFeedServer {
         guard let library, let metaDB, !calibreIDs.isEmpty else { return [] }
         // Applied here rather than per-route: all three routes (.xml, .json,
         // .sqlite) funnel through this one function, so filtering here is the
-        // single choke point that keeps a feed from serving a stale Calibre
-        // duplicate of an AO3 work — matching the "Deduplicate books"
-        // preference already applied to the app's own library/search/series
-        // grouping via LibraryVisibilityPolicy. See DuplicateBookDetector.
-        var effectiveIDs = calibreIDs
-        if ReaderPreferences.shared.hideDuplicateBooks {
-            let loserIDs = await library.duplicateLoserBookIDs()
-            effectiveIDs = effectiveIDs.filter { !loserIDs.contains($0) }
-        }
+        // single choke point that keeps feeds in sync with the app's own
+        // library-visibility toggles (Settings > Library), matching what
+        // LibraryRootView/EmailLibraryViewController apply via
+        // LibraryVisibilityPolicy.filter(_:) before rendering a row. Series
+        // grouping's own anthology/duplicate exclusion (groupedDisplayUnits)
+        // is a separate, narrower concern — whether a book counts toward a
+        // group — and is intentionally not folded into this policy.
+        let skippedIDs = Set((try? await collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
+        let policy = LibraryVisibilityPolicy(
+            showSkippedCollection: ReaderPreferences.shared.showSkippedCollection,
+            shouldGroupSeriesRows: false,
+            hideNonAO3PublisherBooks: ReaderPreferences.shared.hideNonAO3PublisherBooks,
+            hideAnthologyBooks: ReaderPreferences.shared.hideAnthologyBooks,
+            hideDuplicateBooks: ReaderPreferences.shared.hideDuplicateBooks,
+            skippedIDs: skippedIDs,
+            seriesOrMergedIDs: [],
+            ao3PublisherIDs: await library.ao3PublisherBookIDs(),
+            anthologyIDs: await library.anthologyBookIDs(),
+            duplicateLoserIDs: await library.duplicateLoserBookIDs()
+        )
+        let effectiveIDs = policy.filter(calibreIDs)
         guard !effectiveIDs.isEmpty else { return [] }
         let ao3Map = (try? await metaDB.ao3Metadata(for: effectiveIDs)) ?? [:]
         // Batched the same way as ao3Map above — one query for every book in this
@@ -783,7 +795,7 @@ actor LocalFeedServer {
         let entries = pairs.flatMap { $0.seriesEntries }
         let anthologyIDs = Set(pairs.filter { $0.book.isDescriptionAnthology }.map { $0.book.id })
         let duplicateLoserIDs = ReaderPreferences.shared.hideDuplicateBooks
-            ? await (library?.duplicateLoserBookIDs() ?? [])
+            ? await library.duplicateLoserBookIDs()
             : []
 
         let groupedByKey = Dictionary(
@@ -1760,17 +1772,14 @@ actor LocalFeedServer {
         }
 
         // Wire Contract: skipped books are excluded from `items` entirely.
-        // fetchFeedBooks/CollectionStore.members(of:) does NOT already filter
-        // these out (confirmed against the dump — see
-        // docs/ambrosia-feed-transfer-phase0-findings.md), so it's done
-        // explicitly here rather than assumed.
-        let skippedIDs = Set((try? await collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
-        let filteredIDs = calibreIDs.filter { !skippedIDs.contains($0) }
-        guard !filteredIDs.isEmpty else {
+        // Now enforced once, upstream, inside fetchFeedBooks via
+        // LibraryVisibilityPolicy — no longer duplicated here. See that
+        // function's doc comment.
+        guard !calibreIDs.isEmpty else {
             return try await sqliteResponse(for: [], manifest: emptySQLiteManifest())
         }
 
-        let (allPairs, walkID) = await pairsForSQLiteWalk(walkKey: walkKey, calibreIDs: filteredIDs)
+        let (allPairs, walkID) = await pairsForSQLiteWalk(walkKey: walkKey, calibreIDs: calibreIDs)
         let (pagePairs, hasMore) = paginatePairs(allPairs, page: clampedPage, maxPerPage: Self.sqliteFeedMaxBooksPerPage)
 
         LibraryFilterDebug.log("feed.page.end", [
