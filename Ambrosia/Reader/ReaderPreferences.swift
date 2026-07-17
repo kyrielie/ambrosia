@@ -129,10 +129,15 @@ final class ReaderPreferences: ObservableObject {
             preferenceChangeKind.send(.cosmetic)
         }
     }
+    /// Structural, not cosmetic: indent removal is now applied by
+    /// EPUBParser.stripLeadingIndentWhitespace when the HTML is built (see
+    /// sanitise/extractBodyContent), not by a live CSS variable, so toggling
+    /// this needs a full reloadHTML() to regenerate the document — a
+    /// cosmetic-path CSS swap has nothing left to update.
     @Published var removeParagraphIndents: Bool {
         didSet {
             UserDefaults.standard.set(removeParagraphIndents, forKey: Keys.removeParagraphIndents)
-            preferenceChangeKind.send(.cosmetic)
+            preferenceChangeKind.send(.structural)
         }
     }
     @Published var colsPerScreen: ColsPerScreen {
@@ -583,18 +588,19 @@ final class ReaderPreferences: ObservableObject {
     /// Emits just the *contents* of the `:root { ... }` block (no braces) for
     /// the cosmetic properties `css(paginated:)` drives via CSS variables:
     /// fontFamily, fontSize, lineHeight, readerBackgroundColor,
-    /// readerTextColor, paddingH, paddingV, maxWidth, allowReaderLinkClicks,
-    /// and removeParagraphIndents. `ReaderViewController.applyCosmeticCSSUpdate()`
-    /// writes this into a standalone `<style id="ambrosia-vars">` element
-    /// without needing the rest of the stylesheet reinjected.
-    /// `removeParagraphIndents` is expressed as a variable whose value is
-    /// either `0` or the CSS-wide keyword `unset` (valid wherever
-    /// `text-indent` is valid) rather than a conditionally-included rule
-    /// block, since the rule referencing it must stay static in the HTML for
-    /// this to be a value swap and not a reload.
+    /// readerTextColor, paddingH, paddingV, maxWidth, allowReaderLinkClicks.
+    /// `ReaderViewController.applyCosmeticCSSUpdate()` writes this into a
+    /// standalone `<style id="ambrosia-vars">` element without needing the
+    /// rest of the stylesheet reinjected.
+    /// (removeParagraphIndents is deliberately not one of these — see its
+    /// own doc comment above. It used to be expressed here as a
+    /// `--ambrosia-paragraph-indent` variable feeding a `text-indent`
+    /// override, but publisher CSS is stripped unconditionally before this
+    /// stylesheet is ever injected, so there was never any publisher
+    /// `text-indent` left for that override to cancel out — dead code,
+    /// removed. The actual fix is EPUBParser.stripLeadingIndentWhitespace.)
     var cssVariableDeclarations: String {
-        let indentVar = removeParagraphIndents ? "0" : "unset"
-        return """
+        """
         --ambrosia-font-family: \(fontFamily);
         --ambrosia-font-size: \(fontSize)px;
         --ambrosia-line-height: \(lineHeight);
@@ -604,7 +610,6 @@ final class ReaderPreferences: ObservableObject {
         --ambrosia-padding-v: \(paddingV)px;
         --ambrosia-max-width: \(maxWidth)px;
         --ambrosia-link-pointer-events: \(allowReaderLinkClicks ? "auto" : "none");
-        --ambrosia-paragraph-indent: \(indentVar);
         """
     }
 
@@ -658,12 +663,6 @@ final class ReaderPreferences: ObservableObject {
         pre { overflow-x: auto; padding: 1em; background: rgba(128,128,128,0.1); border-radius: 4px; }
         div, section, article { float: none !important; position: static !important; }
         nav[epub\\:type="toc"], nav[epub\\:type="landmarks"] { display: none; }
-        p, div, li {
-            text-indent: var(--ambrosia-paragraph-indent, unset) !important;
-        }
-        p::first-line, div::first-line, li::first-line {
-            text-indent: var(--ambrosia-paragraph-indent, unset) !important;
-        }
         """
     }
 
