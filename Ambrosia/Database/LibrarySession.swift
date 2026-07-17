@@ -59,6 +59,14 @@ final class LibrarySession {
     var cachedReadLaterIDs: Set<Int> = []
     var cachedAnthologyIDs: Set<Int> = []
 
+    /// Non-winning calibre IDs of any AO3-work duplicate group (see
+    /// `DuplicateBookDetector`). Computed inside `CalibreLibrary` whenever
+    /// `refreshAO3MetaCaches()` runs (library open, after AO3 extraction
+    /// batches); mirrored into `refreshCollectionSnapshots()` below so it
+    /// participates in the same "did visibility change" diff as the other
+    /// five sets.
+    var cachedDuplicateLoserIDs: Set<Int> = []
+
     /// The path of the currently open library.
     private(set) var activePath: String?
 
@@ -87,6 +95,7 @@ final class LibrarySession {
         let currentSeriesOrMerged = membershipByID[SystemCollectionID.seriesOrMerged] ?? []
         let currentAO3PublisherIDs = await library?.ao3PublisherBookIDs() ?? []
         let currentAnthologyIDs = await library?.anthologyBookIDs() ?? []
+        let currentDuplicateLoserIDs = await library?.duplicateLoserBookIDs() ?? []
 
         let changed = cachedLikedIDs != currentLiked
             || cachedReadLaterIDs != currentReadLater
@@ -94,6 +103,7 @@ final class LibrarySession {
             || cachedSeriesOrMergedIDs != currentSeriesOrMerged
             || cachedAO3PublisherIDs != currentAO3PublisherIDs
             || cachedAnthologyIDs != currentAnthologyIDs
+            || cachedDuplicateLoserIDs != currentDuplicateLoserIDs
 
         cachedLikedIDs = currentLiked
         cachedReadLaterIDs = currentReadLater
@@ -101,6 +111,7 @@ final class LibrarySession {
         cachedSeriesOrMergedIDs = currentSeriesOrMerged
         cachedAO3PublisherIDs = currentAO3PublisherIDs
         cachedAnthologyIDs = currentAnthologyIDs
+        cachedDuplicateLoserIDs = currentDuplicateLoserIDs
 
         collectionMembershipByName = Dictionary(uniqueKeysWithValues: collections.map { collection in
             (collection.name, membershipByID[collection.id] ?? [])
@@ -201,6 +212,7 @@ final class LibrarySession {
             cachedAO3PublisherIDs = []
             cachedReadLaterIDs = []
             cachedAnthologyIDs = []
+            cachedDuplicateLoserIDs = []
             LibraryRegistry.shared.register(url)
             LibraryIndexManager.shared.record(url: url)
             importAO3TagSeeds()
@@ -245,9 +257,11 @@ final class LibrarySession {
             async let wordCounts = metaDB.allAO3WordCounts()
             async let dates = metaDB.allAO3Dates()
             async let crossoverIDs = metaDB.allCrossoverBookIDs()
+            async let workIDs = metaDB.allAO3WorkIDs()
             let resolvedWordCounts = await wordCounts
             let resolvedDates = await dates
             let resolvedCrossoverIDs = await crossoverIDs
+            let resolvedWorkIDs = await workIDs
             // This Task was created from a MainActor context and is not detached,
             // so it already runs on the MainActor — no MainActor.run hop needed.
             // `library` is a separate actor now, so the call into it still needs `await`.
@@ -255,8 +269,15 @@ final class LibrarySession {
             await library.updateAO3MetaCaches(
                 wordCounts: resolvedWordCounts,
                 dates: resolvedDates,
-                crossoverIDs: resolvedCrossoverIDs
+                crossoverIDs: resolvedCrossoverIDs,
+                workIDs: resolvedWorkIDs
             )
+            // `duplicateLoserIDCache` was just recomputed inside the actor from
+            // the freshly-fetched work IDs/dates — mirror it into
+            // `cachedDuplicateLoserIDs` now rather than waiting for the next
+            // unrelated `refreshCollectionSnapshots()` call (e.g. after a
+            // like/skip toggle) to happen to pick it up.
+            await self?.refreshCollectionSnapshots()
         }
     }
 
@@ -287,6 +308,7 @@ final class LibrarySession {
         SearchActivityLog.shared.clear()
         cachedAO3PublisherIDs = []
         cachedAnthologyIDs = []
+        cachedDuplicateLoserIDs = []
         stopFeedServer()                                     // §4
     }
 

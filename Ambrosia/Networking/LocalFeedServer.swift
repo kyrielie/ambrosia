@@ -714,18 +714,30 @@ actor LocalFeedServer {
     /// own concurrent UI browsing.
     private func fetchFeedBooks(calibreIDs: [Int], context: String) async -> [FeedBookPair] {
         guard let library, let metaDB, !calibreIDs.isEmpty else { return [] }
-        let ao3Map = (try? await metaDB.ao3Metadata(for: calibreIDs)) ?? [:]
+        // Applied here rather than per-route: all three routes (.xml, .json,
+        // .sqlite) funnel through this one function, so filtering here is the
+        // single choke point that keeps a feed from serving a stale Calibre
+        // duplicate of an AO3 work — matching the "Deduplicate books"
+        // preference already applied to the app's own library/search/series
+        // grouping via LibraryVisibilityPolicy. See DuplicateBookDetector.
+        var effectiveIDs = calibreIDs
+        if ReaderPreferences.shared.hideDuplicateBooks {
+            let loserIDs = await library.duplicateLoserBookIDs()
+            effectiveIDs = effectiveIDs.filter { !loserIDs.contains($0) }
+        }
+        guard !effectiveIDs.isEmpty else { return [] }
+        let ao3Map = (try? await metaDB.ao3Metadata(for: effectiveIDs)) ?? [:]
         // Batched the same way as ao3Map above — one query for every book in this
         // build rather than a per-item lookup — so per-book series membership is
         // available to both the RSS and JSON Feed item builders without either of
         // them touching series_cache directly.
-        let seriesRows = (try? await metaDB.seriesEntries(for: calibreIDs)) ?? []
+        let seriesRows = (try? await metaDB.seriesEntries(for: effectiveIDs)) ?? []
         let seriesByBook = Dictionary(grouping: seriesRows, by: \.calibreID)
         // No cap here — callers decide how many IDs to pass in. RSS passes the
         // full list (no pagination protocol exists for RSS); JSON Feed passes
         // one page's worth (see buildJSONFeed's book-count page cap,
         // jsonFeedMaxBooksPerPage).
-        let books = await library.books(ids: calibreIDs, offset: 0, limit: calibreIDs.count,
+        let books = await library.books(ids: effectiveIDs, offset: 0, limit: effectiveIDs.count,
                                    sort: .title, ascending: true, context: context)
         return books.map { ($0, ao3Map[$0.id], seriesByBook[$0.id] ?? []) }
     }
@@ -770,9 +782,12 @@ actor LocalFeedServer {
         let pairByID = Dictionary(uniqueKeysWithValues: pairs.map { ($0.book.id, $0) })
         let entries = pairs.flatMap { $0.seriesEntries }
         let anthologyIDs = Set(pairs.filter { $0.book.isDescriptionAnthology }.map { $0.book.id })
+        let duplicateLoserIDs = ReaderPreferences.shared.hideDuplicateBooks
+            ? await (library?.duplicateLoserBookIDs() ?? [])
+            : []
 
         let groupedByKey = Dictionary(
-            grouping: entries.filter { !anthologyIDs.contains($0.calibreID) },
+            grouping: entries.filter { !anthologyIDs.contains($0.calibreID) && !duplicateLoserIDs.contains($0.calibreID) },
             by: \.seriesKey
         )
         // Sorted rather than raw `.keys`: Dictionary iteration order isn't part of
@@ -797,7 +812,8 @@ actor LocalFeedServer {
             allEntries: allEntries,
             byID: byID,
             seriesMetadata: seriesMetadata,
-            anthologyIDs: anthologyIDs
+            anthologyIDs: anthologyIDs,
+            duplicateLoserIDs: duplicateLoserIDs
         )
 
         // Members resolved only via allBooks/seriesMetadata (i.e. outside the

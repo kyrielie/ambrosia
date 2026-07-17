@@ -32,6 +32,7 @@ final class EmailSidebarViewController: NSViewController,
     var onContextMenuOpen:             (([CalibreBook]) -> Void)?
     var onContextMenuReadLater:        (([CalibreBook]) -> Void)?
     var onContextMenuCollectionPicker: (([CalibreBook], NSView, NSRect) -> Void)?
+    var onContextMenuRemoveFromCollection: (([CalibreBook], String) -> Void)?
     var onToggleLiked:                 (([CalibreBook]) -> Void)?
     var onToggleReadLater:             (([CalibreBook]) -> Void)?
 
@@ -49,6 +50,11 @@ final class EmailSidebarViewController: NSViewController,
     var readLaterIDs: Set<Int> = [] { didSet { reloadVisibleRows() } }
     /// Collection snapshot for building context menu submenus. Key = name, value = member calibreIDs.
     var collectionMembership: [String: Set<Int>] = [:] { didSet { reloadVisibleRows() } }
+    /// The single collection ID the current filter is scoped to, if any — mirrors
+    /// `LibraryRootView.activeCollectionID`. Non-nil only when exactly one complete
+    /// `.collection` filter rule is active. Controls whether "Remove from Collection"
+    /// appears in the context menu (set by the parent EmailLibraryViewController).
+    var activeCollectionID: String?
 
     // MARK: - Private
 
@@ -314,6 +320,13 @@ final class EmailSidebarViewController: NSViewController,
         collectionItem.representedObject = ["books": selectedBooks, "row": row] as [String: Any]
         menu.addItem(collectionItem)
 
+        if let activeCollectionID {
+            let removeItem = NSMenuItem(title: "Remove from Collection", action: #selector(contextRemoveFromCollection(_:)), keyEquivalent: "")
+            removeItem.target = self
+            removeItem.representedObject = ["books": selectedBooks, "collectionID": activeCollectionID] as [String: Any]
+            menu.addItem(removeItem)
+        }
+
         return menu
     }
 
@@ -356,6 +369,13 @@ final class EmailSidebarViewController: NSViewController,
               row >= 0,
               row < tableView.numberOfRows else { return }
         onContextMenuCollectionPicker?(books, tableView, tableView.rect(ofRow: row))
+    }
+
+    @objc private func contextRemoveFromCollection(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let books = dict["books"] as? [CalibreBook],
+              let collectionID = dict["collectionID"] as? String else { return }
+        onContextMenuRemoveFromCollection?(books, collectionID)
     }
 
     func updateSelectionForContextClick(row: Int, event: NSEvent) {

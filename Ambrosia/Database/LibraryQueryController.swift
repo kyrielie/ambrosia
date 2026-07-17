@@ -90,20 +90,24 @@ final class LibraryQueryController {
         shouldGroupSeriesRows: Bool,
         hideNonAO3PublisherBooks: Bool,
         hideAnthologyBooks: Bool,
+        hideDuplicateBooks: Bool,
         skippedIDs: Set<Int>,
         seriesOrMergedIDs: Set<Int>,
         ao3PublisherIDs: Set<Int>,
-        anthologyIDs: Set<Int>
+        anthologyIDs: Set<Int>,
+        duplicateLoserIDs: Set<Int>
     ) -> LibraryVisibilityPolicy {
         LibraryVisibilityPolicy(
             showSkippedCollection: showSkippedCollection,
             shouldGroupSeriesRows: shouldGroupSeriesRows,
             hideNonAO3PublisherBooks: hideNonAO3PublisherBooks,
             hideAnthologyBooks: hideAnthologyBooks,
+            hideDuplicateBooks: hideDuplicateBooks,
             skippedIDs: skippedIDs,
             seriesOrMergedIDs: seriesOrMergedIDs,
             ao3PublisherIDs: ao3PublisherIDs,
-            anthologyIDs: anthologyIDs
+            anthologyIDs: anthologyIDs,
+            duplicateLoserIDs: duplicateLoserIDs
         )
     }
 
@@ -127,6 +131,7 @@ final class LibraryQueryController {
             let strippedBySeriesOrMerged = raw.filter { policy.seriesOrMergedIDs.contains($0.id) }.count
             let strippedByPublisher = raw.filter { policy.hideNonAO3PublisherBooks && !$0.isAO3PublisherBook }.count
             let strippedByAnthology = raw.filter { policy.hideAnthologyBooks && $0.isDescriptionAnthology }.count
+            let strippedByDuplicate = raw.filter { policy.hideDuplicateBooks && policy.duplicateLoserIDs.contains($0.id) }.count
             LibraryFilterDebug.log("visibleBooks.breakdown", [
                 "surface": surfaceLabel,
                 "raw": raw.count,
@@ -135,6 +140,7 @@ final class LibraryQueryController {
                 "strippedBySeriesOrMerged": strippedBySeriesOrMerged,
                 "strippedByPublisher": strippedByPublisher,
                 "strippedByAnthology": strippedByAnthology,
+                "strippedByDuplicate": strippedByDuplicate,
                 "sampleStrippedIDs": raw.filter { policy.seriesOrMergedIDs.contains($0.id) }.prefix(5).map(\.id).map(String.init).joined(separator: ",")
             ])
         }
