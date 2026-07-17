@@ -866,11 +866,20 @@ struct LibraryRootView: View {
         rebuildTask = Task {
             var degraded = false
             let pageIDs = pageBooks.map(\.id)
+
+            // These four only depend on pageIDs, not on each other's results —
+            // fire them concurrently rather than awaiting one at a time.
+            async let pageMetadataTask = metaDB.ao3Metadata(for: pageIDs)
+            async let pageDiagnosticsTask = metaDB.ao3ExtractionDiagnostics(for: pageIDs)
+            async let entriesTask = metaDB.seriesEntries(for: pageIDs)
+            async let singletonWarningsTask = metaDB.singletonNonLeadingSeriesEntries(for: pageIDs)
+
             let pageMetadata: [Int: AO3MetadataRecord]
             let pageDiagnostics: [Int: AO3ExtractionDiagnostic]
             let entries: [SeriesCacheEntry]
+            let singletonWarnings: [Int: [SingletonSeriesWarning]]
             guard !Task.isCancelled else { return }
-            do { pageMetadata   = try await metaDB.ao3Metadata(for: pageIDs) }
+            do { pageMetadata   = try await pageMetadataTask }
             catch {
                 pageMetadata = [:]
                 #if DEBUG
@@ -879,7 +888,7 @@ struct LibraryRootView: View {
                 #endif
             }
             guard !Task.isCancelled else { return }
-            do { pageDiagnostics = try await metaDB.ao3ExtractionDiagnostics(for: pageIDs) }
+            do { pageDiagnostics = try await pageDiagnosticsTask }
             catch {
                 pageDiagnostics = [:]
                 #if DEBUG
@@ -888,7 +897,7 @@ struct LibraryRootView: View {
                 #endif
             }
             guard !Task.isCancelled else { return }
-            do { entries = try await metaDB.seriesEntries(for: pageIDs) }
+            do { entries = try await entriesTask }
             catch {
                 entries = []
                 #if DEBUG
@@ -896,11 +905,27 @@ struct LibraryRootView: View {
                 print("[LibraryRootView] rebuildItems: seriesEntries(page) failed: \(error)")
                 #endif
             }
+            guard !Task.isCancelled else { return }
+            do { singletonWarnings = try await singletonWarningsTask }
+            catch {
+                singletonWarnings = [:]
+                #if DEBUG
+                degraded = true
+                print("[LibraryRootView] rebuildItems: singletonNonLeadingSeriesEntries failed: \(error)")
+                #endif
+            }
+
             let groupedEntries = Dictionary(grouping: entries.filter { !anthologyIDs.contains($0.calibreID) }, by: \.seriesKey)
             let seriesKeys = groupedEntries.keys.sorted()
+
+            // allEntries and placeholders both only depend on seriesKeys.
+            async let allEntriesTask = metaDB.seriesEntries(keys: seriesKeys)
+            async let placeholdersTask = metaDB.placeholders(for: seriesKeys)
+
             let allEntries: [SeriesCacheEntry]
+            let placeholders: [String: [SeriesPlaceholder]]
             guard !Task.isCancelled else { return }
-            do { allEntries = try await metaDB.seriesEntries(keys: seriesKeys) }
+            do { allEntries = try await allEntriesTask }
             catch {
                 allEntries = []
                 #if DEBUG
@@ -908,6 +933,16 @@ struct LibraryRootView: View {
                 print("[LibraryRootView] rebuildItems: seriesEntries(keys) failed: \(error)")
                 #endif
             }
+            guard !Task.isCancelled else { return }
+            do { placeholders = try await placeholdersTask }
+            catch {
+                placeholders = [:]
+                #if DEBUG
+                degraded = true
+                print("[LibraryRootView] rebuildItems: placeholders failed: \(error)")
+                #endif
+            }
+
             let allIDs = Array(Set(allEntries.map(\.calibreID)))
             guard !Task.isCancelled else { return }
             // CalibreLibrary is actor-isolated now: this await serializes automatically
@@ -915,13 +950,18 @@ struct LibraryRootView: View {
             // the same library, on whatever executor the actor runs on. The SQLITE_BUSY
             // race this MainActor hop used to guard against is no longer possible —
             // the actor itself is CalibreLibrary.db's only access path.
-            let allBooks = await library.booksForIDs(allIDs)
+            //
+            // allBooks, seriesMetadata, and seriesDiagnostics all only depend on
+            // allIDs, so fetch them concurrently too.
+            async let allBooksTask = library.booksForIDs(allIDs)
+            async let seriesMetadataTask = metaDB.ao3Metadata(for: allIDs)
+            async let seriesDiagnosticsTask = metaDB.ao3ExtractionDiagnostics(for: allIDs)
+
+            let allBooks = await allBooksTask
             let seriesMetadata: [Int: AO3MetadataRecord]
             let seriesDiagnostics: [Int: AO3ExtractionDiagnostic]
-            let singletonWarnings: [Int: [SingletonSeriesWarning]]
-            let placeholders: [String: [SeriesPlaceholder]]
             guard !Task.isCancelled else { return }
-            do { seriesMetadata   = try await metaDB.ao3Metadata(for: allIDs) }
+            do { seriesMetadata   = try await seriesMetadataTask }
             catch {
                 seriesMetadata = [:]
                 #if DEBUG
@@ -930,30 +970,12 @@ struct LibraryRootView: View {
                 #endif
             }
             guard !Task.isCancelled else { return }
-            do { seriesDiagnostics = try await metaDB.ao3ExtractionDiagnostics(for: allIDs) }
+            do { seriesDiagnostics = try await seriesDiagnosticsTask }
             catch {
                 seriesDiagnostics = [:]
                 #if DEBUG
                 degraded = true
                 print("[LibraryRootView] rebuildItems: ao3ExtractionDiagnostics(series) failed: \(error)")
-                #endif
-            }
-            guard !Task.isCancelled else { return }
-            do { singletonWarnings = try await metaDB.singletonNonLeadingSeriesEntries(for: pageIDs) }
-            catch {
-                singletonWarnings = [:]
-                #if DEBUG
-                degraded = true
-                print("[LibraryRootView] rebuildItems: singletonNonLeadingSeriesEntries failed: \(error)")
-                #endif
-            }
-            guard !Task.isCancelled else { return }
-            do { placeholders = try await metaDB.placeholders(for: seriesKeys) }
-            catch {
-                placeholders = [:]
-                #if DEBUG
-                degraded = true
-                print("[LibraryRootView] rebuildItems: placeholders failed: \(error)")
                 #endif
             }
             let warnings = enrichWarnings(singletonWarnings, books: pageBooks)
