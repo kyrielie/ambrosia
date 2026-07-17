@@ -30,8 +30,6 @@ struct FlowLayout: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
-        refreshSubviewSizes(in: &cache, subviews: subviews)
-        rebuildRows(in: &cache, maxWidth: bounds.width)
         var rowIdx = 0
         var x = bounds.minX
 
@@ -50,11 +48,9 @@ struct FlowLayout: Layout {
     }
 
     private func refreshSubviewSizes(in cache: inout Cache, subviews: Subviews) {
-        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
-        if sizes != cache.subviewSizes {
-            cache.subviewSizes = sizes
-            cache.lastWidth = -1
-        }
+        guard subviews.count != cache.subviewSizes.count else { return }
+        cache.subviewSizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        cache.lastWidth = -1
     }
 
     private func rebuildRows(in cache: inout Cache, maxWidth: CGFloat) {
