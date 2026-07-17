@@ -93,6 +93,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Persist search history before quitting. LibrarySession.close() also
+        // does this, but close() additionally tears down extractionTask, stops
+        // the feed server, and clears membership caches — none of which is
+        // necessary or safe to run synchronously during termination, so save
+        // directly instead of calling close(). Force-quit bypasses this, same
+        // as it bypasses the rest of applicationWillTerminate.
+        if let path = LibraryRegistry.shared.activePath {
+            SearchActivityLog.shared.save(libraryHash: Ambrosia.libraryHash(for: URL(fileURLWithPath: path)))
+        }
         // Clean up temp image directories created by EPUBParser.extractImages
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("ambrosia")
         try? FileManager.default.removeItem(at: tmp)
