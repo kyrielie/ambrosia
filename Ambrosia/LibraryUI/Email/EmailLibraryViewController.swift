@@ -52,6 +52,7 @@ final class EmailLibraryViewController: NSViewController {
     private var seriesOrMergedIDs: Set<Int> = []
     private var ao3PublisherIDs: Set<Int> = []
     private var anthologyIDs: Set<Int> = []
+    private var duplicateLoserIDs: Set<Int> = []
     private var collectionMembership: [String: Set<Int>] = [:]
     private var pendingCollectionSeedIDs: [Int] = []
     // §Phase2-Pass1: currentPage/rawSQLOffset/rawSQLOffsetHistory/
@@ -158,6 +159,7 @@ final class EmailLibraryViewController: NSViewController {
         likedIDs          = session.cachedLikedIDs
         ao3PublisherIDs   = session.cachedAO3PublisherIDs
         anthologyIDs      = session.cachedAnthologyIDs
+        duplicateLoserIDs = session.cachedDuplicateLoserIDs
         readLaterIDs      = session.cachedReadLaterIDs
         lastGroupBySeries = toolbarState.groupBySeries
         refreshBookStates()
@@ -211,6 +213,13 @@ final class EmailLibraryViewController: NSViewController {
             }
             .store(in: &preferenceCancellables)
         ReaderPreferences.shared.$hideAnthologyBooks
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.refreshCollections()
+            }
+            .store(in: &preferenceCancellables)
+        ReaderPreferences.shared.$hideDuplicateBooks
             .dropFirst()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
@@ -312,6 +321,9 @@ final class EmailLibraryViewController: NSViewController {
             guard let self else { return }
             self.showCollectionPicker(for: books.map(\.id), relativeTo: anchorRect, of: anchorView)
         }
+        sidebarVC.onContextMenuRemoveFromCollection = { [weak self] books, collectionID in
+            self?.removeFromCollection(named: collectionID, calibreIDs: books.map(\.id))
+        }
 
         splitVC = AmbrosiaEmailSplitViewController()
         splitVC.splitView.isVertical   = true
@@ -401,6 +413,26 @@ final class EmailLibraryViewController: NSViewController {
         popover.contentViewController = NSHostingController(rootView: root)
         collectionPickerPopover = popover
         popover.show(relativeTo: rect, of: view, preferredEdge: .maxX)
+    }
+
+    /// Mirrors LibraryRootView.removeFromCollection(named:calibreIDs:) — see
+    /// its doc comment. Only reachable via the sidebar's "Remove from
+    /// Collection" item, which itself only appears when `activeCollectionID`
+    /// is non-nil (exactly one `.collection` filter rule active).
+    private func removeFromCollection(named collectionName: String, calibreIDs: [Int]) {
+        Task {
+            guard let collections = try? await session.collectionStore?.collections(),
+                  let match = collections.first(where: { $0.name == collectionName }) else { return }
+            try? await session.collectionStore?.bulkRemove(calibreIDs: calibreIDs, from: match.id)
+            CollectionAssignment.didAssign(session: session) { [weak self] in
+                guard let self else { return }
+                if toolbarState.filterExpression.hasCompleteRules {
+                    applyFilterRules()
+                } else {
+                    Task { await self.loadPage(reset: true) }
+                }
+            }
+        }
     }
 
     // MARK: - Placeholder
@@ -758,6 +790,7 @@ final class EmailLibraryViewController: NSViewController {
             let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
             let currentAO3PublisherIDs = await library.ao3PublisherBookIDs()
             let currentAnthologyIDs = await library.anthologyBookIDs()
+            let currentDuplicateLoserIDs = await library.duplicateLoserBookIDs()
             let filteredIDs = ReaderPreferences.shared.showSkippedCollection
                 ? result.calibreIDs
                 : result.calibreIDs.filter { !currentSkipped.contains($0) }
@@ -765,6 +798,7 @@ final class EmailLibraryViewController: NSViewController {
                 .filter { !currentSeriesOrMerged.contains($0) }
                 .filter { !ReaderPreferences.shared.hideNonAO3PublisherBooks || currentAO3PublisherIDs.contains($0) }
                 .filter { !ReaderPreferences.shared.hideAnthologyBooks || !currentAnthologyIDs.contains($0) }
+                .filter { !ReaderPreferences.shared.hideDuplicateBooks || !currentDuplicateLoserIDs.contains($0) }
             guard toolbarState.libraryFilterApplicationToken == token else { return }
             defer { toolbarState.finishLibraryFilterApplication(token: token) }
             let cacheableResult = FilterResult(
@@ -781,6 +815,8 @@ final class EmailLibraryViewController: NSViewController {
             ao3PublisherIDs = currentAO3PublisherIDs
             anthologyIDs = currentAnthologyIDs
             session.cachedAnthologyIDs = currentAnthologyIDs
+            duplicateLoserIDs = currentDuplicateLoserIDs
+            session.cachedDuplicateLoserIDs = currentDuplicateLoserIDs
             await loadPage(reset: true)
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "email",
@@ -1305,6 +1341,7 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func rebuildSidebarItems() {
+        sidebarVC?.activeCollectionID = activeCollectionID
         guard shouldGroupSidebarRows,
               let metaDB = session.metaDB,
               let library = session.library else {
@@ -1350,7 +1387,7 @@ final class EmailLibraryViewController: NSViewController {
                 #endif
                 degraded = true
             }
-            let groupedEntries = Dictionary(grouping: entries.filter { !anthologyIDs.contains($0.calibreID) }, by: \.seriesKey)
+            let groupedEntries = Dictionary(grouping: entries.filter { !anthologyIDs.contains($0.calibreID) && !duplicateLoserIDs.contains($0.calibreID) }, by: \.seriesKey)
             let seriesKeys = groupedEntries.keys.sorted()
             guard !Task.isCancelled else { return }
             do { allEntries = try await metaDB.seriesEntries(keys: seriesKeys) }
@@ -1408,6 +1445,7 @@ final class EmailLibraryViewController: NSViewController {
                 byID: byID,
                 seriesMetadata: metadata,
                 anthologyIDs: anthologyIDs,
+                duplicateLoserIDs: duplicateLoserIDs,
                 placeholders: placeholders
             )
 
@@ -1475,6 +1513,14 @@ final class EmailLibraryViewController: NSViewController {
         toolbarState.groupBySeries || toolbarState.filterExpression.hasSeriesOrMergedEqualsRule
     }
 
+    /// Mirrors LibraryRootView.activeCollectionID — see its doc comment.
+    private var activeCollectionID: String? {
+        let collectionRules = toolbarState.filterExpression.groups.flatMap(\.rules)
+            .filter { $0.field == .collection && $0.op == .equals }
+        guard collectionRules.count == 1 else { return nil }
+        return collectionRules[0].value
+    }
+
     /// Mirrors LibraryRootView.currentVisibilityPolicy — see LibraryVisibilityPolicy.swift.
     private var currentVisibilityPolicy: LibraryVisibilityPolicy {
         queryController.visibilityPolicy(
@@ -1482,10 +1528,12 @@ final class EmailLibraryViewController: NSViewController {
             shouldGroupSeriesRows: shouldGroupSidebarRows,
             hideNonAO3PublisherBooks: ReaderPreferences.shared.hideNonAO3PublisherBooks,
             hideAnthologyBooks: ReaderPreferences.shared.hideAnthologyBooks,
+            hideDuplicateBooks: ReaderPreferences.shared.hideDuplicateBooks,
             skippedIDs: skippedIDs,
             seriesOrMergedIDs: seriesOrMergedIDs,
             ao3PublisherIDs: ao3PublisherIDs,
-            anthologyIDs: anthologyIDs
+            anthologyIDs: anthologyIDs,
+            duplicateLoserIDs: duplicateLoserIDs
         )
     }
 
@@ -1604,6 +1652,7 @@ final class EmailLibraryViewController: NSViewController {
         let previousSeriesOrMerged = seriesOrMergedIDs
         let previousAO3PublisherIDs = ao3PublisherIDs
         let previousAnthologyIDs = anthologyIDs
+        let previousDuplicateLoserIDs = duplicateLoserIDs
 
         await session.refreshCollectionSnapshots()
 
@@ -1614,6 +1663,7 @@ final class EmailLibraryViewController: NSViewController {
         seriesOrMergedIDs = session.cachedSeriesOrMergedIDs
         ao3PublisherIDs = session.cachedAO3PublisherIDs
         anthologyIDs = session.cachedAnthologyIDs
+        duplicateLoserIDs = session.cachedDuplicateLoserIDs
         sidebarVC?.collectionMembership = collectionMembership
         sidebarVC?.likedIDs = likedIDs
         sidebarVC?.readLaterIDs = readLaterIDs
@@ -1622,6 +1672,7 @@ final class EmailLibraryViewController: NSViewController {
             || seriesOrMergedIDs != previousSeriesOrMerged
             || ao3PublisherIDs != previousAO3PublisherIDs
             || anthologyIDs != previousAnthologyIDs
+            || duplicateLoserIDs != previousDuplicateLoserIDs
         if shouldReloadPage {
             await loadPage(reset: true)
         }

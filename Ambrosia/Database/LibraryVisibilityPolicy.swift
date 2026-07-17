@@ -19,32 +19,40 @@ struct LibraryVisibilityPolicy {
     var shouldGroupSeriesRows: Bool
     var hideNonAO3PublisherBooks: Bool
     var hideAnthologyBooks: Bool
+    var hideDuplicateBooks: Bool
 
     var skippedIDs: Set<Int>
     var seriesOrMergedIDs: Set<Int>
     var ao3PublisherIDs: Set<Int>
     var anthologyIDs: Set<Int>
+    var duplicateLoserIDs: Set<Int>
 
     static let allowAll = LibraryVisibilityPolicy(
         showSkippedCollection: true,
         shouldGroupSeriesRows: false,
         hideNonAO3PublisherBooks: false,
         hideAnthologyBooks: false,
+        hideDuplicateBooks: false,
         skippedIDs: [],
         seriesOrMergedIDs: [],
         ao3PublisherIDs: [],
-        anthologyIDs: []
+        anthologyIDs: [],
+        duplicateLoserIDs: []
     )
 
     /// True if `id` should be shown under these rules.
     ///
     /// `ao3PublisherIDs` is an allow-list (must be a member when the toggle is
-    /// on); the other three sets are deny-lists (must NOT be a member).
+    /// on); the other four sets are deny-lists (must NOT be a member).
+    /// `duplicateLoserIDs` holds the non-winning calibre IDs of any AO3-work
+    /// duplicate group (see `DuplicateBookDetector`) — never books without
+    /// extracted AO3 metadata, which can't be identified as duplicates.
     func isVisible(_ id: Int) -> Bool {
         (showSkippedCollection || !skippedIDs.contains(id)) &&
         (!shouldGroupSeriesRows || !seriesOrMergedIDs.contains(id)) &&
         (!hideNonAO3PublisherBooks || ao3PublisherIDs.contains(id)) &&
-        (!hideAnthologyBooks || !anthologyIDs.contains(id))
+        (!hideAnthologyBooks || !anthologyIDs.contains(id)) &&
+        (!hideDuplicateBooks || !duplicateLoserIDs.contains(id))
     }
 
     /// Same rule set, evaluated against a hydrated `CalibreBook` instead of a
@@ -59,7 +67,8 @@ struct LibraryVisibilityPolicy {
         (showSkippedCollection || !skippedIDs.contains(book.id)) &&
         (!shouldGroupSeriesRows || !seriesOrMergedIDs.contains(book.id)) &&
         (!hideNonAO3PublisherBooks || book.isAO3PublisherBook) &&
-        (!hideAnthologyBooks || !book.isDescriptionAnthology)
+        (!hideAnthologyBooks || !book.isDescriptionAnthology) &&
+        (!hideDuplicateBooks || !duplicateLoserIDs.contains(book.id))
     }
 
     func filter(_ ids: [Int]) -> [Int] {

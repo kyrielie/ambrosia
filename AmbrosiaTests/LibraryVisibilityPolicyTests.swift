@@ -67,21 +67,36 @@ final class LibraryVisibilityPolicyTests: XCTestCase {
         XCTAssertTrue(policy.isVisible(91393))
     }
 
+    func test_duplicateLoser_isADenyList() {
+        var policy = LibraryVisibilityPolicy.allowAll
+        policy.hideDuplicateBooks = true
+        policy.duplicateLoserIDs = [55]
+
+        XCTAssertFalse(policy.isVisible(55), "stale duplicate should be hidden")
+        XCTAssertTrue(policy.isVisible(1), "winner/unrelated ID should still show")
+
+        policy.hideDuplicateBooks = false
+        XCTAssertTrue(policy.isVisible(55), "toggling off should reveal the stale duplicate again")
+    }
+
     func test_allExclusionsCombine() {
         var policy = LibraryVisibilityPolicy.allowAll
         policy.showSkippedCollection = false
         policy.shouldGroupSeriesRows = true
         policy.hideNonAO3PublisherBooks = true
         policy.hideAnthologyBooks = true
+        policy.hideDuplicateBooks = true
         policy.skippedIDs = [1]
         policy.seriesOrMergedIDs = [2]
-        policy.ao3PublisherIDs = [3, 4]
+        policy.ao3PublisherIDs = [3, 4, 6]
         policy.anthologyIDs = [4]
+        policy.duplicateLoserIDs = [6]
 
         XCTAssertFalse(policy.isVisible(1), "skipped")
         XCTAssertFalse(policy.isVisible(2), "collapsed series member")
         XCTAssertFalse(policy.isVisible(4), "AO3 publisher AND anthology — anthology deny-list wins")
-        XCTAssertTrue(policy.isVisible(3), "AO3 publisher, not anthology — should show")
+        XCTAssertFalse(policy.isVisible(6), "AO3 publisher AND stale duplicate — duplicate deny-list wins")
+        XCTAssertTrue(policy.isVisible(3), "AO3 publisher, not anthology, not a duplicate — should show")
         XCTAssertFalse(policy.isVisible(5), "not in AO3-publisher allow-list")
     }
 

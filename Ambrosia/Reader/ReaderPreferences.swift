@@ -185,6 +185,17 @@ final class ReaderPreferences: ObservableObject {
     @Published var hideAnthologyBooks: Bool {
         didSet { UserDefaults.standard.set(hideAnthologyBooks, forKey: Keys.hideAnthologyBooks) }
     }
+    /// Hides the non-winning copy of a Calibre duplicate — two rows for the
+    /// same AO3 work (same `ao3_work_id`, different `calibre_id`), which
+    /// happens when a work gets re-downloaded/re-imported. The more recently
+    /// updated copy is kept (falling back to published date, then an
+    /// arbitrary but stable tiebreak); the rest are hidden from the library
+    /// list, search, series grouping, and feeds. See `DuplicateBookDetector`.
+    /// Never silent by default — surfaced as its own toggle next to
+    /// `hideNonAO3PublisherBooks` so the user knows books are being hidden.
+    @Published var hideDuplicateBooks: Bool {
+        didSet { UserDefaults.standard.set(hideDuplicateBooks, forKey: Keys.hideDuplicateBooks) }
+    }
     @Published var emailPillsShowCollections: Bool {
         didSet { UserDefaults.standard.set(emailPillsShowCollections, forKey: Keys.emailPillsShowCollections) }
     }
@@ -392,6 +403,7 @@ final class ReaderPreferences: ObservableObject {
         static let correctCalibreAmpEntities   = true
         static let hideNonAO3PublisherBooks    = false
         static let hideAnthologyBooks          = true
+        static let hideDuplicateBooks          = true
         static let emailPillsShowCollections   = false
         // Default set of system collections excluded from RSS/JSON feed
         // publishing. Applied whenever no per-library exclusion value has
@@ -442,6 +454,7 @@ final class ReaderPreferences: ObservableObject {
         static let correctCalibreAmpEntities   = "rp.correctCalibreAmpEntities"
         static let hideNonAO3PublisherBooks    = "rp.hideNonAO3PublisherBooks"
         static let hideAnthologyBooks          = "rp.hideAnthologyBooks"
+        static let hideDuplicateBooks          = "rp.hideDuplicateBooks"
         static let emailPillsShowCollections   = "rp.emailPillsShowCollections"
         static let feedServerEnableDailyStory  = "rp.feedServerEnableDailyStory"
         static let feedServerExcludedCollectionIDs = "rp.feedServerExcludedCollectionIDs"
@@ -514,6 +527,9 @@ final class ReaderPreferences: ObservableObject {
         hideAnthologyBooks = ud.object(forKey: Keys.hideAnthologyBooks) != nil
             ? ud.bool(forKey: Keys.hideAnthologyBooks)
             : Defaults.hideAnthologyBooks
+        hideDuplicateBooks = ud.object(forKey: Keys.hideDuplicateBooks) != nil
+            ? ud.bool(forKey: Keys.hideDuplicateBooks)
+            : Defaults.hideDuplicateBooks
         emailPillsShowCollections = ud.object(forKey: Keys.emailPillsShowCollections) != nil
             ? ud.bool(forKey: Keys.emailPillsShowCollections)
             : Defaults.emailPillsShowCollections
@@ -862,6 +878,7 @@ final class ReaderPreferences: ObservableObject {
             || hideFanworksTagPill != Defaults.hideFanworksTagPill
             || hideNonAO3PublisherBooks != Defaults.hideNonAO3PublisherBooks
             || hideAnthologyBooks != Defaults.hideAnthologyBooks
+            || hideDuplicateBooks != Defaults.hideDuplicateBooks
             || emailPillsShowCollections != Defaults.emailPillsShowCollections
             || groupBySeries != Defaults.groupBySeries
     }
@@ -906,6 +923,7 @@ final class ReaderPreferences: ObservableObject {
         hideFanworksTagPill         = Defaults.hideFanworksTagPill
         hideNonAO3PublisherBooks    = Defaults.hideNonAO3PublisherBooks
         hideAnthologyBooks          = Defaults.hideAnthologyBooks
+        hideDuplicateBooks          = Defaults.hideDuplicateBooks
         emailPillsShowCollections   = Defaults.emailPillsShowCollections
         groupBySeries               = Defaults.groupBySeries
     }

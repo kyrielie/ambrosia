@@ -421,11 +421,12 @@ private struct LibraryTab: View {
                 Toggle("Hide Fanworks tag pill", isOn: $prefs.hideFanworksTagPill)
                 Toggle("Show AO3 books only", isOn: $prefs.hideNonAO3PublisherBooks)
                 Toggle("Hide anthology/merged books", isOn: $prefs.hideAnthologyBooks)
+                Toggle("Deduplicate books", isOn: $prefs.hideDuplicateBooks)
                 Toggle("Show collection pills in email view", isOn: $prefs.emailPillsShowCollections)
             } header: {
                 Label("Library Rows", systemImage: "list.bullet.rectangle").font(.headline)
             } footer: {
-                Text("AO3-only mode keeps books whose publisher is exactly Archive of Our Own. \"Hide anthology/merged books\" hides books whose description was written by Calibre's EPUB-merge plugin (starts with \"Anthology containing:\"). Collection pills apply to email view rows.")
+                Text("AO3-only mode keeps books whose publisher is exactly Archive of Our Own. \"Hide anthology/merged books\" hides books whose description was written by Calibre's EPUB-merge plugin (starts with \"Anthology containing:\"). \"Deduplicate books\" hides stale copies: when a Calibre duplicate of the same AO3 work exists, keeps only the more recently updated copy (or an arbitrary one if update dates match) and hides the rest from the library, search, series grouping, and feeds. Collection pills apply to email view rows.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 

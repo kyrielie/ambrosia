@@ -70,6 +70,7 @@ struct LibraryRootView: View {
     @State private var seriesOrMergedIDs: Set<Int> = []
     @State private var ao3PublisherIDs: Set<Int> = []
     @State private var anthologyIDs: Set<Int> = []
+    @State private var duplicateLoserIDs: Set<Int> = []
     /// Native List selection, keyed by `LibraryItem.id` (String) so both plain
     /// book rows and series-group rows can be selected/highlighted/arrow-key-
     /// navigated the same way a Finder-style list would. This is the source of
@@ -233,6 +234,9 @@ struct LibraryRootView: View {
             .onChange(of: prefs.hideAnthologyBooks) {
                 Task { await refreshVisibilitySnapshots() }
             }
+            .onChange(of: prefs.hideDuplicateBooks) {
+                Task { await refreshVisibilitySnapshots() }
+            }
             .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
                 let persisted = UserDefaults.standard.bool(forKey: "groupBySeries")
                 if toolbarState.groupBySeries != persisted {
@@ -274,6 +278,7 @@ struct LibraryRootView: View {
                     seriesOrMergedIDs = session.cachedSeriesOrMergedIDs
                     ao3PublisherIDs = session.cachedAO3PublisherIDs
                     anthologyIDs = session.cachedAnthologyIDs
+                    duplicateLoserIDs = session.cachedDuplicateLoserIDs
                     Task { await loadPage() }
                     refreshBookStates()
                 }
@@ -959,6 +964,7 @@ struct LibraryRootView: View {
                 seriesMetadata: seriesMetadata,
                 seriesDiagnostics: seriesDiagnostics,
                 anthologyIDs: anthologyIDs,
+                duplicateLoserIDs: duplicateLoserIDs,
                 placeholders: placeholders
             )
             var collapsedIDs = Set<Int>()
@@ -1042,10 +1048,12 @@ struct LibraryRootView: View {
             shouldGroupSeriesRows: shouldGroupSeriesRows,
             hideNonAO3PublisherBooks: prefs.hideNonAO3PublisherBooks,
             hideAnthologyBooks: prefs.hideAnthologyBooks,
+            hideDuplicateBooks: prefs.hideDuplicateBooks,
             skippedIDs: skippedIDs,
             seriesOrMergedIDs: seriesOrMergedIDs,
             ao3PublisherIDs: ao3PublisherIDs,
-            anthologyIDs: anthologyIDs
+            anthologyIDs: anthologyIDs,
+            duplicateLoserIDs: duplicateLoserIDs
         )
     }
 
@@ -1070,6 +1078,7 @@ struct LibraryRootView: View {
         await session.refreshCollectionSnapshots()
         ao3PublisherIDs = session.cachedAO3PublisherIDs
         anthologyIDs = session.cachedAnthologyIDs
+        duplicateLoserIDs = session.cachedDuplicateLoserIDs
         if resetPage { offsetState.resetForNewFilter() }
         if toolbarState.filterExpression.hasCompleteRules {
             applyFilterRules()
@@ -1096,6 +1105,7 @@ struct LibraryRootView: View {
             seriesOrMergedIDs = session.cachedSeriesOrMergedIDs
             ao3PublisherIDs = session.cachedAO3PublisherIDs
             anthologyIDs = session.cachedAnthologyIDs
+            duplicateLoserIDs = session.cachedDuplicateLoserIDs
             pruneSelection()
             offsetState.resetForNewFilter()
             // loadPage() is async now (CalibreLibrary is actor-isolated), so it can't
@@ -1405,12 +1415,14 @@ struct LibraryRootView: View {
             let currentSeriesOrMerged = Set((try? await fetchedSeriesOrMerged) ?? [])
             let publisherIDs = await capturedLibrary2?.ao3PublisherBookIDs() ?? []
             let currentAnthologyIDs2 = await capturedLibrary2?.anthologyBookIDs() ?? []
+            let currentDuplicateLoserIDs2 = await capturedLibrary2?.duplicateLoserBookIDs() ?? []
             let filteredIDs = prefs.showSkippedCollection
                 ? finalResult.calibreIDs
                 : finalResult.calibreIDs.filter { !currentSkipped.contains($0) }
             let visibleFilteredIDs = filteredIDs.filter { !currentSeriesOrMerged.contains($0) }
                 .filter { !prefs.hideNonAO3PublisherBooks || publisherIDs.contains($0) }
                 .filter { !prefs.hideAnthologyBooks || !currentAnthologyIDs2.contains($0) }
+                .filter { !prefs.hideDuplicateBooks || !currentDuplicateLoserIDs2.contains($0) }
             guard toolbarState.libraryFilterApplicationToken == token else { return }
             defer { toolbarState.finishLibraryFilterApplication(token: token) }
             let cacheableResult = FilterResult(
@@ -1426,6 +1438,8 @@ struct LibraryRootView: View {
             seriesOrMergedIDs = currentSeriesOrMerged
             anthologyIDs = currentAnthologyIDs2
             session.cachedAnthologyIDs = currentAnthologyIDs2
+            duplicateLoserIDs = currentDuplicateLoserIDs2
+            session.cachedDuplicateLoserIDs = currentDuplicateLoserIDs2
             selectedItemIDs.removeAll()
             suppressNextReloadToken = true   // §perf: we call loadPage() below; skip onChange duplicate
             offsetState.resetForNewFilter(); await loadPage()

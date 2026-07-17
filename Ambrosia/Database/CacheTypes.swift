@@ -75,6 +75,7 @@ struct GroupAwareCountCacheKey: Hashable {
     let showSkippedCollection: Bool
     let hideNonAO3PublisherBooks: Bool
     let hideAnthologyBooks: Bool
+    let hideDuplicateBooks: Bool
 }
 
 /// A simple bounded LRU dictionary. The oldest-inserted entry is evicted when `limit` is reached.

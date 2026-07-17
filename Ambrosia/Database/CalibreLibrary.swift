@@ -59,6 +59,14 @@ actor CalibreLibrary {
     private(set) var ao3WordCountCache: [Int: Int] = [:]
     private(set) var ao3DateCache: [Int: (published: String?, updated: String?)] = [:]
     private(set) var crossoverIDCache: Set<Int> = []
+    private(set) var ao3WorkIDCache: [Int: String] = [:]
+
+    /// Non-winning calibre IDs of any AO3-work duplicate group, computed via
+    /// `DuplicateBookDetector` whenever `ao3WorkIDCache`/`ao3DateCache` are
+    /// refreshed (see `updateAO3MetaCaches`). Consumed as
+    /// `LibraryVisibilityPolicy.duplicateLoserIDs` when the "Deduplicate
+    /// books" preference is on.
+    private(set) var duplicateLoserIDCache: Set<Int> = []
 
     /// §6: Seeded random sort seed. Stable within a session; refreshed on library open
     /// or when the user explicitly requests a new shuffle.
@@ -80,11 +88,14 @@ actor CalibreLibrary {
     func updateAO3MetaCaches(
         wordCounts: [Int: Int],
         dates: [Int: (published: String?, updated: String?)],
-        crossoverIDs: Set<Int>
+        crossoverIDs: Set<Int>,
+        workIDs: [Int: String]
     ) {
         ao3WordCountCache = wordCounts
         ao3DateCache = dates
         crossoverIDCache = crossoverIDs
+        ao3WorkIDCache = workIDs
+        duplicateLoserIDCache = DuplicateBookDetector.loserIDs(workIDs: workIDs, dates: dates)
         // §Phase3: word-count-sorted pages and any page/count keyed on this
         // library's AO3 fields are now stale. Same actor reaching into its own
         // state, no version plumbing needed (see LRUCache note above pageCache).
@@ -230,6 +241,12 @@ actor CalibreLibrary {
     // in-memory scan of all IDs and return empty so filtering is a no-op rather than crash.
     func crossoverBookIDs() -> Set<Int> {
         crossoverIDCache
+    }
+
+    /// Non-winning calibre IDs of any AO3-work duplicate group. See
+    /// `DuplicateBookDetector` and `duplicateLoserIDCache` above.
+    func duplicateLoserBookIDs() -> Set<Int> {
+        duplicateLoserIDCache
     }
 
     // MARK: - §6: Seeded random sort helpers
@@ -571,7 +588,8 @@ actor CalibreLibrary {
             visibilityVersion: visibilityVersion,
             showSkippedCollection: visibility.showSkippedCollection,
             hideNonAO3PublisherBooks: visibility.hideNonAO3PublisherBooks,
-            hideAnthologyBooks: visibility.hideAnthologyBooks
+            hideAnthologyBooks: visibility.hideAnthologyBooks,
+            hideDuplicateBooks: visibility.hideDuplicateBooks
         )
         if let cached = groupAwareCountCache[cacheKey] { return cached }
         let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,

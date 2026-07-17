@@ -25,16 +25,22 @@ import Foundation
 /// logging and `SeriesGroup.placeholders` respectively) — callers that don't need
 /// them (e.g. `LocalFeedServer`, which serializes neither into a feed item) may
 /// omit them and rely on the empty defaults below.
+///
+/// `duplicateLoserIDs` (see `DuplicateBookDetector`) is excluded from the
+/// grouping pool the same way `anthologyIDs` is: a stale Calibre duplicate of
+/// an already-grouped work must not appear a second time as its own
+/// orphaned/ungrouped series entry.
 func buildSeriesGroups(
     allEntries: [SeriesCacheEntry],
     byID: [Int: CalibreBook],
     seriesMetadata: [Int: AO3MetadataRecord],
     seriesDiagnostics: [Int: AO3ExtractionDiagnostic] = [:],
     anthologyIDs: Set<Int> = [],
+    duplicateLoserIDs: Set<Int> = [],
     placeholders: [String: [SeriesPlaceholder]] = [:]
 ) -> [String: SeriesGroup] {
     let entriesBySeries = Dictionary(
-        grouping: allEntries.filter { !anthologyIDs.contains($0.calibreID) },
+        grouping: allEntries.filter { !anthologyIDs.contains($0.calibreID) && !duplicateLoserIDs.contains($0.calibreID) },
         by: \.seriesKey
     )
     var seriesByKey: [String: SeriesGroup] = [:]

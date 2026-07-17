@@ -1388,6 +1388,24 @@ actor AmbrosiaMetaDB {
         return result
     }
 
+    /// Bulk-fetches every calibre_id -> ao3_work_id mapping with a non-null,
+    /// non-empty work id. Used by `DuplicateBookDetector` to find calibre
+    /// rows that share the same AO3 work (see `LibrarySession.refreshAO3MetaCaches()`).
+    func allAO3WorkIDs() -> [Int: String] {
+        let sql = """
+        SELECT calibre_id, ao3_work_id
+        FROM ao3_metadata
+        WHERE ao3_work_id IS NOT NULL AND ao3_work_id != ''
+        """
+        guard let rows = try? readDB.prepare(sql).map({ $0 }) else { return [:] }
+        var result: [Int: String] = [:]
+        for row in rows {
+            guard let id = (row[0] as? Int64).map(Int.init), let workID = row[1] as? String else { continue }
+            result[id] = workID
+        }
+        return result
+    }
+
     func allCrossoverBookIDs() -> Set<Int> {
         let sql = """
         SELECT calibre_id
