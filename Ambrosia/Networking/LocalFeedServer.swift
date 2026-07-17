@@ -1840,7 +1840,7 @@ actor LocalFeedServer {
 
         LibraryFilterDebug.log("feed.sqlite.end", [
             "candidates": calibreIDs.count,
-            "filtered": filteredIDs.count,
+            "filtered": allPairs.count,
             "rows": rows.count,
         ])
 
