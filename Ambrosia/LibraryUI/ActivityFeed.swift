@@ -67,13 +67,17 @@ struct SearchActivityEntry: Identifiable, Sendable, Codable {
     // MARK: Display helpers
 
     /// Short human-readable summary for the row subject line.
+    ///
+    /// Filter portion delegates to `FilterSummary.humanReadable`, which is
+    /// group-aware (preserves AND-within-group / OR-between-group structure),
+    /// rather than flattening every group's rules into one undifferentiated
+    /// list — a plain `groups.flatMap(\.completeRules)` here would silently
+    /// drop which rules were ANDed vs ORed.
     var displaySummary: String {
         var parts: [String] = []
         if !searchText.isEmpty { parts.append("\u{201C}\(searchText)\u{201D}") }
         if let expr = filterExpression, expr.hasCompleteRules {
-            let rules = expr.groups.flatMap(\.completeRules)
-            let ruleDesc = rules.prefix(2).map { "\($0.field.label): \($0.value)" }.joined(separator: ", ")
-            parts.append(rules.count > 2 ? "\(ruleDesc) +\(rules.count - 2) more" : ruleDesc)
+            parts.append(FilterSummary.humanReadable(expression: expr))
         }
         return parts.joined(separator: " · ")
     }

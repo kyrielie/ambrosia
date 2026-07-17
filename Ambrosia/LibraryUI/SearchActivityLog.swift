@@ -43,10 +43,13 @@ final class SearchActivityLog {
         // Don't log a no-op (empty search, no filter).
         guard !trimmed.isEmpty || hasExpr else { return }
 
-        // Deduplicate: skip if identical to most recent entry.
+        // Deduplicate: skip if identical to most recent entry. Compare the
+        // filter expression itself (not just "has complete rules"), otherwise
+        // any two consecutive filtered searches with the same result count
+        // are wrongly treated as duplicates and dropped.
         if let last = entries.last,
            last.searchText == trimmed,
-           last.filterExpression?.hasCompleteRules == hasExpr,
+           last.filterExpression == (hasExpr ? filterExpression : nil),
            last.resultCount == resultCount { return }
 
         let entry = SearchActivityEntry(
