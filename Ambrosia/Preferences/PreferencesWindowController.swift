@@ -56,6 +56,10 @@ private struct PreferencesRootView: View {
                 .tabItem { Label("Data", systemImage: "externaldrive") }
                 .tag(PrefTab.data)
 
+            RSSTab()
+                .tabItem { Label("RSS", systemImage: "dot.radiowaves.left.and.right") }
+                .tag(PrefTab.rss)
+
             ShortcutsTab()
                 .tabItem { Label("Shortcuts", systemImage: "keyboard") }
                 .tag(PrefTab.shortcuts)
@@ -69,7 +73,7 @@ private struct PreferencesRootView: View {
     }
 }
 
-private enum PrefTab: String { case reader, library, data, shortcuts }
+private enum PrefTab: String { case reader, library, data, rss, shortcuts }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MARK: - Reader Tab
@@ -676,7 +680,6 @@ private struct DataTab: View {
     @State private var wordCountLabel: String = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
     @State private var kudosLabel: String = CustomColumnConfig.shared.kudosLabel ?? "(none)"
     @State private var availableColumns: [String] = []
-    @State private var rssCollections: [(id: String, name: String)] = []
 
     var body: some View {
         Form {
@@ -789,52 +792,6 @@ private struct DataTab: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            // MARK: RSS Feeds
-            Section {
-                Toggle("Enable Daily Story feed", isOn: $prefs.feedServerEnableDailyStory)
-
-                Toggle("Restart automatically when I reopen this library",
-                       isOn: $prefs.feedServerAutoRestart)
-
-                Text("""
-                    Starting the feed server makes your library reachable by \
-                    any device on your local network. Feeds are \
-                    unauthenticated — anyone on the network who knows or \
-                    guesses a feed URL can read it. The restart option above \
-                    takes effect next time you start the server.
-                    """)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if rssCollections.isEmpty {
-                    Text(rssCollections.isEmpty && AppDelegate.shared?.session?.isOpen == true
-                         ? "No collections in the current library."
-                         : "Open a library to configure per-collection publishing.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Excluded collections are not served or listed in OPML:")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    ForEach(rssCollections, id: \.id) { col in
-                        Toggle(col.name, isOn: Binding(
-                            get: { !prefs.feedServerExcludedCollectionIDs.contains(col.id) },
-                            set: { enabled in
-                                if enabled {
-                                    prefs.feedServerExcludedCollectionIDs.remove(col.id)
-                                } else {
-                                    prefs.feedServerExcludedCollectionIDs.insert(col.id)
-                                }
-                            }
-                        ))
-                    }
-                }
-            } header: {
-                Label("RSS Feeds", systemImage: "dot.radiowaves.left.and.right").font(.headline)
-            } footer: {
-                Text("Daily Story serves one random book per day. Excluded collections return 404 to feed readers.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
         }
         .formStyle(.grouped)
         .padding(.bottom, 8)
@@ -842,7 +799,6 @@ private struct DataTab: View {
             reloadKnownLibraries()
             tagSeedConfig.refreshValidation()
             Task { await loadAvailableColumns() }
-            loadRSSCollections()
         }
     }
 
@@ -949,14 +905,6 @@ private struct DataTab: View {
         kudosLabel = CustomColumnConfig.shared.kudosLabel ?? "(none)"
     }
 
-    private func loadRSSCollections() {
-        guard let store = AppDelegate.shared?.session?.collectionStore else { return }
-        Task { @MainActor in
-            let rows = (try? await store.collections()) ?? []
-            rssCollections = rows.map { ($0.id, $0.name) }
-        }
-    }
-
     private func confirmReextract() {
         let alert = NSAlert()
         alert.messageText = "Re-extract AO3 Metadata?"
@@ -966,6 +914,78 @@ private struct DataTab: View {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         AppDelegate.shared?.session?.reextractAO3Metadata()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - RSS Tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+private struct RSSTab: View {
+    @ObservedObject private var prefs = ReaderPreferences.shared
+    @State private var rssCollections: [(id: String, name: String)] = []
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Enable Daily Story feed", isOn: $prefs.feedServerEnableDailyStory)
+
+                Toggle("Restart automatically when I reopen this library",
+                       isOn: $prefs.feedServerAutoRestart)
+
+                Text("""
+                    Starting the feed server makes your library reachable by \
+                    any device on your local network. Feeds are \
+                    unauthenticated — anyone on the network who knows or \
+                    guesses a feed URL can read it. The restart option above \
+                    takes effect next time you start the server.
+                    """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if rssCollections.isEmpty {
+                    Text(rssCollections.isEmpty && AppDelegate.shared?.session?.isOpen == true
+                         ? "No collections in the current library."
+                         : "Open a library to configure per-collection publishing.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Excluded collections are not served or listed in OPML:")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    ForEach(rssCollections, id: \.id) { col in
+                        Toggle(col.name, isOn: Binding(
+                            get: { !prefs.feedServerExcludedCollectionIDs.contains(col.id) },
+                            set: { enabled in
+                                if enabled {
+                                    prefs.feedServerExcludedCollectionIDs.remove(col.id)
+                                } else {
+                                    prefs.feedServerExcludedCollectionIDs.insert(col.id)
+                                }
+                            }
+                        ))
+                    }
+                }
+            } header: {
+                Label("RSS Feeds", systemImage: "dot.radiowaves.left.and.right").font(.headline)
+            } footer: {
+                Text("Daily Story serves one random book per day. Excluded collections return 404 to feed readers.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .padding(.bottom, 8)
+        .onAppear {
+            loadRSSCollections()
+        }
+    }
+
+    private func loadRSSCollections() {
+        guard let store = AppDelegate.shared?.session?.collectionStore else { return }
+        Task { @MainActor in
+            let rows = (try? await store.collections()) ?? []
+            rssCollections = rows.map { ($0.id, $0.name) }
+        }
     }
 }
 
