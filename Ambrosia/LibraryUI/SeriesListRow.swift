@@ -57,18 +57,18 @@ struct SeriesListRow: View, Equatable {
                 .buttonStyle(.borderless)
                 .help(series.missingIndices.isEmpty ? "Show series index" : "Missing works")
                 .popover(isPresented: $showIndex) { indexPopover }
-                Button(action: onLikeToggle) {
-                    Image(systemName: isLiked ? "star.fill" : "star")
-                        .foregroundStyle(isLiked ? Color.yellow : Color.secondary)
-                }
-                .buttonStyle(.borderless)
-                .help(isLiked ? "Unlike Series" : "Like Series")
                 Button(action: onReadLaterToggle) {
                     Image(systemName: isInReadLater ? "bookmark.fill" : "bookmark")
                         .foregroundStyle(isInReadLater ? Color.accentColor : Color.secondary)
                 }
                 .buttonStyle(.borderless)
                 .help(isInReadLater ? "Remove from Read Later" : "Add to Read Later")
+                Button(action: onLikeToggle) {
+                    Image(systemName: isLiked ? "star.fill" : "star")
+                        .foregroundStyle(isLiked ? Color.yellow : Color.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(isLiked ? "Unlike Series" : "Like Series")
             }
             Text(series.displayAuthors)
                 .font(.subheadline)
