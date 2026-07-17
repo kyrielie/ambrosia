@@ -77,6 +77,62 @@ extension CurrentSearchSnapshot {
 private struct HTMLCacheKey: Hashable {
     let calibreID: Int
     let epubMtime: Date
+    // Included so flipping "Remove paragraph indents" busts previously-cached
+    // merged HTML instead of serving stale indentation until epubMtime changes
+    // or the entry is evicted. See EPUBParser.stripLeadingIndentWhitespace.
+    let removeParagraphIndents: Bool
+}
+
+// MARK: - EPUB-parse concurrency governor (§9 Nectar interop fix)
+//
+// Both the .json and .sqlite feed routes build their per-page rows by calling
+// cachedMergedHTML, which does a full EPUB parse on a cache miss. Each route
+// used to bound concurrency only *within* its own page (a TaskGroup per
+// request), which meant several requests in flight at once (observed in
+// practice: a client opening one connection per collection) multiplied their
+// concurrent parse load instead of sharing a budget — e.g. 150-book sqlite
+// pages × 5 simultaneous collection walks was enough concurrent EPUB parsing
+// to blow through available CPU/disk bandwidth, slowing every in-flight
+// request rather than just the busiest one. cachedMergedHTML wraps its
+// actual parse in EPUBParseGovernor.shared.run(_:) so this is one process-
+// wide cap shared by every caller (single-book JSON items, grouped/series
+// JSON items, and .sqlite transfer rows alike), not something each call
+// site has to opt into separately.
+actor EPUBParseGovernor {
+    static let shared = EPUBParseGovernor(maxConcurrent: 8)
+
+    private let maxConcurrent: Int
+    private var inFlight = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(maxConcurrent: Int) {
+        self.maxConcurrent = maxConcurrent
+    }
+
+    func acquire() async {
+        if inFlight < maxConcurrent {
+            inFlight += 1
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            inFlight -= 1
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+
+    /// Runs `work` under the governor's shared concurrency budget.
+    func run<T>(_ work: () async -> T) async -> T {
+        await acquire()
+        defer { release() }
+        return await work()
+    }
 }
 
 // MARK: - LocalFeedServer actor
@@ -1326,13 +1382,22 @@ actor LocalFeedServer {
     /// the real bound on server-side work per request instead.
     private static let jsonFeedMaxBooksPerPage = 30
 
-    /// Analogous cap for the `.sqlite` transfer route, but tuned lower than
-    /// `jsonFeedMaxBooksPerPage`: every row here costs a full EPUB parse
-    /// (`cachedMergedHTML`) on a cache miss, a materially heavier per-row cost
-    /// than the JSON route's lighter per-item serialization. 150 is a starting
-    /// value, not a validated one — measure real per-page wall-clock time
-    /// against an actual multi-thousand-book library using the `feed.page.end`
-    /// logging below before adjusting.
+    /// Analogous cap for the `.sqlite` transfer route. Every row here costs a
+    /// full EPUB parse (`cachedMergedHTML`) on a cache miss, a materially
+    /// heavier per-row cost than the JSON route's lighter per-item
+    /// serialization — but unlike the JSON route, `.sqlite` transfer requests
+    /// on the Nectar client bypass the generic 15s feed-download timeout
+    /// entirely (`AmbrosiaSQLiteTransferFetcher` uses its own 300s session
+    /// specifically because a whole-database page can take a while), so this
+    /// cap is no longer sized against a 15s deadline. What it still has to
+    /// guard against is *this device* running many concurrent EPUB parses at
+    /// once when several collections are walked in parallel — that's now
+    /// `EPUBParseGovernor`'s job (see above), not this constant's. 150 stays
+    /// as a page-size default for practical page-count reasons; if you want
+    /// to size it against measured wall-clock time, do that with the governor
+    /// in place, not without it — a large page size only accumulates queued
+    /// work under the governor rather than accumulating uncontrolled parallel
+    /// CPU/disk load the way it used to.
     private static let sqliteFeedMaxBooksPerPage = 150
 
     /// Splits `units` into pages bounded by cumulative underlying book count
@@ -1711,15 +1776,33 @@ actor LocalFeedServer {
             return .notModified(etag: etag)
         }
 
-        var items: [JSONFeedItem] = []
-        for unit in pageUnits {
-            switch unit {
-            case .book(let pair):
-                items.append(await buildJSONFeedItem(book: pair.book, ao3: pair.ao3, seriesEntries: pair.seriesEntries, library: library))
-            case .series(let group, let members):
-                items.append(await buildGroupedJSONFeedItem(group: group, members: members, library: library))
+        // Built concurrently (bounded by EPUBParseGovernor, shared with the
+        // .sqlite route) rather than one unit at a time: this loop used to be
+        // a plain sequential `for await`, so a page whose units mostly missed
+        // the merged-HTML cache paid for every EPUB parse back-to-back and
+        // could exceed Nectar's DownloadSession 15s timeout on an otherwise
+        // unremarkable 30-book page. Order is restored from the indexed
+        // results since task-group completion order isn't page order.
+        let indexedItems = await withTaskGroup(of: (Int, JSONFeedItem).self) { group in
+            for (index, unit) in pageUnits.enumerated() {
+                group.addTask {
+                    let item: JSONFeedItem
+                    switch unit {
+                    case .book(let pair):
+                        item = await self.buildJSONFeedItem(book: pair.book, ao3: pair.ao3, seriesEntries: pair.seriesEntries, library: library)
+                    case .series(let seriesGroup, let members):
+                        item = await self.buildGroupedJSONFeedItem(group: seriesGroup, members: members, library: library)
+                    }
+                    return (index, item)
+                }
             }
+            var results: [(Int, JSONFeedItem)] = []
+            for await result in group {
+                results.append(result)
+            }
+            return results
         }
+        let items = indexedItems.sorted { $0.0 < $1.0 }.map { $0.1 }
 
         let nextURL: String?
         if hasMore {
@@ -2261,20 +2344,31 @@ actor LocalFeedServer {
     private func cachedMergedHTML(book: CalibreBook, library: CalibreLibrary) async -> String {
         guard let epubURL = book.epubURL(libraryRoot: library.root) else { return "" }
         let mtime = (try? epubURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date.distantPast
-        let cacheKey = HTMLCacheKey(calibreID: book.id, epubMtime: mtime)
+        let removeParagraphIndents = ReaderPreferences.shared.removeParagraphIndents
+        let cacheKey = HTMLCacheKey(calibreID: book.id, epubMtime: mtime, removeParagraphIndents: removeParagraphIndents)
 
         if let cached = htmlCache[cacheKey] { return cached }
 
-        // Parse off-actor so we don't block the server task.
-        let html = await Task.detached(priority: .utility) {
-            do {
-                var parser = EPUBParser(epubURL: epubURL)
-                try parser.parse()
-                return try parser.mergedHTML(userCSS: "")
-            } catch {
-                return ""
-            }
-        }.value
+        // Parse off-actor so we don't block the server task, and under the
+        // shared governor so this request's parses don't pile onto every
+        // other in-flight request's parses uncontrolled (see
+        // EPUBParseGovernor above `HTMLCacheKey`).
+        let html = await EPUBParseGovernor.shared.run {
+            await Task.detached(priority: .utility) {
+                do {
+                    var parser = EPUBParser(epubURL: epubURL)
+                    try parser.parse()
+                    // Publisher CSS is already stripped entirely in mergedHTML's
+                    // extraction step, so "remove paragraph indents" can't be
+                    // expressed as CSS here the way the in-app reader does it —
+                    // it has to strip the literal leading whitespace instead.
+                    // Feeds previously ignored this preference altogether.
+                    return try parser.mergedHTML(userCSS: "", removeParagraphIndents: removeParagraphIndents)
+                } catch {
+                    return ""
+                }
+            }.value
+        }
 
         htmlCache[cacheKey] = html
         htmlCacheOrder.append(cacheKey)

@@ -136,7 +136,14 @@ struct EPUBParser {
     ///   capture, link navigation) is consistent between paginated and
     ///   scroll mode. This does not affect `item.index`, which still governs
     ///   this work's own preface/endmatter checks below.
-    func html(for item: SpineItem, userCSS: String, globalSpineIndex: Int? = nil) throws -> String {
+    /// - Parameter removeParagraphIndents: When true, strips leading space/tab
+    ///   runs at the start of paragraph-like elements' text. Publisher CSS is
+    ///   already stripped unconditionally by `sanitise`, so a CSS-only
+    ///   `text-indent: 0` override (as the in-app reader stylesheet used to
+    ///   rely on) has nothing left to override here — this handles the case
+    ///   CSS never could: books that fake first-line indentation with literal
+    ///   whitespace characters in the text itself.
+    func html(for item: SpineItem, userCSS: String, globalSpineIndex: Int? = nil, removeParagraphIndents: Bool = false) throws -> String {
         let archive = try openArchive()
         guard let entry = archive[item.href],
               let data  = Self.extract(entry, from: archive)
@@ -145,7 +152,7 @@ struct EPUBParser {
         let raw = String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .isoLatin1)
                 ?? ""
-        var s = Self.sanitise(raw, userCSS: userCSS, spineIndex: globalSpineIndex ?? item.index)
+        var s = Self.sanitise(raw, userCSS: userCSS, spineIndex: globalSpineIndex ?? item.index, removeParagraphIndents: removeParagraphIndents)
 
         // Match mergedHTML's per-item behaviour: strip the redundant "Preface"
         // heading on the first spine item (unconditional, not gated on
@@ -183,11 +190,18 @@ struct EPUBParser {
     ///   change `item.index` itself or anything keyed off it internally (e.g.
     ///   `isFirstSpineItem`); it only affects the attribute written into the HTML,
     ///   which is what JS position/annotation code reads.
+    /// - Parameter removeParagraphIndents: See `html(for:removeParagraphIndents:)`
+    ///   — same literal-whitespace stripping, applied here so both the
+    ///   scroll-mode reader and the RSS/JSON feed server (which both call
+    ///   this via `mergedHTML`) respect the preference identically. Feeds
+    ///   previously ignored it entirely, since it was only ever expressed as
+    ///   reader CSS that never reached feed output.
     func mergedHTML(
         userCSS: String,
         ao3Record: AO3MetadataRecord? = nil,
         spineIndexOffset: Int = 0,
-        imageBaseOverride: URL? = nil
+        imageBaseOverride: URL? = nil,
+        removeParagraphIndents: Bool = false
     ) throws -> String {
         let archive = try openArchive()
         var bodyChunks: [String] = []
@@ -202,7 +216,7 @@ struct EPUBParser {
                     ?? ""
 
             // Extract only the <body>…</body> content
-            var bodyContent = Self.extractBodyContent(from: raw, isFirstSpineItem: item.index == 0)
+            var bodyContent = Self.extractBodyContent(from: raw, isFirstSpineItem: item.index == 0, removeParagraphIndents: removeParagraphIndents)
             if let imageBase = imageBaseOverride {
                 bodyContent = Self.rewriteImageReferences(in: bodyContent, imageBaseURL: imageBase)
             }
@@ -408,7 +422,7 @@ struct EPUBParser {
 
     /// Strip all publisher CSS (link/style/style= attributes/script),
     /// inject userCSS before </head>. Sets window.currentSpineIndex for JS.
-    private static func sanitise(_ xhtml: String, userCSS: String, spineIndex: Int) -> String {
+    private static func sanitise(_ xhtml: String, userCSS: String, spineIndex: Int, removeParagraphIndents: Bool = false) -> String {
         var s = xhtml
 
         // Remove stylesheet links
@@ -434,6 +448,12 @@ struct EPUBParser {
             of: #"<script[^>]*>[\s\S]*?</script>"#,
             with: "", options: .regularExpression)
 
+        // With publisher CSS gone, a leading indent can only be literal
+        // whitespace left in the text — see stripLeadingIndentWhitespace.
+        if removeParagraphIndents {
+            s = Self.stripLeadingIndentWhitespace(s)
+        }
+
         // Inject user CSS + spine index tracker before </head>
         let injection = """
         <style>
@@ -452,7 +472,7 @@ struct EPUBParser {
     }
 
     /// Extracts the content between <body> and </body> tags, or the whole string if not found.
-    private static func extractBodyContent(from xhtml: String, isFirstSpineItem: Bool) -> String {
+    private static func extractBodyContent(from xhtml: String, isFirstSpineItem: Bool, removeParagraphIndents: Bool = false) -> String {
         // Strip publisher CSS first so we don't drag styles into the merged doc
         var s = xhtml
         s = s.replacingOccurrences(
@@ -471,6 +491,14 @@ struct EPUBParser {
             of: #"<script[^>]*>[\s\S]*?</script>"#,
             with: "", options: .regularExpression)
 
+        // With publisher CSS gone, a leading indent can only be literal
+        // whitespace left in the text — see stripLeadingIndentWhitespace.
+        // Shared by extractBodyContent (scroll mode + feeds) and sanitise
+        // (paginated mode) so there's one definition of "indent" between them.
+        if removeParagraphIndents {
+            s = Self.stripLeadingIndentWhitespace(s)
+        }
+
         // Extract body content
         var body: String
         if let bodyStart = s.range(of: "<body", options: .caseInsensitive),
@@ -488,6 +516,22 @@ struct EPUBParser {
         }
 
         return body
+    }
+
+    /// Strips leading space/tab runs immediately inside paragraph-like
+    /// elements — the literal-whitespace equivalent of the old
+    /// `text-indent: 0` CSS override, for books that fake first-line
+    /// indentation with actual whitespace characters rather than CSS
+    /// (publisher CSS never survives `sanitise`/`extractBodyContent`, so
+    /// there's nothing left for a CSS override to cancel out). Scoped to the
+    /// same element set the CSS rule targeted (`p, div, li`), extended to
+    /// headings/blockquote/table cells since those are equally plausible
+    /// homes for a converted-from-plaintext indent. Deliberately does not
+    /// touch `&nbsp;`-based fake indents — a different, separate pattern.
+    private static func stripLeadingIndentWhitespace(_ html: String) -> String {
+        html.replacingOccurrences(
+            of: #"(?i)(<(?:p|div|li|h[1-6]|blockquote|td|th)[^>]*>)[ \t]+"#,
+            with: "$1", options: .regularExpression)
     }
 
     /// Strips a redundant "Preface" heading (AO3 uses <h2 class="toc-heading">

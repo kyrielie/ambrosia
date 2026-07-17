@@ -645,7 +645,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private func buildScrollHTML() throws -> String {
         guard case .series(let series) = target else {
             guard let p = workParsers.first else { return "" }
-            return try p.mergedHTML(userCSS: ReaderPreferences.shared.css, ao3Record: workAO3Records.first ?? nil)
+            return try p.mergedHTML(userCSS: ReaderPreferences.shared.css, ao3Record: workAO3Records.first ?? nil, removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents)
         }
 
         var parts: [String] = []
@@ -666,7 +666,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             // relative baseURL on the whole merged document can only ever
             // resolve one work's images — see EPUBParser.rewriteImageReferences.
             let workImageBase = workImageBaseURLs.indices.contains(offset) ? workImageBaseURLs[offset] : nil
-            let workHTML = try p.mergedHTML(userCSS: ReaderPreferences.shared.css, ao3Record: record, spineIndexOffset: spineIndexOffset, imageBaseOverride: workImageBase)
+            let workHTML = try p.mergedHTML(userCSS: ReaderPreferences.shared.css, ao3Record: record, spineIndexOffset: spineIndexOffset, imageBaseOverride: workImageBase, removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents)
             let wrappedWorkHTML = """
             <div class="ambrosia-work" data-work-calibre-id="\(work.id)">
             \(workHTML)
@@ -774,7 +774,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             let baseCSS = ReaderPreferences.shared.css(paginated: true)
             let combinedCSS = baseCSS + "\n" + colCSS
 
-            let html = try workParser.html(for: item, userCSS: combinedCSS, globalSpineIndex: index)
+            let html = try workParser.html(for: item, userCSS: combinedCSS, globalSpineIndex: index, removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents)
             isReaderContentReady = false
             paginationEngine?.setColsPerScreen(ReaderPreferences.shared.colsPerScreen)
             pendingRestorePosition = restorePosition
