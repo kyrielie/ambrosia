@@ -1572,7 +1572,11 @@ final class EmailLibraryViewController: NSViewController {
 
     func refreshBookStates() {
         let ctx = modelContainer.mainContext
-        let all = (try? ctx.fetch(FetchDescriptor<BookState>())) ?? []
+        let pageIDs = Set(books.map(\.id))
+        let descriptor = FetchDescriptor<BookState>(
+            predicate: #Predicate { pageIDs.contains($0.calibreID) }
+        )
+        let all = (try? ctx.fetch(descriptor)) ?? []
         bookStates = all.reduce(into: [:]) { $0[$1.calibreID] = $1 }
         sidebarVC?.bookStates = bookStates
         Task { await refreshCollectionSnapshots() }
