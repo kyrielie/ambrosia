@@ -53,7 +53,10 @@ actor CollectionStore {
     }
 
     func deleteCollection(id: String) async throws {
-        try await db.run("DELETE FROM collections WHERE id = ? AND is_system = 0", [id])
+        try await db.transaction { db in
+            try db.run("DELETE FROM collection_members WHERE collection_id = ?", [id])
+            try db.run("DELETE FROM collections WHERE id = ? AND is_system = 0", [id])
+        }
     }
 
     func remove(calibreID: Int, from collectionID: String) async throws {
