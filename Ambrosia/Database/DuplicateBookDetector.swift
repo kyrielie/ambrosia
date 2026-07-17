@@ -57,7 +57,7 @@ enum DuplicateBookDetector {
         if let candidateUpdated, let currentUpdated, candidateUpdated != currentUpdated {
             return candidateUpdated > currentUpdated
         }
-        if let candidateUpdated, currentUpdated == nil { return true }
+        if candidateUpdated != nil, currentUpdated == nil { return true }
         if currentUpdated != nil, candidateUpdated == nil { return false }
 
         let candidatePublished = parseISODate(dates[candidate]?.published)
@@ -65,7 +65,7 @@ enum DuplicateBookDetector {
         if let candidatePublished, let currentPublished, candidatePublished != currentPublished {
             return candidatePublished > currentPublished
         }
-        if let candidatePublished, currentPublished == nil { return true }
+        if candidatePublished != nil, currentPublished == nil { return true }
         if currentPublished != nil, candidatePublished == nil { return false }
 
         // No usable dates on either side, or an exact tie: stable arbitrary
