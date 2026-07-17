@@ -117,9 +117,11 @@ struct BookListRow: View, Equatable {
             descriptionRow
         }
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            AppDelegate.shared?.openReaderWindow(book: book, modelContext: modelContext)
-        }
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded {
+                AppDelegate.shared?.openReaderWindow(book: book, modelContext: modelContext)
+            }
+        )
         .contextMenu {
             Button(selectedCount == 1 ? "Open" : "Open Selected") {
                 onOpenSelected()
