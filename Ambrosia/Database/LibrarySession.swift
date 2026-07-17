@@ -641,11 +641,22 @@ final class LibrarySession {
 
         func flushBatch() async {
             guard !pendingSuccess.isEmpty || !pendingFailure.isEmpty else { return }
-            let toInsertSuccess = pendingSuccess
-            let toInsertFailure = pendingFailure
-            pendingSuccess.removeAll()
-            pendingFailure.removeAll()
-            try? await metaDB.insertBatch(toInsertSuccess, diagnostics: toInsertFailure)
+            // Only clear the pending buffers once the write has actually
+            // succeeded. This used to copy-then-clear-then-write-with-try?,
+            // so any transient insertBatch failure (e.g. the nested
+            // transaction AmbrosiaMetaDB.insert(_:calibreID:) used to open)
+            // silently discarded that batch's results with no retry and no
+            // log line — those books would then look "never attempted" and
+            // get needlessly reprocessed on every subsequent launch.
+            do {
+                try await metaDB.insertBatch(pendingSuccess, diagnostics: pendingFailure)
+                pendingSuccess.removeAll()
+                pendingFailure.removeAll()
+            } catch {
+                #if DEBUG
+                print("[LibrarySession] AO3 batch flush failed, will retry next flush: \(error)")
+                #endif
+            }
             lastFlushAt = Date()
         }
 

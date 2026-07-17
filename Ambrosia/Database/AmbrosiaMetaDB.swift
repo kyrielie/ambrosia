@@ -235,6 +235,14 @@ actor AmbrosiaMetaDB {
         }
     }
 
+    /// Checks whether `column` already exists on `table`, so additive
+    /// migrations can be made idempotent instead of relying on `try?` to
+    /// swallow the "duplicate column name" error on every launch.
+    private static func columnExists(_ table: String, _ column: String, db: Connection) throws -> Bool {
+        let rows = try db.prepare("PRAGMA table_info(\(table))").map { $0 }
+        return rows.contains { ($0[1] as? String) == column }
+    }
+
     private static func createAO3Metadata(db: Connection) throws {
         try db.execute("""
         CREATE TABLE IF NOT EXISTS ao3_metadata (
@@ -265,8 +273,12 @@ actor AmbrosiaMetaDB {
         // Additive columns for libraries whose ao3_metadata table predates rating/
         // warnings extraction. CREATE TABLE IF NOT EXISTS above only applies to
         // brand-new tables, so existing tables need these added explicitly.
-        _ = try? db.run("ALTER TABLE ao3_metadata ADD COLUMN rating TEXT")
-        _ = try? db.run("ALTER TABLE ao3_metadata ADD COLUMN warnings_json TEXT")
+        if try !columnExists("ao3_metadata", "rating", db: db) {
+            try db.run("ALTER TABLE ao3_metadata ADD COLUMN rating TEXT")
+        }
+        if try !columnExists("ao3_metadata", "warnings_json", db: db) {
+            try db.run("ALTER TABLE ao3_metadata ADD COLUMN warnings_json TEXT")
+        }
         try db.execute("""
         CREATE TABLE IF NOT EXISTS series_cache (
             calibre_id INTEGER NOT NULL,
@@ -955,6 +967,22 @@ actor AmbrosiaMetaDB {
     }
 
     func insert(_ metadata: AO3MetadataRecord, calibreID: Int) throws {
+        try transaction {
+            try writeAO3Metadata(metadata, calibreID: calibreID)
+        }
+        invalidateAO3MetadataCaches(for: calibreID)
+    }
+
+    /// Writes one book's `ao3_metadata` row and its `series_cache` rows
+    /// without opening its own transaction. `insert(_:calibreID:)` wraps this
+    /// in a transaction for standalone callers; `insertBatch` calls it
+    /// directly inside its own single transaction. Previously
+    /// `insert(_:calibreID:)` always opened `transaction { }` itself, so
+    /// `insertBatch` was nesting one transaction per row inside its outer
+    /// transaction — if any row in a batch failed, the whole nested/outer
+    /// transaction could roll back and, combined with `flushBatch`'s `try?`
+    /// on the call site, silently drop that batch's results with no retry.
+    private func writeAO3Metadata(_ metadata: AO3MetadataRecord, calibreID: Int) throws {
         let encoder = JSONEncoder()
         func json(_ values: [String]) -> String {
             guard let data = try? encoder.encode(values) else { return "[]" }
@@ -963,55 +991,55 @@ actor AmbrosiaMetaDB {
         let seriesData = (try? encoder.encode(metadata.series)) ?? Data("[]".utf8)
         let seriesJSON = String(data: seriesData, encoding: .utf8) ?? "[]"
 
-        try transaction {
+        try run(
+            """
+            INSERT OR REPLACE INTO ao3_metadata
+            (calibre_id, story_url, ao3_work_id, ao3_author_username, kudos_count, word_count,
+             chapter_current, chapter_total, is_complete, language, published_date, updated_date,
+             fandoms_json, relationships_json, characters_json, additional_tags_json, category_json,
+             ao3_collections_json, series_json, rating, warnings_json, extracted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                calibreID,
+                metadata.storyURL,
+                metadata.workID,
+                metadata.authorUsername,
+                metadata.kudosCount,
+                metadata.wordCount,
+                metadata.chapterCurrent,
+                metadata.chapterTotal,
+                metadata.isComplete ? 1 : 0,
+                metadata.language,
+                metadata.publishedDate,
+                metadata.updatedDate,
+                json(metadata.fandoms),
+                json(metadata.relationships),
+                json(metadata.characters),
+                json(metadata.additionalTags),
+                json(metadata.categories),
+                json(metadata.ao3Collections),
+                seriesJSON,
+                metadata.rating,
+                json(metadata.warnings),
+                metadata.extractedAt,
+            ]
+        )
+
+        try run("DELETE FROM series_cache WHERE calibre_id = ?", [calibreID])
+        for entry in metadata.series where !entry.name.isEmpty {
             try run(
                 """
-                INSERT OR REPLACE INTO ao3_metadata
-                (calibre_id, story_url, ao3_work_id, ao3_author_username, kudos_count, word_count,
-                 chapter_current, chapter_total, is_complete, language, published_date, updated_date,
-                 fandoms_json, relationships_json, characters_json, additional_tags_json, category_json,
-                 ao3_collections_json, series_json, rating, warnings_json, extracted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO series_cache
+                (calibre_id, series_name, series_index, ao3_series_id, is_anthology)
+                VALUES (?, ?, ?, ?, 0)
                 """,
-                [
-                    calibreID,
-                    metadata.storyURL,
-                    metadata.workID,
-                    metadata.authorUsername,
-                    metadata.kudosCount,
-                    metadata.wordCount,
-                    metadata.chapterCurrent,
-                    metadata.chapterTotal,
-                    metadata.isComplete ? 1 : 0,
-                    metadata.language,
-                    metadata.publishedDate,
-                    metadata.updatedDate,
-                    json(metadata.fandoms),
-                    json(metadata.relationships),
-                    json(metadata.characters),
-                    json(metadata.additionalTags),
-                    json(metadata.categories),
-                    json(metadata.ao3Collections),
-                    seriesJSON,
-                    metadata.rating,
-                    json(metadata.warnings),
-                    metadata.extractedAt,
-                ]
+                [calibreID, entry.name, entry.index, entry.ao3ID]
             )
-
-            try run("DELETE FROM series_cache WHERE calibre_id = ?", [calibreID])
-            for entry in metadata.series where !entry.name.isEmpty {
-                try run(
-                    """
-                    INSERT OR REPLACE INTO series_cache
-                    (calibre_id, series_name, series_index, ao3_series_id, is_anthology)
-                    VALUES (?, ?, ?, ?, 0)
-                    """,
-                    [calibreID, entry.name, entry.index, entry.ao3ID]
-                )
-            }
         }
+    }
 
+    private func invalidateAO3MetadataCaches(for calibreID: Int) {
         ao3MetadataCache[calibreID] = nil
         // series_cache rows for this calibreID were replaced wholesale above
         // (by-key and singleton-warning entries derived from them may now be
@@ -1023,6 +1051,14 @@ actor AmbrosiaMetaDB {
     }
 
     func insert(_ diagnostic: AO3ExtractionDiagnostic) throws {
+        try writeAO3Diagnostic(diagnostic)
+        ao3DiagnosticsCache[diagnostic.calibreID] = nil
+    }
+
+    /// Writes one `ao3_extraction_diagnostics` row without opening its own
+    /// transaction — see `writeAO3Metadata` for why this matters inside
+    /// `insertBatch`.
+    private func writeAO3Diagnostic(_ diagnostic: AO3ExtractionDiagnostic) throws {
         try run(
             """
             INSERT OR REPLACE INTO ao3_extraction_diagnostics
@@ -1039,7 +1075,6 @@ actor AmbrosiaMetaDB {
                 diagnostic.attemptedAt,
             ]
         )
-        ao3DiagnosticsCache[diagnostic.calibreID] = nil
     }
 
     /// Flush a batch of extraction results in a single transaction.
@@ -1048,14 +1083,25 @@ actor AmbrosiaMetaDB {
     /// transaction means the actor is only acquired once per batch rather than once
     /// per book, so read queries (e.g. collection membership for filter results) can
     /// cut in between batches instead of waiting for thousands of individual inserts.
+    ///
+    /// Uses the non-transactional `writeAO3Metadata`/`writeAO3Diagnostic` helpers
+    /// rather than `insert(_:calibreID:)`/`insert(_:)` — those each open their own
+    /// `transaction { }`, which used to nest a transaction per row inside this
+    /// function's outer transaction.
     func insertBatch(_ records: [(AO3MetadataRecord, Int)], diagnostics: [AO3ExtractionDiagnostic]) throws {
         try transaction {
             for (metadata, calibreID) in records {
-                try insert(metadata, calibreID: calibreID)
+                try writeAO3Metadata(metadata, calibreID: calibreID)
             }
             for diagnostic in diagnostics {
-                try insert(diagnostic)
+                try writeAO3Diagnostic(diagnostic)
             }
+        }
+        for (_, calibreID) in records {
+            invalidateAO3MetadataCaches(for: calibreID)
+        }
+        for diagnostic in diagnostics {
+            ao3DiagnosticsCache[diagnostic.calibreID] = nil
         }
     }
 
