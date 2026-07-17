@@ -1112,7 +1112,11 @@ struct LibraryRootView: View {
     private func refreshBookStates() {
         // §list-teardown fix: no-op if the List surface has been torn down.
         guard !toolbarState.isListSurfaceTornDown else { return }
-        let all = (try? modelContext.fetch(FetchDescriptor<BookState>())) ?? []
+        let pageIDs = Set(books.map(\.id))
+        let descriptor = FetchDescriptor<BookState>(
+            predicate: #Predicate { pageIDs.contains($0.calibreID) }
+        )
+        let all = (try? modelContext.fetch(descriptor)) ?? []
         bookStates = all.reduce(into: [:]) { $0[$1.calibreID] = $1 }
         Task {
             // §Phase1: session.refreshCollectionSnapshots() is now the single
