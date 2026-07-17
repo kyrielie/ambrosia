@@ -1056,6 +1056,7 @@ private struct ShortcutsTab: View {
                         }
                     }
                 )
+                .fixedSize()
                 .accessibilityLabel("Record shortcut for \(action.displayName)")
                 .accessibilityValue(prefs.keyBindings[action]?.displayString ?? "No shortcut")
             }
