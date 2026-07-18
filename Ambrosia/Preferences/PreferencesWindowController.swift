@@ -152,6 +152,16 @@ private struct ReaderTab: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            // ── Find bar ──────────────────────────────────────────────────
+            Section {
+                Toggle("Automatically open Find bar for full-text search", isOn: $prefs.autoOpenFindBarForFullTextSearch)
+            } header: {
+                Label("Find", systemImage: "magnifyingglass").font(.headline)
+            } footer: {
+                Text("When on, opening a book from a full-text search (or editing that search while the book is open) shows the Find bar and jumps to your search phrase. Turn off to open books without the Find bar appearing automatically.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             // ── Preferences update behaviour ──────────────────────────────
             Section {
                 HStack(spacing: 6) {

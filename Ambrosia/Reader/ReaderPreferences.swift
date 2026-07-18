@@ -146,6 +146,18 @@ final class ReaderPreferences: ObservableObject {
             preferenceChangeKind.send(.structural)
         }
     }
+    /// When true (default), opening a book from a `fulltext:` search — or
+    /// changing the search text while a book from that search is open —
+    /// automatically shows the reader's Find bar and populates it with the
+    /// search phrase (see `EmailLibraryViewController.applyFullTextPhraseToLocalFind`).
+    /// Some readers find this intrusive (e.g. short/common phrases producing
+    /// a wall of highlights, or wanting to read without the find bar taking
+    /// up screen space), so it's user-toggleable rather than always-on.
+    @Published var autoOpenFindBarForFullTextSearch: Bool {
+        didSet {
+            UserDefaults.standard.set(autoOpenFindBarForFullTextSearch, forKey: Keys.autoOpenFindBarForFullTextSearch)
+        }
+    }
 
     // MARK: - Library appearance — colour mode
 
@@ -397,6 +409,7 @@ final class ReaderPreferences: ObservableObject {
         static let allowReaderLinkClicks       = false
         static let removeParagraphIndents      = false
         static let colsPerScreen               = ColsPerScreen.one
+        static let autoOpenFindBarForFullTextSearch = true
         static let libraryColorMode            = LibraryColorMode.systemDefault
         static let libraryAppearanceMode       = LibraryAppearanceMode.system
         static let libraryLightBackgroundColor = "#FFFFFF"
@@ -448,6 +461,7 @@ final class ReaderPreferences: ObservableObject {
         static let allowReaderLinkClicks       = "rp.allowReaderLinkClicks"
         static let removeParagraphIndents      = "rp.removeParagraphIndents"
         static let colsPerScreen               = "rp.colsPerScreen"
+        static let autoOpenFindBarForFullTextSearch = "rp.autoOpenFindBarForFullTextSearch"
         static let libraryColorMode            = "rp.libraryColorMode"
         static let libraryAppearanceMode       = "rp.libraryAppearanceMode"
         static let libraryLightBG              = "rp.libraryLightBG"
@@ -488,6 +502,9 @@ final class ReaderPreferences: ObservableObject {
             : Defaults.removeParagraphIndents
         let rawCols = ud.integer(forKey: Keys.colsPerScreen).nonZero
         colsPerScreen = rawCols.flatMap(ColsPerScreen.init(rawValue:)) ?? Defaults.colsPerScreen
+        autoOpenFindBarForFullTextSearch = ud.object(forKey: Keys.autoOpenFindBarForFullTextSearch) != nil
+            ? ud.bool(forKey: Keys.autoOpenFindBarForFullTextSearch)
+            : Defaults.autoOpenFindBarForFullTextSearch
 
         // Migrate old "rp.backgroundColor" key if present
         let legacyBG = ud.string(forKey: "rp.backgroundColor")
@@ -862,6 +879,7 @@ final class ReaderPreferences: ObservableObject {
             || allowReaderLinkClicks != Defaults.allowReaderLinkClicks
             || removeParagraphIndents != Defaults.removeParagraphIndents
             || colsPerScreen != Defaults.colsPerScreen
+            || autoOpenFindBarForFullTextSearch != Defaults.autoOpenFindBarForFullTextSearch
             || defaultReadingMode != Defaults.defaultReadingMode
             || keyBindings != Defaults.keyBindings
     }
@@ -894,6 +912,7 @@ final class ReaderPreferences: ObservableObject {
         allowReaderLinkClicks = Defaults.allowReaderLinkClicks
         removeParagraphIndents = Defaults.removeParagraphIndents
         colsPerScreen          = Defaults.colsPerScreen
+        autoOpenFindBarForFullTextSearch = Defaults.autoOpenFindBarForFullTextSearch
         defaultReadingMode    = Defaults.defaultReadingMode
         keyBindings           = Defaults.keyBindings
     }

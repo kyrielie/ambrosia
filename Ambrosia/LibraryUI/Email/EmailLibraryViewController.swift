@@ -1831,7 +1831,14 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func applyFullTextPhraseToLocalFind(reader: ReaderViewController? = nil, allowDeferred: Bool = true) {
-        let phrase = activeFullTextPhrase() ?? ""
+        // Respect the user's preference: when disabled, behave exactly as if
+        // there were no active full-text phrase (clears/no-ops rather than
+        // auto-showing the Find bar). Everything below this line is
+        // unchanged so the dedup/deferred-application bookkeeping stays
+        // correct whether or not the phrase is real.
+        let phrase = ReaderPreferences.shared.autoOpenFindBarForFullTextSearch
+            ? (activeFullTextPhrase() ?? "")
+            : ""
         let targetReader = reader ?? currentReaderVC
         guard let targetReader else { return }
         pendingFullTextPhrase = phrase
