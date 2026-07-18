@@ -69,6 +69,23 @@ struct AmbrosiaApp: App {
                 Menu("Recent Libraries") {
                     RecentLibrariesMenuContent(session: session)
                 }
+
+                Divider()
+
+                // Act on whichever work the focused reader window currently has
+                // open (routed via the responder chain to
+                // ReaderViewController.toggleLikeCurrentWork/
+                // toggleReadLaterCurrentWork). No-ops if no reader window is
+                // key, same as the "Reader" menu's actions below.
+                Button("Like") {
+                    NSApp.sendAction(#selector(ReaderViewController.toggleLikeCurrentWork(_:)),
+                                     to: nil, from: nil)
+                }
+
+                Button("Read Later") {
+                    NSApp.sendAction(#selector(ReaderViewController.toggleReadLaterCurrentWork(_:)),
+                                     to: nil, from: nil)
+                }
             }
             
             // Shortcuts for every item in this menu are rebindable from

@@ -77,6 +77,20 @@ final class LibraryToolbarState {
 
     var hasActiveFilter: Bool { activeFilterResult != nil || pendingFullTextSearch != nil }
 
+    /// True while a SQL-pageable filter's row set is already applied but its
+    /// total count hasn't come back from `scheduleDeferredSQLFilterCount` yet.
+    /// `applyFilterRules()` clears `isApplyingLibraryFilter` as soon as the
+    /// filtered rows are pageable (so the list itself isn't stuck "loading"),
+    /// but the *count* used in the toolbar label and filter chip is still
+    /// pending — without this, those labels briefly fall back to their
+    /// "Filtered fics" / "Filtered results" placeholder text as if nothing
+    /// were happening, instead of showing a spinner until the real count
+    /// arrives.
+    var isFilterCountPending: Bool {
+        guard let result = activeFilterResult else { return false }
+        return result.isSQLBacked && result.totalCount == nil
+    }
+
     @discardableResult
     func beginLibraryFilterApplication() -> UUID {
         let token = UUID()

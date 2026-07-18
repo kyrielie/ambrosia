@@ -394,7 +394,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
     private func updateCountLabel() {
         guard let ts = toolbarState, let sess = session else { return }
-        let isApplying = ts.isApplyingLibraryFilter || ts.pendingFullTextSearch != nil
+        let isApplying = ts.isApplyingLibraryFilter || ts.pendingFullTextSearch != nil || ts.isFilterCountPending
         ficCountLabel?.isHidden = isApplying
         ficCountProgress?.isHidden = !isApplying
         if isApplying {
@@ -409,7 +409,12 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         let count: Int
         if let result = ts.activeFilterResult {
             guard let knownCount = result.totalCount else {
-                ficCountLabel?.stringValue = "Filtered fics"
+                // isFilterCountPending above already covers the normal
+                // "count not back yet" case; this is just a defensive
+                // fallback so we never render stale placeholder text.
+                ficCountProgress?.isHidden = false
+                ficCountProgress?.startAnimation(nil)
+                ficCountLabel?.isHidden = true
                 return
             }
             count = knownCount
@@ -426,6 +431,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private func scheduleCounting() {
         withObservationTracking {
             _ = toolbarState?.activeFilterResult?.totalCount
+            _ = toolbarState?.activeFilterResult?.isSQLBacked
             _ = toolbarState?.isApplyingLibraryFilter
             _ = toolbarState?.pendingFullTextSearch
             _ = session?.totalCount

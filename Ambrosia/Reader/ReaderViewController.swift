@@ -1501,6 +1501,43 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     @objc func findNextAction(_ sender: Any?) { findNext() }
     @objc func findPreviousAction(_ sender: Any?) { findPrevious() }
 
+    /// Toggles Like on whichever work is currently on screen — `activeCalibreID`,
+    /// not the reading target's primary book, so paging into a later work of a
+    /// multi-work series toggles *that* work, matching what the reader is
+    /// actually displaying. Mirrors LibraryRootView's `toggleLike(for:)`.
+    @objc func toggleLikeCurrentWork(_ sender: Any?) {
+        let calibreID = activeCalibreID
+        guard let session = AppDelegate.shared?.session,
+              let collectionStore = session.collectionStore else { return }
+        Task {
+            let alreadyLiked = ((try? await collectionStore.likedIDs()) ?? []).contains(calibreID)
+            try? await collectionStore.setLiked(calibreIDs: [calibreID], liked: !alreadyLiked)
+            session.bumpMembershipVersion()
+            let refreshed = (try? await collectionStore.likedIDs()) ?? []
+            await MainActor.run { session.cachedLikedIDs = refreshed }
+        }
+    }
+
+    /// Toggles Read Later on whichever work is currently on screen. Mirrors
+    /// LibraryRootView's `toggleReadLater(for:)`.
+    @objc func toggleReadLaterCurrentWork(_ sender: Any?) {
+        let calibreID = activeCalibreID
+        guard let session = AppDelegate.shared?.session,
+              let collectionStore = session.collectionStore else { return }
+        Task {
+            let alreadyInReadLater = Set((try? await collectionStore.members(of: SystemCollectionID.readLater)) ?? [])
+                .contains(calibreID)
+            if alreadyInReadLater {
+                try? await collectionStore.remove(calibreID: calibreID, from: SystemCollectionID.readLater)
+            } else {
+                try? await collectionStore.bulkAdd(calibreIDs: [calibreID], to: SystemCollectionID.readLater)
+            }
+            session.bumpMembershipVersion()
+            let refreshed = Set((try? await collectionStore.members(of: SystemCollectionID.readLater)) ?? [])
+            await MainActor.run { session.cachedReadLaterIDs = refreshed }
+        }
+    }
+
     // MARK: - Point annotations (⌘D)
 
     private func savePointAnnotationAtCurrentPosition() {
