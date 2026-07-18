@@ -226,8 +226,8 @@ final class AO3FilterFacetController {
         }
         switch state.crossoverState {
         case .any: break
-        case .includeOnly: includeGroup.rules.append(FilterRule(field: .crossover, op: .equals, value: "true"))
-        case .excludeOnly: includeGroup.rules.append(FilterRule(field: .crossover, op: .equals, value: "false"))
+        case .includeOnly: includeGroup.rules.append(FilterRule(field: .crossover, op: .equals))
+        case .excludeOnly: includeGroup.rules.append(FilterRule(field: .crossover, op: .notEquals))
         }
         switch state.completionState {
         case .any: break

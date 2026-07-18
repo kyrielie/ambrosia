@@ -343,16 +343,7 @@ struct FilterRuleRow: View {
             TextField("Number", text: $rule.value)
                 .textFieldStyle(.roundedBorder).frame(maxWidth: .infinity)
         case .crossover:                                        // §6
-            Picker("", selection: $rule.value) {
-                Text("is crossover").tag("true")
-                Text("is not crossover").tag("false")
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(maxWidth: .infinity)
-            .onAppear {
-                if rule.value.isEmpty { rule.value = "true" }
-            }
+            Text("crossover").font(.callout).foregroundStyle(.secondary); Spacer()
         default:
             // FilterValueTextField provides live autocomplete for .tag,
             // .authorName, and .title via CalibreLibrary suggestion queries.
