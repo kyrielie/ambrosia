@@ -161,6 +161,22 @@ struct LibraryRootView: View {
             .onChange(of: toolbarState.ascending)     { selectedItemIDs.removeAll(); offsetState.resetForNewFilter(); Task { await loadPage() } }
             .onChange(of: toolbarState.reshuffleToken)   { Task { await loadPage() } }
             .onChange(of: toolbarState.groupBySeries) { selectedItemIDs.removeAll(); offsetState.resetForNewFilter(); Task { await loadPage() } }
+            .onChange(of: toolbarState.filterExpression) {
+                // AO3FilterPopupWindowController's popup lives in its own NSWindow
+                // and writes toolbarState.filterExpression directly (no shared view
+                // tree with LibraryRootView to route an explicit apply call through).
+                // Without this handler that write was inert: applyFilterRules() --
+                // the only thing that turns filterExpression into an actual
+                // activeFilterResult/reload -- was only ever called from this
+                // view's own addOrReplaceRule(_:) quick-filter path.
+                selectedItemIDs.removeAll()
+                offsetState.resetForNewFilter()
+                if toolbarState.filterExpression.hasCompleteRules {
+                    applyFilterRules()
+                } else {
+                    Task { await loadPage() }
+                }
+            }
             .onChange(of: toolbarState.searchText) {
                 selectedItemIDs.removeAll()
                 offsetState.resetForNewFilter()
