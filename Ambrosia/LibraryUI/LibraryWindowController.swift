@@ -24,6 +24,12 @@ extension NSToolbarItem.Identifier {
 class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFieldDelegate, NSMenuDelegate, NSMenuItemValidation {
 
     private weak var toolbarState: LibraryToolbarState?
+
+    /// Exposes `toolbarState` to call sites outside this class — currently
+    /// only `AmbrosiaApp.swift`'s `.commands` closure, which has no other way
+    /// to reach the active window's toolbar state for the
+    /// `View → Open AO3 Style Filter` menu command.
+    var toolbarStateForCommands: LibraryToolbarState? { toolbarState }
     private weak var session: LibrarySession?
     private var viewModeControl: NSSegmentedControl?
     private var sortMenuToolbarItem: NSMenuToolbarItem?

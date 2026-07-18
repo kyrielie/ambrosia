@@ -84,6 +84,21 @@ struct AmbrosiaApp: App {
             // whenever a binding changes. Item titles below must match
             // RebindableAction.displayName exactly — that's how the sync
             // code finds each item.
+            CommandGroup(after: .toolbar) {
+                Button("Open AO3 Style Filter") {
+                    guard let libraryWindowController = AppDelegate.shared?.libraryWindowController,
+                          let toolbarState = libraryWindowController.toolbarStateForCommands,
+                          let session = AppDelegate.shared?.session,
+                          let metaDB = session.metaDB,
+                          let library = session.library
+                    else { return }
+                    AO3FilterPopupWindowController.open(
+                        toolbarState: toolbarState, metaDB: metaDB, library: library,
+                        ftsLibrary: session.ftsLibrary, collectionStore: session.collectionStore
+                    )
+                }
+            }
+
             CommandMenu("Reader") {
                 Button("Toggle Reading Mode") {
                     NSApp.sendAction(#selector(ReaderViewController.toggleReadingMode(_:)),
