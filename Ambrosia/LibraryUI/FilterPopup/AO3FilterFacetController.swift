@@ -44,7 +44,8 @@ final class AO3FilterFacetController {
     /// `LibraryRootView`/`EmailLibraryViewController` use per-query: a fresh
     /// `FilterBuilder`, built from `session.library`/`session.ftsLibrary`,
     /// with synonym expansions and crossover/status membership maps
-    /// resolved up front.
+    /// resolved up front. crossoverMap/statusMap are always computed (not
+    /// gated on the base expression) — see fix note below.
     static func make(toolbarState: LibraryToolbarState,
                       metaDB: AmbrosiaMetaDB,
                       library: CalibreLibrary,
@@ -54,18 +55,21 @@ final class AO3FilterFacetController {
         let tagExpansions = await TagExpansionResolver.filterTagExpansions(for: expression, metaDB: metaDB)
         let filterBuilder = FilterBuilder(library: library, ftsLibrary: ftsLibrary, tagExpansions: tagExpansions)
 
-        var crossoverMap: Set<Int> = []
-        let needsCrossover = expression.groups.flatMap(\.rules).contains { $0.field == .crossover }
-        if needsCrossover {
-            crossoverMap = await library.crossoverBookIDs()
-        }
+        // Always computed, unconditionally: unlike LibraryRootView's per-query
+        // path, these maps back scoping queries built from the popup's OWN
+        // in-progress crossoverState/completionState (via otherFieldsExpression),
+        // not just whatever the base toolbar expression happens to contain.
+        // Gating on the base expression (the old `needsCrossover`/`needsStatus`
+        // checks) left these empty the moment a user touched either control,
+        // and idSet.intersection([]) is always empty — every tag facet
+        // silently dropped to zero. Both are cheap (actor-cached crossover
+        // IDs; a handful of indexed lookups over a small fixed enum for
+        // status), so there's no cost reason to keep the old gating.
+        let crossoverMap = await library.crossoverBookIDs()
 
         var statusMap: [AO3CompletionStatus: Set<Int>] = [:]
-        let needsStatus = expression.groups.flatMap(\.rules).contains { $0.field == .status }
-        if needsStatus {
-            for status in AO3CompletionStatus.allCases {
-                statusMap[status] = (try? await metaDB.ao3CompletionStatusIDs(status)) ?? []
-            }
+        for status in AO3CompletionStatus.allCases {
+            statusMap[status] = (try? await metaDB.ao3CompletionStatusIDs(status)) ?? []
         }
 
         var likedIDs: Set<Int> = []
