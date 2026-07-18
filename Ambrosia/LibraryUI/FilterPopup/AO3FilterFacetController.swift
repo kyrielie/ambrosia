@@ -91,12 +91,6 @@ final class AO3FilterFacetController {
             statusMap[status] = (try? await metaDB.ao3CompletionStatusIDs(status)) ?? []
         }
 
-        var likedIDs: Set<Int> = []
-        let needsLiked = expression.groups.flatMap(\.rules).contains { $0.field == .isLiked }
-        if needsLiked {
-            likedIDs = (try? await collectionStore?.likedIDs()) ?? []
-        }
-
         // `FilterBuilder.matchingIDs` treats an expression with no complete
         // rules as "match nothing" (see matchingIDsSync's early-return
         // branch), not "match everything" — it's designed to be called only
@@ -108,7 +102,6 @@ final class AO3FilterFacetController {
         if expression.hasCompleteRules {
             let baseResult = await filterBuilder.matchingIDs(
                 expression: expression,
-                likedIDs: likedIDs,
                 statusMap: statusMap,
                 crossoverMap: crossoverMap
             )
@@ -135,7 +128,6 @@ final class AO3FilterFacetController {
 
         let result = await filterBuilder.matchingIDs(
             expression: popupExpression,
-            likedIDs: [],
             statusMap: statusMap,
             crossoverMap: crossoverMap
         )
