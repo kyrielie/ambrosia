@@ -101,21 +101,42 @@ struct AO3FilterPopupView: View {
         refreshFacets()
     }
 
+    // §9: Previously ran one full matchingIDs pass per facet field, serially,
+    // on every checkbox toggle — 7 sequential round trips (6 tag-shaped
+    // AO3FacetField cases plus rating) per toggle, per filterlogs.txt's
+    // near-identical consecutive matchingIDs.start/end pairs. Each field's
+    // scopedIDs call only reads `state`/`baseIDs`, both immutable for the
+    // duration of one refreshFacets() invocation, so the calls are
+    // independent and can run concurrently. CalibreLibrary/AmbrosiaMetaDB are
+    // both actors, so this overlaps wait time across fields rather than
+    // truly parallelizing SQLite execution — still a real win over the fully
+    // serial await chain. See fix plan §2.
     private func refreshFacets() {
         facetRefreshTask?.cancel()
         facetRefreshTask = Task {
-            var newFacets: [AO3FacetField: [(name: String, count: Int)]] = [:]
-            for field in AO3FacetField.allCases {
-                let ids = await facetController.scopedIDs(ignoring: field, state: state)
-                guard !Task.isCancelled else { return }
-                let raw = await facetController.metaDB.topFacets(for: field, scopedTo: ids, limit: limit(for: field))
-                guard !Task.isCancelled else { return }
-                newFacets[field] = await facetController.metaDB.canonicalize(raw)
-            }
+            async let ratingIDsTask = facetController.scopedIDsForRating(state: state)
+
+            let newFacets: [AO3FacetField: [(name: String, count: Int)]] =
+                await withTaskGroup(of: (AO3FacetField, [(name: String, count: Int)]).self) { group in
+                    for field in AO3FacetField.allCases {
+                        group.addTask {
+                            let ids = await facetController.scopedIDs(ignoring: field, state: state)
+                            let raw = await facetController.metaDB.topFacets(for: field, scopedTo: ids, limit: limit(for: field))
+                            let canonicalized = await facetController.metaDB.canonicalize(raw)
+                            return (field, canonicalized)
+                        }
+                    }
+                    var result: [AO3FacetField: [(name: String, count: Int)]] = [:]
+                    for await (field, entries) in group {
+                        result[field] = entries
+                    }
+                    return result
+                }
+
             guard !Task.isCancelled else { return }
             facets = newFacets
 
-            let ratingIDs = await facetController.scopedIDsForRating(state: state)
+            let ratingIDs = await ratingIDsTask
             guard !Task.isCancelled else { return }
             ratingFacets = await facetController.metaDB.topRatingFacets(scopedTo: ratingIDs)
         }
