@@ -71,26 +71,13 @@ struct LibraryRootView: View {
     @State private var ao3PublisherIDs: Set<Int> = []
     @State private var anthologyIDs: Set<Int> = []
     @State private var duplicateLoserIDs: Set<Int> = []
-    /// Native List selection, keyed by `LibraryItem.id` (String) so both plain
-    /// book rows and series-group rows can be selected/highlighted/arrow-key-
-    /// navigated the same way a Finder-style list would. This is the source of
-    /// truth for what's highlighted; `selectedIDs` below is derived from it.
-    @State private var selectedItemIDs: Set<String> = []
-    /// Calibre book IDs implied by `selectedItemIDs` — a series selection expands
-    /// to every work in that series. This is what `selectedBooks(fallback:)` and
-    /// the "Selected" context-menu actions actually operate on; it is recomputed
-    /// whenever `selectedItemIDs` or `items` changes, never mutated directly.
-    private var selectedIDs: Set<Int> {
-        var ids = Set<Int>()
-        for item in items where selectedItemIDs.contains(item.id) {
-            switch item {
-            case .book(let book): ids.insert(book.id)
-            case .series(let series): ids.formUnion(series.works.map(\.id))
-            case .orphanedSeriesEntry(let book, _): ids.insert(book.id)
-            }
-        }
-        return ids
-    }
+    // Row view intentionally has no selection state: no click-to-select, no
+    // shift/cmd-click, no Cmd+A. Opening is double-click (or Enter via
+    // context menu) and acts on the row in question only. This used to be
+    // backed by a `selectedItemIDs` set plus a derived `selectedIDs`/
+    // `selectedBooks(fallback:)` pair that every row recomputed against the
+    // *entire* library on every render — that was the main cause of row-view
+    // scroll lag, and it's gone along with the selection concept itself.
     // §Phase2: shared visibility-filtering logic, also owned by
     // EmailLibraryViewController. Stateless aside from its debug-log label,
     // so a plain `let` (not `@State`) is correct here.
@@ -157,10 +144,10 @@ struct LibraryRootView: View {
     private func attachDataHandlers<V: View>(to view: V) -> some View {
         view
             .onChange(of: offsetState.currentPage)                { Task { await loadPage() } }
-            .onChange(of: toolbarState.sortField)     { selectedItemIDs.removeAll(); offsetState.resetForNewFilter(); Task { await loadPage() } }
-            .onChange(of: toolbarState.ascending)     { selectedItemIDs.removeAll(); offsetState.resetForNewFilter(); Task { await loadPage() } }
+            .onChange(of: toolbarState.sortField)     { offsetState.resetForNewFilter(); Task { await loadPage() } }
+            .onChange(of: toolbarState.ascending)     { offsetState.resetForNewFilter(); Task { await loadPage() } }
             .onChange(of: toolbarState.reshuffleToken)   { Task { await loadPage() } }
-            .onChange(of: toolbarState.groupBySeries) { selectedItemIDs.removeAll(); offsetState.resetForNewFilter(); Task { await loadPage() } }
+            .onChange(of: toolbarState.groupBySeries) { offsetState.resetForNewFilter(); Task { await loadPage() } }
             .onChange(of: toolbarState.filterExpression) {
                 // AO3FilterPopupWindowController's popup lives in its own NSWindow
                 // and writes toolbarState.filterExpression directly (no shared view
@@ -169,7 +156,6 @@ struct LibraryRootView: View {
                 // the only thing that turns filterExpression into an actual
                 // activeFilterResult/reload -- was only ever called from this
                 // view's own addOrReplaceRule(_:) quick-filter path.
-                selectedItemIDs.removeAll()
                 offsetState.resetForNewFilter()
                 if toolbarState.filterExpression.hasCompleteRules {
                     applyFilterRules()
@@ -178,7 +164,6 @@ struct LibraryRootView: View {
                 }
             }
             .onChange(of: toolbarState.searchText) {
-                selectedItemIDs.removeAll()
                 offsetState.resetForNewFilter()
                 if toolbarState.consumeSearchTextReloadSuppression() {
                     LibraryFilterDebug.log("searchText.suppressed", [
@@ -225,7 +210,6 @@ struct LibraryRootView: View {
             }
             .onChange(of: toolbarState.activeFilterResult?.reloadToken) {
                 if suppressNextReloadToken { suppressNextReloadToken = false; return }
-                selectedItemIDs.removeAll()
                 offsetState.resetForNewFilter(); Task { await loadPage() }
             }
     }
@@ -257,7 +241,6 @@ struct LibraryRootView: View {
                 let persisted = UserDefaults.standard.bool(forKey: "groupBySeries")
                 if toolbarState.groupBySeries != persisted {
                     toolbarState.groupBySeries = persisted
-                    selectedItemIDs.removeAll()
                     offsetState.resetForNewFilter()
                     Task { await loadPage() }
                 }
@@ -267,7 +250,6 @@ struct LibraryRootView: View {
             }
             .onChange(of: session.isOpen) {
                 if session.isOpen {
-                    selectedItemIDs.removeAll()
                     offsetState.resetForNewFilter()
                     toolbarState.searchText = ""
                     toolbarState.activeFilterResult = nil
@@ -279,8 +261,7 @@ struct LibraryRootView: View {
                     Task { await loadPage() }
                     refreshBookStates()
                 } else {
-                    books = []; bookStates = [:]; selectedItemIDs.removeAll()
-                }
+                    books = []; bookStates = [:];                }
             }
             .onAppear {
                 if session.isOpen {
@@ -327,7 +308,6 @@ struct LibraryRootView: View {
                         toolbarState.filterExpression = FilterExpression()
                         toolbarState.activeFilterResult = nil
                         toolbarState.cancelLibraryFilterApplication()
-                        selectedItemIDs.removeAll()
                         offsetState.resetForNewFilter(); Task { await loadPage() }
                     }
                 )
@@ -467,7 +447,10 @@ struct LibraryRootView: View {
                 degradedDataBanner
             }
             if toolbarState.hasActiveFilter || activeFullTextPhrase != nil {
-                activeFilterChip(count: toolbarState.activeFilterResult?.totalCount)
+                activeFilterChip(
+                    count: toolbarState.activeFilterResult?.totalCount,
+                    countPending: toolbarState.isFilterCountPending
+                )
             }
             if !session.isOpen {
                 emptyLibraryState
@@ -541,7 +524,7 @@ struct LibraryRootView: View {
                 filterForSQL = nil
             } else if toolbarState.activeFilterResult != nil {
                 books = []; items = []; hasNextPage = false
-                rebuildItems(); loadAO3MetadataForCurrentPage(); pruneSelection()
+                rebuildItems(); loadAO3MetadataForCurrentPage()
                 return
             } else {
                 restrictIDs = nil
@@ -582,7 +565,7 @@ struct LibraryRootView: View {
                     "surface": "list", "mode": "emptyExplicitIDs.wordCount", "page": offsetState.currentPage
                 ])
                 books = []; items = []; hasNextPage = false
-                rebuildItems(); loadAO3MetadataForCurrentPage(); pruneSelection()
+                rebuildItems(); loadAO3MetadataForCurrentPage()
                 return
             } else {
                 restrictIDs = nil
@@ -620,7 +603,7 @@ struct LibraryRootView: View {
                 filterForSQL = nil
             } else if toolbarState.activeFilterResult != nil {
                 books = []; items = []; hasNextPage = false
-                rebuildItems(); loadAO3MetadataForCurrentPage(); pruneSelection()
+                rebuildItems(); loadAO3MetadataForCurrentPage()
                 return
             } else {
                 restrictIDs = nil
@@ -820,7 +803,6 @@ struct LibraryRootView: View {
         }
         rebuildItems()
         loadAO3MetadataForCurrentPage()
-        pruneSelection()
         refreshGroupAwareCountIfNeeded(query: query)
         LibraryFilterDebug.log("loadPage.end", [
             "surface": "list",
@@ -1148,7 +1130,6 @@ struct LibraryRootView: View {
             ao3PublisherIDs = session.cachedAO3PublisherIDs
             anthologyIDs = session.cachedAnthologyIDs
             duplicateLoserIDs = session.cachedDuplicateLoserIDs
-            pruneSelection()
             offsetState.resetForNewFilter()
             // loadPage() is async now (CalibreLibrary is actor-isolated), so it can't
             // be called from inside a synchronous MainActor closure — call it here
@@ -1303,7 +1284,6 @@ struct LibraryRootView: View {
             toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
-            selectedItemIDs.removeAll()
             offsetState.resetForNewFilter()
             Task { await loadPage() }
             LibraryFilterDebug.log("applyFilter.end", [
@@ -1318,7 +1298,6 @@ struct LibraryRootView: View {
             toolbarState.activeFilterResult = cached
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
-            selectedItemIDs.removeAll()
             offsetState.resetForNewFilter()
             suppressNextReloadToken = true   // §perf: we call loadPage() below; skip onChange duplicate
             Task { await loadPage() }
@@ -1482,7 +1461,6 @@ struct LibraryRootView: View {
             session.cachedAnthologyIDs = currentAnthologyIDs2
             duplicateLoserIDs = currentDuplicateLoserIDs2
             session.cachedDuplicateLoserIDs = currentDuplicateLoserIDs2
-            selectedItemIDs.removeAll()
             suppressNextReloadToken = true   // §perf: we call loadPage() below; skip onChange duplicate
             offsetState.resetForNewFilter(); await loadPage()
             LibraryFilterDebug.log("applyFilter.end", [
@@ -1594,15 +1572,23 @@ struct LibraryRootView: View {
         return phrase?.isEmpty == false ? phrase : nil
     }
 
-    private func activeFilterChip(count: Int?) -> some View {
+    private func activeFilterChip(count: Int?, countPending: Bool) -> some View {
         let completeRules = toolbarState.filterExpression.groups.flatMap(\.rules).filter(\.isComplete)
         return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Image(systemName: "line.3.horizontal.decrease.circle.fill")
                     .foregroundStyle(Color.accentColor)
                     .font(.caption)
-                Text(count.map { "\($0) result\($0 == 1 ? "" : "s")" } ?? "Filtered results")
-                    .font(.caption).foregroundStyle(.secondary)
+                if countPending {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .scaleEffect(0.6)
+                    Text("Filtering…")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text(count.map { "\($0) result\($0 == 1 ? "" : "s")" } ?? "Filtered results")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button("Edit") { toolbarState.showFilterDrawer = true }
                     .buttonStyle(.borderless).font(.caption)
@@ -1610,7 +1596,6 @@ struct LibraryRootView: View {
                     toolbarState.filterExpression = FilterExpression()
                     toolbarState.activeFilterResult = nil
                     toolbarState.cancelLibraryFilterApplication()
-                    selectedItemIDs.removeAll()
                     offsetState.resetForNewFilter(); Task { await loadPage() }
                 } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
@@ -1682,17 +1667,18 @@ struct LibraryRootView: View {
     }
 
     private var itemList: some View {
-        // `selection:` is what makes this an actual NSTableView-backed selectable
-        // list rather than a plain scroll of tappable rows: click-to-select,
-        // Cmd/Shift-click range selection, arrow-key navigation, and type-ahead
-        // all come from this binding, not from anything we implement ourselves.
-        //
-        // Double-click-to-open used to be a `TapGesture(count: 2)` on each row
-        // (BookListRow/SeriesListRow), which competed with the selection above
-        // and broke click/shift-click/cmd-click. It's now a single window-level
-        // monitor (see LibraryListDoubleClickMonitor.swift) that never touches
-        // mouseDown, plus Return-key as the keyboard equivalent.
-        List(items, selection: $selectedItemIDs) { item in
+        // No `selection:` binding on this List — row view intentionally has
+        // no click-to-select, no Cmd/Shift-click range selection, and no
+        // Cmd+A. Opening is double-click only, via the window-level monitor
+        // below (see LibraryListDoubleClickMonitor.swift, which only reacts
+        // to `.leftMouseUp` with clickCount == 2 and never touches
+        // mouseDown), or right-click → context menu, both of which act on
+        // the row they land on. This also removes the per-row "what's
+        // currently selected" bookkeeping that used to run on every row on
+        // every scroll/render pass (the old `selectedBooks(fallback:)` /
+        // `selectedBookIDs(fallback:)` calls in `bookRow`), which was the
+        // main source of row-view scroll lag.
+        List(items) { item in
             itemRow(item)
         }
         .listStyle(.plain)
@@ -1702,33 +1688,20 @@ struct LibraryRootView: View {
                 openItem(items[row])
             }
         )
-        .onKeyPress(.return) {
-            openSelection()
-            return .handled
-        }
     }
 
-    /// Opens a single item the same way its context menu's "Open" / "Open
-    /// Selected" / "Open Series" action already does. For a `.book`, this
-    /// expands to the full current selection via `selectedBooks(fallback:)`
-    /// (matching "Open Selected"), not just the double-clicked row.
+    /// Opens a single item — row view has no selection, so this always
+    /// opens just the row that was double-clicked or the row whose context
+    /// menu "Open" was chosen.
     private func openItem(_ item: LibraryItem) {
         switch item {
         case .book(let book):
-            open(selectedBooks(fallback: book))
+            open([book])
         case .orphanedSeriesEntry(let book, _):
-            open(selectedBooks(fallback: book))
+            open([book])
         case .series(let series):
             AppDelegate.shared?.openReaderWindow(target: .series(series), modelContext: modelContext)
         }
-    }
-
-    /// Return-key equivalent of double-click: opens the current selection.
-    /// No-op if nothing is selected.
-    private func openSelection() {
-        guard let firstID = selectedItemIDs.first,
-              let item = items.first(where: { $0.id == firstID }) else { return }
-        openItem(item)
     }
 
     /// The single collection this list is currently filtered to, or nil if
@@ -1771,28 +1744,23 @@ struct LibraryRootView: View {
             onAuthorTap: { author in
                 addOrReplaceRule(FilterRule(field: .authorName, op: .equals, value: author))
             },
-            onOpenSelected: { open(selectedBooks(fallback: book)) },
+            onOpen: { open([book]) },
             isInReadLater: readLaterIDs.contains(book.id),
             onReadLaterToggle: { toggleReadLater(for: book) },
             onLikeToggle: { toggleLike(for: book) },
-            onLikeSelected: { setLiked(selectedBooks(fallback: book), liked: true) },
-            onUnlikeSelected: { setLiked(selectedBooks(fallback: book), liked: false) },
-            onReadLater: { addToReadLater(selectedBooks(fallback: book)) },
-            onSkip: { skip(selectedBooks(fallback: book)) },
-            onMarkRead: { markRead(selectedBooks(fallback: book)) },
-            onResetProgress: { resetProgress(selectedBooks(fallback: book)) },
+            onReadLater: { addToReadLater([book]) },
+            onSkip: { skip([book]) },
+            onMarkRead: { markRead([book]) },
+            onResetProgress: { resetProgress([book]) },
             onCollectionChanged: {
                 CollectionAssignment.didAssign(session: session) {
                     Task { await refreshVisibilitySnapshots(resetPage: false) }
                 }
             },
-            selectedCount: selectedBooks(fallback: book).count,
-            selectedIDs: selectedBookIDs(fallback: book),
             activeCollectionID: activeCollectionID,
             onRemoveFromCollection: { collectionName in
-                removeFromCollection(named: collectionName, calibreIDs: selectedBookIDs(fallback: book))
-            },
-            isSelected: selectedItemIDs.contains(id)
+                removeFromCollection(named: collectionName, calibreIDs: [book.id])
+            }
         )
         .equatable()
         .listRowSeparator(.visible)
@@ -1823,7 +1791,10 @@ struct LibraryRootView: View {
             onRemoveFromCollection: { collectionName in
                 removeFromCollection(named: collectionName, calibreIDs: series.works.map(\.id))
             },
-            isSelected: selectedItemIDs.contains(id)
+            // Row view has no selection concept anymore; SeriesListRow still
+            // takes `isSelected` purely for its tag-pill contrast styling,
+            // which is now always the unselected variant.
+            isSelected: false
         )
         .equatable()
         .listRowSeparator(.visible)
@@ -1936,21 +1907,6 @@ struct LibraryRootView: View {
                 )
             }
         }
-    }
-
-    private func selectedBooks(fallback book: CalibreBook) -> [CalibreBook] {
-        let selected = books.filter { selectedIDs.contains($0.id) }
-        return selected.isEmpty ? [book] : selected
-    }
-
-    private func selectedBookIDs(fallback book: CalibreBook) -> [Int] {
-        let ids = selectedBooks(fallback: book).map(\.id)
-        return ids.isEmpty ? [book.id] : ids
-    }
-
-    private func pruneSelection() {
-        let visible = Set(items.map(\.id))
-        selectedItemIDs.formIntersection(visible)
     }
 
     private func setLiked(_ books: [CalibreBook], liked: Bool) {

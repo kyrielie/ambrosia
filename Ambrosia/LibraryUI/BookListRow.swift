@@ -18,20 +18,15 @@ struct BookListRow: View, Equatable {
     let modelContext: ModelContext
     let onTagTap: (String, FilterField) -> Void
     let onAuthorTap: (String) -> Void
-    let onOpenSelected: () -> Void
+    let onOpen: () -> Void
     let onLikeToggle: () -> Void
-    let onLikeSelected: () -> Void
-    let onUnlikeSelected: () -> Void
     let onReadLater: () -> Void
     let onSkip: () -> Void
     let onMarkRead: () -> Void
     let onResetProgress: () -> Void
     let onCollectionChanged: () -> Void
-    let selectedCount: Int
-    let selectedIDs: [Int]
     let activeCollectionID: String?
     let onRemoveFromCollection: (String) -> Void
-    let isSelected: Bool
     @State private var showCollectionPicker = false
 
     static func == (lhs: BookListRow, rhs: BookListRow) -> Bool {
@@ -53,31 +48,23 @@ struct BookListRow: View, Equatable {
             && lhs.hideFanworksTagPill         == rhs.hideFanworksTagPill
             && lhs.correctCalibreAmpEntities   == rhs.correctCalibreAmpEntities
             && lhs.bookState?.totalReadPercent == rhs.bookState?.totalReadPercent
-            && lhs.selectedCount               == rhs.selectedCount
-            && lhs.selectedIDs                 == rhs.selectedIDs
             && lhs.activeCollectionID          == rhs.activeCollectionID
-            && lhs.isSelected                  == rhs.isSelected
     }
 
     init(book: CalibreBook, bookState: BookState?, ao3Metadata: AO3MetadataRecord?, ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?, singletonSeriesWarnings: [SingletonSeriesWarning], isLiked: Bool, hideFanworksTagPill: Bool, correctCalibreAmpEntities: Bool, modelContext: ModelContext,
          onTagTap: @escaping (String, FilterField) -> Void,
          onAuthorTap: @escaping (String) -> Void,
-         onOpenSelected: @escaping () -> Void,
+         onOpen: @escaping () -> Void,
          isInReadLater: Bool,
          onReadLaterToggle: @escaping () -> Void,
          onLikeToggle: @escaping () -> Void,
-         onLikeSelected: @escaping () -> Void,
-         onUnlikeSelected: @escaping () -> Void,
          onReadLater: @escaping () -> Void,
          onSkip: @escaping () -> Void,
          onMarkRead: @escaping () -> Void,
          onResetProgress: @escaping () -> Void,
          onCollectionChanged: @escaping () -> Void,
-         selectedCount: Int,
-         selectedIDs: [Int],
          activeCollectionID: String?,
-         onRemoveFromCollection: @escaping (String) -> Void,
-         isSelected: Bool) {
+         onRemoveFromCollection: @escaping (String) -> Void) {
         self.book         = book
         self.bookState    = bookState
         self.ao3Metadata  = ao3Metadata
@@ -91,20 +78,15 @@ struct BookListRow: View, Equatable {
         self.modelContext = modelContext
         self.onTagTap     = onTagTap
         self.onAuthorTap  = onAuthorTap
-        self.onOpenSelected = onOpenSelected
+        self.onOpen = onOpen
         self.onLikeToggle = onLikeToggle
-        self.onLikeSelected = onLikeSelected
-        self.onUnlikeSelected = onUnlikeSelected
         self.onReadLater = onReadLater
         self.onSkip       = onSkip
         self.onMarkRead   = onMarkRead
         self.onResetProgress = onResetProgress
         self.onCollectionChanged = onCollectionChanged
-        self.selectedCount = selectedCount
-        self.selectedIDs = selectedIDs
         self.activeCollectionID = activeCollectionID
         self.onRemoveFromCollection = onRemoveFromCollection
-        self.isSelected = isSelected
     }
 
     var body: some View {
@@ -118,20 +100,15 @@ struct BookListRow: View, Equatable {
         }
         .contentShape(Rectangle())
         .contextMenu {
-            Button(selectedCount == 1 ? "Open" : "Open Selected") {
-                onOpenSelected()
+            Button("Open") {
+                onOpen()
             }
             Divider()
-            if selectedCount == 1 {
-                Button(isLiked ? "Unlike" : "Like") { onLikeToggle() }
-            } else {
-                Button("Like Selected") { onLikeSelected() }
-                Button("Unlike Selected") { onUnlikeSelected() }
-            }
-            Button(selectedCount == 1 ? "Read Later" : "Add Selected to Read Later") { onReadLater() }
-            Button(selectedCount == 1 ? "Mark as Read" : "Mark Selected as Read") { onMarkRead() }
+            Button(isLiked ? "Unlike" : "Like") { onLikeToggle() }
+            Button("Read Later") { onReadLater() }
+            Button("Mark as Read") { onMarkRead() }
             Button("Reset Reading Progress") { onResetProgress() }
-            Button(selectedCount == 1 ? "Skip" : "Skip Selected") { onSkip() }
+            Button("Skip") { onSkip() }
             Divider()
             Button("Add to Collection…") { showCollectionPicker = true }
             if let activeCollectionID {
@@ -140,7 +117,7 @@ struct BookListRow: View, Equatable {
         }
         .popover(isPresented: $showCollectionPicker, arrowEdge: .trailing) {
             CollectionSearchPickerView(
-                calibreIDs: selectedIDs,
+                calibreIDs: [book.id],
                 onChange: {
                     onCollectionChanged()
                 },
