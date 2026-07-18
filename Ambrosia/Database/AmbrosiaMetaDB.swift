@@ -1604,6 +1604,75 @@ actor AmbrosiaMetaDB {
         return result
     }
 
+    // MARK: - AO3-style filter popup facet querying
+    //
+    // Mirrors AO3's own ES terms-aggregation-over-filtered_query behavior
+    // (`WorkQuery#aggregations`): the "(count)" numbers next to each checkbox
+    // are scoped to whatever the current search/filter (base toolbar filter
+    // plus the popup's own in-progress selections) already narrows to, not
+    // the whole library. Uses SQLite's JSON1 `json_each` against
+    // `ao3_metadata`'s existing JSON columns — no schema migration.
+
+    /// Top-N tag values by number of matching books, scoped to `ids`.
+    func topFacets(for field: AO3FacetField, scopedTo ids: [Int], limit: Int = 10) -> [(name: String, count: Int)] {
+        guard !ids.isEmpty else { return [] }
+        let idPlaceholders = ids.map { _ in "?" }.joined(separator: ", ")
+        let sql = """
+            SELECT je.value AS name, COUNT(*) AS cnt
+            FROM ao3_metadata, json_each(ao3_metadata.\(field.jsonColumn)) AS je
+            WHERE ao3_metadata.calibre_id IN (\(idPlaceholders))
+            GROUP BY je.value
+            ORDER BY cnt DESC
+            LIMIT ?
+            """
+        let bindings: [Binding?] = ids.map { $0 as Binding? } + [limit as Binding?]
+        guard let rows = try? readDB.prepare(sql, bindings).map({ $0 }) else { return [] }
+        return rows.compactMap { row in
+            guard let name = row[0] as? String else { return nil }
+            let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) ?? 0
+            return (name, count)
+        }
+    }
+
+    /// Rating facet — `rating` is a single TEXT column, so this is a plain
+    /// `GROUP BY`, not a `json_each` aggregation.
+    func topRatingFacets(scopedTo ids: [Int]) -> [(name: String, count: Int)] {
+        guard !ids.isEmpty else { return [] }
+        let idPlaceholders = ids.map { _ in "?" }.joined(separator: ", ")
+        let sql = """
+            SELECT rating, COUNT(*) AS cnt
+            FROM ao3_metadata
+            WHERE calibre_id IN (\(idPlaceholders)) AND rating IS NOT NULL
+            GROUP BY rating
+            ORDER BY cnt DESC
+            """
+        let bindings: [Binding?] = ids.map { $0 as Binding? }
+        guard let rows = try? readDB.prepare(sql, bindings).map({ $0 }) else { return [] }
+        return rows.compactMap { row in
+            guard let name = row[0] as? String else { return nil }
+            let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) ?? 0
+            return (name, count)
+        }
+    }
+
+    /// Re-groups raw facet rows by canonical name when the AO3 tag seed
+    /// database is enabled, summing counts for names that canonicalize to
+    /// the same tag. No-ops (returns input unchanged, re-sorted) when the
+    /// seed DB is disabled or unconfigured, matching `canonicalTerm`'s own
+    /// guard.
+    func canonicalize(_ rawFacets: [(name: String, count: Int)]) -> [(name: String, count: Int)] {
+        guard AO3TagSeedDatabaseConfig.shared.isEnabled,
+              AO3TagSeedDatabaseConfig.shared.validDatabaseURLIfEnabled() != nil else {
+            return rawFacets.sorted { $0.count > $1.count }
+        }
+        var merged: [String: Int] = [:]
+        for (name, count) in rawFacets {
+            let canonical = canonicalTerm(for: name)
+            merged[canonical, default: 0] += count
+        }
+        return merged.map { (name: $0.key, count: $0.value) }.sorted { $0.count > $1.count }
+    }
+
     func allCrossoverBookIDs() -> Set<Int> {
         let sql = """
         SELECT calibre_id
