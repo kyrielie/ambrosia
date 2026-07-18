@@ -63,73 +63,70 @@ final class AO3FilterPopupState {
     }
 
     // MARK: Mutual exclusion helpers (mirrors AO3's toggleInclude/toggleExclude)
-
-    // Note: these read the current Set out of the keyPath, mutate the local
-    // copy, then write it back with a plain `self[keyPath:] = ...`
-    // assignment, rather than mutating in place via
-    // `self[keyPath: kp].remove(...)`. @Observable's macro-synthesized
-    // accessors don't expose a `modify` accessor for keyPath subscripting,
-    // so in-place mutation through a WritableKeyPath fails to typecheck
-    // ("Cannot use mutating member on immutable value") even though this is
-    // a class and plain property assignment works fine.
-    func toggleInclude(_ value: String,
-                        include: WritableKeyPath<AO3FilterPopupState, Set<String>>,
-                        exclude: WritableKeyPath<AO3FilterPopupState, Set<String>>) {
-        var includeSet = self[keyPath: include]
-        var excludeSet = self[keyPath: exclude]
-        if includeSet.contains(value) {
-            includeSet.remove(value)
-        } else {
-            includeSet.insert(value)
-            excludeSet.remove(value)
-        }
-        self[keyPath: include] = includeSet
-        self[keyPath: exclude] = excludeSet
+    //
+    // These switch on an explicit field enum and access each property
+    // directly rather than going through a `WritableKeyPath` subscript.
+    // `@Observable`'s macro-synthesized storage does not support keyPath
+    // subscripting on the type at all -- not just in-place mutation
+    // (`self[keyPath: kp].remove(...)`), but even a plain
+    // `self[keyPath: kp] = newValue` assignment fails to typecheck
+    // ("Cannot assign through subscript: 'self' is immutable"). Ordinary
+    // property access (`self.includedFandoms = ...`) is unaffected, so
+    // dispatching through a switch avoids the problem entirely.
+    enum StringTagField {
+        case fandom, relationship, character, freeform
     }
 
-    func toggleExclude(_ value: String,
-                        include: WritableKeyPath<AO3FilterPopupState, Set<String>>,
-                        exclude: WritableKeyPath<AO3FilterPopupState, Set<String>>) {
-        var includeSet = self[keyPath: include]
-        var excludeSet = self[keyPath: exclude]
-        if excludeSet.contains(value) {
-            excludeSet.remove(value)
-        } else {
-            excludeSet.insert(value)
-            includeSet.remove(value)
+    func isIncluded(_ value: String, field: StringTagField) -> Bool {
+        switch field {
+        case .fandom:       return includedFandoms.contains(value)
+        case .relationship: return includedRelationships.contains(value)
+        case .character:    return includedCharacters.contains(value)
+        case .freeform:     return includedFreeforms.contains(value)
         }
-        self[keyPath: include] = includeSet
-        self[keyPath: exclude] = excludeSet
     }
 
-    func toggleInclude<T: Hashable>(_ value: T,
-                                     include: WritableKeyPath<AO3FilterPopupState, Set<T>>,
-                                     exclude: WritableKeyPath<AO3FilterPopupState, Set<T>>) {
-        var includeSet = self[keyPath: include]
-        var excludeSet = self[keyPath: exclude]
-        if includeSet.contains(value) {
-            includeSet.remove(value)
-        } else {
-            includeSet.insert(value)
-            excludeSet.remove(value)
+    func isExcluded(_ value: String, field: StringTagField) -> Bool {
+        switch field {
+        case .fandom:       return excludedFandoms.contains(value)
+        case .relationship: return excludedRelationships.contains(value)
+        case .character:    return excludedCharacters.contains(value)
+        case .freeform:     return excludedFreeforms.contains(value)
         }
-        self[keyPath: include] = includeSet
-        self[keyPath: exclude] = excludeSet
     }
 
-    func toggleExclude<T: Hashable>(_ value: T,
-                                     include: WritableKeyPath<AO3FilterPopupState, Set<T>>,
-                                     exclude: WritableKeyPath<AO3FilterPopupState, Set<T>>) {
-        var includeSet = self[keyPath: include]
-        var excludeSet = self[keyPath: exclude]
-        if excludeSet.contains(value) {
-            excludeSet.remove(value)
-        } else {
-            excludeSet.insert(value)
-            includeSet.remove(value)
+    func toggleInclude(_ value: String, field: StringTagField) {
+        switch field {
+        case .fandom:
+            if includedFandoms.contains(value) { includedFandoms.remove(value) }
+            else { includedFandoms.insert(value); excludedFandoms.remove(value) }
+        case .relationship:
+            if includedRelationships.contains(value) { includedRelationships.remove(value) }
+            else { includedRelationships.insert(value); excludedRelationships.remove(value) }
+        case .character:
+            if includedCharacters.contains(value) { includedCharacters.remove(value) }
+            else { includedCharacters.insert(value); excludedCharacters.remove(value) }
+        case .freeform:
+            if includedFreeforms.contains(value) { includedFreeforms.remove(value) }
+            else { includedFreeforms.insert(value); excludedFreeforms.remove(value) }
         }
-        self[keyPath: include] = includeSet
-        self[keyPath: exclude] = excludeSet
+    }
+
+    func toggleExclude(_ value: String, field: StringTagField) {
+        switch field {
+        case .fandom:
+            if excludedFandoms.contains(value) { excludedFandoms.remove(value) }
+            else { excludedFandoms.insert(value); includedFandoms.remove(value) }
+        case .relationship:
+            if excludedRelationships.contains(value) { excludedRelationships.remove(value) }
+            else { excludedRelationships.insert(value); includedRelationships.remove(value) }
+        case .character:
+            if excludedCharacters.contains(value) { excludedCharacters.remove(value) }
+            else { excludedCharacters.insert(value); includedCharacters.remove(value) }
+        case .freeform:
+            if excludedFreeforms.contains(value) { excludedFreeforms.remove(value) }
+            else { excludedFreeforms.insert(value); includedFreeforms.remove(value) }
+        }
     }
 }
 
