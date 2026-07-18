@@ -74,16 +74,29 @@ final class AO3FilterFacetController {
             likedIDs = (try? await collectionStore?.likedIDs()) ?? []
         }
 
-        let baseResult = await filterBuilder.matchingIDs(
-            expression: expression,
-            likedIDs: likedIDs,
-            statusMap: statusMap,
-            crossoverMap: crossoverMap
-        )
+        // `FilterBuilder.matchingIDs` treats an expression with no complete
+        // rules as "match nothing" (see matchingIDsSync's early-return
+        // branch), not "match everything" — it's designed to be called only
+        // when `expression.hasCompleteRules` is true, exactly like
+        // `LibraryRootView.applyFilterRules` guards before ever calling it.
+        // With no active drawer/search filter, the popup's base scope is the
+        // whole library, so that path is skipped here too.
+        let baseIDs: Set<Int>
+        if expression.hasCompleteRules {
+            let baseResult = await filterBuilder.matchingIDs(
+                expression: expression,
+                likedIDs: likedIDs,
+                statusMap: statusMap,
+                crossoverMap: crossoverMap
+            )
+            baseIDs = Set(baseResult.calibreIDs)
+        } else {
+            baseIDs = Set(await library.allCalibreIDs())
+        }
 
         return AO3FilterFacetController(
             metaDB: metaDB, library: library, filterBuilder: filterBuilder,
-            baseIDs: Set(baseResult.calibreIDs), crossoverMap: crossoverMap, statusMap: statusMap
+            baseIDs: baseIDs, crossoverMap: crossoverMap, statusMap: statusMap
         )
     }
 
