@@ -26,15 +26,34 @@ final class AO3FilterFacetController {
     /// while the popup is open.
     let baseIDs: Set<Int>
 
+    /// True when `toolbarState.filterExpression` (the base drawer/search
+    /// filter, as it stood when this controller was built) had no complete
+    /// rules at all -- i.e. `baseIDs` is the whole library structurally, not
+    /// just coincidentally. Used by `isWhollyUnconstrained` to decide whether
+    /// a facet query can skip ID-list scoping entirely.
+    private let baseExpressionIsEmpty: Bool
+
     private let crossoverMap: Set<Int>
     private let statusMap: [AO3CompletionStatus: Set<Int>]
 
+    /// Process-lifetime cache of the "nothing active at all" facet baseline,
+    /// keyed on `LibrarySession.membershipVersion`. Only ever populated/read
+    /// when `isWhollyUnconstrained` is true, i.e. when it's actually safe to
+    /// treat one session's whole-library counts as reusable across popup
+    /// opens -- `membershipVersion` is bumped whenever anything that could
+    /// change these counts changes (import, liked/skipped/status edits), so
+    /// this doesn't go stale mid-session the way a launch-only cache would.
+    private static var wholeLibraryFacetCache: [AO3FacetField: (version: Int, entries: [(name: String, count: Int)])] = [:]
+    private static var wholeLibraryRatingCache: (version: Int, entries: [(name: String, count: Int)])?
+
     private init(metaDB: AmbrosiaMetaDB, library: CalibreLibrary, filterBuilder: FilterBuilder,
-                 baseIDs: Set<Int>, crossoverMap: Set<Int>, statusMap: [AO3CompletionStatus: Set<Int>]) {
+                 baseIDs: Set<Int>, baseExpressionIsEmpty: Bool,
+                 crossoverMap: Set<Int>, statusMap: [AO3CompletionStatus: Set<Int>]) {
         self.metaDB = metaDB
         self.library = library
         self.filterBuilder = filterBuilder
         self.baseIDs = baseIDs
+        self.baseExpressionIsEmpty = baseExpressionIsEmpty
         self.crossoverMap = crossoverMap
         self.statusMap = statusMap
     }
@@ -100,7 +119,8 @@ final class AO3FilterFacetController {
 
         return AO3FilterFacetController(
             metaDB: metaDB, library: library, filterBuilder: filterBuilder,
-            baseIDs: baseIDs, crossoverMap: crossoverMap, statusMap: statusMap
+            baseIDs: baseIDs, baseExpressionIsEmpty: !expression.hasCompleteRules,
+            crossoverMap: crossoverMap, statusMap: statusMap
         )
     }
 
@@ -120,6 +140,53 @@ final class AO3FilterFacetController {
             crossoverMap: crossoverMap
         )
         return Array(baseIDs.intersection(result.calibreIDs))
+    }
+
+    /// True only when there is no base toolbar filter AND no popup selection
+    /// (for any field but `field` itself) that could narrow this facet —
+    /// i.e. the query is structurally "everything," not just coincidentally
+    /// equal to it right now. Checked against expression completeness rather
+    /// than `baseIDs.count`, since counting `baseIDs` against the full
+    /// library ID list would itself require the expensive path this exists
+    /// to avoid.
+    func isWhollyUnconstrained(ignoring field: AO3FacetField?, state: AO3FilterPopupState) -> Bool {
+        baseExpressionIsEmpty && otherFieldsExpression(ignoring: field, state: state).isEmpty
+    }
+
+    /// Entry point for `AO3FilterPopupView`'s tag-facet queries. Routes to
+    /// the cheap unconstrained + membershipVersion-cached path when nothing
+    /// is narrowing this facet at all, and falls back to the existing
+    /// scoped-and-uncached path as soon as any filter/selection applies.
+    func topFacets(for field: AO3FacetField, state: AO3FilterPopupState,
+                    limit: Int, membershipVersion: Int) async -> [(name: String, count: Int)] {
+        if isWhollyUnconstrained(ignoring: field, state: state) {
+            if let cached = Self.wholeLibraryFacetCache[field],
+               cached.version == membershipVersion, cached.entries.count >= limit {
+                return Array(cached.entries.prefix(limit))
+            }
+            let raw = await metaDB.topFacetsUnconstrained(for: field, limit: limit)
+            let canonicalized = await metaDB.canonicalize(raw)
+            Self.wholeLibraryFacetCache[field] = (membershipVersion, canonicalized)
+            return canonicalized
+        }
+        let ids = await scopedIDs(ignoring: field, state: state)
+        let raw = await metaDB.topFacets(for: field, scopedTo: ids, limit: limit)
+        return await metaDB.canonicalize(raw)
+    }
+
+    /// Rating counterpart to `topFacets(for:state:limit:membershipVersion:)`.
+    func topRatingFacets(state: AO3FilterPopupState, membershipVersion: Int) async -> [(name: String, count: Int)] {
+        let ratingScopedState = ratingExcludedState(state)
+        if isWhollyUnconstrained(ignoring: nil, state: ratingScopedState) {
+            if let cached = Self.wholeLibraryRatingCache, cached.version == membershipVersion {
+                return cached.entries
+            }
+            let entries = await metaDB.topRatingFacetsUnconstrained()
+            Self.wholeLibraryRatingCache = (membershipVersion, entries)
+            return entries
+        }
+        let ids = await scopedIDs(ignoring: nil, state: ratingScopedState)
+        return await metaDB.topRatingFacets(scopedTo: ids)
     }
 
     /// Builds a throwaway `FilterExpression` representing every popup field's

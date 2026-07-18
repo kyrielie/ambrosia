@@ -94,7 +94,8 @@ struct AmbrosiaApp: App {
                     else { return }
                     AO3FilterPopupWindowController.open(
                         toolbarState: toolbarState, metaDB: metaDB, library: library,
-                        ftsLibrary: session.ftsLibrary, collectionStore: session.collectionStore
+                        ftsLibrary: session.ftsLibrary, collectionStore: session.collectionStore,
+                        membershipVersion: session.membershipVersion
                     )
                 }
             }

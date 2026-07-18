@@ -20,6 +20,15 @@ struct AO3FilterPopupView: View {
     @Bindable var state: AO3FilterPopupState
     let toolbarState: LibraryToolbarState
     let facetController: AO3FilterFacetController
+    /// Snapshot of `LibrarySession.membershipVersion` at the time this view
+    /// was installed. Passed straight through to
+    /// `AO3FilterFacetController.topFacets`/`topRatingFacets` as the cache
+    /// key for the whole-library facet baseline -- a plain value, not
+    /// something this view needs to observe for live updates, since a
+    /// mid-session membership change is meant to invalidate the *next*
+    /// popup open/reopen (a fresh `AO3FilterPopupWindowController` rebuild),
+    /// not repaint the popup that's already on screen.
+    let membershipVersion: Int
     // §9: Invoked after apply() writes to toolbarState, so the owning
     // AO3FilterPopupWindowController can resync state.capturedDigest and
     // rebuild facetController.baseIDs against the newly-applied expression.
@@ -121,19 +130,29 @@ struct AO3FilterPopupView: View {
     // both actors, so this overlaps wait time across fields rather than
     // truly parallelizing SQLite execution — still a real win over the fully
     // serial await chain. See fix plan §2.
+    //
+    // §10: Also routes through AO3FilterFacetController.topFacets/
+    // topRatingFacets rather than calling AmbrosiaMetaDB.topFacets(scopedTo:)
+    // directly. With no active drawer/search filter and no popup selections
+    // -- the single most common way this popup gets opened -- the old direct
+    // call passed the ENTIRE library's ID list as one bound parameter per ID,
+    // silently failing past SQLite's default 999-parameter limit (the
+    // `try?` in AmbrosiaMetaDB.topFacets swallowed the error and returned
+    // `[]`). The controller now detects that "wholly unconstrained" case and
+    // uses an ID-list-free query instead, cached per membershipVersion.
     private func refreshFacets() {
         facetRefreshTask?.cancel()
         facetRefreshTask = Task {
-            async let ratingIDsTask = facetController.scopedIDsForRating(state: state)
+            async let ratingFacetsTask = facetController.topRatingFacets(state: state, membershipVersion: membershipVersion)
 
             let newFacets: [AO3FacetField: [(name: String, count: Int)]] =
                 await withTaskGroup(of: (AO3FacetField, [(name: String, count: Int)]).self) { group in
                     for field in AO3FacetField.allCases {
                         group.addTask {
-                            let ids = await facetController.scopedIDs(ignoring: field, state: state)
-                            let raw = await facetController.metaDB.topFacets(for: field, scopedTo: ids, limit: limit(for: field))
-                            let canonicalized = await facetController.metaDB.canonicalize(raw)
-                            return (field, canonicalized)
+                            let entries = await facetController.topFacets(
+                                for: field, state: state, limit: limit(for: field), membershipVersion: membershipVersion
+                            )
+                            return (field, entries)
                         }
                     }
                     var result: [AO3FacetField: [(name: String, count: Int)]] = [:]
@@ -146,9 +165,9 @@ struct AO3FilterPopupView: View {
             guard !Task.isCancelled else { return }
             facets = newFacets
 
-            let ratingIDs = await ratingIDsTask
+            let ratingFacetsResult = await ratingFacetsTask
             guard !Task.isCancelled else { return }
-            ratingFacets = await facetController.metaDB.topRatingFacets(scopedTo: ratingIDs)
+            ratingFacets = ratingFacetsResult
         }
     }
 
@@ -158,11 +177,11 @@ struct AO3FilterPopupView: View {
     private func loadMoreFacets(_ field: AO3FacetField) {
         facetLimits[field] = limit(for: field) + Self.facetPageSize
         Task {
-            let ids = await facetController.scopedIDs(ignoring: field, state: state)
+            let entries = await facetController.topFacets(
+                for: field, state: state, limit: limit(for: field), membershipVersion: membershipVersion
+            )
             guard !Task.isCancelled else { return }
-            let raw = await facetController.metaDB.topFacets(for: field, scopedTo: ids, limit: limit(for: field))
-            guard !Task.isCancelled else { return }
-            facets[field] = await facetController.metaDB.canonicalize(raw)
+            facets[field] = entries
         }
     }
 
