@@ -107,27 +107,18 @@ struct TagFacetSection: View {
     let onToggle: () -> Void
     @State private var isExpanded = false
 
-    private var includeKeyPath: WritableKeyPath<AO3FilterPopupState, Set<String>> {
+    private var stringField: AO3FilterPopupState.StringTagField {
         switch field {
-        case .fandom: return \.includedFandoms
-        case .relationship: return \.includedRelationships
-        case .character: return \.includedCharacters
-        case .freeform: return \.includedFreeforms
-        case .warning, .category: return \.includedFreeforms // unused: warning/category use EnumFacetSection instead
-        }
-    }
-    private var excludeKeyPath: WritableKeyPath<AO3FilterPopupState, Set<String>> {
-        switch field {
-        case .fandom: return \.excludedFandoms
-        case .relationship: return \.excludedRelationships
-        case .character: return \.excludedCharacters
-        case .freeform: return \.excludedFreeforms
-        case .warning, .category: return \.excludedFreeforms // unused
+        case .fandom: return .fandom
+        case .relationship: return .relationship
+        case .character: return .character
+        case .freeform: return .freeform
+        case .warning, .category: return .freeform // unused: warning/category use EnumFacetSection instead
         }
     }
 
     private var hasActiveSelection: Bool {
-        !state[keyPath: includeKeyPath].isEmpty || !state[keyPath: excludeKeyPath].isEmpty
+        entries.contains { state.isIncluded($0.name, field: stringField) || state.isExcluded($0.name, field: stringField) }
     }
 
     var body: some View {
@@ -151,9 +142,9 @@ struct TagFacetSection: View {
 
     private func includeBinding(_ value: String) -> Binding<Bool> {
         Binding(
-            get: { state[keyPath: includeKeyPath].contains(value) },
+            get: { state.isIncluded(value, field: stringField) },
             set: { _ in
-                state.toggleInclude(value, include: includeKeyPath, exclude: excludeKeyPath)
+                state.toggleInclude(value, field: stringField)
                 onToggle()
             }
         )
@@ -161,9 +152,9 @@ struct TagFacetSection: View {
 
     private func excludeBinding(_ value: String) -> Binding<Bool> {
         Binding(
-            get: { state[keyPath: excludeKeyPath].contains(value) },
+            get: { state.isExcluded(value, field: stringField) },
             set: { _ in
-                state.toggleExclude(value, include: includeKeyPath, exclude: excludeKeyPath)
+                state.toggleExclude(value, field: stringField)
                 onToggle()
             }
         )
