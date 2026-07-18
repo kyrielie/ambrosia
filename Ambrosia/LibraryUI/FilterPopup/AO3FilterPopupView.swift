@@ -24,6 +24,13 @@ struct AO3FilterPopupView: View {
     @State private var facets: [AO3FacetField: [(name: String, count: Int)]] = [:]
     @State private var ratingFacets: [(name: String, count: Int)] = []
     @State private var facetRefreshTask: Task<Void, Never>?
+    @State private var facetLimits: [AO3FacetField: Int] = [:]
+
+    private static let facetPageSize = 10
+
+    private func limit(for field: AO3FacetField) -> Int {
+        facetLimits[field] ?? Self.facetPageSize
+    }
 
     var body: some View {
         ScrollView {
@@ -41,14 +48,16 @@ struct AO3FilterPopupView: View {
 
                 FilterDirectionSection(
                     title: "Include", direction: .include, state: state,
-                    facets: facets, ratingFacets: ratingFacets, onToggle: refreshFacets
+                    facets: facets, ratingFacets: ratingFacets, facetLimits: facetLimits,
+                    onToggle: refreshFacets, onLoadMore: loadMoreFacets
                 )
 
                 Divider()
 
                 FilterDirectionSection(
                     title: "Exclude", direction: .exclude, state: state,
-                    facets: facets, ratingFacets: ratingFacets, onToggle: refreshFacets
+                    facets: facets, ratingFacets: ratingFacets, facetLimits: facetLimits,
+                    onToggle: refreshFacets, onLoadMore: loadMoreFacets
                 )
 
                 Divider()
@@ -82,6 +91,7 @@ struct AO3FilterPopupView: View {
         state.excludedRatings = []
         state.crossoverState = .any
         state.completionState = .any
+        facetLimits = [:]
         refreshFacets()
     }
 
@@ -92,7 +102,7 @@ struct AO3FilterPopupView: View {
             for field in AO3FacetField.allCases {
                 let ids = await facetController.scopedIDs(ignoring: field, state: state)
                 guard !Task.isCancelled else { return }
-                let raw = await facetController.metaDB.topFacets(for: field, scopedTo: ids)
+                let raw = await facetController.metaDB.topFacets(for: field, scopedTo: ids, limit: limit(for: field))
                 guard !Task.isCancelled else { return }
                 newFacets[field] = await facetController.metaDB.canonicalize(raw)
             }
@@ -102,6 +112,20 @@ struct AO3FilterPopupView: View {
             let ratingIDs = await facetController.scopedIDsForRating(state: state)
             guard !Task.isCancelled else { return }
             ratingFacets = await facetController.metaDB.topRatingFacets(scopedTo: ratingIDs)
+        }
+    }
+
+    /// "Load more" for a single tag facet type: bumps that field's own limit
+    /// and refetches just that field, rather than re-running every field's
+    /// `matchingIDs`/`topFacets` query like a full `refreshFacets()` would.
+    private func loadMoreFacets(_ field: AO3FacetField) {
+        facetLimits[field] = limit(for: field) + Self.facetPageSize
+        Task {
+            let ids = await facetController.scopedIDs(ignoring: field, state: state)
+            guard !Task.isCancelled else { return }
+            let raw = await facetController.metaDB.topFacets(for: field, scopedTo: ids, limit: limit(for: field))
+            guard !Task.isCancelled else { return }
+            facets[field] = await facetController.metaDB.canonicalize(raw)
         }
     }
 
@@ -189,7 +213,9 @@ struct FilterDirectionSection: View {
     @Bindable var state: AO3FilterPopupState
     let facets: [AO3FacetField: [(name: String, count: Int)]]
     let ratingFacets: [(name: String, count: Int)]
+    let facetLimits: [AO3FacetField: Int]
     let onToggle: () -> Void
+    let onLoadMore: (AO3FacetField) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -204,10 +230,26 @@ struct FilterDirectionSection: View {
                 title: AO3FacetField.category.sectionLabel, direction: direction, allCases: AO3Category.allCases,
                 selected: categoryBinding, counts: categoryCount, onSelect: categorySelect
             )
-            DirectionalTagFacetSection(field: .fandom, direction: direction, entries: facets[.fandom] ?? [], state: state, onToggle: onToggle)
-            DirectionalTagFacetSection(field: .character, direction: direction, entries: facets[.character] ?? [], state: state, onToggle: onToggle)
-            DirectionalTagFacetSection(field: .relationship, direction: direction, entries: facets[.relationship] ?? [], state: state, onToggle: onToggle)
-            DirectionalTagFacetSection(field: .freeform, direction: direction, entries: facets[.freeform] ?? [], state: state, onToggle: onToggle)
+            DirectionalTagFacetSection(
+                field: .fandom, direction: direction, entries: facets[.fandom] ?? [],
+                limit: facetLimits[.fandom] ?? 10, state: state, onToggle: onToggle,
+                onLoadMore: { onLoadMore(.fandom) }
+            )
+            DirectionalTagFacetSection(
+                field: .character, direction: direction, entries: facets[.character] ?? [],
+                limit: facetLimits[.character] ?? 10, state: state, onToggle: onToggle,
+                onLoadMore: { onLoadMore(.character) }
+            )
+            DirectionalTagFacetSection(
+                field: .relationship, direction: direction, entries: facets[.relationship] ?? [],
+                limit: facetLimits[.relationship] ?? 10, state: state, onToggle: onToggle,
+                onLoadMore: { onLoadMore(.relationship) }
+            )
+            DirectionalTagFacetSection(
+                field: .freeform, direction: direction, entries: facets[.freeform] ?? [],
+                limit: facetLimits[.freeform] ?? 10, state: state, onToggle: onToggle,
+                onLoadMore: { onLoadMore(.freeform) }
+            )
         }
     }
 
@@ -260,8 +302,10 @@ struct DirectionalTagFacetSection: View {
     let field: AO3FacetField
     let direction: FilterDirection
     let entries: [(name: String, count: Int)]
+    let limit: Int
     @Bindable var state: AO3FilterPopupState
     let onToggle: () -> Void
+    let onLoadMore: () -> Void
     @State private var isExpanded = false
 
     private var stringField: AO3FilterPopupState.StringTagField {
@@ -286,6 +330,11 @@ struct DirectionalTagFacetSection: View {
 
     private var hasActiveSelection: Bool { entries.contains { isOn($0.name) } }
 
+    // `entries.count` hit the requested `limit` exactly -- there may be more
+    // tags in this scope than we've fetched, so offer another page. If the
+    // DB returned fewer rows than asked for, we've already seen every tag.
+    private var hasMore: Bool { entries.count >= limit }
+
     var body: some View {
         AccordionSection(title: field.sectionLabel, isExpanded: $isExpanded) {
             VStack(alignment: .leading, spacing: 2) {
@@ -294,6 +343,11 @@ struct DirectionalTagFacetSection: View {
                         Text("\(entry.name) (\(entry.count))")
                     }
                     .toggleStyle(.checkbox)
+                }
+                if hasMore {
+                    Button("Load more", action: onLoadMore)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
