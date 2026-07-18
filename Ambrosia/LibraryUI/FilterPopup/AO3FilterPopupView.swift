@@ -23,6 +23,7 @@ struct AO3FilterPopupView: View {
 
     @State private var facets: [AO3FacetField: [(name: String, count: Int)]] = [:]
     @State private var ratingFacets: [(name: String, count: Int)] = []
+    @State private var facetRefreshTask: Task<Void, Never>?
 
     var body: some View {
         ScrollView {
@@ -85,16 +86,21 @@ struct AO3FilterPopupView: View {
     }
 
     private func refreshFacets() {
-        Task {
+        facetRefreshTask?.cancel()
+        facetRefreshTask = Task {
             var newFacets: [AO3FacetField: [(name: String, count: Int)]] = [:]
             for field in AO3FacetField.allCases {
                 let ids = await facetController.scopedIDs(ignoring: field, state: state)
+                guard !Task.isCancelled else { return }
                 let raw = await facetController.metaDB.topFacets(for: field, scopedTo: ids)
+                guard !Task.isCancelled else { return }
                 newFacets[field] = await facetController.metaDB.canonicalize(raw)
             }
+            guard !Task.isCancelled else { return }
             facets = newFacets
 
             let ratingIDs = await facetController.scopedIDsForRating(state: state)
+            guard !Task.isCancelled else { return }
             ratingFacets = await facetController.metaDB.topRatingFacets(scopedTo: ratingIDs)
         }
     }
