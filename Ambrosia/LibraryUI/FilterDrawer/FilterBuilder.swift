@@ -505,14 +505,20 @@ extension CalibreLibrary {
             }
         }
 
-        let needsTagJoin     = rules.contains { [.tag, .rating, .warning, .category].contains($0.field) }
+        // §9: Previously also added a `LEFT JOIN books_tags_link btl / tags t`
+        // whenever any rule touched .tag/.rating/.warning/.category. That join
+        // is dead weight: every clause for those fields is built by
+        // tagMembershipFragment/ao3TagFragment as a self-contained correlated
+        // EXISTS/NOT EXISTS subquery aliased btl2/t2 — nothing in this file
+        // references the outer t/btl aliases. The outer join fanned every book
+        // out to one row per tag (10-20x row multiplication on a 74k-book
+        // library) and forced NOT EXISTS to be re-evaluated once per fanned-out
+        // row instead of once per book, before SELECT DISTINCT collapsed it
+        // back down — this was the dominant cost of exclude/NOT queries, not
+        // the correlated-subquery mechanism itself. Removed; see fix plan §1.
         let needsCommentJoin = rules.contains { $0.field == .comment }
 
         var joins: [String] = []
-        if needsTagJoin {
-            joins.append("LEFT JOIN books_tags_link btl ON btl.book = b.id")
-            joins.append("LEFT JOIN tags t ON t.id = btl.tag")
-        }
         if needsCommentJoin {
             joins.append("LEFT JOIN comments c ON c.book = b.id")
         }
