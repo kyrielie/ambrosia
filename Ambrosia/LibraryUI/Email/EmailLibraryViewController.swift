@@ -116,6 +116,17 @@ final class EmailLibraryViewController: NSViewController {
     private var fullTextTask: Task<Void, Never>?
     private var filterCountTask: Task<Void, Never>?
     private var rebuildSidebarTask: Task<Void, Never>?
+    /// Cancel-and-replace handle for `loadPage(reset:)`. Several independent
+    /// triggers (applyFilterRules' own completion, the withObservationTracking
+    /// sink reacting to that same activeFilterResult change, sort/search/group
+    /// toggles, pagination scroll, tag-expansion resolution, ...) can each want
+    /// to reload the current page at nearly the same moment. Without this,
+    /// two `loadPage` calls run concurrently against the same mutable state
+    /// (books, items, offsetState, hasNextPage) and whichever finishes last
+    /// wins — producing stale/partial results until a later reload happens to
+    /// land cleanly. All `loadPage` calls should go through
+    /// `scheduleLoadPage(reset:)` instead of constructing their own `Task`.
+    private var loadPageTask: Task<Void, Never>?
 
     private var selectedBook: CalibreBook?
     private weak var currentReaderVC: ReaderViewController?
@@ -167,7 +178,7 @@ final class EmailLibraryViewController: NSViewController {
         if toolbarState.filterExpression.hasCompleteRules {
             applyFilterRules()
         } else {
-            Task { [weak self] in guard let self else { return }; await self.loadPage(reset: true) }
+            scheduleLoadPage(reset: true)
         }
         startObservingToolbarState()
         startObservingPreferences()
@@ -190,7 +201,7 @@ final class EmailLibraryViewController: NSViewController {
                 if toolbarState.filterExpression.hasCompleteRules {
                     applyFilterRules()
                 } else {
-                    Task { await self.loadPage(reset: true) }
+                    scheduleLoadPage(reset: true)
                 }
             }
 
@@ -264,7 +275,7 @@ final class EmailLibraryViewController: NSViewController {
             toolbarState.filterExpression   = FilterExpression()
             toolbarState.activeFilterResult = nil
             toolbarState.cancelLibraryFilterApplication()
-            Task { await self.loadPage(reset: true) }
+            scheduleLoadPage(reset: true)
         }
         sidebarVC.onContextMenuOpen = { [weak self] books in
             guard let self else { return }
@@ -429,7 +440,7 @@ final class EmailLibraryViewController: NSViewController {
                 if toolbarState.filterExpression.hasCompleteRules {
                     applyFilterRules()
                 } else {
-                    Task { await self.loadPage(reset: true) }
+                    scheduleLoadPage(reset: true)
                 }
             }
         }
@@ -550,12 +561,12 @@ final class EmailLibraryViewController: NSViewController {
         if toolbarState.reshuffleToken != lastReshuffleToken {
             lastReshuffleToken = toolbarState.reshuffleToken
             if toolbarState.sortField == .random {
-                Task { [weak self] in guard let self else { return }; await self.loadPage(reset: true) }
+                scheduleLoadPage(reset: true)
             }
         }
         if toolbarState.groupBySeries != lastGroupBySeries {
             lastGroupBySeries = toolbarState.groupBySeries
-            Task { [weak self] in guard let self else { return }; await self.loadPage(reset: true) }
+            scheduleLoadPage(reset: true)
         }
         let newSearch    = toolbarState.searchText
         let newSort      = toolbarState.sortField
@@ -613,14 +624,14 @@ final class EmailLibraryViewController: NSViewController {
                     }
                     let token = self.toolbarState.beginLibraryFilterApplication()
                     Task {
-                        await self.loadPage(reset: true)
+                        await self.scheduleLoadPage(reset: true).value
                         self.toolbarState.finishLibraryFilterApplication(token: token)
                     }
                 }
             }
         } else {
             applyFullTextPhraseToLocalFind()
-            Task { [weak self] in guard let self else { return }; await self.loadPage(reset: true) }
+            scheduleLoadPage(reset: true)
         }
     }
 
@@ -645,7 +656,7 @@ final class EmailLibraryViewController: NSViewController {
         guard toolbarState.filterExpression.hasCompleteRules else {
             toolbarState.activeFilterResult = nil
             toolbarState.cancelLibraryFilterApplication()
-            Task { [weak self] in guard let self else { return }; await self.loadPage(reset: true) }
+            scheduleLoadPage(reset: true)
             return
         }
         let expression = toolbarState.filterExpression
@@ -658,7 +669,7 @@ final class EmailLibraryViewController: NSViewController {
             toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
-            Task { [weak self] in guard let self else { return }; await self.loadPage(reset: true) }
+            scheduleLoadPage(reset: true)
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "email",
                 "mode": "sqlPagedDeferredCount",
@@ -671,7 +682,7 @@ final class EmailLibraryViewController: NSViewController {
             toolbarState.activeFilterResult = cached
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
-            Task { [weak self] in guard let self else { return }; await self.loadPage(reset: true) }
+            scheduleLoadPage(reset: true)
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "email",
                 "mode": "cached",
@@ -817,7 +828,7 @@ final class EmailLibraryViewController: NSViewController {
             session.cachedAnthologyIDs = currentAnthologyIDs
             duplicateLoserIDs = currentDuplicateLoserIDs
             session.cachedDuplicateLoserIDs = currentDuplicateLoserIDs
-            await loadPage(reset: true)
+            await scheduleLoadPage(reset: true).value
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "email",
                 "mode": "explicitIDs",
@@ -882,7 +893,7 @@ final class EmailLibraryViewController: NSViewController {
         guard activeFullTextPhrase()?.trimmingCharacters(in: .whitespacesAndNewlines) == phrase else { return }
         toolbarState.activeFilterResult = FilterResult(calibreIDs: ids, totalCount: ids.count)
         toolbarState.clearPendingFullTextSearch()
-        Task { [weak self] in guard let self else { return }; await self.loadPage(reset: true) }
+        scheduleLoadPage(reset: true)
     }
 
     private func scheduleDeferredSQLFilterCount(query: SearchQuery) {
@@ -936,6 +947,23 @@ final class EmailLibraryViewController: NSViewController {
 
     // MARK: - Data loading (uses SearchQuery path — mirrors BookGridItem exactly)
 
+    /// Single entry point for reloading the current page. Cancels any
+    /// in-flight `loadPage` before starting a new one, so overlapping
+    /// triggers (see `loadPageTask`'s doc comment) resolve to exactly one
+    /// winning run instead of racing. Not `private` — `FilterSheetCarrier`
+    /// (a sibling SwiftUI type holding a weak `emailVC` reference) calls
+    /// this too, and needs the same guard, not a bare `Task { loadPage(...) }`.
+    @discardableResult
+    func scheduleLoadPage(reset: Bool) -> Task<Void, Never> {
+        loadPageTask?.cancel()
+        let task = Task { [weak self] in
+            guard let self, !self.isTornDown else { return }
+            await self.loadPage(reset: reset)
+        }
+        loadPageTask = task
+        return task
+    }
+
     @MainActor
     func loadPage(reset: Bool) async {
         let loadStart = LibraryFilterDebug.now()
@@ -949,6 +977,7 @@ final class EmailLibraryViewController: NSViewController {
             sidebarVC?.ao3Metadata = [:]
             return
         }
+        guard !isTornDown, !Task.isCancelled else { return }
         // Parse search text into a structured query — same path as list view
         let rawQuery = toolbarState.searchText.isEmpty
             ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
@@ -1336,7 +1365,7 @@ final class EmailLibraryViewController: NSViewController {
             guard let self, !self.isTornDown else { return }
             let resolved = await TagExpansionResolver.resolvedTagExpansions(for: terms, metaDB: metaDB)
             self.resolvedTagExpansions = resolved
-            await self.loadPage(reset: false)
+            await self.scheduleLoadPage(reset: false).value
         }
     }
 
@@ -1567,7 +1596,7 @@ final class EmailLibraryViewController: NSViewController {
     private func loadNextPageIfAvailable() {
         guard hasNextPage else { return }
         offsetState.currentPage += 1
-        Task { [weak self] in guard let self else { return }; await self.loadPage(reset: false) }
+        scheduleLoadPage(reset: false)
     }
 
     func refreshBookStates() {
@@ -1629,7 +1658,7 @@ final class EmailLibraryViewController: NSViewController {
             }
             session.bumpMembershipVersion()  // §7
             refreshBookStates()
-            await loadPage(reset: true)
+            await scheduleLoadPage(reset: true).value
         }
     }
 
@@ -1656,7 +1685,7 @@ final class EmailLibraryViewController: NSViewController {
             }
             session.bumpMembershipVersion()  // §7
             refreshBookStates()
-            await loadPage(reset: true)
+            await scheduleLoadPage(reset: true).value
         }
     }
 
@@ -1693,7 +1722,7 @@ final class EmailLibraryViewController: NSViewController {
             || anthologyIDs != previousAnthologyIDs
             || duplicateLoserIDs != previousDuplicateLoserIDs
         if shouldReloadPage {
-            await loadPage(reset: true)
+            await scheduleLoadPage(reset: true).value
         }
     }
 
@@ -1979,7 +2008,7 @@ struct FilterSheetCarrier: View {
                         toolbarState.filterExpression   = FilterExpression()
                         toolbarState.activeFilterResult = nil
                         toolbarState.cancelLibraryFilterApplication()
-                        Task { await emailVC?.loadPage(reset: true) }
+                        emailVC?.scheduleLoadPage(reset: true)
                     }
                 )
                 .environment(toolbarState)
