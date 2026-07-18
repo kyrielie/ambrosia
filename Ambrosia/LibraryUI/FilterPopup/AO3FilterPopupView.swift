@@ -113,6 +113,64 @@ enum FilterDirection {
     case exclude
 }
 
+// MARK: - AccordionSection
+//
+// A DisclosureGroup replacement whose ENTIRE header row is the tap target
+// (AO3's own JS toggles the drawer on a click anywhere in the `<h5>` row,
+// not just its text) and whose content sits flush against the leading edge
+// -- no indentation, matching AO3's own unindented `<ul>` list.
+
+struct AccordionSection<Content: View>: View {
+    let title: String
+    @Binding var isExpanded: Bool
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                isExpanded.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption)
+                        .frame(width: 10)
+                    Text(title)
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                content()
+            }
+        }
+    }
+}
+
+// MARK: - RadioRow
+//
+// A radio-button row whose entire horizontal area is clickable and which
+// sits flush left, unlike `Picker(.radioGroup)`, which indents each option.
+
+struct RadioRow: View {
+    let label: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                Text(label)
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // MARK: - FilterDirectionSection
 //
 // One whole top-level "Include" or "Exclude" block: every tag type's
@@ -223,7 +281,7 @@ struct DirectionalTagFacetSection: View {
     private var hasActiveSelection: Bool { entries.contains { isOn($0.name) } }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
+        AccordionSection(title: field.sectionLabel, isExpanded: $isExpanded) {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(entries, id: \.name) { entry in
                     Toggle(isOn: Binding(get: { isOn(entry.name) }, set: { _ in toggle(entry.name) })) {
@@ -232,9 +290,6 @@ struct DirectionalTagFacetSection: View {
                     .toggleStyle(.checkbox)
                 }
             }
-            .padding(.leading, 4)
-        } label: {
-            Text(field.sectionLabel)
         }
         .onAppear { isExpanded = hasActiveSelection }
     }
@@ -256,7 +311,7 @@ struct DirectionalEnumFacetSection<T: RawRepresentable & CaseIterable & Hashable
     @State private var isExpanded = false
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
+        AccordionSection(title: title, isExpanded: $isExpanded) {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(allCases), id: \.self) { value in
                     Toggle(isOn: Binding(
@@ -268,9 +323,6 @@ struct DirectionalEnumFacetSection<T: RawRepresentable & CaseIterable & Hashable
                     .toggleStyle(.checkbox)
                 }
             }
-            .padding(.leading, 4)
-        } label: {
-            Text(title)
         }
         .onAppear { isExpanded = !selected.isEmpty }
     }
@@ -295,17 +347,19 @@ struct RatingDirectionalSection: View {
     }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
+        AccordionSection(title: "Rating", isExpanded: $isExpanded) {
             switch direction {
             case .include:
-                Picker("Rating", selection: includeSelection) {
-                    Text("Any").tag(AO3Rating?.none)
+                VStack(alignment: .leading, spacing: 2) {
+                    RadioRow(label: "Any", isSelected: state.includedRating == nil) {
+                        selectIncluded(nil)
+                    }
                     ForEach(AO3Rating.allCases, id: \.self) { rating in
-                        Text("\(rating.rawValue) (\(count(for: rating)))").tag(AO3Rating?.some(rating))
+                        RadioRow(label: "\(rating.rawValue) (\(count(for: rating)))", isSelected: state.includedRating == rating) {
+                            selectIncluded(rating)
+                        }
                     }
                 }
-                .pickerStyle(.radioGroup)
-                .labelsHidden()
             case .exclude:
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(AO3Rating.allCases, id: \.self) { rating in
@@ -315,25 +369,17 @@ struct RatingDirectionalSection: View {
                         .toggleStyle(.checkbox)
                     }
                 }
-                .padding(.leading, 4)
             }
-        } label: {
-            Text("Rating")
         }
         .onAppear {
             isExpanded = direction == .include ? state.includedRating != nil : !state.excludedRatings.isEmpty
         }
     }
 
-    private var includeSelection: Binding<AO3Rating?> {
-        Binding(
-            get: { state.includedRating },
-            set: { newValue in
-                state.includedRating = newValue
-                if let newValue { state.excludedRatings.remove(newValue) }
-                onToggle()
-            }
-        )
+    private func selectIncluded(_ newValue: AO3Rating?) {
+        state.includedRating = newValue
+        if let newValue { state.excludedRatings.remove(newValue) }
+        onToggle()
     }
 
     private func excludeBinding(_ rating: AO3Rating) -> Binding<Bool> {
@@ -365,15 +411,16 @@ struct TriStateSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.subheadline)
-            Picker(title, selection: Binding(get: { selection }, set: { selection = $0; onChange() })) {
-                Text("Include all").tag(AO3FilterPopupState.TriState.any)
-                Text("Exclude").tag(AO3FilterPopupState.TriState.excludeOnly)
-                Text("Only").tag(AO3FilterPopupState.TriState.includeOnly)
-            }
-            .pickerStyle(.radioGroup)
-            .labelsHidden()
+            RadioRow(label: "Include all", isSelected: selection == .any) { select(.any) }
+            RadioRow(label: "Exclude", isSelected: selection == .excludeOnly) { select(.excludeOnly) }
+            RadioRow(label: "Only", isSelected: selection == .includeOnly) { select(.includeOnly) }
         }
         .padding(.vertical, 2)
+    }
+
+    private func select(_ newValue: AO3FilterPopupState.TriState) {
+        selection = newValue
+        onChange()
     }
 }
 
