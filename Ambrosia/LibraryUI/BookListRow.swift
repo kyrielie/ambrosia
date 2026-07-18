@@ -194,7 +194,7 @@ struct BookListRow: View, Equatable {
                     Button {
                         onTagTap(pill.label, pill.field)
                     } label: {
-                        tagPill(pill.label, color: pill.color, isSelected: isSelected)
+                        tagPill(pill.label, color: pill.color, isSelected: false)
                     }
                     .buttonStyle(.plain)
                     .help("Filter by \(pill.label)")
