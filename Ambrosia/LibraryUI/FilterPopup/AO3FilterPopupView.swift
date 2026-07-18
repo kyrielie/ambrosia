@@ -64,8 +64,14 @@ struct AO3FilterPopupView: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("More Options").font(.headline)
-                    TriStateSection(title: "Crossovers", selection: $state.crossoverState, onChange: refreshFacets)
-                    TriStateSection(title: "Completion Status", selection: $state.completionState, onChange: refreshFacets)
+                    TriStateSection(
+                        title: "Crossovers", selection: $state.crossoverState, onChange: refreshFacets,
+                        anyLabel: "Include crossovers", excludeLabel: "Exclude crossovers", includeOnlyLabel: "Show only crossovers"
+                    )
+                    TriStateSection(
+                        title: "Completion Status", selection: $state.completionState, onChange: refreshFacets,
+                        anyLabel: "All works", excludeLabel: "Works in progress only", includeOnlyLabel: "Complete works only"
+                    )
                 }
             }
             .padding()
@@ -467,13 +473,16 @@ struct TriStateSection: View {
     let title: String
     @Binding var selection: AO3FilterPopupState.TriState
     let onChange: () -> Void
+    let anyLabel: String
+    let excludeLabel: String
+    let includeOnlyLabel: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.subheadline)
-            RadioRow(label: "Include all", isSelected: selection == .any) { select(.any) }
-            RadioRow(label: "Exclude", isSelected: selection == .excludeOnly) { select(.excludeOnly) }
-            RadioRow(label: "Only", isSelected: selection == .includeOnly) { select(.includeOnly) }
+            RadioRow(label: anyLabel, isSelected: selection == .any) { select(.any) }
+            RadioRow(label: excludeLabel, isSelected: selection == .excludeOnly) { select(.excludeOnly) }
+            RadioRow(label: includeOnlyLabel, isSelected: selection == .includeOnly) { select(.includeOnly) }
         }
         .padding(.vertical, 2)
     }
