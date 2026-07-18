@@ -64,48 +64,72 @@ final class AO3FilterPopupState {
 
     // MARK: Mutual exclusion helpers (mirrors AO3's toggleInclude/toggleExclude)
 
+    // Note: these read the current Set out of the keyPath, mutate the local
+    // copy, then write it back with a plain `self[keyPath:] = ...`
+    // assignment, rather than mutating in place via
+    // `self[keyPath: kp].remove(...)`. @Observable's macro-synthesized
+    // accessors don't expose a `modify` accessor for keyPath subscripting,
+    // so in-place mutation through a WritableKeyPath fails to typecheck
+    // ("Cannot use mutating member on immutable value") even though this is
+    // a class and plain property assignment works fine.
     func toggleInclude(_ value: String,
                         include: WritableKeyPath<AO3FilterPopupState, Set<String>>,
                         exclude: WritableKeyPath<AO3FilterPopupState, Set<String>>) {
-        if self[keyPath: include].contains(value) {
-            self[keyPath: include].remove(value)
+        var includeSet = self[keyPath: include]
+        var excludeSet = self[keyPath: exclude]
+        if includeSet.contains(value) {
+            includeSet.remove(value)
         } else {
-            self[keyPath: include].insert(value)
-            self[keyPath: exclude].remove(value)
+            includeSet.insert(value)
+            excludeSet.remove(value)
         }
+        self[keyPath: include] = includeSet
+        self[keyPath: exclude] = excludeSet
     }
 
     func toggleExclude(_ value: String,
                         include: WritableKeyPath<AO3FilterPopupState, Set<String>>,
                         exclude: WritableKeyPath<AO3FilterPopupState, Set<String>>) {
-        if self[keyPath: exclude].contains(value) {
-            self[keyPath: exclude].remove(value)
+        var includeSet = self[keyPath: include]
+        var excludeSet = self[keyPath: exclude]
+        if excludeSet.contains(value) {
+            excludeSet.remove(value)
         } else {
-            self[keyPath: exclude].insert(value)
-            self[keyPath: include].remove(value)
+            excludeSet.insert(value)
+            includeSet.remove(value)
         }
+        self[keyPath: include] = includeSet
+        self[keyPath: exclude] = excludeSet
     }
 
     func toggleInclude<T: Hashable>(_ value: T,
                                      include: WritableKeyPath<AO3FilterPopupState, Set<T>>,
                                      exclude: WritableKeyPath<AO3FilterPopupState, Set<T>>) {
-        if self[keyPath: include].contains(value) {
-            self[keyPath: include].remove(value)
+        var includeSet = self[keyPath: include]
+        var excludeSet = self[keyPath: exclude]
+        if includeSet.contains(value) {
+            includeSet.remove(value)
         } else {
-            self[keyPath: include].insert(value)
-            self[keyPath: exclude].remove(value)
+            includeSet.insert(value)
+            excludeSet.remove(value)
         }
+        self[keyPath: include] = includeSet
+        self[keyPath: exclude] = excludeSet
     }
 
     func toggleExclude<T: Hashable>(_ value: T,
                                      include: WritableKeyPath<AO3FilterPopupState, Set<T>>,
                                      exclude: WritableKeyPath<AO3FilterPopupState, Set<T>>) {
-        if self[keyPath: exclude].contains(value) {
-            self[keyPath: exclude].remove(value)
+        var includeSet = self[keyPath: include]
+        var excludeSet = self[keyPath: exclude]
+        if excludeSet.contains(value) {
+            excludeSet.remove(value)
         } else {
-            self[keyPath: exclude].insert(value)
-            self[keyPath: include].remove(value)
+            excludeSet.insert(value)
+            includeSet.remove(value)
         }
+        self[keyPath: include] = includeSet
+        self[keyPath: exclude] = excludeSet
     }
 }
 
