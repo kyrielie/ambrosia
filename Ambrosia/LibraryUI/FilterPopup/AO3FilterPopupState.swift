@@ -56,7 +56,12 @@ final class AO3FilterPopupState {
     // time the popup window is (re)opened; a mismatch means the underlying
     // search/filter changed since, so this state is discarded in favor of a
     // fresh `AO3FilterPopupState()`.
-    let capturedDigest: String
+    //
+    // §9: `var`, not `let` — apply() resynchronizes this after a successful
+    // Apply so a reopen of the same popup doesn't see its own just-applied
+    // expression as an "external" change and wipe the checkboxes that
+    // produced it. See fix plan §3b.
+    var capturedDigest: String
 
     init(capturedDigest: String) {
         self.capturedDigest = capturedDigest

@@ -20,6 +20,16 @@ struct AO3FilterPopupView: View {
     @Bindable var state: AO3FilterPopupState
     let toolbarState: LibraryToolbarState
     let facetController: AO3FilterFacetController
+    // §9: Invoked after apply() writes to toolbarState, so the owning
+    // AO3FilterPopupWindowController can resync state.capturedDigest and
+    // rebuild facetController.baseIDs against the newly-applied expression.
+    // Without this, apply() left both stale: baseIDs kept reflecting the
+    // pre-Apply toolbar filter (so any further toggle's facet counts stopped
+    // matching the filter actually in effect), and capturedDigest kept its
+    // pre-Apply value, so the *next* reopen of this same popup saw its own
+    // just-applied expression as an external change and silently discarded
+    // the checkboxes that produced it. See fix plan §3b.
+    var onApply: () -> Void = {}
 
     @State private var facets: [AO3FacetField: [(name: String, count: Int)]] = [:]
     @State private var ratingFacets: [(name: String, count: Int)] = []
@@ -160,6 +170,7 @@ struct AO3FilterPopupView: View {
         toolbarState.filterExpression = state.buildExpression()
         toolbarState.sortField = state.sortField
         toolbarState.ascending = state.ascending
+        onApply()
     }
 }
 
