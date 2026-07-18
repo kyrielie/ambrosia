@@ -1317,7 +1317,7 @@ final class EmailLibraryViewController: NSViewController {
             SearchActivityLog.shared.append(
                 searchText: toolbarState.searchText,
                 filterExpression: expr,
-                resultCount: books.count
+                resultCount: toolbarState.activeFilterResult?.totalCount ?? books.count
             )
         }
     }
