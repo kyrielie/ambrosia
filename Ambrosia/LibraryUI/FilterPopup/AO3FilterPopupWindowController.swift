@@ -18,12 +18,15 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
                       metaDB: AmbrosiaMetaDB,
                       library: CalibreLibrary,
                       ftsLibrary: CalibreFTSLibrary?,
-                      collectionStore: CollectionStore?) {
+                      collectionStore: CollectionStore?,
+                      membershipVersion: Int) {
         if let existing = shared {
             existing.showWindow(nil)
             existing.window?.makeKeyAndOrderFront(nil)
             existing.loadTask?.cancel()
-            existing.loadTask = Task { await existing.refreshIfDigestChanged(toolbarState: toolbarState) }
+            existing.loadTask = Task {
+                await existing.refreshIfDigestChanged(toolbarState: toolbarState, membershipVersion: membershipVersion)
+            }
             return
         }
         let wc = AO3FilterPopupWindowController(toolbarState: toolbarState)
@@ -35,7 +38,8 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
                 ftsLibrary: ftsLibrary, collectionStore: collectionStore
             )
             guard !Task.isCancelled else { return }
-            wc.installContent(state: wc.state, toolbarState: toolbarState, facetController: facetController)
+            wc.installContent(state: wc.state, toolbarState: toolbarState,
+                               facetController: facetController, membershipVersion: membershipVersion)
         }
     }
 
@@ -76,9 +80,10 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
     required init?(coder: NSCoder) { fatalError() }
 
     private func installContent(state: AO3FilterPopupState, toolbarState: LibraryToolbarState,
-                                 facetController: AO3FilterFacetController) {
+                                 facetController: AO3FilterFacetController, membershipVersion: Int) {
         hostingController.rootView = AnyView(
             AO3FilterPopupView(state: state, toolbarState: toolbarState, facetController: facetController,
+                                membershipVersion: membershipVersion,
                                 onApply: { [weak self] in self?.applyDidCommit(toolbarState: toolbarState) })
         )
     }
@@ -86,7 +91,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
     /// Discards checkbox state if the underlying search/filter changed since
     /// this popup's state was captured, and rebuilds a fresh facet
     /// controller/view against the new base filter.
-    private func refreshIfDigestChanged(toolbarState: LibraryToolbarState) async {
+    private func refreshIfDigestChanged(toolbarState: LibraryToolbarState, membershipVersion: Int) async {
         let liveDigest = AO3FilterPopupDigest.current(toolbarState: toolbarState)
         guard liveDigest != state.capturedDigest else { return }
         guard let session = AppDelegate.shared?.session,
@@ -97,7 +102,8 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
             ftsLibrary: session.ftsLibrary, collectionStore: session.collectionStore
         )
         guard !Task.isCancelled else { return }
-        installContent(state: state, toolbarState: toolbarState, facetController: facetController)
+        installContent(state: state, toolbarState: toolbarState, facetController: facetController,
+                        membershipVersion: membershipVersion)
     }
 
     // §9: Runs after AO3FilterPopupView.apply() writes a fresh expression to
@@ -131,7 +137,8 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
                 ftsLibrary: session.ftsLibrary, collectionStore: session.collectionStore
             )
             guard !Task.isCancelled else { return }
-            installContent(state: state, toolbarState: toolbarState, facetController: facetController)
+            installContent(state: state, toolbarState: toolbarState, facetController: facetController,
+                            membershipVersion: session.membershipVersion)
         }
     }
 

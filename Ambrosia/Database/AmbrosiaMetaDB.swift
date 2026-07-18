@@ -1634,6 +1634,32 @@ actor AmbrosiaMetaDB {
         }
     }
 
+    /// Same as `topFacets(for:scopedTo:limit:)`, but with no `WHERE`/`IN`
+    /// clause at all. Used when the scope is genuinely "the whole library" --
+    /// no active drawer/search filter AND no popup selection for any field.
+    /// The ID-list form can't express that safely once the library exceeds
+    /// SQLite's bound-parameter limit (`SQLITE_MAX_VARIABLE_NUMBER`, 999 by
+    /// default): binding one placeholder per book silently fails past that
+    /// many books (the `try?` above swallows the error and returns `[]`),
+    /// so "no filter active" -- the single most common way to open the
+    /// AO3-style filter popup -- was the exact case most likely to render
+    /// every facet section empty on any real-sized library.
+    func topFacetsUnconstrained(for field: AO3FacetField, limit: Int = 10) -> [(name: String, count: Int)] {
+        let sql = """
+            SELECT je.value AS name, COUNT(*) AS cnt
+            FROM ao3_metadata, json_each(ao3_metadata.\(field.jsonColumn)) AS je
+            GROUP BY je.value
+            ORDER BY cnt DESC
+            LIMIT ?
+            """
+        guard let rows = try? readDB.prepare(sql, [limit as Binding?]).map({ $0 }) else { return [] }
+        return rows.compactMap { row in
+            guard let name = row[0] as? String else { return nil }
+            let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) ?? 0
+            return (name, count)
+        }
+    }
+
     /// Rating facet — `rating` is a single TEXT column, so this is a plain
     /// `GROUP BY`, not a `json_each` aggregation.
     func topRatingFacets(scopedTo ids: [Int]) -> [(name: String, count: Int)] {
@@ -1648,6 +1674,25 @@ actor AmbrosiaMetaDB {
             """
         let bindings: [Binding?] = ids.map { $0 as Binding? }
         guard let rows = try? readDB.prepare(sql, bindings).map({ $0 }) else { return [] }
+        return rows.compactMap { row in
+            guard let name = row[0] as? String else { return nil }
+            let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) ?? 0
+            return (name, count)
+        }
+    }
+
+    /// Unconstrained counterpart to `topRatingFacets(scopedTo:)` -- see
+    /// `topFacetsUnconstrained(for:limit:)` for why this needs to exist as a
+    /// separate query rather than an ID-list form called with "all IDs."
+    func topRatingFacetsUnconstrained() -> [(name: String, count: Int)] {
+        let sql = """
+            SELECT rating, COUNT(*) AS cnt
+            FROM ao3_metadata
+            WHERE rating IS NOT NULL
+            GROUP BY rating
+            ORDER BY cnt DESC
+            """
+        guard let rows = try? readDB.prepare(sql).map({ $0 }) else { return [] }
         return rows.compactMap { row in
             guard let name = row[0] as? String else { return nil }
             let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) ?? 0
