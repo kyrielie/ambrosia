@@ -1317,8 +1317,7 @@ struct LibraryRootView: View {
             return
         }
         Task {
-            let needsLiked = expression.groups.flatMap(\.rules).contains { $0.field == .isLiked }
-            let currentLikedIDs = needsLiked ? ((try? await session.collectionStore?.likedIDs()) ?? []) : []
+            let currentLikedIDs = session.cachedLikedIDs
             let needsCollection = expression.groups.flatMap(\.rules).contains { $0.field == .collection }
             var collectionMap = needsCollection ? ((try? await session.collectionStore?.membershipMap()) ?? [:]) : [:]
             let statusValues = Set(expression.groups
@@ -1385,7 +1384,6 @@ struct LibraryRootView: View {
             // Pass 1: run all non-wordcount rules.
             let pass1Result = await builder.matchingIDs(
                 expression: expressionWithoutWordCount,
-                likedIDs: currentLikedIDs,
                 collectionMap: collectionMapSnapshot,
                 statusMap: statusMapSnapshot,
                 fulltextMap: fulltextMap,
@@ -1412,7 +1410,6 @@ struct LibraryRootView: View {
                 if wcOnlyExpression.hasCompleteRules {
                     let pass2Result = await builder.matchingIDs(
                         expression: wcOnlyExpression,
-                        likedIDs: [],
                         collectionMap: [:],
                         statusMap: [:],
                         fulltextMap: [:],
@@ -1825,12 +1822,6 @@ struct LibraryRootView: View {
             await MainActor.run {
                 likedIDs = refreshed
                 session.cachedLikedIDs = refreshed
-                // Only re-run the filter when the active filter actually uses isLiked.
-                // For all other filters (and no filter) the star state is reflected
-                // immediately via likedIDs without touching offsetState.currentPage or loadPage().
-                let filterUsesLiked = toolbarState.filterExpression.groups
-                    .flatMap(\.rules).contains { $0.field == .isLiked }
-                if filterUsesLiked { applyFilterRules() }
             }
         }
     }
@@ -1845,9 +1836,6 @@ struct LibraryRootView: View {
             await MainActor.run {
                 likedIDs = refreshed
                 session.cachedLikedIDs = refreshed
-                let filterUsesLiked = toolbarState.filterExpression.groups
-                    .flatMap(\.rules).contains { $0.field == .isLiked }
-                if filterUsesLiked { applyFilterRules() }
             }
         }
     }

@@ -15,7 +15,6 @@ enum FilterField: String, CaseIterable, Identifiable, Codable {
     case wordCountLT
     case kudosGT
     case kudosLT
-    case isLiked
     case collection
     case status
     case fulltext
@@ -37,7 +36,6 @@ enum FilterField: String, CaseIterable, Identifiable, Codable {
         case .wordCountLT: return "Word count <"
         case .kudosGT:     return "Kudos >"
         case .kudosLT:     return "Kudos <"
-        case .isLiked:     return "Is liked"
         case .collection:  return "Collection"
         case .status:      return "Status"
         case .fulltext:    return "Full text"
@@ -49,7 +47,7 @@ enum FilterField: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .title, .authorName, .tag, .rating, .warning, .category, .series, .comment, .collection, .status, .fulltext:
             return true
-        case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT, .isLiked, .crossover:
+        case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT, .crossover:
             return false
         }
     }
@@ -62,9 +60,7 @@ enum FilterField: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    static var visibleCases: [FilterField] {
-        allCases.filter { $0 != .isLiked }
-    }
+    static var visibleCases: [FilterField] { allCases }
 }
 
 // MARK: - AO3CompletionStatus
@@ -153,7 +149,7 @@ struct FilterRule: Identifiable, Codable, Equatable {
 
     var isComplete: Bool {
         switch field {
-        case .isLiked, .crossover:
+        case .crossover:
             return true
         case .status:
             return AO3CompletionStatus(userValue: value) != nil

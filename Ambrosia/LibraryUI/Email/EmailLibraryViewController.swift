@@ -700,9 +700,7 @@ final class EmailLibraryViewController: NSViewController {
         }
 
         Task {
-            let needsLiked = expression.groups
-                .flatMap(\.rules).contains { $0.field == .isLiked }
-            let currentLikedIDs = needsLiked ? ((try? await session.collectionStore?.likedIDs()) ?? []) : []
+            let currentLikedIDs = session.cachedLikedIDs
             let needsCollection = expression.groups
                 .flatMap(\.rules).contains { $0.field == .collection }
             var collectionMap = needsCollection ? ((try? await session.collectionStore?.membershipMap()) ?? [:]) : [:]
@@ -757,7 +755,6 @@ final class EmailLibraryViewController: NSViewController {
 
             let pass1Result = await builder.matchingIDs(
                 expression: expressionWithoutWordCount,
-                likedIDs:      currentLikedIDs,
                 collectionMap: collectionMap,
                 statusMap: statusMap,
                 fulltextMap: fulltextMap,
@@ -781,7 +778,6 @@ final class EmailLibraryViewController: NSViewController {
                 if wcOnlyExpression.hasCompleteRules {
                     let pass2Result = await builder.matchingIDs(
                         expression: wcOnlyExpression,
-                        likedIDs: [],
                         collectionMap: [:],
                         statusMap: [:],
                         fulltextMap: [:],

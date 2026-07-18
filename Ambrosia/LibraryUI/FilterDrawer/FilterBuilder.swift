@@ -115,7 +115,7 @@ extension FilterExpression {
         guard !completeRules.isEmpty else { return false }
         return completeRules.allSatisfy { rule in
             switch rule.field {
-            case .collection, .isLiked, .status, .fulltext, .crossover:
+            case .collection, .status, .fulltext, .crossover:
                 return false
             default:
                 return true
@@ -163,7 +163,6 @@ struct FilterBuilder {
     /// query this makes — no manual `Task.detached` dispatch needed anymore.
     func matchingIDs(
         expression: FilterExpression,
-        likedIDs: Set<Int>,
         collectionMap: [String: Set<Int>] = [:],
         statusMap: [AO3CompletionStatus: Set<Int>] = [:],
         fulltextMap: [String: Set<Int>] = [:],
@@ -172,7 +171,6 @@ struct FilterBuilder {
     ) async -> FilterResult {
         await matchingIDsSync(
             expression:           expression,
-            likedIDs:             likedIDs,
             collectionMap:        collectionMap,
             statusMap:            statusMap,
             fulltextMap:          fulltextMap,
@@ -183,7 +181,6 @@ struct FilterBuilder {
 
     /// Evaluate a full FilterExpression (multiple groups joined by groupConjunction).
     private func matchingIDsSync(expression: FilterExpression,
-                     likedIDs: Set<Int>,
                      collectionMap: [String: Set<Int>] = [:],
                      statusMap: [AO3CompletionStatus: Set<Int>] = [:],
                      fulltextMap: [String: Set<Int>] = [:],
@@ -220,7 +217,6 @@ struct FilterBuilder {
         var groupResults: [Set<Int>] = []
         for group in nonFulltextGroups {
             let ids = await matchingIDsForGroup(group,
-                                    likedIDs: likedIDs,
                                     collectionMap: collectionMap,
                                     statusMap: statusMap,
                                     crossoverMap: crossoverMap,
@@ -262,7 +258,6 @@ struct FilterBuilder {
     }
 
     private func matchingIDsForGroup(_ group: FilterGroup,
-                                     likedIDs: Set<Int>,
                                      collectionMap: [String: Set<Int>],
                                      statusMap: [AO3CompletionStatus: Set<Int>],
                                      crossoverMap: Set<Int> = [],
@@ -275,10 +270,9 @@ struct FilterBuilder {
         // §2a: .wordCountGT/.wordCountLT are SQL when custom column configured,
         //      in-memory via wordCountFallbackMap when not.
         let sqlRules        = complete.filter {
-            $0.field != .isLiked && $0.field != .collection &&
+            $0.field != .collection &&
             $0.field != .status && $0.field != .fulltext && $0.field != .crossover
         }
-        let likedRules      = complete.filter { $0.field == .isLiked }
         let collectionRules = complete.filter { $0.field == .collection }
         let statusRules     = complete.filter { $0.field == .status }
         let crossoverRules  = complete.filter { $0.field == .crossover }  // §6
@@ -293,11 +287,6 @@ struct FilterBuilder {
                                      conjunction: group.conjunction,
                                      wordCountFallbackMap: wordCountFallbackMap,
                                      tagExpansions: tagExpansions)
-        }
-
-        // Apply isLiked in-memory
-        if !likedRules.isEmpty {
-            ids = ids.filter { likedIDs.contains($0) }
         }
 
         // Apply collection rules in-memory
@@ -458,12 +447,11 @@ struct FilterBuilder {
 
     // Legacy single-group entry point — used by quick tag/author taps
     func matchingIDs(rules: [FilterRule], conjunction: FilterConjunction,
-                     likedIDs: Set<Int>,
                      collectionMap: [String: Set<Int>] = [:],
                      statusMap: [AO3CompletionStatus: Set<Int>] = [:]) async -> FilterResult {
         var expr = FilterExpression()
         expr.groups = [FilterGroup(rules: rules, conjunction: conjunction)]
-        return await matchingIDs(expression: expr, likedIDs: likedIDs, collectionMap: collectionMap, statusMap: statusMap)
+        return await matchingIDs(expression: expr, collectionMap: collectionMap, statusMap: statusMap)
     }
 }
 
@@ -711,7 +699,7 @@ extension CalibreLibrary {
             guard let n = rule.numericValue else { return nil }
             return (kudosSQL(sqlOp: "<"), [n as Binding?])
 
-        case .isLiked, .crossover:
+        case .crossover:
             // Evaluated in-memory; never produce a SQL fragment.
             return nil
 

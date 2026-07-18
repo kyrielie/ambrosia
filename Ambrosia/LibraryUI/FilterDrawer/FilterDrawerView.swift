@@ -258,12 +258,10 @@ struct FilterRuleRow: View {
                 }
             }
 
-            if rule.field != .isLiked {
-                Picker("", selection: operatorBinding) {
-                    ForEach(rule.availableOperators) { op in Text(op.label).tag(op) }
-                }
-                .labelsHidden().frame(width: 150)
+            Picker("", selection: operatorBinding) {
+                ForEach(rule.availableOperators) { op in Text(op.label).tag(op) }
             }
+            .labelsHidden().frame(width: 150)
 
             valueInput
 
@@ -298,8 +296,6 @@ struct FilterRuleRow: View {
     @ViewBuilder
     private var valueInput: some View {
         switch rule.field {
-        case .isLiked:
-            Text("is liked").font(.callout).foregroundStyle(.secondary); Spacer()
         case .collection:
             collectionSearchField
         case .status:
