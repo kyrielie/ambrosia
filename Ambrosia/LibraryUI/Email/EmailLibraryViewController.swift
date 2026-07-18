@@ -83,6 +83,12 @@ final class EmailLibraryViewController: NSViewController {
     private var lastAscending: Bool      = true
     private var lastFilterIDs: [Int]?    = nil
     private var lastFilterToken: String? = nil
+
+    /// Set immediately before `applyFilterRules()` triggers its own reload, so the
+    /// Observation-driven trigger in `toolbarStateDidChange()` does not also fire a
+    /// second, redundant `scheduleLoadPage` for the same filter completion.
+    /// Mirrors `LibraryRootView.suppressNextReloadToken`. See Invariant 25.
+    private var suppressNextReloadToken = false
     private var lastSidebarToggle: Bool  = false
     private var lastReaderSidebarToggle: Bool = false
     private var lastShowReaderSidebarToggle: Bool = false
@@ -631,7 +637,16 @@ final class EmailLibraryViewController: NSViewController {
             }
         } else {
             applyFullTextPhraseToLocalFind()
-            scheduleLoadPage(reset: true)
+            // §switch-flicker fix (2): applyFilterRules() sets suppressNextReloadToken
+            // right before triggering its own reload for this same filter completion.
+            // Without this check, that reload and this Observation-driven one both fire
+            // for the same activeFilterResult write and race through scheduleLoadPage's
+            // loadPageTask cancel/reassign. See Invariant 25.
+            if suppressNextReloadToken {
+                suppressNextReloadToken = false
+            } else {
+                scheduleLoadPage(reset: true)
+            }
         }
     }
 
@@ -669,6 +684,7 @@ final class EmailLibraryViewController: NSViewController {
             toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
+            suppressNextReloadToken = true
             scheduleLoadPage(reset: true)
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "email",
@@ -682,6 +698,7 @@ final class EmailLibraryViewController: NSViewController {
             toolbarState.activeFilterResult = cached
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
+            suppressNextReloadToken = true
             scheduleLoadPage(reset: true)
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "email",
@@ -812,7 +829,6 @@ final class EmailLibraryViewController: NSViewController {
                 calibreIDs: visibleFilteredIDs,
                 totalCount: visibleFilteredIDs.count
             )
-            toolbarState.activeFilterResult = cacheableResult
             session.rememberFilterResult(cacheableResult, for: expression)  // §7
             toolbarState.clearPendingFullTextSearch()
             cachedFilterTagExpansions = filterTagExpansions
@@ -824,6 +840,13 @@ final class EmailLibraryViewController: NSViewController {
             session.cachedAnthologyIDs = currentAnthologyIDs
             duplicateLoserIDs = currentDuplicateLoserIDs
             session.cachedDuplicateLoserIDs = currentDuplicateLoserIDs
+            // §switch-flicker fix (2): activeFilterResult is written last, since it is
+            // the property withObservationTracking watches (scheduleObservation()) —
+            // writing it before the visibility-dependent state above would let the
+            // Observation-driven reload race in and read stale skippedIDs/
+            // seriesOrMergedIDs/etc. See Invariant 25.
+            toolbarState.activeFilterResult = cacheableResult
+            suppressNextReloadToken = true
             await scheduleLoadPage(reset: true).value
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "email",
