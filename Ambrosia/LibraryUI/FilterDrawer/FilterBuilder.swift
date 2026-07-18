@@ -360,9 +360,11 @@ struct FilterBuilder {
         if !crossoverRules.isEmpty {
             var idSet = Set(ids)
             for rule in crossoverRules {
-                let wantsCrossover = rule.value == "true"
-                idSet = wantsCrossover ? idSet.intersection(crossoverMap)
-                                       : idSet.subtracting(crossoverMap)
+                switch rule.op {
+                case .equals:    idSet = idSet.intersection(crossoverMap)
+                case .notEquals: idSet = idSet.subtracting(crossoverMap)
+                default:         break
+                }
             }
             ids = Array(idSet).sorted()
         }

@@ -186,8 +186,8 @@ extension AO3FilterPopupState {
 
         switch crossoverState {
         case .any: break
-        case .includeOnly: includeGroup.rules.append(FilterRule(field: .crossover, op: .equals, value: "true"))
-        case .excludeOnly: includeGroup.rules.append(FilterRule(field: .crossover, op: .equals, value: "false"))
+        case .includeOnly: includeGroup.rules.append(FilterRule(field: .crossover, op: .equals))
+        case .excludeOnly: includeGroup.rules.append(FilterRule(field: .crossover, op: .notEquals))
         }
         switch completionState {
         case .any: break
