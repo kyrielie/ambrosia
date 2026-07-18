@@ -167,12 +167,32 @@ struct FilterRule: Identifiable, Codable, Equatable {
     var numericValue: Int? { Int(value) }
 
     /// Operators valid for the current field.
+    ///
+    /// §9 (revised): `.tag` previously fell through to `default` ->
+    /// `textOperators`, which does not include `.notEquals`. FilterRuleRow's
+    /// `rule` is a live `@Binding` straight into the applied
+    /// `FilterExpression`, and both `normalizeOperator()` (called on
+    /// `.onAppear`) and `operatorBinding`'s getter treat any `op` not in
+    /// `availableOperators` as invalid, silently overwriting it with
+    /// `availableOperators[0]`. Since the AO3-style filter popup writes
+    /// `.tag`/`.notEquals` rules for every excluded tag (see
+    /// `AO3FilterPopupState.buildExpression`), simply opening the regular
+    /// filter drawer -- which renders one `FilterRuleRow` per rule --
+    /// silently rewrote every excluded tag into `.contains` (a substring
+    /// *include*, not an exclude) before the user touched anything. `.tag`
+    /// now gets its own case so `.notEquals` survives the round trip; order
+    /// matches `textOperators` with `.notEquals` appended last so a
+    /// freshly-switched-to-`.tag` row (via the field Picker's
+    /// `.onChange`-driven reset to `availableOperators[0]`) still defaults
+    /// to `.contains`, unchanged from before this fix.
     var availableOperators: [FilterOperator] {
         switch field {
         case .rating:
             return FilterOperator.ratingOperators
         case .warning, .category, .collection, .status, .crossover:
             return FilterOperator.exactOperators
+        case .tag:
+            return FilterOperator.textOperators + [.notEquals]
         case .fulltext:
             return [.contains, .notContains]
         case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT:
