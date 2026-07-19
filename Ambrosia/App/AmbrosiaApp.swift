@@ -115,6 +115,16 @@ struct AmbrosiaApp: App {
                         membershipVersion: session.membershipVersion
                     )
                 }
+
+                Divider()
+
+                // Clears the shared, in-memory-only remembered reader window
+                // size and re-sizes every currently-open reader window back
+                // to the half-screen-portrait default. See
+                // ReaderWindowController.sessionWindowSize.
+                Button("Reset Reader Window Size to Default") {
+                    ReaderWindowController.resetAllToDefaultSize()
+                }
             }
 
             CommandMenu("Reader") {

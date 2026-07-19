@@ -9,8 +9,20 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
     /// Recorded when the window loads; diffed on close to accumulate reading time.
     private var sessionStartDate: Date = Date()
     private var didApplyInitialWindowSize = false
+    /// True only while this controller itself is setting the window's frame
+    /// (applyDefaultWindowSize), so windowDidResize can tell an AppKit-driven
+    /// user resize apart from our own programmatic one and avoid feeding our
+    /// own resize back into sessionWindowSize.
+    private var isApplyingProgrammaticResize = false
 
     private static var openWindows: [String: ReaderWindowController] = [:]
+    /// The size the user last resized a reader window to, shared across all
+    /// books for the lifetime of the app process. Deliberately in-memory only
+    /// (not UserDefaults-backed): a fresh launch always starts from the
+    /// half-screen-portrait default, per product requirement. Reset to nil
+    /// by resetAllToDefaultSize(), wired to the View menu's "Reset Reader
+    /// Window Size to Default" command.
+    private static var sessionWindowSize: NSSize?
 
     @MainActor
     static func open(book: CalibreBook, modelContainer: ModelContainer) {
@@ -47,32 +59,26 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         window.minSize = NSSize(width: 600, height: 500)
         // AppKit's automatic window-restoration ("Resume") is on by default
         // for every NSWindow (isRestorable == true) and runs independently
-        // of the per-book setFrameAutosaveName/setFrameUsingName restore
-        // just below. Since this window has no restoration identifier or
-        // registered NSWindowRestoration class, the system can't actually
-        // rebuild it on relaunch -- see the
+        // of this controller's own sizing logic below. Since this window has
+        // no restoration identifier or registered NSWindowRestoration class,
+        // the system can't actually rebuild it on relaunch -- see the
         // "restoreWindowWithIdentifier:state:completionHandler: Unable to
-        // find className=(null)" log line -- but it still runs, still
-        // tries to persist/apply its own snapshot of the window's frame at
-        // launch, and can race with or clobber the per-book restore below.
-        // Disable it outright: per-book frame persistence is already
-        // handled correctly and exclusively by setFrameAutosaveName /
-        // setFrameUsingName.
+        // find className=(null)" log line -- but it still runs, still tries
+        // to persist/apply its own snapshot of the window's frame at launch,
+        // and can race with or clobber our sizing. Disable it outright.
         window.isRestorable = false
         super.init(window: window)
         window.delegate = self
 
-        // Finding 1: restore this window's individual frame if one was saved
-        // for this book/target, keyed the same way `openWindows` already is.
-        // If there's no saved frame (first time opening this book), the
-        // placeholder size above stands until applyDefaultWindowSizeIfNeeded
-        // runs from the showWindow(_:) override below.
-        let autosaveName = "AmbrosiaReaderWindow.\(target.windowKey)"
-        window.setFrameAutosaveName(autosaveName)
-        if window.setFrameUsingName(autosaveName) {
-            didApplyInitialWindowSize = true
-        }
-
+        // Deliberately NOT using NSWindow's setFrameAutosaveName/
+        // setFrameUsingName here. That mechanism persists to UserDefaults
+        // indefinitely, keyed per book -- which contradicts the desired
+        // behavior (default size on every relaunch, shared across books
+        // within a session) and, worse, permanently pins a book to whatever
+        // frame it last had, including any bad/degenerate frame saved while
+        // a sizing bug was active. Window sizing here is instead driven
+        // entirely by sessionWindowSize (see applyDefaultWindowSize below),
+        // which lives only in memory for the lifetime of the app process.
         let vc = ReaderViewController(target: target, modelContainer: modelContainer)
         window.contentViewController = vc
 
@@ -116,22 +122,53 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         applyDefaultWindowSize()
     }
 
-    /// Sets new reader windows to a half-screen portrait size. This only runs
-    /// for windows with no saved per-book frame (see the setFrameUsingName
-    /// check in init); a book that's been opened before keeps its own
-    /// remembered frame regardless. There is no customizable-default-size
-    /// preference anymore — half-screen-portrait is the only formula.
+    /// Sizes a new reader window. If the user has already resized a reader
+    /// window earlier in this session, every subsequently-opened book reuses
+    /// that same size (Self.sessionWindowSize); otherwise this falls back to
+    /// the half-screen-portrait default. Either way the result is centered
+    /// on the target screen. There is no customizable-default-size
+    /// preference — half-screen-portrait is the only default formula, and
+    /// sessionWindowSize is the only thing that overrides it, for the
+    /// current app session only (never persisted across relaunch).
     private func applyDefaultWindowSize() {
         guard let window else { return }
         let screen  = window.screen ?? Self.screenUnderMouse() ?? NSScreen.main ?? NSScreen.screens[0]
         let visible = screen.visibleFrame
 
-        let width  = (visible.width * 0.50).rounded()
-        let height = (visible.height * 0.90).rounded()
+        let size: NSSize
+        if let remembered = Self.sessionWindowSize {
+            size = remembered
+        } else {
+            let width  = (visible.width * 0.50).rounded()
+            let height = (visible.height * 0.90).rounded()
+            size = NSSize(width: width, height: height)
+        }
 
-        let x = visible.minX + (visible.width - width) / 2
-        let y = visible.minY + (visible.height - height) / 2
-        window.setFrame(NSRect(x: x, y: y, width: width, height: height), display: false)
+        let x = visible.minX + (visible.width - size.width) / 2
+        let y = visible.minY + (visible.height - size.height) / 2
+
+        isApplyingProgrammaticResize = true
+        window.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: false)
+        isApplyingProgrammaticResize = false
+    }
+
+    /// Wired to the View menu's "Reset Reader Window Size to Default"
+    /// command via resetAllToDefaultSize(). Re-applies the half-screen-
+    /// portrait formula to this specific window right now.
+    @MainActor
+    fileprivate func resetToDefaultSize() {
+        applyDefaultWindowSize()
+    }
+
+    /// Clears the session-remembered size and immediately re-sizes every
+    /// currently-open reader window back to the half-screen-portrait
+    /// default. Called from the View menu.
+    @MainActor
+    static func resetAllToDefaultSize() {
+        sessionWindowSize = nil
+        for wc in openWindows.values {
+            wc.resetToDefaultSize()
+        }
     }
 
     /// Best-effort fallback for the rare case window.screen is still nil after
@@ -142,6 +179,18 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
     private static func screenUnderMouse() -> NSScreen? {
         let mouseLocation = NSEvent.mouseLocation
         return NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) }
+    }
+
+    /// Captures the user's manual resizes (drag or the green zoom button)
+    /// into Self.sessionWindowSize, so the next book opened in this session
+    /// reuses that size. isApplyingProgrammaticResize guards against feeding
+    /// our own applyDefaultWindowSize()/resetToDefaultSize() calls back into
+    /// this, which would otherwise immediately overwrite a real user resize
+    /// with whatever default/remembered size we just set.
+    @MainActor
+    func windowDidResize(_ notification: Notification) {
+        guard !isApplyingProgrammaticResize, let window else { return }
+        Self.sessionWindowSize = window.frame.size
     }
 
     @MainActor
