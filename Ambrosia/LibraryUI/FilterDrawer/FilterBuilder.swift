@@ -86,11 +86,18 @@ struct FilterResult {
     let calibreIDs: [Int]
     let totalCount: Int?
     let isSQLBacked: Bool
+    /// `LibraryFilterDebug.summary(expression:)` for the filter this
+    /// `totalCount` was computed against, if any. Lets a surface being
+    /// (re)mounted recognize "this exact filter is already counted" and
+    /// skip discarding a known count back to nil — see applyFilterRules()
+    /// in LibraryRootView/EmailLibraryViewController.
+    let filterSignature: String?
 
-    init(calibreIDs: [Int], totalCount: Int? = nil, isSQLBacked: Bool = false) {
+    init(calibreIDs: [Int], totalCount: Int? = nil, isSQLBacked: Bool = false, filterSignature: String? = nil) {
         self.calibreIDs = calibreIDs
         self.totalCount = totalCount
         self.isSQLBacked = isSQLBacked
+        self.filterSignature = filterSignature
     }
 
     var reloadToken: String {
