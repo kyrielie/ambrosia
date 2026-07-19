@@ -63,7 +63,11 @@ struct LibraryListDoubleClickMonitor: NSViewRepresentable {
         }
 
         func installMonitorIfNeeded() {
-            guard monitor == nil, let window else { return }
+            guard monitor == nil, let window else {
+                print("DoubleClickMonitor: skipped install, monitor=\(monitor != nil), window=\(String(describing: window))")
+                return
+            }
+            print("DoubleClickMonitor: installing monitor on window \(window)")
             // Local monitor: only ever sees events destined for our own
             // window, and — critically — we never consume the event (always
             // return it unchanged), so nothing about normal AppKit event
@@ -88,13 +92,19 @@ struct LibraryListDoubleClickMonitor: NSViewRepresentable {
         }
 
         private func handleMouseUp(_ event: NSEvent, in window: NSWindow) {
+            print("DoubleClickMonitor: handleMouseUp clickCount=\(event.clickCount) eventWindow=\(String(describing: event.window)) ourWindow=\(window)")
             guard event.window === window, event.clickCount == 2 else { return }
             guard let contentView = window.contentView else { return }
             let windowPoint = event.locationInWindow
-            guard let hit = contentView.hitTest(windowPoint) else { return }
+            guard let hit = contentView.hitTest(windowPoint) else {
+                print("DoubleClickMonitor: hitTest returned nil")
+                return
+            }
+            print("DoubleClickMonitor: hit view \(hit), walking up")
 
             var probe: NSView? = hit
             while let current = probe {
+                print("DoubleClickMonitor: probe \(type(of: current))")
                 // NSTableView must be checked *before* the NSControl bailout
                 // below: NSTableView is itself an NSControl subclass, so if
                 // the order were reversed, the walk would match "is
@@ -104,6 +114,7 @@ struct LibraryListDoubleClickMonitor: NSViewRepresentable {
                 if let tableView = current as? NSTableView {
                     let localPoint = tableView.convert(windowPoint, from: nil)
                     let row = tableView.row(at: localPoint)
+                    print("DoubleClickMonitor: found NSTableView, row=\(row)")
                     guard row >= 0 else { return }
                     onDoubleClick?(row)
                     return
@@ -111,9 +122,13 @@ struct LibraryListDoubleClickMonitor: NSViewRepresentable {
                 // A double-click on any button/control inside the row (tag
                 // pill, like toggle, series index button, ...) is that
                 // control's own business, not ours.
-                if current is NSControl { return }
+                if current is NSControl {
+                    print("DoubleClickMonitor: hit NSControl bailout \(type(of: current))")
+                    return
+                }
                 probe = current.superview
             }
+            print("DoubleClickMonitor: walk exhausted without finding NSTableView")
         }
     }
 }
