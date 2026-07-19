@@ -263,8 +263,8 @@ enum HighlightBridge {
 
     struct TapInfo {
         let id: String
-        let x: CGFloat
-        let y: CGFloat
+        let locationX: CGFloat
+        let locationY: CGFloat
     }
 
     static func decodeTap(from message: WKScriptMessage) -> TapInfo? {
@@ -276,6 +276,6 @@ enum HighlightBridge {
               let tapX = json["x"] as? CGFloat,
               let tapY = json["y"] as? CGFloat
         else { return nil }
-        return TapInfo(id: id, x: tapX, y: tapY)
+        return TapInfo(id: id, locationX: tapX, locationY: tapY)
     }
 }

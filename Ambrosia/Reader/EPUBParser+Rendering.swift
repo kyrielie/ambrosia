@@ -28,7 +28,12 @@ extension EPUBParser {
     ///   rely on) has nothing left to override here — this handles the case
     ///   CSS never could: books that fake first-line indentation with literal
     ///   whitespace characters in the text itself.
-    func html(for item: SpineItem, userCSS: String, globalSpineIndex: Int? = nil, removeParagraphIndents: Bool = false) throws -> String {
+    func html(
+        for item: SpineItem,
+        userCSS: String,
+        globalSpineIndex: Int? = nil,
+        removeParagraphIndents: Bool = false
+    ) throws -> String {
         let archive = try openArchive()
         guard let entry = archive[item.href],
               let data  = Self.extract(entry, from: archive)
@@ -37,7 +42,12 @@ extension EPUBParser {
         let raw = String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .isoLatin1)
                 ?? ""
-        var html = Self.sanitise(raw, userCSS: userCSS, spineIndex: globalSpineIndex ?? item.index, removeParagraphIndents: removeParagraphIndents)
+        var html = Self.sanitise(
+            raw,
+            userCSS: userCSS,
+            spineIndex: globalSpineIndex ?? item.index,
+            removeParagraphIndents: removeParagraphIndents
+        )
 
         // Match mergedHTML's per-item behaviour: strip the redundant "Preface"
         // heading on the first spine item (unconditional, not gated on
@@ -101,7 +111,11 @@ extension EPUBParser {
                     ?? ""
 
             // Extract only the <body>…</body> content
-            var bodyContent = Self.extractBodyContent(from: raw, isFirstSpineItem: item.index == 0, removeParagraphIndents: removeParagraphIndents)
+            var bodyContent = Self.extractBodyContent(
+                from: raw,
+                isFirstSpineItem: item.index == 0,
+                removeParagraphIndents: removeParagraphIndents
+            )
             if let imageBase = imageBaseOverride {
                 bodyContent = Self.rewriteImageReferences(in: bodyContent, imageBaseURL: imageBase)
             }
@@ -159,7 +173,12 @@ extension EPUBParser {
 
     /// Strip all publisher CSS (link/style/style= attributes/script),
     /// inject userCSS before </head>. Sets window.currentSpineIndex for JS.
-    private static func sanitise(_ xhtml: String, userCSS: String, spineIndex: Int, removeParagraphIndents: Bool = false) -> String {
+    private static func sanitise(
+        _ xhtml: String,
+        userCSS: String,
+        spineIndex: Int,
+        removeParagraphIndents: Bool = false
+    ) -> String {
         var html = xhtml
 
         // Remove stylesheet links
@@ -209,7 +228,11 @@ extension EPUBParser {
     }
 
     /// Extracts the content between <body> and </body> tags, or the whole string if not found.
-    private static func extractBodyContent(from xhtml: String, isFirstSpineItem: Bool, removeParagraphIndents: Bool = false) -> String {
+    private static func extractBodyContent(
+        from xhtml: String,
+        isFirstSpineItem: Bool,
+        removeParagraphIndents: Bool = false
+    ) -> String {
         // Strip publisher CSS first so we don't drag styles into the merged doc
         var html = xhtml
         html = html.replacingOccurrences(
