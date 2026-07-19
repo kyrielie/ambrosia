@@ -1733,39 +1733,26 @@ struct LibraryRootView: View {
     private var itemList: some View {
         // No `selection:` binding on this List — row view intentionally has
         // no click-to-select, no Cmd/Shift-click range selection, and no
-        // Cmd+A. Opening is double-click only, via the window-level monitor
-        // below (see LibraryListDoubleClickMonitor.swift, which only reacts
-        // to `.leftMouseUp` with clickCount == 2 and never touches
-        // mouseDown), or right-click → context menu, both of which act on
-        // the row they land on. This also removes the per-row "what's
-        // currently selected" bookkeeping that used to run on every row on
-        // every scroll/render pass (the old `selectedBooks(fallback:)` /
+        // Cmd+A. Opening is double-click (BookListRow/SeriesListRow's own
+        // `.simultaneousGesture(TapGesture(count: 2)...)`, calling `onOpen`)
+        // or right-click → context menu, both of which act on the row they
+        // land on. This also removes the per-row "what's currently
+        // selected" bookkeeping that used to run on every row on every
+        // scroll/render pass (the old `selectedBooks(fallback:)` /
         // `selectedBookIDs(fallback:)` calls in `bookRow`), which was the
         // main source of row-view scroll lag.
+        //
+        // A window-level NSEvent monitor / NSTableView doubleAction
+        // approach (LibraryListDoubleClickMonitor) was tried to avoid a
+        // per-row gesture recognizer competing with List's own mouseDown
+        // handling, but never reliably fired double-clicks landing on
+        // rows. Reverted to the row-level TapGesture, which is known to
+        // work now that there's no `selection:` binding on this List for
+        // it to compete with.
         List(items) { item in
             itemRow(item)
         }
         .listStyle(.plain)
-        .background(
-            LibraryListDoubleClickMonitor { row in
-                guard items.indices.contains(row) else { return }
-                openItem(items[row])
-            }
-        )
-    }
-
-    /// Opens a single item — row view has no selection, so this always
-    /// opens just the row that was double-clicked or the row whose context
-    /// menu "Open" was chosen.
-    private func openItem(_ item: LibraryItem) {
-        switch item {
-        case .book(let book):
-            open([book])
-        case .orphanedSeriesEntry(let book, _):
-            open([book])
-        case .series(let series):
-            AppDelegate.shared?.openReaderWindow(target: .series(series), modelContext: modelContext)
-        }
     }
 
     /// The single collection this list is currently filtered to, or nil if

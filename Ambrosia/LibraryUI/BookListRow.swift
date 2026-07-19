@@ -99,6 +99,9 @@ struct BookListRow: View, Equatable {
             descriptionRow
         }
         .contentShape(Rectangle())
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded(onOpen)
+        )
         .contextMenu {
             Button("Open") {
                 onOpen()
