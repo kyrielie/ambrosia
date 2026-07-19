@@ -52,6 +52,9 @@ jobs:
             -scheme Ambrosia \
             -destination "platform=macOS,arch=arm64" \
             -resultBundlePath "$result_bundle" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
             test 2>&1 | tee "$build_log" | xcbeautify --renderer github-actions
 
       - name: Upload macOS Result Bundle

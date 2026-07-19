@@ -64,11 +64,11 @@ enum HighlightBridge {
         var renderedRanges: [(start: Int, end: Int)] = []
         var overlapping: Set<UUID> = []
         for annotation in sorted {
-            let s = annotation.startChar, e = annotation.endChar
-            if renderedRanges.contains(where: { r in s < r.end && e > r.start }) {
+            let start = annotation.startChar, end = annotation.endChar
+            if renderedRanges.contains(where: { r in start < r.end && end > r.start }) {
                 overlapping.insert(annotation.id)
             }
-            renderedRanges.append((s, e))
+            renderedRanges.append((start, end))
         }
         for annotation in sorted {
             let js = restoreHighlightJS(annotation: annotation,
@@ -81,6 +81,7 @@ enum HighlightBridge {
     // Collects all text nodes in [startChar, endChar), splits the boundary nodes,
     // and wraps each segment in its own span with the same id-prefix + "-N" suffix.
     // This works correctly across <em>, <strong>, <p>, <br> and any other element boundary.
+    // swiftlint:disable:next function_body_length
     private static func restoreHighlightJS(annotation: Annotation, useUnderline: Bool) -> String {
         let startChar   = annotation.startChar
         let endChar     = annotation.endChar
@@ -252,11 +253,11 @@ enum HighlightBridge {
         else { return nil }
 
         return Annotation(
-            spineIndex:   json["spineIndex"] as? Int ?? 0,
-            startChar:    startChar,
-            endChar:      endChar,
+            spineIndex: json["spineIndex"] as? Int ?? 0,
+            startChar: startChar,
+            endChar: endChar,
             selectedText: selectedText,
-            colorHex:     "#FFD60A"
+            colorHex: "#FFD60A"
         )
     }
 

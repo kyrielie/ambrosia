@@ -10,11 +10,11 @@ import SwiftUI
 struct FindBarView: View {
 
     @Binding var searchText: String
-    let matchCurrent: Int    // 1-based current match index (0 = no match yet)
-    let matchTotal:   Int    // total matches found (0 = no results / not searched yet)
-    let onNext:       () -> Void
-    let onPrevious:   () -> Void
-    let onClose:      () -> Void
+    let matchCurrent: Int // 1-based current match index (0 = no match yet)
+    let matchTotal: Int // total matches found (0 = no results / not searched yet)
+    let onNext: () -> Void
+    let onPrevious: () -> Void
+    let onClose: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
