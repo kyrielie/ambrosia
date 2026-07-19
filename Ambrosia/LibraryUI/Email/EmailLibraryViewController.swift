@@ -681,6 +681,27 @@ final class EmailLibraryViewController: NSViewController {
             "sqlPageable": expression.isSQLPageable
         ])
         if expression.isSQLPageable {
+            let filterSignature = LibraryFilterDebug.summary(expression: expression)
+            // Same reuse-known-count guard as LibraryRootView.applyFilterRules() —
+            // viewDidLoad() calls applyFilterRules() unconditionally whenever this
+            // view controller is (re)mounted (e.g. switching to the Email surface),
+            // which previously reset an already-counted filter's totalCount back
+            // to nil on the shared toolbarState, restarting the spinner for no reason.
+            if let existing = toolbarState.activeFilterResult,
+               existing.isSQLBacked,
+               existing.totalCount != nil,
+               existing.filterSignature == filterSignature {
+                toolbarState.clearPendingFullTextSearch()
+                toolbarState.cancelLibraryFilterApplication()
+                suppressNextReloadToken = true
+                scheduleLoadPage(reset: true)
+                LibraryFilterDebug.log("applyFilter.end", [
+                    "surface": "email",
+                    "mode": "sqlPagedDeferredCount.reuseCount",
+                    "elapsedMS": LibraryFilterDebug.elapsedMS(since: applyStart)
+                ])
+                return
+            }
             toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
@@ -915,6 +936,15 @@ final class EmailLibraryViewController: NSViewController {
         scheduleLoadPage(reset: true)
     }
 
+    /// Single call site for kicking off the deferred count of a SQL-backed
+    /// filter's total row count, mirroring LibraryRootView's identical
+    /// helper. Used by the word-count and grouped-title sort branches of
+    /// loadPage(), which previously never triggered the count at all.
+    private func triggerDeferredSQLCountIfNeeded(query: SearchQuery) {
+        guard let result = toolbarState.activeFilterResult, result.isSQLBacked else { return }
+        scheduleDeferredSQLFilterCount(query: query)
+    }
+
     private func scheduleDeferredSQLFilterCount(query: SearchQuery) {
         guard let library = session.library,
               let result = toolbarState.activeFilterResult,
@@ -953,7 +983,8 @@ final class EmailLibraryViewController: NSViewController {
                 self.toolbarState.activeFilterResult = FilterResult(
                     calibreIDs: [],
                     totalCount: count,
-                    isSQLBacked: true
+                    isSQLBacked: true,
+                    filterSignature: filterSignature
                 )
                 LibraryFilterDebug.log("deferredCount.apply", [
                     "surface": "email",
@@ -1127,6 +1158,7 @@ final class EmailLibraryViewController: NSViewController {
                 wordCountHasMore = hasMore
             }
             raw = []
+            triggerDeferredSQLCountIfNeeded(query: query)
         } else if toolbarState.sortField == .title && shouldGroupSidebarRows {
             // §SeriesGrouping Phase 2: mirrors LibraryRootView's equivalent
             // branch — title sort needs materialize-then-sort once grouping
@@ -1174,6 +1206,7 @@ final class EmailLibraryViewController: NSViewController {
                 wordCountHasMore = hasMore
             }
             raw = []
+            triggerDeferredSQLCountIfNeeded(query: query)
         } else if let result = toolbarState.activeFilterResult, result.isSQLBacked {
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "email",

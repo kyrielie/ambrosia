@@ -1289,7 +1289,8 @@ struct LibraryRootView: View {
                 toolbarState.activeFilterResult = FilterResult(
                     calibreIDs: [],
                     totalCount: count,
-                    isSQLBacked: true
+                    isSQLBacked: true,
+                    filterSignature: filterSignature
                 )
                 LibraryFilterDebug.log("deferredCount.apply", [
                     "surface": "list",
@@ -1321,6 +1322,30 @@ struct LibraryRootView: View {
             "sqlPageable": expression.isSQLPageable
         ])
         if expression.isSQLPageable {
+            let filterSignature = LibraryFilterDebug.summary(expression: expression)
+            // If this exact filter was already applied and counted (e.g.
+            // applyFilterRules() is being re-run only because a sibling
+            // surface — Email — just (re)mounted and called it again on
+            // the same shared toolbarState), keep the known totalCount
+            // instead of resetting it to nil. Resetting here is what made
+            // the result count and spinner reset on every surface switch
+            // even though nothing about the filter changed.
+            if let existing = toolbarState.activeFilterResult,
+               existing.isSQLBacked,
+               existing.totalCount != nil,
+               existing.filterSignature == filterSignature {
+                lastHandledReloadToken = existing.reloadToken   // §perf: we call loadPage() below; skip onChange duplicate
+                toolbarState.clearPendingFullTextSearch()
+                toolbarState.cancelLibraryFilterApplication()
+                offsetState.resetForNewFilter()
+                Task { await loadPage() }
+                LibraryFilterDebug.log("applyFilter.end", [
+                    "surface": "list",
+                    "mode": "sqlPagedDeferredCount.reuseCount",
+                    "elapsedMS": LibraryFilterDebug.elapsedMS(since: applyStart)
+                ])
+                return
+            }
             let newResult = FilterResult(calibreIDs: [], isSQLBacked: true)
             lastHandledReloadToken = newResult.reloadToken   // §perf: we call loadPage() below; skip onChange duplicate
             toolbarState.activeFilterResult = newResult
