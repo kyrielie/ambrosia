@@ -22,7 +22,6 @@
 		56289C63BFA2118454C7D2C7F /* ReadingGoalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49EB97076C4987CADEC037C /* ReadingGoalView.swift */; };
 		6217B5AE30060E570033C2E1 /* TransferDatabaseBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6217B5AD30060E570033C2E1 /* TransferDatabaseBuilder.swift */; };
 		6217B5AF30060E570033C2E1 /* GzipEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6217B5AC30060E570033C2E1 /* GzipEncoder.swift */; };
-		622906D1300ACC2900B03D20 /* LibraryListDoubleClickMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 622906D0300ACC2900B03D20 /* LibraryListDoubleClickMonitor.swift */; };
 		622906D8300B8C3E00B03D20 /* AO3FilterPopupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 622906D5300B8C3E00B03D20 /* AO3FilterPopupView.swift */; };
 		622906D9300B8C3E00B03D20 /* AO3FilterPopupState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 622906D4300B8C3E00B03D20 /* AO3FilterPopupState.swift */; };
 		622906DA300B8C3E00B03D20 /* AO3FilterPopupWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 622906D6300B8C3E00B03D20 /* AO3FilterPopupWindowController.swift */; };
@@ -123,7 +122,6 @@
 		5037BC30F5C947B49D7196AE /* LibraryWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryWindowController.swift; sourceTree = "<group>"; };
 		6217B5AC30060E570033C2E1 /* GzipEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GzipEncoder.swift; sourceTree = "<group>"; };
 		6217B5AD30060E570033C2E1 /* TransferDatabaseBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferDatabaseBuilder.swift; sourceTree = "<group>"; };
-		622906D0300ACC2900B03D20 /* LibraryListDoubleClickMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryListDoubleClickMonitor.swift; sourceTree = "<group>"; };
 		622906D2300B8C3E00B03D20 /* AO3FacetField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AO3FacetField.swift; sourceTree = "<group>"; };
 		622906D3300B8C3E00B03D20 /* AO3FilterFacetController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AO3FilterFacetController.swift; sourceTree = "<group>"; };
 		622906D4300B8C3E00B03D20 /* AO3FilterPopupState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AO3FilterPopupState.swift; sourceTree = "<group>"; };
@@ -339,7 +337,6 @@
 			isa = PBXGroup;
 			children = (
 				622906D7300B8C3E00B03D20 /* FilterPopup */,
-				622906D0300ACC2900B03D20 /* LibraryListDoubleClickMonitor.swift */,
 				62E763022FF2266E00B84049 /* RSSPublishView.swift */,
 				9A00000000000000000001 /* SeriesGroupBuilder.swift */,
 				1C4325980DE54054B34FA01C /* FilterDrawer */,
@@ -561,7 +558,6 @@
 				622906DB300B8C3E00B03D20 /* AO3FacetField.swift in Sources */,
 				622906DC300B8C3E00B03D20 /* AO3FilterFacetController.swift in Sources */,
 				B5AFCEF95AAE4E7B9C495F7DF /* BookListRow.swift in Sources */,
-				622906D1300ACC2900B03D20 /* LibraryListDoubleClickMonitor.swift in Sources */,
 				A2F4FB0A25B64F7BA9599329F /* FlowLayout.swift in Sources */,
 				70378A99C66B46E59C7D64FAF /* SeriesListRow.swift in Sources */,
 				2FC91CA366334CFE8E8EAD54F /* FilterDrawerView.swift in Sources */,

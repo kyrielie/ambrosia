@@ -84,6 +84,7 @@ struct SeriesListRow: View, Equatable {
             }
         }
         .contentShape(Rectangle())
+        .simultaneousGesture(TapGesture(count: 2).onEnded(onOpen))
         .contextMenu {
             Button("Open Series", action: onOpen)
             Button("Show Individual Works") { showIndex = true }
