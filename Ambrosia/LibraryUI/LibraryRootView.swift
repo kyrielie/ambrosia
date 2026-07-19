@@ -100,9 +100,32 @@ struct LibraryRootView: View {
     // an undefined order, and a task begun just before switching away from this
     // view mode kept running with nothing to stop it. Matches the existing
     // tracked-task idiom already used for fullTextTask/filterCountTask/rebuildTask.
-    // §perf: prevents the onChange(reloadToken) handler from firing a duplicate
-    // loadPage() when applyFilterRules() has already called it synchronously.
-    @State private var suppressNextReloadToken = false
+    // §perf/§duplicate-loadPage fix: prevents the onChange(reloadToken) handler
+    // from firing a duplicate loadPage() when applyFilterRules()/the cached/
+    // SQL-pageable paths have already called it synchronously for the same
+    // activeFilterResult change.
+    //
+    // Previously a plain Bool (`suppressNextReloadToken`) set to true right
+    // before each direct `loadPage()` call, on the assumption that SwiftUI
+    // would deliver this view's `.onChange(of: activeFilterResult?.reloadToken)`
+    // strictly after the `.onChange`/direct-call site that set the flag, in
+    // the same update pass. That ordering does NOT hold when
+    // `activeFilterResult` is mutated as a side effect of
+    // `toolbarState.filterExpression` being written from
+    // `AO3FilterPopupWindowController` -- a *separate* NSWindow with its own
+    // SwiftUI update cycle. Under that path the flag could still be false (or
+    // already reset) by the time the reloadToken handler ran, causing a
+    // second, fully redundant `loadPage()` for the identical filter. Visible
+    // directly in `filterlogs.txt` as back-to-back duplicate `loadPage.start`
+    // pairs with identical `pageBookIDs`, which in turn kept cancelling
+    // `filterCountTask` before `scheduleDeferredSQLFilterCount` could ever
+    // finish (`deferredCount.apply` never appeared in the logs at all).
+    //
+    // Fix: instead of a timing-dependent flag, record the exact reloadToken
+    // value that was already handled by the direct call. The onChange handler
+    // then compares against that value rather than trusting flag timing --
+    // it's a value equality check, not a race.
+    @State private var lastHandledReloadToken: String?
 
     /// Async-resolved synonym expansions for the current search query's tag terms.
     /// Populated by `resolveTagExpansionsIfNeeded` whenever `tagTerms` changes.
@@ -209,7 +232,9 @@ struct LibraryRootView: View {
                 }
             }
             .onChange(of: toolbarState.activeFilterResult?.reloadToken) {
-                if suppressNextReloadToken { suppressNextReloadToken = false; return }
+                let currentToken = toolbarState.activeFilterResult?.reloadToken
+                if lastHandledReloadToken == currentToken { return }
+                lastHandledReloadToken = currentToken
                 offsetState.resetForNewFilter(); Task { await loadPage() }
             }
     }
@@ -1280,8 +1305,9 @@ struct LibraryRootView: View {
             "sqlPageable": expression.isSQLPageable
         ])
         if expression.isSQLPageable {
-            suppressNextReloadToken = true   // §perf: we call loadPage() below; skip onChange duplicate
-            toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
+            let newResult = FilterResult(calibreIDs: [], isSQLBacked: true)
+            lastHandledReloadToken = newResult.reloadToken   // §perf: we call loadPage() below; skip onChange duplicate
+            toolbarState.activeFilterResult = newResult
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
             offsetState.resetForNewFilter()
@@ -1299,7 +1325,7 @@ struct LibraryRootView: View {
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
             offsetState.resetForNewFilter()
-            suppressNextReloadToken = true   // §perf: we call loadPage() below; skip onChange duplicate
+            lastHandledReloadToken = cached.reloadToken   // §perf: we call loadPage() below; skip onChange duplicate
             Task { await loadPage() }
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "list",
@@ -1458,7 +1484,7 @@ struct LibraryRootView: View {
             session.cachedAnthologyIDs = currentAnthologyIDs2
             duplicateLoserIDs = currentDuplicateLoserIDs2
             session.cachedDuplicateLoserIDs = currentDuplicateLoserIDs2
-            suppressNextReloadToken = true   // §perf: we call loadPage() below; skip onChange duplicate
+            lastHandledReloadToken = cacheableResult.reloadToken   // §perf: we call loadPage() below; skip onChange duplicate
             offsetState.resetForNewFilter(); await loadPage()
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "list",

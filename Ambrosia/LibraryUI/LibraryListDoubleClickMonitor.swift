@@ -39,6 +39,17 @@ struct LibraryListDoubleClickMonitor: NSViewRepresentable {
 
     func updateNSView(_ nsView: CatcherView, context: Context) {
         nsView.onDoubleClick = onDoubleClick
+        // §fix: `List` doesn't reliably re-propagate `viewDidMoveToWindow` to
+        // content attached via `.background()` — when this representable is
+        // first created, its ancestor `NSHostingView` may not yet be attached
+        // to a real `NSWindow` (see LibraryViewController.applyViewMode,
+        // which builds/reuses that hosting view independently of window
+        // attachment timing), and no second `viewDidMoveToWindow` call ever
+        // arrives to retry. `updateNSView` re-runs on every SwiftUI body
+        // evaluation (i.e. constantly, since `items` changes on every page
+        // load), so it's used here as a resilient retry point instead of
+        // trusting the one-shot AppKit lifecycle hook alone.
+        nsView.installMonitorIfNeeded()
     }
 
     final class CatcherView: NSView {
@@ -47,11 +58,12 @@ struct LibraryListDoubleClickMonitor: NSViewRepresentable {
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
-                self.monitor = nil
-            }
-            guard let window else { return }
+            teardownMonitor()
+            installMonitorIfNeeded()
+        }
+
+        func installMonitorIfNeeded() {
+            guard monitor == nil, let window else { return }
             // Local monitor: only ever sees events destined for our own
             // window, and — critically — we never consume the event (always
             // return it unchanged), so nothing about normal AppKit event
@@ -59,6 +71,13 @@ struct LibraryListDoubleClickMonitor: NSViewRepresentable {
             monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
                 self?.handleMouseUp(event, in: window)
                 return event
+            }
+        }
+
+        private func teardownMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
             }
         }
 
