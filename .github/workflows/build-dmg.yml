@@ -52,6 +52,18 @@ jobs:
           echo "APP_PATH=$app_path" >> "$GITHUB_ENV"
           echo "APP_NAME=$(basename "$app_path" .app)" >> "$GITHUB_ENV"
 
+      - name: Ad-hoc sign app
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Unsigned builds carry no signature at all, which makes Gatekeeper
+          # report "damaged" (instead of the usual "unidentified developer")
+          # once the quarantine flag is applied on download. Ad-hoc signing
+          # gives it a valid signature so Gatekeeper can evaluate it normally.
+          codesign --force --deep --sign - "$APP_PATH"
+          codesign --verify --verbose "$APP_PATH"
+
       - name: Create DMG
         shell: bash
         run: |
