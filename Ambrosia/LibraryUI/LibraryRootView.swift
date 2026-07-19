@@ -611,6 +611,7 @@ struct LibraryRootView: View {
             guard !Task.isCancelled else { return }
             books = page
             hasNextPage = hasMore
+            triggerDeferredSQLCountIfNeeded(query: query)
         } else if toolbarState.sortField == .title && shouldGroupSeriesRows {
             // §SeriesGrouping Phase 2: title sort needs the same
             // materialize-then-sort treatment as word count once grouping is
@@ -650,6 +651,7 @@ struct LibraryRootView: View {
             guard !Task.isCancelled else { return }
             books = page
             hasNextPage = hasMore
+            triggerDeferredSQLCountIfNeeded(query: query)
         } else if let result = toolbarState.activeFilterResult, result.isSQLBacked {
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "list",
@@ -730,7 +732,7 @@ struct LibraryRootView: View {
                     "shouldGroup": false
                 ])
             }
-            scheduleDeferredSQLFilterCount(query: query)
+            triggerDeferredSQLCountIfNeeded(query: query)
         } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
             LibraryFilterDebug.log("loadPage.start", [
                 "surface": "list",
@@ -1237,6 +1239,20 @@ struct LibraryRootView: View {
     /// representatives only — out of scope for this pass; the footer hides the now-known-
     /// wrong "X-Y of N" display when grouping is on (see footer) rather than show a
     /// misleading number.
+    /// Single call site for kicking off the deferred count of a SQL-backed
+    /// filter's total row count, used by every `loadPage()` sort-mode branch
+    /// that can serve a `result.isSQLBacked` filter (base SQL-windowed path,
+    /// word-count sort, and grouped title sort). `scheduleDeferredSQLFilterCount`
+    /// already no-ops unless `activeFilterResult.isSQLBacked && totalCount == nil`,
+    /// so this wrapper mainly exists so a new sort-mode branch can't silently
+    /// forget to trigger the count the way `.wordCount` and grouped `.title`
+    /// previously did — see LibraryFilterDebug `deferredCount.schedule` /
+    /// `.apply` / `.discard` logs to confirm this fires for a given branch.
+    private func triggerDeferredSQLCountIfNeeded(query: SearchQuery) {
+        guard let result = toolbarState.activeFilterResult, result.isSQLBacked else { return }
+        scheduleDeferredSQLFilterCount(query: query)
+    }
+
     private func scheduleDeferredSQLFilterCount(query: SearchQuery) {
         guard let library = session.library,
               let result = toolbarState.activeFilterResult,
