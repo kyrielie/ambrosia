@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Detects a real double-click landing on a `List`'s underlying `NSTableView`
+/// Detects a double-click on a row in a `List`'s underlying `NSTableView`
 /// and reports the double-clicked row index, without ever intercepting
 /// `mouseDown`.
 ///
@@ -17,17 +17,27 @@ import SwiftUI
 /// gesture recognizer — which is exactly the split that was reported
 /// ("arrow key navigation/selection works though").
 ///
-/// This type replaces that gesture. It only reacts to `.leftMouseUp` with
-/// `clickCount == 2` — i.e. strictly *after* AppKit has already resolved
-/// selection from the first click of the pair — so single-click, shift-click,
-/// and cmd-click selection are routed to `NSTableView` completely untouched.
-/// It also skips events landing on a button/control (tag pills, like /
-/// read-later toggles, the series index disclosure button, etc.) so their own
-/// click behavior isn't hijacked into "open."
+/// An `NSEvent.addLocalMonitorForEvents(matching:)` monitor was tried next,
+/// but `NSTableView` handles row mouseDown/mouseUp inside its own internal
+/// mouse-tracking loop rather than through the normal
+/// `NSApplication.sendEvent:` pipeline that local event monitors observe —
+/// confirmed by instrumentation showing the monitor never received a single
+/// event for clicks landing on rows, only for events routed through the
+/// ordinary responder chain (e.g. the click that activates the window).
+///
+/// This type instead uses `NSTableView`'s own built-in double-click support:
+/// `target`/`doubleAction` is invoked by AppKit itself, from inside that same
+/// internal tracking loop, once a double-click on a row has resolved — so it
+/// reliably fires and needs no hit-testing or `NSControl` filtering of its
+/// own (AppKit already routes clicks on embedded controls, e.g. tag pills,
+/// to those controls first and does not invoke `doubleAction` for them).
 ///
 /// Install as a transparent `.background` on the `List` (see
-/// `LibraryRootView.itemList`), not as a per-row modifier — a single monitor
-/// per list, not one per row.
+/// `LibraryRootView.itemList`), not as a per-row modifier — a single
+/// attachment per list, not one per row. The underlying `NSTableView` isn't
+/// necessarily attached the moment this view is; `installIfNeeded` is
+/// re-tried both from `viewDidMoveToWindow` and from every `updateNSView`
+/// call until it succeeds.
 struct LibraryListDoubleClickMonitor: NSViewRepresentable {
     var onDoubleClick: (_ row: Int) -> Void
 
@@ -48,87 +58,46 @@ struct LibraryListDoubleClickMonitor: NSViewRepresentable {
         // arrives to retry. `updateNSView` re-runs on every SwiftUI body
         // evaluation (i.e. constantly, since `items` changes on every page
         // load), so it's used here as a resilient retry point instead of
-        // trusting the one-shot AppKit lifecycle hook alone.
-        nsView.installMonitorIfNeeded()
+        // trusting the one-shot AppKit lifecycle hook alone. Also needed
+        // because `List`'s `NSTableView` itself may not exist yet the moment
+        // this representable's NSView is created.
+        nsView.installIfNeeded()
     }
 
     final class CatcherView: NSView {
         var onDoubleClick: ((Int) -> Void)?
-        private var monitor: Any?
+        private weak var installedTableView: NSTableView?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            teardownMonitor()
-            installMonitorIfNeeded()
+            installIfNeeded()
         }
 
-        func installMonitorIfNeeded() {
-            guard monitor == nil, let window else {
-                print("DoubleClickMonitor: skipped install, monitor=\(monitor != nil), window=\(String(describing: window))")
-                return
-            }
-            print("DoubleClickMonitor: installing monitor on window \(window)")
-            // Local monitor: only ever sees events destined for our own
-            // window, and — critically — we never consume the event (always
-            // return it unchanged), so nothing about normal AppKit event
-            // dispatch (selection, button clicks, etc.) is affected.
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
-                self?.handleMouseUp(event, in: window)
-                return event
-            }
+        func installIfNeeded() {
+            guard installedTableView == nil, let tableView = findEnclosingTableView() else { return }
+            tableView.target = self
+            tableView.doubleAction = #selector(handleDoubleClick(_:))
+            installedTableView = tableView
         }
 
-        private func teardownMonitor() {
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
-                self.monitor = nil
-            }
-        }
-
-        deinit {
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
-            }
-        }
-
-        private func handleMouseUp(_ event: NSEvent, in window: NSWindow) {
-            print("DoubleClickMonitor: handleMouseUp clickCount=\(event.clickCount) eventWindow=\(String(describing: event.window)) ourWindow=\(window)")
-            guard event.window === window, event.clickCount == 2 else { return }
-            guard let contentView = window.contentView else { return }
-            let windowPoint = event.locationInWindow
-            guard let hit = contentView.hitTest(windowPoint) else {
-                print("DoubleClickMonitor: hitTest returned nil")
-                return
-            }
-            print("DoubleClickMonitor: hit view \(hit), walking up")
-
-            var probe: NSView? = hit
+        /// Walks up from this view (a sibling of `List`'s content, attached
+        /// via `.background`) to the enclosing `NSScrollView`, then reads its
+        /// `documentView` — which is the `NSTableView` for a `List` on macOS.
+        private func findEnclosingTableView() -> NSTableView? {
+            var probe: NSView? = self
             while let current = probe {
-                print("DoubleClickMonitor: probe \(type(of: current))")
-                // NSTableView must be checked *before* the NSControl bailout
-                // below: NSTableView is itself an NSControl subclass, so if
-                // the order were reversed, the walk would match "is
-                // NSControl" the moment it reached the table view and return
-                // before ever reaching the NSTableView branch -- silently
-                // swallowing every double-click. Do not reorder these.
-                if let tableView = current as? NSTableView {
-                    let localPoint = tableView.convert(windowPoint, from: nil)
-                    let row = tableView.row(at: localPoint)
-                    print("DoubleClickMonitor: found NSTableView, row=\(row)")
-                    guard row >= 0 else { return }
-                    onDoubleClick?(row)
-                    return
-                }
-                // A double-click on any button/control inside the row (tag
-                // pill, like toggle, series index button, ...) is that
-                // control's own business, not ours.
-                if current is NSControl {
-                    print("DoubleClickMonitor: hit NSControl bailout \(type(of: current))")
-                    return
+                if let scrollView = current as? NSScrollView, let tableView = scrollView.documentView as? NSTableView {
+                    return tableView
                 }
                 probe = current.superview
             }
-            print("DoubleClickMonitor: walk exhausted without finding NSTableView")
+            return nil
+        }
+
+        @objc private func handleDoubleClick(_ sender: NSTableView) {
+            let row = sender.clickedRow
+            guard row >= 0 else { return }
+            onDoubleClick?(row)
         }
     }
 }
