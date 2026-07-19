@@ -65,15 +65,15 @@ enum HighlightBridge {
         var overlapping: Set<UUID> = []
         for annotation in sorted {
             let start = annotation.startChar, end = annotation.endChar
-            if renderedRanges.contains(where: { r in start < r.end && end > r.start }) {
+            if renderedRanges.contains(where: { range in start < range.end && end > range.start }) {
                 overlapping.insert(annotation.id)
             }
             renderedRanges.append((start, end))
         }
         for annotation in sorted {
-            let js = restoreHighlightJS(annotation: annotation,
+            let highlightJS = restoreHighlightJS(annotation: annotation,
                                         useUnderline: overlapping.contains(annotation.id))
-            webView.evaluateJavaScript(js, completionHandler: nil)
+            webView.evaluateJavaScript(highlightJS, completionHandler: nil)
         }
     }
 
@@ -201,7 +201,7 @@ enum HighlightBridge {
 
     static func removeHighlight(id: UUID, from webView: WKWebView) {
         let hexID = id.uuidString.replacingOccurrences(of: "-", with: "")
-        let js = """
+        let removeJS = """
         (function() {
             var baseID = '\(hexID)';
             // Collect all spans for this annotation (single span or multi-segment)
@@ -219,11 +219,11 @@ enum HighlightBridge {
             document.body.normalize();
         })();
         """
-        webView.evaluateJavaScript(js, completionHandler: nil)
+        webView.evaluateJavaScript(removeJS, completionHandler: nil)
     }
 
     static func clearHighlights(from webView: WKWebView, completion: (() -> Void)? = nil) {
-        let js = """
+        let clearJS = """
         (function() {
             var spans = Array.from(document.querySelectorAll('[data-ambrosia-highlight="1"]'));
             spans.forEach(function(span) {
@@ -235,7 +235,7 @@ enum HighlightBridge {
             document.body.normalize();
         })();
         """
-        webView.evaluateJavaScript(js) { _, _ in completion?() }
+        webView.evaluateJavaScript(clearJS) { _, _ in completion?() }
     }
 
     // MARK: - Decode messages
@@ -261,15 +261,21 @@ enum HighlightBridge {
         )
     }
 
-    static func decodeTap(from message: WKScriptMessage) -> (id: String, x: CGFloat, y: CGFloat)? {
+    struct TapInfo {
+        let id: String
+        let x: CGFloat
+        let y: CGFloat
+    }
+
+    static func decodeTap(from message: WKScriptMessage) -> TapInfo? {
         guard message.name == "highlightTapped",
-              let body  = message.body as? String,
-              let data  = body.data(using: .utf8),
-              let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let id    = json["id"]    as? String,
-              let x     = json["x"]    as? CGFloat,
-              let y     = json["y"] as? CGFloat
+              let body = message.body as? String,
+              let data = body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = json["id"] as? String,
+              let tapX = json["x"] as? CGFloat,
+              let tapY = json["y"] as? CGFloat
         else { return nil }
-        return (id, x, y)
+        return TapInfo(id: id, x: tapX, y: tapY)
     }
 }
