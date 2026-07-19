@@ -1,0 +1,84 @@
+name: Build DMG
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-dmg:
+    name: Build Unsigned DMG
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+
+      - name: Build Ambrosia
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          build_dir="${RUNNER_TEMP}/build"
+          build_log="${RUNNER_TEMP}/Ambrosia-build.log"
+
+          set -o pipefail
+          xcodebuild \
+            -project Ambrosia.xcodeproj \
+            -scheme Ambrosia \
+            -configuration Release \
+            -destination "platform=macOS,arch=arm64" \
+            -derivedDataPath "$build_dir" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee "$build_log" | xcbeautify --renderer github-actions
+
+      - name: Locate built app
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app_path=$(find "${RUNNER_TEMP}/build/Build/Products/Release" -maxdepth 1 -name "*.app" -print -quit)
+
+          if [ -z "$app_path" ]; then
+            echo "Could not find built .app" >&2
+            exit 1
+          fi
+
+          echo "APP_PATH=$app_path" >> "$GITHUB_ENV"
+          echo "APP_NAME=$(basename "$app_path" .app)" >> "$GITHUB_ENV"
+
+      - name: Create DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          staging_dir="${RUNNER_TEMP}/dmg-staging"
+          rm -rf "$staging_dir"
+          mkdir -p "$staging_dir"
+
+          cp -R "$APP_PATH" "$staging_dir/"
+          ln -s /Applications "$staging_dir/Applications"
+
+          dmg_path="${RUNNER_TEMP}/${APP_NAME}.dmg"
+
+          hdiutil create \
+            -volname "$APP_NAME" \
+            -srcfolder "$staging_dir" \
+            -ov \
+            -format UDZO \
+            "$dmg_path"
+
+          echo "DMG_PATH=$dmg_path" >> "$GITHUB_ENV"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-unsigned-dmg
+          path: ${{ env.DMG_PATH }}
+          if-no-files-found: error
+          retention-days: 14
