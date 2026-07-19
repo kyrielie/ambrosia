@@ -1457,7 +1457,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                   let note = annotation.note, !note.isEmpty
             else { return }
             DispatchQueue.main.async { [weak self] in
-                self?.presentNotePopover(note: note, clientX: tap.x, clientY: tap.y)
+                self?.presentNotePopover(note: note, clientX: tap.locationX, clientY: tap.locationY)
             }
 
         default:

@@ -11,8 +11,8 @@ import SwiftUI
 struct AnnotationSidebarView: View {
 
     let annotations: [Annotation]
-    let onJump:   (Annotation) -> Void
-    let onDelete: (UUID)       -> Void
+    let onJump: (Annotation) -> Void
+    let onDelete: (UUID) -> Void
 
     private var sorted: [Annotation] {
         annotations.sorted {
@@ -81,8 +81,8 @@ struct AnnotationSidebarView: View {
 private struct AnnotationRow: View {
 
     let annotation: Annotation
-    let onJump:   (Annotation) -> Void
-    let onDelete: (UUID)       -> Void
+    let onJump: (Annotation) -> Void
+    let onDelete: (UUID) -> Void
 
     @State private var isEditingNote: Bool = false
 
