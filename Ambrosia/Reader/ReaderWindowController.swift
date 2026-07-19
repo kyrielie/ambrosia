@@ -45,6 +45,20 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         )
         window.title   = target.displayTitle
         window.minSize = NSSize(width: 600, height: 500)
+        // AppKit's automatic window-restoration ("Resume") is on by default
+        // for every NSWindow (isRestorable == true) and runs independently
+        // of the per-book setFrameAutosaveName/setFrameUsingName restore
+        // just below. Since this window has no restoration identifier or
+        // registered NSWindowRestoration class, the system can't actually
+        // rebuild it on relaunch -- see the
+        // "restoreWindowWithIdentifier:state:completionHandler: Unable to
+        // find className=(null)" log line -- but it still runs, still
+        // tries to persist/apply its own snapshot of the window's frame at
+        // launch, and can race with or clobber the per-book restore below.
+        // Disable it outright: per-book frame persistence is already
+        // handled correctly and exclusively by setFrameAutosaveName /
+        // setFrameUsingName.
+        window.isRestorable = false
         super.init(window: window)
         window.delegate = self
 
