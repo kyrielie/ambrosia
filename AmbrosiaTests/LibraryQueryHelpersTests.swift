@@ -7,6 +7,10 @@ import XCTest
 // populated on the CalibreBook fixtures below — everything else uses
 // CalibreBook's real (non-optional) fields with placeholder values, since
 // CalibreBook has no synthesized default init for a partial fixture.
+//
+// visibleIDs/visibleBooks were retired from LibraryQueryHelpers in favor of
+// LibraryVisibilityPolicy.filter(_:) (see that type's doc comment); the
+// tests below exercise the same behavior through the policy type.
 final class LibraryQueryHelpersTests: XCTestCase {
 
     private func makeBook(
@@ -30,90 +34,80 @@ final class LibraryQueryHelpersTests: XCTestCase {
         )
     }
 
-    // MARK: - visibleIDs
+    private func makePolicy(
+        showSkippedCollection: Bool = true,
+        shouldGroupSeriesRows: Bool = false,
+        hideNonAO3PublisherBooks: Bool = false,
+        hideAnthologyBooks: Bool = false,
+        hideDuplicateBooks: Bool = false,
+        skippedIDs: Set<Int> = [],
+        seriesOrMergedIDs: Set<Int> = [],
+        ao3PublisherIDs: Set<Int> = [],
+        anthologyIDs: Set<Int> = [],
+        duplicateLoserIDs: Set<Int> = []
+    ) -> LibraryVisibilityPolicy {
+        LibraryVisibilityPolicy(
+            showSkippedCollection: showSkippedCollection,
+            shouldGroupSeriesRows: shouldGroupSeriesRows,
+            hideNonAO3PublisherBooks: hideNonAO3PublisherBooks,
+            hideAnthologyBooks: hideAnthologyBooks,
+            hideDuplicateBooks: hideDuplicateBooks,
+            skippedIDs: skippedIDs,
+            seriesOrMergedIDs: seriesOrMergedIDs,
+            ao3PublisherIDs: ao3PublisherIDs,
+            anthologyIDs: anthologyIDs,
+            duplicateLoserIDs: duplicateLoserIDs
+        )
+    }
+
+    // MARK: - visibleIDs (via LibraryVisibilityPolicy.filter(_: [Int]))
 
     func testVisibleIDsHidesSkippedUnlessShowSkippedIsOn() {
-        let result = LibraryQueryHelpers.visibleIDs(
-            [1, 2, 3],
-            showSkippedCollection: false,
-            shouldGroupSeriesRows: false,
-            skippedIDs: [2],
-            seriesOrMergedIDs: [],
-            hideNonAO3PublisherBooks: false,
-            ao3PublisherIDs: []
-        )
-        XCTAssertEqual(result, [1, 3])
+        let policy = makePolicy(showSkippedCollection: false, skippedIDs: [2])
+        XCTAssertEqual(policy.filter([1, 2, 3]), [1, 3])
     }
 
     func testVisibleIDsShowsSkippedWhenFlagIsOn() {
-        let result = LibraryQueryHelpers.visibleIDs(
-            [1, 2, 3],
-            showSkippedCollection: true,
-            shouldGroupSeriesRows: false,
-            skippedIDs: [2],
-            seriesOrMergedIDs: [],
-            hideNonAO3PublisherBooks: false,
-            ao3PublisherIDs: []
-        )
-        XCTAssertEqual(result, [1, 2, 3])
+        let policy = makePolicy(showSkippedCollection: true, skippedIDs: [2])
+        XCTAssertEqual(policy.filter([1, 2, 3]), [1, 2, 3])
     }
 
     func testVisibleIDsSuppressesSeriesMembersOnlyWhenGroupingIsOn() {
         // Without grouping, a series member must still show as a standalone
         // row -- this is the multi-series-membership case called out in
-        // LibraryQueryHelpers' own doc comment.
-        let ungrouped = LibraryQueryHelpers.visibleIDs(
-            [1, 2], showSkippedCollection: false, shouldGroupSeriesRows: false,
-            skippedIDs: [], seriesOrMergedIDs: [2],
-            hideNonAO3PublisherBooks: false, ao3PublisherIDs: []
-        )
-        XCTAssertEqual(ungrouped, [1, 2])
+        // LibraryVisibilityPolicy's own doc comment.
+        let ungrouped = makePolicy(shouldGroupSeriesRows: false, seriesOrMergedIDs: [2])
+        XCTAssertEqual(ungrouped.filter([1, 2]), [1, 2])
 
-        let grouped = LibraryQueryHelpers.visibleIDs(
-            [1, 2], showSkippedCollection: false, shouldGroupSeriesRows: true,
-            skippedIDs: [], seriesOrMergedIDs: [2],
-            hideNonAO3PublisherBooks: false, ao3PublisherIDs: []
-        )
-        XCTAssertEqual(grouped, [1])
+        let grouped = makePolicy(shouldGroupSeriesRows: true, seriesOrMergedIDs: [2])
+        XCTAssertEqual(grouped.filter([1, 2]), [1])
     }
 
     func testVisibleIDsHidesNonAO3PublisherBooksWhenFlagIsOn() {
-        let result = LibraryQueryHelpers.visibleIDs(
-            [1, 2], showSkippedCollection: false, shouldGroupSeriesRows: false,
-            skippedIDs: [], seriesOrMergedIDs: [],
-            hideNonAO3PublisherBooks: true, ao3PublisherIDs: [1]
-        )
-        XCTAssertEqual(result, [1])
+        let policy = makePolicy(hideNonAO3PublisherBooks: true, ao3PublisherIDs: [1])
+        XCTAssertEqual(policy.filter([1, 2]), [1])
     }
 
     func testVisibleIDsOnEmptyInputReturnsEmpty() {
-        let result = LibraryQueryHelpers.visibleIDs(
-            [], showSkippedCollection: false, shouldGroupSeriesRows: false,
-            skippedIDs: [], seriesOrMergedIDs: [],
-            hideNonAO3PublisherBooks: false, ao3PublisherIDs: []
-        )
-        XCTAssertEqual(result, [])
+        let policy = makePolicy()
+        XCTAssertEqual(policy.filter([] as [Int]), [])
     }
 
-    // MARK: - visibleBooks
+    // MARK: - visibleBooks (via LibraryVisibilityPolicy.filter(_: [CalibreBook]))
 
     func testVisibleBooksExcludesAnthologyDescriptionsRegardlessOfOtherFlags() {
         let anthology = makeBook(id: 1, comment: "Anthology of short works.")
         let normal = makeBook(id: 2, comment: "A perfectly normal fic.")
-        let result = LibraryQueryHelpers.visibleBooks(
-            [anthology, normal], showSkippedCollection: true, shouldGroupSeriesRows: false,
-            skippedIDs: [], seriesOrMergedIDs: [], hideNonAO3PublisherBooks: false
-        )
+        let policy = makePolicy(showSkippedCollection: true, hideAnthologyBooks: true)
+        let result = policy.filter([anthology, normal])
         XCTAssertEqual(result.map(\.id), [2])
     }
 
     func testVisibleBooksHidesNonAO3PublisherBooksWhenFlagIsOn() {
         let ao3Book = makeBook(id: 1, publisher: "Archive of Our Own")
         let otherBook = makeBook(id: 2, publisher: "Some Other Publisher")
-        let result = LibraryQueryHelpers.visibleBooks(
-            [ao3Book, otherBook], showSkippedCollection: true, shouldGroupSeriesRows: false,
-            skippedIDs: [], seriesOrMergedIDs: [], hideNonAO3PublisherBooks: true
-        )
+        let policy = makePolicy(showSkippedCollection: true, hideNonAO3PublisherBooks: true)
+        let result = policy.filter([ao3Book, otherBook])
         XCTAssertEqual(result.map(\.id), [1])
     }
 

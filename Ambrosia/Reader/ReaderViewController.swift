@@ -1450,14 +1450,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             }
 
         case "highlightTapped":
-            guard let (idStr, clientX, clientY) = HighlightBridge.decodeTap(from: message) else { return }
-            let idWithDashes = idStr.inserting(dashes: true)
+            guard let tap = HighlightBridge.decodeTap(from: message) else { return }
+            let idWithDashes = tap.id.inserting(dashes: true)
             guard let uuid = UUID(uuidString: idWithDashes),
                   let annotation = annotations.first(where: { $0.id == uuid }),
                   let note = annotation.note, !note.isEmpty
             else { return }
             DispatchQueue.main.async { [weak self] in
-                self?.presentNotePopover(note: note, clientX: clientX, clientY: clientY)
+                self?.presentNotePopover(note: note, clientX: tap.x, clientY: tap.y)
             }
 
         default:
