@@ -2055,12 +2055,29 @@ struct FilterSheetCarrier: View {
                     ),
                     onApply: {
                         emailVC?.applyFilterRules()
+                        // Don't rely solely on FilterDrawerView's own dismiss()
+                        // (an @Environment(\.dismiss) call). That dismiss is
+                        // anchored to filterSheetHost, a 0x0 NSHostingView glued
+                        // onto this NSViewController purely so SwiftUI's .sheet
+                        // has somewhere to attach -- a fragile interop pattern
+                        // (see the "NSHostingView is being laid out reentrantly"
+                        // / "layoutSubtreeIfNeeded on a view which is already
+                        // being laid out" warnings this can trigger while the
+                        // tag-suggestions popover is repositioning). If that
+                        // dismiss() call lands during a skipped layout pass it
+                        // can silently no-op, leaving the sheet's window stuck
+                        // open with nothing tracking it as still presented.
+                        // Flipping the state binding directly closes the sheet
+                        // regardless of whether the environment dismiss() made
+                        // it through.
+                        toolbarState.showFilterDrawer = false
                     },
                     onClear: {
                         toolbarState.filterExpression   = FilterExpression()
                         toolbarState.activeFilterResult = nil
                         toolbarState.cancelLibraryFilterApplication()
                         emailVC?.scheduleLoadPage(reset: true)
+                        toolbarState.showFilterDrawer = false   // see onApply's comment above
                     }
                 )
                 .environment(toolbarState)
