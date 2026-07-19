@@ -187,9 +187,17 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
     /// our own applyDefaultWindowSize()/resetToDefaultSize() calls back into
     /// this, which would otherwise immediately overwrite a real user resize
     /// with whatever default/remembered size we just set.
+    ///
+    /// Also gated on didApplyInitialWindowSize: assigning
+    /// window.contentViewController during init() (before showWindow(_:) has
+    /// run applyDefaultWindowSizeIfNeeded) can itself trigger an incidental,
+    /// arbitrary-sized resize. At that point isApplyingProgrammaticResize is
+    /// still false, so without this guard that incidental resize would
+    /// silently stomp Self.sessionWindowSize with garbage moments before
+    /// showWindow(_:) reads it back out.
     @MainActor
     func windowDidResize(_ notification: Notification) {
-        guard !isApplyingProgrammaticResize, let window else { return }
+        guard didApplyInitialWindowSize, !isApplyingProgrammaticResize, let window else { return }
         Self.sessionWindowSize = window.frame.size
     }
 
