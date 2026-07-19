@@ -95,10 +95,12 @@ struct LibraryListDoubleClickMonitor: NSViewRepresentable {
 
             var probe: NSView? = hit
             while let current = probe {
-                // A double-click on any button/control inside the row (tag
-                // pill, like toggle, series index button, ...) is that
-                // control's own business, not ours.
-                if current is NSControl { return }
+                // NSTableView must be checked *before* the NSControl bailout
+                // below: NSTableView is itself an NSControl subclass, so if
+                // the order were reversed, the walk would match "is
+                // NSControl" the moment it reached the table view and return
+                // before ever reaching the NSTableView branch -- silently
+                // swallowing every double-click. Do not reorder these.
                 if let tableView = current as? NSTableView {
                     let localPoint = tableView.convert(windowPoint, from: nil)
                     let row = tableView.row(at: localPoint)
@@ -106,6 +108,10 @@ struct LibraryListDoubleClickMonitor: NSViewRepresentable {
                     onDoubleClick?(row)
                     return
                 }
+                // A double-click on any button/control inside the row (tag
+                // pill, like toggle, series index button, ...) is that
+                // control's own business, not ours.
+                if current is NSControl { return }
                 probe = current.superview
             }
         }
