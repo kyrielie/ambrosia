@@ -33,9 +33,9 @@ struct SeriesSpineMap {
         var starts: [Int] = []
         starts.reserveCapacity(spineCounts.count)
         var running = 0
-        for c in spineCounts {
+        for spineCount in spineCounts {
             starts.append(running)
-            running += c
+            running += spineCount
         }
         self.workStartOffsets = starts
         self.count = running
@@ -45,10 +45,9 @@ struct SeriesSpineMap {
     /// Returns nil if out of bounds.
     func ref(atGlobalIndex globalIndex: Int) -> GlobalSpineRef? {
         guard globalIndex >= 0, globalIndex < count else { return nil }
-        for workIndex in stride(from: workStartOffsets.count - 1, through: 0, by: -1) {
-            if globalIndex >= workStartOffsets[workIndex] {
-                return GlobalSpineRef(workIndex: workIndex, localIndex: globalIndex - workStartOffsets[workIndex])
-            }
+        for workIndex in stride(from: workStartOffsets.count - 1, through: 0, by: -1)
+        where globalIndex >= workStartOffsets[workIndex] {
+            return GlobalSpineRef(workIndex: workIndex, localIndex: globalIndex - workStartOffsets[workIndex])
         }
         return nil
     }
