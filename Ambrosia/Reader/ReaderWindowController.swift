@@ -26,7 +26,6 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         }
         let wc = ReaderWindowController(target: target, modelContainer: modelContainer)
         openWindows[target.windowKey] = wc
-        wc.applyDefaultWindowSizeIfNeeded()
         wc.showWindow(nil)
     }
 
@@ -35,8 +34,9 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         self.book           = target.primaryBook
         self.modelContainer = modelContainer
 
-        // Create window with a placeholder size; actual size set in windowDidLoad
-        // once NSScreen.main is reliable (it can be nil during init).
+        // Create window with a placeholder size; actual size is set once the
+        // window is actually shown (see the showWindow(_:) override below),
+        // since window.screen is nil until then.
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 700, height: 900),
             styleMask:   [.titled, .closable, .miniaturizable, .resizable],
@@ -66,7 +66,7 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         // for this book/target, keyed the same way `openWindows` already is.
         // If there's no saved frame (first time opening this book), the
         // placeholder size above stands until applyDefaultWindowSizeIfNeeded
-        // runs in windowDidLoad.
+        // runs from the showWindow(_:) override below.
         let autosaveName = "AmbrosiaReaderWindow.\(target.windowKey)"
         window.setFrameAutosaveName(autosaveName)
         if window.setFrameUsingName(autosaveName) {
@@ -92,6 +92,21 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
     override func windowDidLoad() {
         super.windowDidLoad()
         sessionStartDate = Date()
+    }
+
+    // Sizing must happen here rather than in windowDidLoad(): this window is
+    // constructed via super.init(window:) rather than loaded from a nib, so
+    // AppKit considers it already "loaded" and never actually calls
+    // windowDidLoad(). showWindow(_:) is the call site open() already uses to
+    // display the window, and — critically — by the time super.showWindow(_:)
+    // returns, the window has been ordered onto a real NSScreen, so
+    // window.screen below is no longer nil. Previously the only call to
+    // applyDefaultWindowSizeIfNeeded() ran in open(), before showWindow(nil),
+    // when window.screen was always nil and sizing silently fell back to
+    // NSScreen.main / NSScreen.screens[0] -- not reliably the screen the user
+    // is actually working on (multi-monitor setups, docking/undocking, etc.).
+    override func showWindow(_ sender: Any?) {
+        super.showWindow(sender)
         applyDefaultWindowSizeIfNeeded()
     }
 
@@ -108,7 +123,7 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
     /// preference anymore — half-screen-portrait is the only formula.
     private func applyDefaultWindowSize() {
         guard let window else { return }
-        let screen  = window.screen ?? NSScreen.main ?? NSScreen.screens[0]
+        let screen  = window.screen ?? Self.screenUnderMouse() ?? NSScreen.main ?? NSScreen.screens[0]
         let visible = screen.visibleFrame
 
         let width  = (visible.width * 0.50).rounded()
@@ -117,6 +132,16 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         let x = visible.minX + (visible.width - width) / 2
         let y = visible.minY + (visible.height - height) / 2
         window.setFrame(NSRect(x: x, y: y, width: width, height: height), display: false)
+    }
+
+    /// Best-effort fallback for the rare case window.screen is still nil after
+    /// showWindow(_:) returns (e.g. a screen was disconnected mid-launch).
+    /// Prefers the display the user's pointer is currently on, since that's a
+    /// better proxy for "where the user is working" than NSScreen.main, which
+    /// merely reflects whatever window currently has key status.
+    private static func screenUnderMouse() -> NSScreen? {
+        let mouseLocation = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) }
     }
 
     @MainActor
