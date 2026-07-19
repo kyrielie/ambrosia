@@ -87,8 +87,8 @@ final class PaginationEngine: NSObject {
         super.init()
     }
 
-    func setColsPerScreen(_ n: ColsPerScreen) {
-        colsPerScreen = n.rawValue
+    func setColsPerScreen(_ cols: ColsPerScreen) {
+        colsPerScreen = cols.rawValue
     }
 
     // MARK: Called from webView(_:didFinish:) — after CSS is already applied
@@ -97,17 +97,17 @@ final class PaginationEngine: NSObject {
     /// CSS is already baked into the loaded HTML, so no delay is needed to
     /// wait for layout to settle.
     func applyLayout(restorePosition: RestorePosition) {
-        guard let wv = webView else { return }
+        guard let webViewRef = webView else { return }
         isReady = false
         pendingRestorePosition = restorePosition
 
-        let js = """
+        let setupJS = """
         \(PaginationJS.script)
         window.ambrosiaSetup(\(colsPerScreen));
         window.ambrosiaPaginationMetrics();
         """
 
-        wv.evaluateJavaScript(js) { [weak self] result, error in
+        webViewRef.evaluateJavaScript(setupJS) { [weak self] result, error in
             guard let self else { return }
             if let error {
                 #if DEBUG
@@ -132,8 +132,8 @@ final class PaginationEngine: NSObject {
                 self.scrollToColumn(0)
             case .end:
                 self.scrollToColumn(totalCols - 1)
-            case .fraction(let f):
-                self.scrollToFraction(f)
+            case .fraction(let fraction):
+                self.scrollToFraction(fraction)
             }
 
             self.spineDidLoad?(totalCols)
@@ -144,8 +144,8 @@ final class PaginationEngine: NSObject {
     /// spine reload, so the reload can request .fraction(f) as its restore
     /// position. Does NOT reapply layout itself — see invariant 8.
     func currentFraction(completion: @escaping (Double) -> Void) {
-        guard isReady, let wv = webView else { completion(0); return }
-        wv.evaluateJavaScript("window.ambrosiaProgressFraction();") { result, _ in
+        guard isReady, let webViewRef = webView else { completion(0); return }
+        webViewRef.evaluateJavaScript("window.ambrosiaProgressFraction();") { result, _ in
             completion((result as? Double) ?? 0)
         }
     }
@@ -187,9 +187,15 @@ final class PaginationEngine: NSObject {
     }
 
     func queryProgress(completion: @escaping (_ fraction: Double, _ column: Int, _ total: Int) -> Void) {
-        guard isReady, let wv = webView else { completion(0, 0, 1); return }
-        let js = "JSON.stringify({f:window.ambrosiaProgressFraction(),c:window.ambrosiaCurrentColumn(),t:window.ambrosiaColumnCount()});"
-        wv.evaluateJavaScript(js) { result, _ in
+        guard isReady, let webViewRef = webView else { completion(0, 0, 1); return }
+        let progressJS = """
+        JSON.stringify({
+            f: window.ambrosiaProgressFraction(),
+            c: window.ambrosiaCurrentColumn(),
+            t: window.ambrosiaColumnCount()
+        });
+        """
+        webViewRef.evaluateJavaScript(progressJS) { result, _ in
             guard let str = result as? String,
                   let data = str.data(using: .utf8),
                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Double]
