@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  swiftlint:
+    name: SwiftLint
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install SwiftLint
+        run: brew install swiftlint
+
+      - name: Run SwiftLint
+        run: swiftlint lint --strict --reporter github-actions-logging
+
+  macos-tests:
+    name: macOS Tests
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+
+      - name: Run macOS Tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          result_bundle="${RUNNER_TEMP}/Ambrosia-macOS.xcresult"
+          build_log="${RUNNER_TEMP}/Ambrosia-macOS-build.log"
+          rm -rf "$result_bundle"
+
+          set -o pipefail
+          xcodebuild \
+            -project Ambrosia.xcodeproj \
+            -scheme Ambrosia \
+            -destination "platform=macOS,arch=arm64" \
+            -resultBundlePath "$result_bundle" \
+            test 2>&1 | tee "$build_log" | xcbeautify --renderer github-actions
+
+      - name: Upload macOS Result Bundle
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ambrosia-macos-xcresult
+          path: ${{ runner.temp }}/Ambrosia-macOS.xcresult
+          if-no-files-found: warn
+          retention-days: 7
