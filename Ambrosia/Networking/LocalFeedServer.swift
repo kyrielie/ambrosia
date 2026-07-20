@@ -3,6 +3,20 @@ import Darwin
 import FlyingFox
 import SwiftData
 
+/// Order-preserving dedup for feed metadata arrays (fandoms, relationships,
+/// characters, warnings, categories, freeform tags). Used by
+/// `buildJSONFeedItem`, `buildGroupedJSONFeedItem`, and `transferRow` so
+/// every metadata array field goes through the same pass across all three
+/// wire formats this file emits — none of their consumers dedup on their
+/// own end, and the per-field handling used to be inconsistent (some fields
+/// relied on `SeriesGroup`'s own `Set`-based construction; `warnings` and the
+/// singleton items' fandoms/relationships/characters/warnings had no dedup
+/// pass anywhere).
+private func dedupPreservingOrder(_ values: [String]) -> [String] {
+    var seen = Set<String>()
+    return values.filter { seen.insert($0).inserted }
+}
+
 // MARK: - §9 / §4: LocalFeedServer
 //
 // Lightweight RSS 2.0 + `content:encoded` feed server backed by FlyingFox.
@@ -2007,11 +2021,15 @@ actor LocalFeedServer {
         for tag in buckets.regular + (ao3?.additionalTags ?? []) {
             if seenTags.insert(tag).inserted { tags.append(tag) }
         }
-        func dedup(_ values: [String]) -> [String] {
-            var seen = Set<String>()
-            return values.filter { seen.insert($0).inserted }
-        }
-        let categories = dedup(buckets.categories + (ao3?.categories ?? []))
+        // Same dedup pass as buildJSONFeedItem, so this route's *_json
+        // columns never silently disagree with the JSON Feed's _ambrosia
+        // fields for the same book (see this function's doc comment).
+        let fandoms       = dedupPreservingOrder(ao3?.fandoms.compactMap { $0.isEmpty ? nil : $0 } ?? [])
+        let relationships = dedupPreservingOrder(ao3?.relationships.compactMap { $0.isEmpty ? nil : $0 } ?? [])
+        let characters    = dedupPreservingOrder(ao3?.characters.compactMap { $0.isEmpty ? nil : $0 } ?? [])
+        let categories    = dedupPreservingOrder(buckets.categories + (ao3?.categories ?? []))
+        let warnings      = dedupPreservingOrder(buckets.warnings)
+        let ratings       = AO3Rating.highest(among: book.tags).map { [$0.rawValue] } ?? []
         let anthologyEntry = anthologySeriesEntry(for: book, seriesEntries: pair.seriesEntries)
         let seriesEntries = ao3?.series.map { JSONFeedSeriesEntry(name: $0.name, index: $0.index, ao3_id: $0.ao3ID) } ?? []
 
@@ -2037,11 +2055,11 @@ actor LocalFeedServer {
             chapterCurrent: ao3?.chapterCurrent,
             chapterTotal: ao3?.chapterTotal,
             isComplete: ao3?.isComplete,
-            fandomsJSON: json(ao3?.fandoms.compactMap { $0.isEmpty ? nil : $0 } ?? []),
-            relationshipsJSON: json(ao3?.relationships.compactMap { $0.isEmpty ? nil : $0 } ?? []),
-            charactersJSON: json(ao3?.characters.compactMap { $0.isEmpty ? nil : $0 } ?? []),
-            ratingsJSON: json(buckets.ratings),
-            warningsJSON: json(buckets.warnings),
+            fandomsJSON: json(fandoms),
+            relationshipsJSON: json(relationships),
+            charactersJSON: json(characters),
+            ratingsJSON: json(ratings),
+            warningsJSON: json(warnings),
             categoriesJSON: json(categories),
             seriesJSON: json(seriesEntries),
             isReadLater: isReadLater,
@@ -2142,11 +2160,15 @@ actor LocalFeedServer {
             if seenTags.insert(tag).inserted { tags.append(tag) }
         }
 
-        func dedup(_ values: [String]) -> [String] {
-            var seen = Set<String>()
-            return values.filter { seen.insert($0).inserted }
-        }
-        let categories = dedup(buckets.categories + (ao3?.categories ?? []))
+        // Every _ambrosia metadata array field goes through the same
+        // order-preserving dedup pass — previously only `categories` did
+        // (via this now-removed local closure), while fandoms/relationships/
+        // characters/warnings had no dedup pass anywhere for singleton items.
+        let fandoms       = dedupPreservingOrder(ao3?.fandoms.compactMap { $0.isEmpty ? nil : $0 } ?? [])
+        let relationships = dedupPreservingOrder(ao3?.relationships.compactMap { $0.isEmpty ? nil : $0 } ?? [])
+        let characters    = dedupPreservingOrder(ao3?.characters.compactMap { $0.isEmpty ? nil : $0 } ?? [])
+        let categories    = dedupPreservingOrder(buckets.categories + (ao3?.categories ?? []))
+        let warnings      = dedupPreservingOrder(buckets.warnings)
 
         let dateModified = ao3?.updatedDate.flatMap { $0.isEmpty ? nil : iso8601DateString(from: $0) }
         let anthologyEntry = anthologySeriesEntry(for: book, seriesEntries: seriesEntries)
@@ -2156,11 +2178,16 @@ actor LocalFeedServer {
             chapter_current: ao3?.chapterCurrent,
             chapter_total: ao3?.chapterTotal,
             is_complete: ao3?.isComplete,
-            fandoms: ao3?.fandoms.compactMap { $0.isEmpty ? nil : $0 },
-            relationships: ao3?.relationships.compactMap { $0.isEmpty ? nil : $0 },
-            characters: ao3?.characters.compactMap { $0.isEmpty ? nil : $0 },
-            ratings: buckets.ratings.isEmpty ? nil : buckets.ratings,
-            warnings: buckets.warnings.isEmpty ? nil : buckets.warnings,
+            fandoms: fandoms.isEmpty ? nil : fandoms,
+            relationships: relationships.isEmpty ? nil : relationships,
+            characters: characters.isEmpty ? nil : characters,
+            // A single book should only ever carry one rating tag in
+            // Calibre, but resolve through the same hierarchy-aware helper
+            // as the grouped path anyway, rather than trusting that
+            // invariant — harmless if it never triggers, and keeps both
+            // paths behaving identically if it ever doesn't hold.
+            ratings: AO3Rating.highest(among: book.tags).map { [$0.rawValue] },
+            warnings: warnings.isEmpty ? nil : warnings,
             categories: categories.isEmpty ? nil : categories,
             series: ao3?.series.map { JSONFeedSeriesEntry(name: $0.name, index: $0.index, ao3_id: $0.ao3ID) },
             date_modified: dateModified,
@@ -2228,11 +2255,23 @@ actor LocalFeedServer {
         for tag in buckets.regular + group.allAdditionalTags {
             if seenTags.insert(tag).inserted { tags.append(tag) }
         }
-        func dedup(_ values: [String]) -> [String] {
-            var seen = Set<String>()
-            return values.filter { seen.insert($0).inserted }
-        }
-        let categories = dedup(buckets.categories + group.allCategories)
+        // `group.allFandoms`/`allRelationships`/`allCharacters` are already
+        // built via `Set(...).sorted()` in `SeriesGroupBuilder.swift`, so
+        // wrapping them here is redundant today — but it removes the
+        // implicit cross-file invariant ("this is safe because the builder
+        // already deduped it") and keeps this function correct on its own
+        // terms even if `SeriesGroup`'s construction ever changes.
+        let fandoms       = dedupPreservingOrder(group.allFandoms)
+        let relationships = dedupPreservingOrder(group.allRelationships)
+        let characters    = dedupPreservingOrder(group.allCharacters)
+        let categories    = dedupPreservingOrder(buckets.categories + group.allCategories)
+        let warnings      = dedupPreservingOrder(buckets.warnings)
+
+        // One rating tag for the whole group — the highest on the hierarchy,
+        // per AO3Rating.level — never the raw per-member union. The partner
+        // app has no hierarchy of its own, so a grouped item must only ever
+        // publish one rating tag, not e.g. ["Explicit", "General Audiences"].
+        let ratings = AO3Rating.highest(among: unionTags).map { [$0.rawValue] }
 
         let leaderAO3 = members.first?.ao3
         let datePublished = group.earliestPublished.map { iso8601DateString(from: $0) }
@@ -2267,11 +2306,11 @@ actor LocalFeedServer {
             chapter_current: group.chapterCurrentTotal,
             chapter_total: group.chapterTotalTotal,
             is_complete: group.isComplete,
-            fandoms: group.allFandoms.isEmpty ? nil : group.allFandoms,
-            relationships: group.allRelationships.isEmpty ? nil : group.allRelationships,
-            characters: group.allCharacters.isEmpty ? nil : group.allCharacters,
-            ratings: buckets.ratings.isEmpty ? nil : buckets.ratings,
-            warnings: buckets.warnings.isEmpty ? nil : buckets.warnings,
+            fandoms: fandoms.isEmpty ? nil : fandoms,
+            relationships: relationships.isEmpty ? nil : relationships,
+            characters: characters.isEmpty ? nil : characters,
+            ratings: ratings,
+            warnings: warnings.isEmpty ? nil : warnings,
             categories: categories.isEmpty ? nil : categories,
             series: nil,
             date_modified: dateModified,

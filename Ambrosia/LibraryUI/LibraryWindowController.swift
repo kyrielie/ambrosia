@@ -899,6 +899,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         let expandedIDs = await SeriesMatchExpansion.expand(
             matchedIDs: ids,
             shouldGroupSeriesRows: toolbarState?.groupBySeries ?? false,
+            filter: toolbarState?.filterExpression,
+            library: session.library,
             metaDB: session.metaDB
         )
         CurrentSearchSnapshot.publish(calibreIDs: expandedIDs, label: label, libraryHash: libHash)
