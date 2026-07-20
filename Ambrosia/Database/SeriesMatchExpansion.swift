@@ -27,7 +27,7 @@ enum SeriesMatchExpansion {
     /// used to decide whether an expanded series group should be dropped
     /// entirely. Two distinct shapes, matching the two rating-shaped
     /// `FilterOperator`s that can appear on a `.rating` `FilterRule`:
-    enum SeriesRatingConstraint {
+    enum SeriesRatingConstraint: Equatable {
         /// From `.ratingAtMost` — a series may contain this rating or
         /// anything lower on the hierarchy (`AO3Rating.level`); only a
         /// member rated *above* `level` disqualifies the group.
