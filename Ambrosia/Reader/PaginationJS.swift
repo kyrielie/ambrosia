@@ -43,10 +43,21 @@ import Foundation
 //
 // KEYSTROKES: handled entirely in Swift (ReaderViewController).
 //   JS does not install any keydown listeners.
+//
+// The script is assembled from several fileprivate chunks below rather than
+// one long literal, so PaginationJS's enum body stays under SwiftLint's
+// type_body_length limit. The chunks are concatenated in order and form a
+// single IIFE; they are not meaningful Swift APIs on their own.
 
 enum PaginationJS {
 
-    static let script: String = #"""
+    static let script: String = _pjsSetupAndColumnCount + _pjsScrollAndPaging
+        + _pjsNavigateAndHighlight + _pjsMetricsAndHelpers
+}
+
+// MARK: - Setup, column count, current column
+
+private let _pjsSetupAndColumnCount: String = #"""
     (function () {
     'use strict';
 
@@ -190,6 +201,11 @@ enum PaginationJS {
         }
         return Math.max(0, rounded);
     };
+    """#
+
+// MARK: - Scroll to column, progress fraction, page navigation
+
+private let _pjsScrollAndPaging: String = #"""
 
     // ─── Scroll to column n ───────────────────────────────────────────────────
 
@@ -243,7 +259,8 @@ enum PaginationJS {
         var cur   = window.ambrosiaCurrentColumn();
         var total = window.ambrosiaColumnCount();
         var next  = cur + _colsPerScreen;
-        console.log('[ambrosiaNextPage] cur=' + cur + ' total=' + total + ' next=' + next + ' scrollX=' + window.scrollX);
+        console.log('[ambrosiaNextPage] cur=' + cur + ' total=' + total +
+            ' next=' + next + ' scrollX=' + window.scrollX);
         if (next >= total) {
             _postPageAction('nextSpineItem');
             return;
@@ -263,6 +280,11 @@ enum PaginationJS {
         window.ambrosiaScrollToColumn(Math.max(0, cur - _colsPerScreen));
         _postPositionUpdate();
     };
+    """#
+
+// MARK: - Navigate to char offset, scroll to anchor, highlight flash
+
+private let _pjsNavigateAndHighlight: String = #"""
 
     // ─── Navigate to char offset ──────────────────────────────────────────────
     //
@@ -314,7 +336,8 @@ enum PaginationJS {
             else range.setEndAfter(pos.node);
             var span = document.createElement('span');
             span.id = '__ambrosia_highlight__';
-            span.style.cssText = 'background-color:rgba(255,214,10,0.55);border-radius:2px;transition:opacity 1.5s;opacity:1;';
+            span.style.cssText =
+                'background-color:rgba(255,214,10,0.55);border-radius:2px;transition:opacity 1.5s;opacity:1;';
             range.surroundContents(span);
             window.ambrosiaNavigateToOffset(offset);
             setTimeout(function () {
@@ -323,6 +346,11 @@ enum PaginationJS {
             }, 500);
         } catch (e) { /* surroundContents throws across element boundaries — ignore */ }
     };
+    """#
+
+// MARK: - Metrics, internal helpers, IIFE close
+
+private let _pjsMetricsAndHelpers: String = #"""
 
     // ─── Metrics (used by Swift to read column count after load) ─────────────
 
@@ -386,4 +414,3 @@ enum PaginationJS {
 
     })();
     """#
-}

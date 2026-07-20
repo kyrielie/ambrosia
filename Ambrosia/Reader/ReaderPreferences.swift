@@ -440,12 +440,12 @@ final class ReaderPreferences: ObservableObject {
 
         // showTOCSidebar is intentionally absent — see keyBindings' doc comment.
         static let keyBindings: [RebindableAction: KeyBinding] = [
-            .toggleReadingMode:     KeyBinding(character: "m", modifiers: [.command, .shift]),
-            .addAnnotation:         KeyBinding(character: "d", modifiers: [.command]),
+            .toggleReadingMode: KeyBinding(character: "m", modifiers: [.command, .shift]),
+            .addAnnotation: KeyBinding(character: "d", modifiers: [.command]),
             .showAnnotationSidebar: KeyBinding(character: "b", modifiers: [.command]),
-            .toggleFindBar:         KeyBinding(character: "f", modifiers: [.command]),
-            .findNext:              KeyBinding(character: "g", modifiers: [.command]),
-            .findPrevious:          KeyBinding(character: "g", modifiers: [.command, .shift]),
+            .toggleFindBar: KeyBinding(character: "f", modifiers: [.command]),
+            .findNext: KeyBinding(character: "g", modifiers: [.command]),
+            .findPrevious: KeyBinding(character: "g", modifiers: [.command, .shift])
         ]
     }
 
@@ -838,16 +838,16 @@ final class ReaderPreferences: ObservableObject {
     }
 
     static let fontPresets: [FontPreset] = [
-        FontPreset(id: "iowan",       label: "Iowan Old Style",  cssStack: "\"Iowan Old Style\", Georgia, serif"),
-        FontPreset(id: "newyork",     label: "New York",          cssStack: "\"New York\", Georgia, serif"),
-        FontPreset(id: "georgia",     label: "Georgia",           cssStack: "Georgia, serif"),
-        FontPreset(id: "palatino",    label: "Palatino",          cssStack: "Palatino, \"Palatino Linotype\", serif"),
-        FontPreset(id: "times",       label: "Times New Roman",   cssStack: "\"Times New Roman\", Times, serif"),
-        FontPreset(id: "charter",     label: "Charter",           cssStack: "Charter, Georgia, serif"),
-        FontPreset(id: "system",      label: "System (SF Pro)",   cssStack: "-apple-system, sans-serif"),
-        FontPreset(id: "avenir",      label: "Avenir Next",       cssStack: "\"Avenir Next\", Avenir, sans-serif"),
-        FontPreset(id: "seravek",     label: "Seravek",           cssStack: "Seravek, \"Gill Sans\", sans-serif"),
-        FontPreset(id: "courier",     label: "Courier New",       cssStack: "\"Courier New\", Courier, monospace"),
+        FontPreset(id: "iowan", label: "Iowan Old Style", cssStack: "\"Iowan Old Style\", Georgia, serif"),
+        FontPreset(id: "newyork", label: "New York", cssStack: "\"New York\", Georgia, serif"),
+        FontPreset(id: "georgia", label: "Georgia", cssStack: "Georgia, serif"),
+        FontPreset(id: "palatino", label: "Palatino", cssStack: "Palatino, \"Palatino Linotype\", serif"),
+        FontPreset(id: "times", label: "Times New Roman", cssStack: "\"Times New Roman\", Times, serif"),
+        FontPreset(id: "charter", label: "Charter", cssStack: "Charter, Georgia, serif"),
+        FontPreset(id: "system", label: "System (SF Pro)", cssStack: "-apple-system, sans-serif"),
+        FontPreset(id: "avenir", label: "Avenir Next", cssStack: "\"Avenir Next\", Avenir, sans-serif"),
+        FontPreset(id: "seravek", label: "Seravek", cssStack: "Seravek, \"Gill Sans\", sans-serif"),
+        FontPreset(id: "courier", label: "Courier New", cssStack: "\"Courier New\", Courier, monospace")
     ]
 
     /// Returns the display label for the currently selected font family.

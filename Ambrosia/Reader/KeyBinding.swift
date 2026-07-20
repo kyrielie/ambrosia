@@ -122,7 +122,7 @@ private let reservedBindings: [KeyBinding] = [
     KeyBinding(character: "z", modifiers: [.command]),
     KeyBinding(character: "z", modifiers: [.command, .shift]),
     KeyBinding(character: ",", modifiers: [.command]),
-    KeyBinding(character: "o", modifiers: [.command]),
+    KeyBinding(character: "o", modifiers: [.command])
 ]
 
 /// Pure, UI/NSEvent-free so it's unit-testable alongside
