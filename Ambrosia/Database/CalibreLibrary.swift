@@ -433,6 +433,8 @@ actor CalibreLibrary {
         let matchedIDs = await SeriesMatchExpansion.expand(
             matchedIDs: rawMatchedIDs,
             shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
+            filter: filter,
+            library: self,
             metaDB: metaDB
         )
         let allIDs = visibility.filter(matchedIDs)
@@ -484,6 +486,41 @@ actor CalibreLibrary {
         return result
     }
 
+    /// Bulk-fetch just the AO3 rating tag(s) attached to each of `ids`, keyed
+    /// by calibre id — analogous to `bulkTitles`, used by
+    /// `SeriesMatchExpansion.expand` so series-aware rating checks don't pay
+    /// for a full `booksForIDs` hydration (authors/tags/comments) just to
+    /// read one tag. A book normally has zero or one rating tag; the array
+    /// shape is defensive, not an expectation of multiples. Chunked at the
+    /// same 900-id boundary as `_tags(for:)`, since this is the same
+    /// `books_tags_link`/`tags` join with an additional bound rating-name
+    /// list on top, and unchunked would risk exceeding SQLite's bound
+    /// parameter limit for large expanded-series ID sets.
+    func bulkRatingTags(ids: [Int]) -> [Int: [String]] {
+        guard !ids.isEmpty else { return [:] }
+        let ratingValues = AO3Rating.allCases.map(\.rawValue)
+        let ratingPlaceholders = ratingValues.map { _ in "?" }.joined(separator: ",")
+        var result: [Int: [String]] = [:]
+        let chunkSize = 900
+        for chunkStart in stride(from: 0, to: ids.count, by: chunkSize) {
+            let chunk = Array(ids[chunkStart..<min(chunkStart + chunkSize, ids.count)])
+            let placeholders = chunk.map { _ in "?" }.joined(separator: ",")
+            let sql = """
+                SELECT btl.book, t.name FROM books_tags_link btl
+                JOIN tags t ON t.id = btl.tag
+                WHERE btl.book IN (\(placeholders))
+                  AND t.name IN (\(ratingPlaceholders))
+                """
+            let args = chunk.map { $0 as Binding? } + ratingValues.map { $0 as Binding? }
+            guard let rows = try? db.prepare(sql, args).map({ $0 }) else { continue }
+            for row in rows {
+                guard let id = (row[0] as? Int64).map(Int.init), let tag = row[1] as? String else { continue }
+                result[id, default: []].append(tag)
+            }
+        }
+        return result
+    }
+
     /// Group-aware title-sorted page. `orderByClause(.title)` alone can't do
     /// this: it sorts SQL rows by `b.title`, one book at a time, which is
     /// fine per-book but scatters a grouped series' representative row
@@ -527,6 +564,8 @@ actor CalibreLibrary {
         let matchedIDs = await SeriesMatchExpansion.expand(
             matchedIDs: rawMatchedIDs,
             shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
+            filter: filter,
+            library: self,
             metaDB: metaDB
         )
         let allIDs = visibility.filter(matchedIDs)
@@ -597,6 +636,8 @@ actor CalibreLibrary {
         let matchedIDs = await SeriesMatchExpansion.expand(
             matchedIDs: rawMatchedIDs,
             shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
+            filter: filter,
+            library: self,
             metaDB: metaDB
         )
         let count = visibility.filter(matchedIDs).count
@@ -630,6 +671,8 @@ actor CalibreLibrary {
         let matchedIDs = await SeriesMatchExpansion.expand(
             matchedIDs: rawMatchedIDs,
             shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
+            filter: filter,
+            library: self,
             metaDB: metaDB
         )
         let allIDs = visibility.filter(matchedIDs)

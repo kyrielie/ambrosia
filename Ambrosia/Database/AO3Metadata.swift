@@ -41,6 +41,16 @@ enum AO3Rating: String, CaseIterable {
         guard let myLevel = level else { return [] }
         return AO3Rating.allCases.filter { ($0.level ?? Int.max) < myLevel }
     }
+
+    /// The single highest-hierarchy rating found among `tags`. Unrecognized
+    /// tags are ignored. `.notRated` (outside the linear scale, `level ==
+    /// nil`) only wins if every recognized rating tag present is itself
+    /// `.notRated` — any ranked rating beats it. Returns nil if `tags`
+    /// contains no recognized rating tag at all.
+    static func highest(among tags: [String]) -> AO3Rating? {
+        tags.compactMap { AO3Rating(rawValue: $0) }
+            .max { ($0.level ?? -1) < ($1.level ?? -1) }
+    }
 }
 
 enum AO3Warning: String, CaseIterable {
