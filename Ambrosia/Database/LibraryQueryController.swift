@@ -9,88 +9,77 @@ import Foundation
 struct PagingOffsetState {
     var currentPage: Int = 0
 
-    /// Raw SQL row offset for the current page. When grouping is on,
-    /// visibility filtering strips most rows, so `currentPage * pageSize`
-    /// drifts far behind the actual SQL position. This tracks the true SQL
-    /// offset independently.
-    var rawSQLOffset: Int = 0
-
-    /// Stack of prior rawSQLOffset values, one push per forward page, so
-    /// "Previous" can pop back to the exact offset instead of guessing
-    /// currentPage * pageSize.
-    var rawSQLOffsetHistory: [Int] = []
-
-    /// Overflow from the group-aware drain loop in loadPage: the loop stops
-    /// once it has >= pageSize visible rows, which can overshoot by up to
-    /// pageFetchLimit - 1. The excess is buffered here and prepended to the
-    /// next forward page instead of being re-fetched (rawSQLOffset has
-    /// already moved past it) or silently dropped.
-    var rawSQLOffsetOverflow: [CalibreBook] = []
-
-    /// What kind of loadPage() call this is, with respect to
-    /// rawSQLOffset/rawSQLOffsetHistory bookkeeping. The grouped drain
-    /// branch in loadPage() used to push/advance this state unconditionally
-    /// on every call, including calls triggered by "← Previous" itself and
-    /// by unrelated reloads (filter reapply, membershipVersion bumps during
-    /// background AO3 extraction). That double-mutated the history stack:
-    /// Previous would pop a value and then the resulting reload would push
-    /// a fresh (already-stale) one right back, so backward paging past the
-    /// end of a drained/grouped search replayed the same exhausted offset
-    /// forever instead of rewinding. See incident notes below.
+    /// The raw SQL offset that page `i`'s own drain loop started from, for
+    /// every page ever visited this filter session, indexed by page number
+    /// (0-based, always contiguous — Next/Previous only move one page at a
+    /// time, so no index is ever skipped). Append-only: entries are never
+    /// removed. Revisiting a page (Previous, or Next back to a page seen
+    /// earlier after going back) re-drains from `rawSQLOffsetByPage[page]`
+    /// and is fully deterministic given an unchanged filter/sort/
+    /// visibilityVersion, so there is nothing to pop or restore — just
+    /// look the value up.
     ///
-    /// - forward: Next, or the first-ever load of a page (including page 0
-    ///   after a filter/sort reset). Pushes the pre-drain offset onto
-    ///   history, then advances rawSQLOffset to the post-drain offset.
-    /// - backward: Previous. rawSQLOffsetHistory has already been popped by
-    ///   the button action before currentPage changed; loadPage() re-drains
-    ///   from the restored rawSQLOffset but must NOT push again.
-    /// - reload: same page, different cause. Re-drains from the current
-    ///   (unchanged) rawSQLOffset and must not touch history at all.
+    /// # Incident notes
+    /// This replaced an earlier stack-based design
+    /// (`rawSQLOffsetHistory: [Int]`, pushed on every forward load, popped
+    /// by "Previous") that had two compounding bugs:
     ///
-    /// Set explicitly at every call site that changes `currentPage` or
-    /// otherwise triggers loadPage(); loadPage() consumes it and resets it
-    /// to `.reload` so a stray follow-up call defaults to the safe,
-    /// non-mutating case rather than silently inheriting `.forward`.
-    enum NavigationIntent {
-        case forward
-        case backward
-        case reload
-    }
+    /// 1. The push happened unconditionally on every `loadPage()` call
+    ///    through the grouped drain branch, including calls triggered by
+    ///    Previous itself and by unrelated reloads (filter reapply,
+    ///    membershipVersion bumps from background AO3 extraction). Each
+    ///    such call re-pushed the (already-stale) current offset, silently
+    ///    duplicating entries and desyncing the stack's depth from
+    ///    `currentPage`. A first fix attempted to gate the push by an
+    ///    explicit `NavigationIntent` (forward/backward/reload) threaded
+    ///    through ~20 call sites.
+    ///
+    /// 2. Even with that gating in place, the stack model was wrong on its
+    ///    own terms: loading page N pushed *page N's own starting offset*,
+    ///    but by the time page N+1 loaded, its push captured *page N's
+    ///    post-drain (ending) offset* — the value page N left behind, not
+    ///    a value belonging to N+1. Popping "the last entry" when going
+    ///    Previous from N+1 therefore returned page N's *end* offset, not
+    ///    its *start* offset — redraining from it just replayed page N+1's
+    ///    own content again, one page short of where the user actually
+    ///    was. This produced exactly the observed crash: after 7 clean
+    ///    forward pages, one Previous click desynced
+    ///    `rawSQLOffsetHistory.count` from `currentPage` and tripped the
+    ///    debug assertion that had been added to catch this class of bug.
+    ///
+    /// The per-page array below sidesteps both problems: there is no
+    /// "direction" to get wrong, because every page's start offset is
+    /// looked up by its own index rather than inferred from stack depth.
+    var rawSQLOffsetByPage: [Int] = []
+
+    /// Same indexing as `rawSQLOffsetByPage`: the overflow rows (from the
+    /// previous page's drain overshooting pageSize) that must seed page
+    /// `i`'s `visible` array before its own drain runs. Needed because the
+    /// group-aware drain loop couples adjacent pages together — page N+1's
+    /// displayed rows are `[overflow left over from page N] + [freshly
+    /// drained rows]` — so redraining page N+1 in isolation on a revisit
+    /// requires knowing what N's overflow was, not just N+1's own SQL
+    /// offset.
+    var seedOverflowByPage: [[CalibreBook]] = []
+
+    /// The furthest raw SQL offset drained so far this filter session.
+    /// Only advances when a genuinely new (never-before-visited) page is
+    /// loaded; revisiting an already-recorded page never touches this.
+    var rawSQLOffsetFrontier: Int = 0
+
+    /// The overflow rows produced by the most recently *newly drained*
+    /// page, waiting to seed the next never-before-seen page. Only
+    /// mutated alongside `rawSQLOffsetFrontier`, for the same reason.
+    var rawSQLOffsetOverflowFrontier: [CalibreBook] = []
 
     mutating func resetForNewFilter() {
         currentPage = 0
-        rawSQLOffset = 0
-        rawSQLOffsetHistory = []
-        rawSQLOffsetOverflow = []
+        rawSQLOffsetByPage = []
+        seedOverflowByPage = []
+        rawSQLOffsetFrontier = 0
+        rawSQLOffsetOverflowFrontier = []
     }
 }
-
-// MARK: - Incident notes: backward-pagination offset corruption
-//
-// Symptom: paging backward ("← Previous") through a search whose results
-// required the group-aware drain loop (shouldGroupSeriesRows == true, i.e.
-// visibility filtering stripped enough rows that a single SQL page window
-// collapsed to fewer than pageSize visible rows) would, after reaching the
-// true end of the result set, show empty pages on every subsequent Previous
-// click instead of the expected earlier rows.
-//
-// Root cause: rawSQLOffsetHistory.append(rawSQLOffset) plus the
-// rawSQLOffset = <post-drain offset> assignment ran unconditionally inside
-// loadPage()'s grouped drain branch, on every call through that branch —
-// not just forward navigation. Clicking Previous popped a history entry and
-// set rawSQLOffset to it, then currentPage -= 1 fired .onChange(of:
-// currentPage), which called loadPage() again; that call re-entered the
-// same drain branch and re-pushed/re-advanced rawSQLOffset from whatever it
-// had just been set to, corrupting the entry the next Previous click needed.
-// A background reload (e.g. an AO3 extraction batch bumping
-// membershipVersion) hitting the same branch had the identical effect even
-// with no page navigation at all.
-//
-// Fix: `PagingOffsetState.NavigationIntent`, set explicitly by every call
-// site that triggers loadPage(), consumed once per call. Only `.forward`
-// pushes to rawSQLOffsetHistory; `.backward` and `.reload` re-run the drain
-// loop to repopulate the current page's rows but never mutate the history
-// stack. See loadPage()'s grouped branch in LibraryRootView.swift.
 
 
 /// Filtering logic shared by `LibraryRootView` and `EmailLibraryViewController`.
