@@ -84,7 +84,18 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
 
         // Update lastOpenedDate in BookState
         let calibreID = book.id
-        Task.detached {
+        // Explicit .userInitiated: this runs on Swift's cooperative thread
+        // pool at whatever priority Task.detached defaults to (.medium) if
+        // left unspecified, which can run at a lower QoS than the
+        // main-actor (.userInteractive) work opening this window. If
+        // ModelContainer's internal locking is ever contended between this
+        // save and main-thread SwiftData access, a lower-priority thread
+        // holding that lock while a user-interactive thread waits on it is
+        // a priority inversion (Thread Performance Checker's "Hang Risk").
+        // Raising this detached task's priority doesn't remove the
+        // contention, but keeps it from running at a lower QoS than the
+        // thread that might wait on it.
+        Task.detached(priority: .userInitiated) {
             let ctx = ModelContext(modelContainer)
             let state = LibraryQueryHelpers.stateForMutation(calibreID, in: ctx)
             state.lastOpenedDate = Date()
