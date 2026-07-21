@@ -58,11 +58,21 @@ final class EmailLibraryViewController: NSViewController {
     // §Phase2-Pass1: currentPage/rawSQLOffset/rawSQLOffsetHistory/
     // groupAwareOverflow used to be four independent properties (this file
     // used the name "groupAwareOverflow" where LibraryRootView used
-    // "rawSQLOffsetOverflow" for the identical purpose -- both now map onto
-    // PagingOffsetState.rawSQLOffsetOverflow). Bundled into one
+    // "rawSQLOffsetOverflow" for the identical purpose). Bundled into one
     // PagingOffsetState, shared type with LibraryRootView, so
     // LibraryQueryController (Pass 4/5) can take one inout value instead of
     // four/five loosely-named parameters.
+    //
+    // PagingOffsetState was since refactored to a per-page model
+    // (rawSQLOffsetByPage/seedOverflowByPage/rawSQLOffsetFrontier/
+    // rawSQLOffsetOverflowFrontier -- see that type's doc comment in
+    // LibraryQueryController.swift for why). This view has no Previous, only
+    // forward/append-only paging via loadNextPageIfAvailable, so every load
+    // here is a new page: it always reads from and advances the frontier,
+    // and never reads back rawSQLOffsetByPage/seedOverflowByPage -- they're
+    // recorded on each load purely to keep this view's usage of the shared
+    // type consistent with LibraryRootView's, not because anything here
+    // reads them back.
     private var offsetState = PagingOffsetState()
     private var hasNextPage = false
     private let pageSize    = 25
@@ -1216,9 +1226,19 @@ final class EmailLibraryViewController: NSViewController {
                 "filter": LibraryFilterDebug.summary(expression: toolbarState.filterExpression)
             ])
             if shouldGroupSidebarRows {
-                var visible: [CalibreBook] = reset ? [] : offsetState.rawSQLOffsetOverflow
-                if !reset { offsetState.rawSQLOffsetOverflow = [] }
-                var offset = offsetState.rawSQLOffset
+                // PagingOffsetState was refactored to a per-page model
+                // (rawSQLOffsetByPage/seedOverflowByPage/rawSQLOffsetFrontier/
+                // rawSQLOffsetOverflowFrontier — see that type's doc comment
+                // in LibraryQueryController.swift) but this view still has no
+                // Previous, only forward/append-only paging via
+                // loadNextPageIfAvailable, so every load here is a new page:
+                // read from the frontier, then record it, mirroring
+                // LibraryRootView's isNewPage branch.
+                let startOffset = offsetState.rawSQLOffsetFrontier
+                let startOverflow = reset ? [] : offsetState.rawSQLOffsetOverflowFrontier
+                var visible: [CalibreBook] = startOverflow
+                if !reset { offsetState.rawSQLOffsetOverflowFrontier = [] }
+                var offset = startOffset
                 var exhausted = false
                 var totalRawFetched = 0
                 var iterations = 0
@@ -1243,8 +1263,9 @@ final class EmailLibraryViewController: NSViewController {
                     guard !isTornDown, !Task.isCancelled else { return }
                 }
                 guard !isTornDown, !Task.isCancelled else { return }
-                offsetState.rawSQLOffsetHistory.append(offsetState.rawSQLOffset)
-                offsetState.rawSQLOffset = offset
+                offsetState.rawSQLOffsetByPage.append(startOffset)
+                offsetState.seedOverflowByPage.append(startOverflow)
+                offsetState.rawSQLOffsetFrontier = offset
                 groupAwareVisible = visible
                 hasNextPage = !exhausted || visible.count > pageSize
                 LibraryFilterDebug.log("visibleBooks.end", [
@@ -1298,9 +1319,11 @@ final class EmailLibraryViewController: NSViewController {
                 "query": LibraryFilterDebug.summary(query: query)
             ])
             if shouldGroupSidebarRows {
-                var visible: [CalibreBook] = reset ? [] : offsetState.rawSQLOffsetOverflow
-                if !reset { offsetState.rawSQLOffsetOverflow = [] }
-                var offset = offsetState.rawSQLOffset
+                let startOffset = offsetState.rawSQLOffsetFrontier
+                let startOverflow = reset ? [] : offsetState.rawSQLOffsetOverflowFrontier
+                var visible: [CalibreBook] = startOverflow
+                if !reset { offsetState.rawSQLOffsetOverflowFrontier = [] }
+                var offset = startOffset
                 var exhausted = false
                 var totalRawFetched = 0
                 var iterations = 0
@@ -1323,8 +1346,9 @@ final class EmailLibraryViewController: NSViewController {
                     guard !isTornDown, !Task.isCancelled else { return }
                 }
                 guard !isTornDown, !Task.isCancelled else { return }
-                offsetState.rawSQLOffsetHistory.append(offsetState.rawSQLOffset)
-                offsetState.rawSQLOffset = offset
+                offsetState.rawSQLOffsetByPage.append(startOffset)
+                offsetState.seedOverflowByPage.append(startOverflow)
+                offsetState.rawSQLOffsetFrontier = offset
                 groupAwareVisible = visible
                 hasNextPage = !exhausted || visible.count > pageSize
                 LibraryFilterDebug.log("visibleBooks.end", [
@@ -1354,12 +1378,12 @@ final class EmailLibraryViewController: NSViewController {
         } else if let groupAwareVisible {
             // hasNextPage was already set by the group-aware drain loop above.
             page = Array(groupAwareVisible.prefix(pageSize))
-            offsetState.rawSQLOffsetOverflow = Array(groupAwareVisible.dropFirst(pageSize))
+            offsetState.rawSQLOffsetOverflowFrontier = Array(groupAwareVisible.dropFirst(pageSize))
             LibraryFilterDebug.log("visibleBooks.pagePrefix", [
                 "surface": "email",
                 "visible": groupAwareVisible.count,
                 "page": page.count,
-                "overflow": offsetState.rawSQLOffsetOverflow.count
+                "overflow": offsetState.rawSQLOffsetOverflowFrontier.count
             ])
         } else {
             let visible = visibleBooks(raw)
