@@ -46,6 +46,11 @@ struct EPUBParser {
     private(set) var spine: [SpineItem] = []
     private(set) var title: String = ""
     private(set) var opfBasePath: String = ""   // e.g. "OEBPS"
+    /// Raw `dc:creator` element text, in document order, one element per
+    /// entry (an element may itself hold a comma-joined list of names —
+    /// see `FullOPFParser.dcCreators`). Populated by `parse()` alongside
+    /// `title`, since the OPF is already being parsed for spine/title.
+    private(set) var opfCreators: [String] = []
 
     // MARK: - TOCEntry
 
@@ -111,6 +116,7 @@ struct EPUBParser {
         xmlParser.parse()
 
         title = opfParser.dcTitle ?? ""
+        opfCreators = opfParser.dcCreators
 
         // Build spine in order
         var items: [SpineItem] = []

@@ -701,8 +701,40 @@ final class LibrarySession {
                         for item in parser.spine.prefix(5) {
                             checked += 1
                             let html = try parser.html(for: item, userCSS: "")
-                            if let metadata = AO3MetadataExtractor.extract(from: html) {
+                            if var metadata = AO3MetadataExtractor.extract(from: html) {
                                 spineItemsChecked = checked
+                                let prefaceIndex = checked - 1
+
+                                // Byline is the very next spine item in every observed
+                                // case; scan a couple further only in case something
+                                // non-standard sits between preface and chapter 1. Do
+                                // NOT reuse the wide prefix(5) preface scan here — this
+                                // runs on ~70k books, and the covers/TOC pages that
+                                // justify a wide scan before the preface don't exist
+                                // after it.
+                                let bylineRangeEnd = min(prefaceIndex + 3, parser.spine.count)
+                                for candidateIndex in (prefaceIndex + 1)..<bylineRangeEnd {
+                                    let candidate = parser.spine[candidateIndex]
+                                    guard let chapterHTML = try? parser.html(for: candidate, userCSS: "") else { continue }
+                                    let bylineAuthors = AO3MetadataExtractor.parseAuthors(from: chapterHTML)
+                                    if !bylineAuthors.isEmpty {
+                                        metadata.authors = bylineAuthors
+                                        break
+                                    }
+                                }
+
+                                // Tier 2: EPUB's own dc:creator — free, already parsed,
+                                // no Calibre dependency. One dc:creator element may hold
+                                // a comma-joined name list (observed AO3 export shape).
+                                if metadata.authors.isEmpty {
+                                    let names = parser.opfCreators
+                                        .flatMap { $0.components(separatedBy: ", ") }
+                                        .map { $0.trimmingCharacters(in: .whitespaces) }
+                                        .filter { !$0.isEmpty }
+                                    metadata.authors = names.map {
+                                        AO3AuthorEntry(username: $0, pseud: nil, profileURL: nil, source: .opfCreator)
+                                    }
+                                }
                                 return metadata
                             }
                         }
@@ -719,7 +751,17 @@ final class LibrarySession {
                 failureReason = "no EPUB found"
                 metadata = nil
             }
-            if let metadata {
+            if var metadata {
+                // Tier 3: Calibre's own author field, last resort. Deliberately
+                // resolved here rather than inside the inner scan above — this is
+                // the one dependency we're trying to phase out (see 3.4), kept as
+                // a single, isolated, easy-to-delete-later call site.
+                if metadata.authors.isEmpty {
+                    let calibreAuthors = await library.booksForIDs([id]).first?.authors ?? []
+                    metadata.authors = calibreAuthors.map {
+                        AO3AuthorEntry(username: $0, pseud: nil, profileURL: nil, source: .calibre)
+                    }
+                }
                 return .success(metadata, id)
             } else {
                 return .failure(AO3ExtractionDiagnostic(
