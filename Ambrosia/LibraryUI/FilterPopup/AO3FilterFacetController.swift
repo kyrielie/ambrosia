@@ -198,6 +198,7 @@ final class AO3FilterFacetController {
         if field != .relationship { addTagRules(state.includedRelationships, state.excludedRelationships, .tag) }
         if field != .character { addTagRules(state.includedCharacters, state.excludedCharacters, .tag) }
         if field != .freeform { addTagRules(state.includedFreeforms, state.excludedFreeforms, .tag) }
+        if field != .author { addTagRules(state.includedAuthors, state.excludedAuthors, .authorName) }
         if field != .warning {
             for w in state.includedWarnings { includeGroup.rules.append(FilterRule(field: .warning, op: .equals, value: w.rawValue)) }
             for w in state.excludedWarnings { excludeGroup.rules.append(FilterRule(field: .warning, op: .notEquals, value: w.rawValue)) }

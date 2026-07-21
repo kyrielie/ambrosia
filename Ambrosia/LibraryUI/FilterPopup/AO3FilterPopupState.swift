@@ -21,6 +21,8 @@ final class AO3FilterPopupState {
     var excludedCharacters:    Set<String> = []
     var includedFreeforms:     Set<String> = []
     var excludedFreeforms:     Set<String> = []
+    var includedAuthors:       Set<String> = []
+    var excludedAuthors:       Set<String> = []
 
     // Warning/Category use AO3's own fixed vocabularies (AO3Warning/AO3Category)
     // rather than free-form facet strings, but are still include/exclude pairs.
@@ -79,7 +81,7 @@ final class AO3FilterPopupState {
     // property access (`self.includedFandoms = ...`) is unaffected, so
     // dispatching through a switch avoids the problem entirely.
     enum StringTagField {
-        case fandom, relationship, character, freeform
+        case fandom, relationship, character, freeform, author
     }
 
     func isIncluded(_ value: String, field: StringTagField) -> Bool {
@@ -88,6 +90,7 @@ final class AO3FilterPopupState {
         case .relationship: return includedRelationships.contains(value)
         case .character:    return includedCharacters.contains(value)
         case .freeform:     return includedFreeforms.contains(value)
+        case .author:       return includedAuthors.contains(value)
         }
     }
 
@@ -97,6 +100,7 @@ final class AO3FilterPopupState {
         case .relationship: return excludedRelationships.contains(value)
         case .character:    return excludedCharacters.contains(value)
         case .freeform:     return excludedFreeforms.contains(value)
+        case .author:       return excludedAuthors.contains(value)
         }
     }
 
@@ -114,6 +118,9 @@ final class AO3FilterPopupState {
         case .freeform:
             if includedFreeforms.contains(value) { includedFreeforms.remove(value) }
             else { includedFreeforms.insert(value); excludedFreeforms.remove(value) }
+        case .author:
+            if includedAuthors.contains(value) { includedAuthors.remove(value) }
+            else { includedAuthors.insert(value); excludedAuthors.remove(value) }
         }
     }
 
@@ -131,6 +138,9 @@ final class AO3FilterPopupState {
         case .freeform:
             if excludedFreeforms.contains(value) { excludedFreeforms.remove(value) }
             else { excludedFreeforms.insert(value); includedFreeforms.remove(value) }
+        case .author:
+            if excludedAuthors.contains(value) { excludedAuthors.remove(value) }
+            else { excludedAuthors.insert(value); includedAuthors.remove(value) }
         }
     }
 }
@@ -171,6 +181,7 @@ extension AO3FilterPopupState {
         addTagRules(include: includedRelationships, exclude: excludedRelationships)
         addTagRules(include: includedCharacters, exclude: excludedCharacters)
         addTagRules(include: includedFreeforms, exclude: excludedFreeforms)
+        addTagRules(include: includedAuthors, exclude: excludedAuthors, field: .authorName)
 
         for w in includedWarnings { includeGroup.rules.append(FilterRule(field: .warning, op: .equals, value: w.rawValue)) }
         for w in excludedWarnings { excludeGroup.rules.append(FilterRule(field: .warning, op: .notEquals, value: w.rawValue)) }

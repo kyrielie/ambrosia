@@ -187,7 +187,7 @@ struct FilterRule: Identifiable, Codable, Equatable {
             return FilterOperator.ratingOperators
         case .warning, .category, .collection, .status, .crossover:
             return FilterOperator.exactOperators
-        case .tag:
+        case .tag, .authorName:
             return FilterOperator.textOperators + [.notEquals]
         case .fulltext:
             return [.contains, .notContains]
