@@ -11,6 +11,7 @@ enum AO3FacetField: String, CaseIterable {
     case freeform
     case warning
     case category
+    case author
 
     /// The `ao3_metadata` JSON-array column this facet is aggregated over.
     var jsonColumn: String {
@@ -21,6 +22,7 @@ enum AO3FacetField: String, CaseIterable {
         case .freeform:     return "additional_tags_json"
         case .warning:      return "warnings_json"
         case .category:     return "category_json"
+        case .author:       return "author_names_json"
         }
     }
 
@@ -30,6 +32,7 @@ enum AO3FacetField: String, CaseIterable {
         case .fandom, .relationship, .character, .freeform: return .tag
         case .warning: return .warning
         case .category: return .category
+        case .author: return .authorName
         }
     }
 
@@ -41,6 +44,7 @@ enum AO3FacetField: String, CaseIterable {
         case .freeform:     return "Additional Tags"
         case .warning:      return "Archive Warnings"
         case .category:     return "Categories"
+        case .author:       return "Authors"
         }
     }
 }

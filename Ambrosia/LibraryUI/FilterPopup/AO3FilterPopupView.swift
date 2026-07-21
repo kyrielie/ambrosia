@@ -307,6 +307,11 @@ struct FilterDirectionSection: View {
                 limit: facetLimits[.freeform] ?? 10, state: state, onToggle: onToggle,
                 onLoadMore: { onLoadMore(.freeform) }
             )
+            DirectionalTagFacetSection(
+                field: .author, direction: direction, entries: facets[.author] ?? [],
+                limit: facetLimits[.author] ?? 10, state: state, onToggle: onToggle,
+                onLoadMore: { onLoadMore(.author) }
+            )
         }
     }
 
@@ -371,6 +376,7 @@ struct DirectionalTagFacetSection: View {
         case .relationship: return .relationship
         case .character: return .character
         case .freeform: return .freeform
+        case .author: return .author
         case .warning, .category: return .freeform // unused here; warning/category use DirectionalEnumFacetSection
         }
     }

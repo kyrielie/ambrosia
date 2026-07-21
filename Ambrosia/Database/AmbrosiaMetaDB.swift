@@ -251,6 +251,7 @@ actor AmbrosiaMetaDB {
             story_url TEXT,
             ao3_work_id TEXT,
             authors_json TEXT,
+            author_names_json TEXT,
             kudos_count INTEGER,
             word_count INTEGER,
             chapter_current INTEGER,
@@ -282,6 +283,18 @@ actor AmbrosiaMetaDB {
         }
         if try !columnExists("ao3_metadata", "authors_json", db: db) {
             try db.run("ALTER TABLE ao3_metadata ADD COLUMN authors_json TEXT")
+        }
+        // author_names_json is a flat [String] of display names (pseud, falling
+        // back to username), kept alongside the structured authors_json. The
+        // generic facet aggregation (AmbrosiaMetaDB.topFacets/
+        // topFacetsUnconstrained) runs `json_each` expecting a scalar-string
+        // array, same shape as fandoms_json/warnings_json/etc. — authors_json's
+        // array-of-objects shape isn't that, so AO3FacetField.author points at
+        // this denormalized column instead. authors_json remains the source of
+        // truth for anything that needs the structured entry (profile URL,
+        // pseud/username, source tier).
+        if try !columnExists("ao3_metadata", "author_names_json", db: db) {
+            try db.run("ALTER TABLE ao3_metadata ADD COLUMN author_names_json TEXT")
         }
         try db.execute("""
         CREATE TABLE IF NOT EXISTS series_cache (
@@ -1021,21 +1034,24 @@ actor AmbrosiaMetaDB {
         let seriesJSON = String(data: seriesData, encoding: .utf8) ?? "[]"
         let authorsData = (try? encoder.encode(metadata.authors)) ?? Data("[]".utf8)
         let authorsJSON = String(data: authorsData, encoding: .utf8) ?? "[]"
+        let authorNames = metadata.authors.map { $0.pseud ?? $0.username }
+        let authorNamesJSON = json(authorNames)
 
         try run(
             """
             INSERT OR REPLACE INTO ao3_metadata
-            (calibre_id, story_url, ao3_work_id, authors_json, kudos_count, word_count,
+            (calibre_id, story_url, ao3_work_id, authors_json, author_names_json, kudos_count, word_count,
              chapter_current, chapter_total, is_complete, language, published_date, updated_date,
              fandoms_json, relationships_json, characters_json, additional_tags_json, category_json,
              ao3_collections_json, series_json, rating, warnings_json, extracted_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 calibreID,
                 metadata.storyURL,
                 metadata.workID,
                 authorsJSON,
+                authorNamesJSON,
                 metadata.kudosCount,
                 metadata.wordCount,
                 metadata.chapterCurrent,
