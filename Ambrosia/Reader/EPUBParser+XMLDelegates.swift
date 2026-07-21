@@ -193,7 +193,7 @@ class NCXParser: NSObject, XMLParserDelegate {
     }
 }
 
-/// Full OPF parser: extracts manifest (id→href, id→mediaType), spine order, and dc:title.
+/// Full OPF parser: extracts manifest (id→href, id→mediaType), spine order, dc:title, and dc:creator.
 class FullOPFParser: NSObject, XMLParserDelegate {
     /// manifest id → href (relative to OPF directory)
     var manifest: [String: String] = [:]
@@ -205,11 +205,19 @@ class FullOPFParser: NSObject, XMLParserDelegate {
     var spineIdrefs: [String] = []
     /// dc:title value
     var dcTitle: String?
+    /// dc:creator values, in document order. The OPF spec allows multiple
+    /// `<dc:creator>` elements; one element may itself hold a comma-joined
+    /// list of names (observed AO3 export shape), so this captures each
+    /// element's raw text without splitting it further — callers decide how
+    /// to split.
+    var dcCreators: [String] = []
 
     private var inManifest  = false
     private var inSpine     = false
     private var inTitle     = false
     private var titleBuffer = ""
+    private var inCreator     = false
+    private var creatorBuffer = ""
 
     func parser(_ parser: XMLParser, didStartElement element: String,
                 namespaceURI: String?, qualifiedName _: String?,
@@ -232,6 +240,8 @@ class FullOPFParser: NSObject, XMLParserDelegate {
             }
         case "dc:title", "title":
             if dcTitle == nil { inTitle = true; titleBuffer = "" }
+        case "dc:creator", "creator":
+            inCreator = true; creatorBuffer = ""
         default:
             break
         }
@@ -239,6 +249,7 @@ class FullOPFParser: NSObject, XMLParserDelegate {
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
         if inTitle { titleBuffer += string }
+        if inCreator { creatorBuffer += string }
     }
 
     func parser(_ parser: XMLParser, didEndElement element: String,
@@ -251,6 +262,12 @@ class FullOPFParser: NSObject, XMLParserDelegate {
                 inTitle = false
                 let trimmed = titleBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty { dcTitle = trimmed }
+            }
+        case "dc:creator", "creator":
+            if inCreator {
+                inCreator = false
+                let trimmed = creatorBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { dcCreators.append(trimmed) }
             }
         default: break
         }
