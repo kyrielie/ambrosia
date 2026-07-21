@@ -2010,8 +2010,8 @@ actor LocalFeedServer {
         let dateModified = ao3?.updatedDate.flatMap { $0.isEmpty ? nil : iso8601DateString(from: $0) }
 
         let authors: [JSONFeedAuthor] = book.authors.map { name in
-            let url = (book.authors.count == 1 ? ao3?.authorUsername : nil)
-                .map { "https://archiveofourown.org/users/\($0)" }
+            let url = (book.authors.count == 1 && ao3?.authors.count == 1)
+                ? ao3?.authors.first?.profileURL : nil
             return JSONFeedAuthor(name: name, url: url)
         }
 
@@ -2138,12 +2138,13 @@ actor LocalFeedServer {
         }
 
         // Real author array — one JSONFeedAuthor per author name, unlike RSS's
-        // single comma-joined <author>. Only attach an AO3 profile URL when there's
-        // exactly one author, since `authorUsername` is a single AO3 field and
-        // guessing which of several co-authors it belongs to would be wrong.
+        // single comma-joined <author>. Only attach an AO3 profile URL when
+        // both sides agree on exactly one author, since a Calibre author list
+        // and an AO3-extracted author list aren't guaranteed to line up
+        // one-to-one for co-authored works.
         let authors: [JSONFeedAuthor]? = book.authors.isEmpty ? nil : book.authors.map { name in
-            let url = (book.authors.count == 1 ? ao3?.authorUsername : nil)
-                .map { "https://archiveofourown.org/users/\($0)" }
+            let url = (book.authors.count == 1 && ao3?.authors.count == 1)
+                ? ao3?.authors.first?.profileURL : nil
             return JSONFeedAuthor(name: name, url: url)
         }
 
@@ -2278,8 +2279,8 @@ actor LocalFeedServer {
         let dateModified = group.latestUpdated.map { iso8601DateString(from: $0) }
 
         let authors: [JSONFeedAuthor]? = group.allAuthors.isEmpty ? nil : group.allAuthors.map { name in
-            let url = (group.allAuthors.count == 1 ? leaderAO3?.authorUsername : nil)
-                .map { "https://archiveofourown.org/users/\($0)" }
+            let url = (group.allAuthors.count == 1 && leaderAO3?.authors.count == 1)
+                ? leaderAO3?.authors.first?.profileURL : nil
             return JSONFeedAuthor(name: name, url: url)
         }
 

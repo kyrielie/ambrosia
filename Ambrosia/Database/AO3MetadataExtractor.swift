@@ -10,7 +10,7 @@ struct AO3MetadataRecord: Codable, Equatable, Sendable {
 
     var storyURL: String?
     var workID: String?
-    var authorUsername: String?
+    var authors: [AO3AuthorEntry]
     var kudosCount: Int?
     var wordCount: Int?
     var chapterCurrent: Int?
@@ -29,6 +29,33 @@ struct AO3MetadataRecord: Codable, Equatable, Sendable {
     var rating: String?
     var warnings: [String]
     var extractedAt: String
+}
+
+/// One author credited on a work. AO3 works can list multiple authors
+/// (co-authorships), including a mix of real accounts and `orphan_account`
+/// placeholders in the same byline.
+struct AO3AuthorEntry: Codable, Equatable, Sendable {
+    /// Login account, or "orphan_account" / "Anonymous" verbatim.
+    let username: String
+    /// nil when the pseud equals the username, or unknown (fallback tiers).
+    let pseud: String?
+    /// nil only when not derivable (shouldn't happen for the byline tier).
+    let profileURL: String?
+    /// Where this entry came from — see `AO3AuthorSource`.
+    let source: AO3AuthorSource
+}
+
+/// Provenance for an `AO3AuthorEntry`, in descending order of reliability.
+/// Downstream code (backfill diagnostics, matching against Calibre's author
+/// field) needs to tell these apart, so this is stored per-entry, not
+/// inferred from context.
+enum AO3AuthorSource: String, Codable, Sendable {
+    /// AO3 chapter byline — structured, has an href.
+    case byline
+    /// EPUB `dc:creator` — name only, no href.
+    case opfCreator
+    /// Calibre's own author field — name only, last resort.
+    case calibre
 }
 
 struct AO3ExtractionDiagnostic: Codable, Equatable, Sendable {
@@ -50,7 +77,7 @@ enum AO3MetadataExtractor {
             var record = AO3MetadataRecord(
                 storyURL: nil,
                 workID: nil,
-                authorUsername: nil,
+                authors: [],
                 kudosCount: nil,
                 wordCount: nil,
                 chapterCurrent: nil,

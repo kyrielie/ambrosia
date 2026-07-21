@@ -99,6 +99,7 @@ actor AmbrosiaMetaDB {
         try bridgeLegacyUserVersionMigrations(db: db)
         try migrateSeriesPlaceholdersToKeyedIfNeeded(db: db)
         try dedupeSeriesCacheIfNeeded(db: db)
+        try dropAO3AuthorUsernameIfNeeded(db: db)
         try createAO3TagSynonyms(db: db)
         try bootstrapSystemCollections(db: db)
     }
@@ -249,7 +250,7 @@ actor AmbrosiaMetaDB {
             calibre_id INTEGER PRIMARY KEY,
             story_url TEXT,
             ao3_work_id TEXT,
-            ao3_author_username TEXT,
+            authors_json TEXT,
             kudos_count INTEGER,
             word_count INTEGER,
             chapter_current INTEGER,
@@ -278,6 +279,9 @@ actor AmbrosiaMetaDB {
         }
         if try !columnExists("ao3_metadata", "warnings_json", db: db) {
             try db.run("ALTER TABLE ao3_metadata ADD COLUMN warnings_json TEXT")
+        }
+        if try !columnExists("ao3_metadata", "authors_json", db: db) {
+            try db.run("ALTER TABLE ao3_metadata ADD COLUMN authors_json TEXT")
         }
         try db.execute("""
         CREATE TABLE IF NOT EXISTS series_cache (
@@ -381,6 +385,27 @@ actor AmbrosiaMetaDB {
                 """)
             try db.run("PRAGMA user_version = \(dedupeSeriesCacheMigrationVersion)")
             try markMigrationApplied(migrationNameDedupeSeriesCache, db: db)
+        }
+    }
+
+    /// One-time schema migration: `ao3_author_username` was a dead scalar
+    /// column — the old extractor never populated it (always nil in every
+    /// extracted record). `AO3MetadataRecord.authors` replaces it with a
+    /// structured, potentially multi-author array stored as `authors_json`
+    /// (added additively in `createAO3Metadata` above, mirroring
+    /// `fandoms_json`/`relationships_json`). This drops the old column,
+    /// since nothing depends on it holding real data today. Gated on
+    /// `schema_migrations` per Invariant 11 so the DROP COLUMN runs exactly
+    /// once and a crash mid-migration can't strand the table.
+    private static let migrationNameDropAO3AuthorUsername = "2025_drop_ao3_author_username"
+
+    private static func dropAO3AuthorUsernameIfNeeded(db: Connection) throws {
+        guard !hasAppliedMigration(migrationNameDropAO3AuthorUsername, db: db) else { return }
+        try db.transaction {
+            if try columnExists("ao3_metadata", "ao3_author_username", db: db) {
+                try db.run("ALTER TABLE ao3_metadata DROP COLUMN ao3_author_username")
+            }
+            try markMigrationApplied(migrationNameDropAO3AuthorUsername, db: db)
         }
     }
 
@@ -918,7 +943,7 @@ actor AmbrosiaMetaDB {
         guard !calibreIDs.isEmpty else { return [:] }
         let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")
         let sql = """
-        SELECT calibre_id, story_url, ao3_work_id, ao3_author_username, kudos_count, word_count,
+        SELECT calibre_id, story_url, ao3_work_id, authors_json, kudos_count, word_count,
                chapter_current, chapter_total, is_complete, language, published_date, updated_date,
                fandoms_json, relationships_json, characters_json, additional_tags_json, category_json,
                ao3_collections_json, series_json, rating, warnings_json, extracted_at
@@ -934,6 +959,10 @@ actor AmbrosiaMetaDB {
             guard let string = value as? String, let data = string.data(using: .utf8) else { return [] }
             return (try? decoder.decode([AO3MetadataRecord.SeriesEntry].self, from: data)) ?? []
         }
+        func decodeAuthors(_ value: Binding?) -> [AO3AuthorEntry] {
+            guard let string = value as? String, let data = string.data(using: .utf8) else { return [] }
+            return (try? decoder.decode([AO3AuthorEntry].self, from: data)) ?? []
+        }
 
         var result: [Int: AO3MetadataRecord] = [:]
         for row in try prepare(sql, calibreIDs.map { $0 as Binding? }) {
@@ -942,7 +971,7 @@ actor AmbrosiaMetaDB {
             result[id] = AO3MetadataRecord(
                 storyURL: row[safe: 1] as? String,
                 workID: row[safe: 2] as? String,
-                authorUsername: row[safe: 3] as? String,
+                authors: decodeAuthors(row.binding(at: 3)),
                 kudosCount: row.int(at: 4),
                 wordCount: row.int(at: 5),
                 chapterCurrent: row.int(at: 6),
@@ -990,11 +1019,13 @@ actor AmbrosiaMetaDB {
         }
         let seriesData = (try? encoder.encode(metadata.series)) ?? Data("[]".utf8)
         let seriesJSON = String(data: seriesData, encoding: .utf8) ?? "[]"
+        let authorsData = (try? encoder.encode(metadata.authors)) ?? Data("[]".utf8)
+        let authorsJSON = String(data: authorsData, encoding: .utf8) ?? "[]"
 
         try run(
             """
             INSERT OR REPLACE INTO ao3_metadata
-            (calibre_id, story_url, ao3_work_id, ao3_author_username, kudos_count, word_count,
+            (calibre_id, story_url, ao3_work_id, authors_json, kudos_count, word_count,
              chapter_current, chapter_total, is_complete, language, published_date, updated_date,
              fandoms_json, relationships_json, characters_json, additional_tags_json, category_json,
              ao3_collections_json, series_json, rating, warnings_json, extracted_at)
@@ -1004,7 +1035,7 @@ actor AmbrosiaMetaDB {
                 calibreID,
                 metadata.storyURL,
                 metadata.workID,
-                metadata.authorUsername,
+                authorsJSON,
                 metadata.kudosCount,
                 metadata.wordCount,
                 metadata.chapterCurrent,
