@@ -629,6 +629,7 @@ final class EmailLibraryViewController: NSViewController {
                 ])
                 if self.toolbarState.activeFilterResult?.isSQLBacked == true,
                    self.toolbarState.activeFilterResult?.totalCount != nil {
+                    self.suppressNextReloadToken = true
                     self.toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
                 }
                 if !self.startPendingSearchTextFullTextIfNeeded() {
@@ -641,6 +642,22 @@ final class EmailLibraryViewController: NSViewController {
                     let token = self.toolbarState.beginLibraryFilterApplication()
                     Task {
                         await self.scheduleLoadPage(reset: true).value
+                        if self.toolbarState.libraryFilterApplicationToken == token {
+                            // A stale continuation's guard fails silently here, so an
+                            // abandoned in-progress query never reaches history — its
+                            // own resolution arrives after being superseded.
+                            let resultCount: Int
+                            if let knownTotal = self.toolbarState.activeFilterResult?.totalCount {
+                                resultCount = knownTotal
+                            } else if self.toolbarState.searchText.isEmpty {
+                                resultCount = self.books.count
+                            } else {
+                                let query = SearchQueryParser.parse(self.toolbarState.searchText)
+                                resultCount = await self.session.library?.bookCount(query: query) ?? self.books.count
+                                await self.session.refreshLastSearchError()
+                            }
+                            self.commitSearchActivityLogEntry(resultCount: resultCount)
+                        }
                         self.toolbarState.finishLibraryFilterApplication(token: token)
                     }
                 }
@@ -699,10 +716,11 @@ final class EmailLibraryViewController: NSViewController {
             // to nil on the shared toolbarState, restarting the spinner for no reason.
             if let existing = toolbarState.activeFilterResult,
                existing.isSQLBacked,
-               existing.totalCount != nil,
+               let existingTotalCount = existing.totalCount,
                existing.filterSignature == filterSignature {
                 toolbarState.clearPendingFullTextSearch()
                 toolbarState.cancelLibraryFilterApplication()
+                commitSearchActivityLogEntry(resultCount: existingTotalCount)
                 suppressNextReloadToken = true
                 scheduleLoadPage(reset: true)
                 LibraryFilterDebug.log("applyFilter.end", [
@@ -729,6 +747,7 @@ final class EmailLibraryViewController: NSViewController {
             toolbarState.activeFilterResult = cached
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
+            commitSearchActivityLogEntry(resultCount: cached.totalCount ?? cached.calibreIDs.count)
             suppressNextReloadToken = true
             scheduleLoadPage(reset: true)
             LibraryFilterDebug.log("applyFilter.end", [
@@ -877,6 +896,7 @@ final class EmailLibraryViewController: NSViewController {
             // Observation-driven reload race in and read stale skippedIDs/
             // seriesOrMergedIDs/etc. See Invariant 25.
             toolbarState.activeFilterResult = cacheableResult
+            commitSearchActivityLogEntry(resultCount: cacheableResult.totalCount ?? visibleFilteredIDs.count)
             suppressNextReloadToken = true
             await scheduleLoadPage(reset: true).value
             LibraryFilterDebug.log("applyFilter.end", [
@@ -996,6 +1016,7 @@ final class EmailLibraryViewController: NSViewController {
                     isSQLBacked: true,
                     filterSignature: filterSignature
                 )
+                self.commitSearchActivityLogEntry(resultCount: count)
                 LibraryFilterDebug.log("deferredCount.apply", [
                     "surface": "email",
                     "mode": "sqlPagedDeferredCount",
@@ -1414,17 +1435,23 @@ final class EmailLibraryViewController: NSViewController {
             "hasNext": hasNextPage,
             "elapsedMS": LibraryFilterDebug.elapsedMS(since: loadStart)
         ])
+    }
 
-        // Log to activity feed — only on reset (new query), not pagination.
-        if reset {
-            let expr = toolbarState.filterExpression.hasCompleteRules
-                ? toolbarState.filterExpression : nil
-            SearchActivityLog.shared.append(
-                searchText: toolbarState.searchText,
-                filterExpression: expr,
-                resultCount: toolbarState.activeFilterResult?.totalCount ?? books.count
-            )
-        }
+    /// Commits a settled search generation to the activity log. Called only
+    /// from the guarded commit points that know a final, non-superseded
+    /// result count (the plain-text debounce continuation and each
+    /// `applyFilterRules()` branch) — never from `loadPage(reset:)` itself,
+    /// since a page-0 load can happen more than once per settled query.
+    /// `SearchActivityLog.append` already no-ops on an empty/no-filter query
+    /// and dedupes against the most recent entry.
+    private func commitSearchActivityLogEntry(resultCount: Int) {
+        let expr = toolbarState.filterExpression.hasCompleteRules
+            ? toolbarState.filterExpression : nil
+        SearchActivityLog.shared.append(
+            searchText: toolbarState.searchText,
+            filterExpression: expr,
+            resultCount: resultCount
+        )
     }
 
     private func queryWithCachedFullText(_ query: SearchQuery) -> SearchQuery {

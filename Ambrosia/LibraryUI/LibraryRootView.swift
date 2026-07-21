@@ -204,7 +204,9 @@ struct LibraryRootView: View {
                     ])
                     if toolbarState.activeFilterResult?.isSQLBacked == true,
                        toolbarState.activeFilterResult?.totalCount != nil {
-                        toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
+                        let suppressedResult = FilterResult(calibreIDs: [], isSQLBacked: true)
+                        lastHandledReloadToken = suppressedResult.reloadToken   // §perf: mirrors applyFilterRules() branches; skip onChange duplicate
+                        toolbarState.activeFilterResult = suppressedResult
                     }
                     if startPendingSearchTextFullTextIfNeeded() {
                         return
@@ -227,6 +229,15 @@ struct LibraryRootView: View {
                             let query = SearchQueryParser.parse(toolbarState.searchText)
                             filteredCount = await session.library?.bookCount(query: query)
                             await session.refreshLastSearchError()
+                        }
+                        if toolbarState.libraryFilterApplicationToken == token {
+                            // A stale continuation's guard fails silently here, so an
+                            // abandoned in-progress query never reaches history — its
+                            // own resolution arrives after being superseded.
+                            let resultCount = toolbarState.activeFilterResult?.totalCount
+                                ?? filteredCount
+                                ?? books.count
+                            commitSearchActivityLogEntry(resultCount: resultCount)
                         }
                         toolbarState.finishLibraryFilterApplication(token: token)
                     }
@@ -911,19 +922,24 @@ struct LibraryRootView: View {
             "hasNext": hasNextPage,
             "elapsedMS": LibraryFilterDebug.elapsedMS(since: loadStart)
         ])
+    }
 
-        // Log to activity feed — only on page 0 (new query), not pagination.
-        // loadPage() is @MainActor, so this is already guaranteed to run on
-        // MainActor without an explicit hop.
-        if offsetState.currentPage == 0 {
-            let expr = toolbarState.filterExpression.hasCompleteRules
-                ? toolbarState.filterExpression : nil
-            SearchActivityLog.shared.append(
-                searchText: toolbarState.searchText,
-                filterExpression: expr,
-                resultCount: toolbarState.activeFilterResult?.totalCount ?? books.count
-            )
-        }
+    /// Commits a settled search generation to the activity log. Called only
+    /// from the guarded commit points that know a final, non-superseded
+    /// result count (the plain-text debounce continuation and each
+    /// `applyFilterRules()` branch) — never from `loadPage()` itself, since
+    /// a page-0 load can happen more than once per settled query. Mirrors
+    /// `EmailLibraryViewController.commitSearchActivityLogEntry`.
+    /// `SearchActivityLog.append` already no-ops on an empty/no-filter query
+    /// and dedupes against the most recent entry.
+    private func commitSearchActivityLogEntry(resultCount: Int) {
+        let expr = toolbarState.filterExpression.hasCompleteRules
+            ? toolbarState.filterExpression : nil
+        SearchActivityLog.shared.append(
+            searchText: toolbarState.searchText,
+            filterExpression: expr,
+            resultCount: resultCount
+        )
     }
 
     private func rebuildItems() {
@@ -1366,6 +1382,7 @@ struct LibraryRootView: View {
                     isSQLBacked: true,
                     filterSignature: filterSignature
                 )
+                commitSearchActivityLogEntry(resultCount: count)
                 LibraryFilterDebug.log("deferredCount.apply", [
                     "surface": "list",
                     "mode": "sqlPagedDeferredCount",
@@ -1406,11 +1423,12 @@ struct LibraryRootView: View {
             // even though nothing about the filter changed.
             if let existing = toolbarState.activeFilterResult,
                existing.isSQLBacked,
-               existing.totalCount != nil,
+               let existingTotalCount = existing.totalCount,
                existing.filterSignature == filterSignature {
                 lastHandledReloadToken = existing.reloadToken   // §perf: we call loadPage() below; skip onChange duplicate
                 toolbarState.clearPendingFullTextSearch()
                 toolbarState.cancelLibraryFilterApplication()
+                commitSearchActivityLogEntry(resultCount: existingTotalCount)
                 offsetState.resetForNewFilter()
                 Task { await loadPage() }
                 LibraryFilterDebug.log("applyFilter.end", [
@@ -1441,6 +1459,7 @@ struct LibraryRootView: View {
             toolbarState.cancelLibraryFilterApplication()
             offsetState.resetForNewFilter()
             lastHandledReloadToken = cached.reloadToken   // §perf: we call loadPage() below; skip onChange duplicate
+            commitSearchActivityLogEntry(resultCount: cached.totalCount ?? cached.calibreIDs.count)
             Task { await loadPage() }
             LibraryFilterDebug.log("applyFilter.end", [
                 "surface": "list",
@@ -1589,6 +1608,7 @@ struct LibraryRootView: View {
                 totalCount: visibleFilteredIDs.count
             )
             toolbarState.activeFilterResult = cacheableResult
+            commitSearchActivityLogEntry(resultCount: cacheableResult.totalCount ?? visibleFilteredIDs.count)
             session.rememberFilterResult(cacheableResult, for: expression)  // §7
             toolbarState.clearPendingFullTextSearch()
             cachedFilterTagExpansions = filterTagExpansions
