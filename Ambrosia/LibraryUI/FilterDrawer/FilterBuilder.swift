@@ -174,7 +174,8 @@ struct FilterBuilder {
         statusMap: [AO3CompletionStatus: Set<Int>] = [:],
         fulltextMap: [String: Set<Int>] = [:],
         crossoverMap: Set<Int> = [],
-        wordCountFallbackMap: [Int: Int]? = nil
+        wordCountFallbackMap: [Int: Int]? = nil,
+        kudosFallbackMap: [Int: Int]? = nil
     ) async -> FilterResult {
         await matchingIDsSync(
             expression:           expression,
@@ -182,7 +183,8 @@ struct FilterBuilder {
             statusMap:            statusMap,
             fulltextMap:          fulltextMap,
             crossoverMap:         crossoverMap,
-            wordCountFallbackMap: wordCountFallbackMap
+            wordCountFallbackMap: wordCountFallbackMap,
+            kudosFallbackMap:     kudosFallbackMap
         )
     }
 
@@ -192,7 +194,8 @@ struct FilterBuilder {
                      statusMap: [AO3CompletionStatus: Set<Int>] = [:],
                      fulltextMap: [String: Set<Int>] = [:],
                      crossoverMap: Set<Int> = [],
-                     wordCountFallbackMap: [Int: Int]? = nil) async -> FilterResult {
+                     wordCountFallbackMap: [Int: Int]? = nil,
+                     kudosFallbackMap: [Int: Int]? = nil) async -> FilterResult {
         let start = LibraryFilterDebug.now()
         LibraryFilterDebug.log("matchingIDs.start", [
             "mode": "explicitIDs",
@@ -227,7 +230,8 @@ struct FilterBuilder {
                                     collectionMap: collectionMap,
                                     statusMap: statusMap,
                                     crossoverMap: crossoverMap,
-                                    wordCountFallbackMap: wordCountFallbackMap)
+                                    wordCountFallbackMap: wordCountFallbackMap,
+                                    kudosFallbackMap: kudosFallbackMap)
             groupResults.append(Set(ids))
         }
 
@@ -268,7 +272,8 @@ struct FilterBuilder {
                                      collectionMap: [String: Set<Int>],
                                      statusMap: [AO3CompletionStatus: Set<Int>],
                                      crossoverMap: Set<Int> = [],
-                                     wordCountFallbackMap: [Int: Int]? = nil) async -> [Int] {
+                                     wordCountFallbackMap: [Int: Int]? = nil,
+                                     kudosFallbackMap: [Int: Int]? = nil) async -> [Int] {
         let complete = group.completeRules
         guard !complete.isEmpty else { return await library.allCalibreIDs() }
 
@@ -293,6 +298,7 @@ struct FilterBuilder {
             ids = await library.calibreIDs(matchingRules: sqlRules,
                                      conjunction: group.conjunction,
                                      wordCountFallbackMap: wordCountFallbackMap,
+                                     kudosFallbackMap: kudosFallbackMap,
                                      tagExpansions: tagExpansions)
         }
 
@@ -477,15 +483,18 @@ extension CalibreLibrary {
 
     func calibreIDs(matchingRules rules: [FilterRule], conjunction: FilterConjunction,
                     wordCountFallbackMap: [Int: Int]? = nil,
+                    kudosFallbackMap: [Int: Int]? = nil,
                     tagExpansions: [String: [String]] = [:]) -> [Int] {
         guard !rules.isEmpty else { return allCalibreIDs() }
 
         // §2a: Separate out word-count rules that need in-memory fallback.
         // sqlFragment(for:) returns nil for wordCountGT/LT when no custom column is
         // configured — those rules are handled below against wordCountFallbackMap.
+        // §2.2c: kudosGT/LT mirrors this exactly, against kudosFallbackMap.
         var clauses: [String] = []
         var args: [Binding?]  = []
         var wordCountFallbackRules: [FilterRule] = []
+        var kudosFallbackRules: [FilterRule] = []
 
         for rule in rules {
             if rule.field == .wordCountGT || rule.field == .wordCountLT {
@@ -495,6 +504,14 @@ extension CalibreLibrary {
                 } else {
                     // No custom column — collect for in-memory fallback
                     wordCountFallbackRules.append(rule)
+                }
+            } else if rule.field == .kudosGT || rule.field == .kudosLT {
+                if let (clause, ruleArgs) = sqlFragment(for: rule, tagExpansions: tagExpansions) {
+                    clauses.append(clause)
+                    args.append(contentsOf: ruleArgs)
+                } else {
+                    // No custom column — collect for in-memory fallback
+                    kudosFallbackRules.append(rule)
                 }
             } else if let (clause, ruleArgs) = sqlFragment(for: rule, tagExpansions: tagExpansions) {
                 clauses.append(clause)
@@ -551,6 +568,25 @@ extension CalibreLibrary {
                     idSet = idSet.filter { id in
                         guard let wc = fallbackMap[id] else { return false }
                         return wc < threshold
+                    }
+                default: break
+                }
+            }
+            ids = Array(idSet).sorted()
+        }
+
+        // §2.2c: Apply kudos fallback in-memory when no custom column is configured.
+        if !kudosFallbackRules.isEmpty, let fallbackMap = kudosFallbackMap {
+            var idSet = Set(ids)
+            for rule in kudosFallbackRules {
+                guard let threshold = rule.numericValue else { continue }
+                switch rule.field {
+                case .kudosGT:
+                    idSet = idSet.filter { id in (fallbackMap[id] ?? 0) > threshold }
+                case .kudosLT:
+                    idSet = idSet.filter { id in
+                        guard let kc = fallbackMap[id] else { return false }
+                        return kc < threshold
                     }
                 default: break
                 }

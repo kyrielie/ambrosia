@@ -1522,12 +1522,19 @@ struct LibraryRootView: View {
             }
             let needsWordCountFallback = needsWordCount && CustomColumnConfig.shared.wordCountLabel == nil
 
+            // §2.2c: Two-pass kudos filter, mirroring the word-count pattern exactly.
+            let needsKudos = expression.groups.flatMap(\.rules).contains {
+                $0.field == .kudosGT || $0.field == .kudosLT
+            }
+            let needsKudosFallback = needsKudos && CustomColumnConfig.shared.kudosLabel == nil
+
             // Strip wordcount rules for the first pass (no-op if fallback not needed).
-            let expressionWithoutWordCount: FilterExpression = needsWordCountFallback ? {
+            let expressionWithoutWordCount: FilterExpression = (needsWordCountFallback || needsKudosFallback) ? {
                 var stripped = expression
                 stripped.groups = expression.groups.compactMap { group in
                     let rules = group.rules.filter {
-                        $0.field != .wordCountGT && $0.field != .wordCountLT
+                        (!needsWordCountFallback || ($0.field != .wordCountGT && $0.field != .wordCountLT)) &&
+                        (!needsKudosFallback || ($0.field != .kudosGT && $0.field != .kudosLT))
                     }
                     guard !rules.isEmpty else { return nil }
                     return FilterGroup(rules: rules, conjunction: group.conjunction)
@@ -1541,40 +1548,47 @@ struct LibraryRootView: View {
             let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary,
                                         tagExpansions: filterTagExpansions)
 
-            // Pass 1: run all non-wordcount rules.
+            // Pass 1: run all non-wordcount, non-kudos rules.
             let pass1Result = await builder.matchingIDs(
                 expression: expressionWithoutWordCount,
                 collectionMap: collectionMapSnapshot,
                 statusMap: statusMapSnapshot,
                 fulltextMap: fulltextMap,
                 crossoverMap: crossoverMap,
-                wordCountFallbackMap: nil
+                wordCountFallbackMap: nil,
+                kudosFallbackMap: nil
             )
 
-            // Pass 2: if wordcount fallback is needed, fetch counts for candidates only.
+            // Pass 2: if wordcount and/or kudos fallback is needed, fetch values for
+            // candidates only, then apply both in-memory against the pass-1 survivors.
             var finalResult: FilterResult
-            if needsWordCountFallback {
+            if needsWordCountFallback || needsKudosFallback {
                 let candidateIDs = pass1Result.calibreIDs
-                let fallbackMap = await library.ao3WordCounts(ids: candidateIDs)
+                let wordCountFallback = needsWordCountFallback
+                    ? await library.ao3WordCounts(ids: candidateIDs) : nil
+                let kudosFallback = needsKudosFallback
+                    ? await library.ao3Kudos(ids: candidateIDs) : nil
 
-                var wcOnlyExpression = FilterExpression()
-                wcOnlyExpression.groups = expression.groups.compactMap { group in
+                var fallbackOnlyExpression = FilterExpression()
+                fallbackOnlyExpression.groups = expression.groups.compactMap { group in
                     let rules = group.rules.filter {
-                        ($0.field == .wordCountGT || $0.field == .wordCountLT) && $0.isComplete
+                        (needsWordCountFallback && ($0.field == .wordCountGT || $0.field == .wordCountLT) && $0.isComplete) ||
+                        (needsKudosFallback && ($0.field == .kudosGT || $0.field == .kudosLT) && $0.isComplete)
                     }
                     guard !rules.isEmpty else { return nil }
                     return FilterGroup(rules: rules, conjunction: group.conjunction)
                 }
-                wcOnlyExpression.groupConjunction = expression.groupConjunction
+                fallbackOnlyExpression.groupConjunction = expression.groupConjunction
 
-                if wcOnlyExpression.hasCompleteRules {
+                if fallbackOnlyExpression.hasCompleteRules {
                     let pass2Result = await builder.matchingIDs(
-                        expression: wcOnlyExpression,
+                        expression: fallbackOnlyExpression,
                         collectionMap: [:],
                         statusMap: [:],
                         fulltextMap: [:],
                         crossoverMap: [],
-                        wordCountFallbackMap: fallbackMap
+                        wordCountFallbackMap: wordCountFallback,
+                        kudosFallbackMap: kudosFallback
                     )
                     let pass2Set = Set(pass2Result.calibreIDs)
                     let combined = candidateIDs.filter { pass2Set.contains($0) }
