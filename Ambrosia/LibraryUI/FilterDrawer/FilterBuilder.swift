@@ -2,6 +2,102 @@ import Foundation
 import SwiftData
 import SQLite
 
+// MARK: - Shared tag/author/series EXISTS-subquery builders (§3, Phase 2)
+
+/// Free, non-actor-isolated helper shared by `FilterBuilder` (drawer/popup path)
+/// and `CalibreLibrarySearch` (search-bar path, an extension on the `CalibreLibrary`
+/// actor). Both surfaces need the identical correlated EXISTS/NOT EXISTS subquery
+/// shape for tag/author/series matching; living here as static functions on a
+/// value-less enum means neither call site pays for or requires actor isolation,
+/// and there is exactly one function body instead of one copy-pasted into two files.
+/// See Invariant 24 in ambrosia_architecture.md for why the subquery shape itself
+/// (correlated on `book = b.id`, no outer join) matters.
+enum MatchingSubqueryBuilder {
+
+    /// authorName is multi-valued per book (books_authors_link is a many-to-many
+    /// join). A correlated EXISTS/NOT EXISTS subquery, evaluated independently per
+    /// rule, is required so that two ANDed authorName rules (e.g. "contains Smith"
+    /// AND "contains Jones") can each match a different author row on the same
+    /// book. A single outer LEFT JOIN alias cannot do this — every rule would be
+    /// forced to test the exact same joined row.
+    static func authorFragment(op: FilterOperator, value: String) -> (String, [Binding?])? {
+        let matcher: String
+        let args: [Binding?]
+        let negated: Bool
+        switch op {
+        case .contains:
+            matcher = "LOWER(a2.name) LIKE ?"; args = ["%\(value.lowercased())%"]; negated = false
+        case .notContains:
+            matcher = "LOWER(a2.name) LIKE ?"; args = ["%\(value.lowercased())%"]; negated = true
+        case .equals:
+            matcher = "LOWER(a2.name) = ?"; args = [value.lowercased()]; negated = false
+        case .notEquals:
+            matcher = "LOWER(a2.name) = ?"; args = [value.lowercased()]; negated = true
+        case .startsWith:
+            matcher = "LOWER(a2.name) LIKE ?"; args = ["\(value.lowercased())%"]; negated = false
+        case .ratingAtMost, .ratingAtLeast:
+            // Not offered for authorName (see FilterRule.availableOperators); no valid SQL shape.
+            return nil
+        }
+        let sub = """
+            SELECT 1 FROM books_authors_link bal2
+            JOIN authors a2 ON a2.id = bal2.author
+            WHERE bal2.book = b.id AND \(matcher)
+            """
+        return (negated ? "NOT EXISTS (\(sub))" : "EXISTS (\(sub))", args)
+    }
+
+    /// Same shape as authorFragment — series is also many-to-many via
+    /// books_series_link, so it needs the same correlated-subquery fix. Calibre
+    /// books are usually single-series in practice, but the schema treats it as
+    /// multi-valued, so this stays consistent with that.
+    static func seriesFragment(op: FilterOperator, value: String) -> (String, [Binding?])? {
+        let matcher: String
+        let args: [Binding?]
+        let negated: Bool
+        switch op {
+        case .contains:
+            matcher = "LOWER(s2.name) LIKE ?"; args = ["%\(value.lowercased())%"]; negated = false
+        case .notContains:
+            matcher = "LOWER(s2.name) LIKE ?"; args = ["%\(value.lowercased())%"]; negated = true
+        case .equals:
+            matcher = "LOWER(s2.name) = ?"; args = [value.lowercased()]; negated = false
+        case .notEquals:
+            matcher = "LOWER(s2.name) = ?"; args = [value.lowercased()]; negated = true
+        case .startsWith:
+            matcher = "LOWER(s2.name) LIKE ?"; args = ["\(value.lowercased())%"]; negated = false
+        case .ratingAtMost, .ratingAtLeast:
+            // Not offered for series (see FilterRule.availableOperators); no valid SQL shape.
+            return nil
+        }
+        let sub = """
+            SELECT 1 FROM books_series_link bsl2
+            JOIN series s2 ON s2.id = bsl2.series
+            WHERE bsl2.book = b.id AND \(matcher)
+            """
+        return (negated ? "NOT EXISTS (\(sub))" : "EXISTS (\(sub))", args)
+    }
+
+    /// Shared tag-membership EXISTS/NOT EXISTS shape. Callers supply their own
+    /// already-formatted `matcher` (e.g. with or without `LOWER()`, single or
+    /// OR-joined multi-term for synonym/multi-token expansion) and matching
+    /// `args`; this function only owns the correlated-subquery wrapper, not the
+    /// per-caller matching semantics.
+    static func tagFragment(matcher: String, args: [Binding?], negated: Bool) -> (String, [Binding?])? {
+        guard !matcher.isEmpty else { return nil }
+        if negated {
+            return (
+                "NOT EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND (\(matcher)))",
+                args
+            )
+        }
+        return (
+            "EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND (\(matcher)))",
+            args
+        )
+    }
+}
+
 // MARK: - Library filter debug logging
 
 enum LibraryFilterDebug {
@@ -705,14 +801,14 @@ extension CalibreLibrary {
             return textFragment(column: "b.title", op: rule.op, value: v)
 
         case .series:
-            return seriesFragment(op: rule.op, value: v)
+            return MatchingSubqueryBuilder.seriesFragment(op: rule.op, value: v)
 
         case .comment:
             return textFragment(column: "c.text", op: rule.op, value: v,
                                 nullClause: "c.text IS NULL")
 
         case .authorName:
-            return authorFragment(op: rule.op, value: v)
+            return MatchingSubqueryBuilder.authorFragment(op: rule.op, value: v)
 
         case .tag:
             return expandedTagFragment(op: rule.op, value: v, tagExpansions: tagExpansions)
@@ -822,17 +918,7 @@ extension CalibreLibrary {
     private func tagMembershipFragment(matcher: String,
                                        args: [Binding?],
                                        negated: Bool) -> (String, [Binding?])? {
-        guard !matcher.isEmpty else { return nil }
-        if negated {
-            return (
-                "NOT EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND (\(matcher)))",
-                args
-            )
-        }
-        return (
-            "EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND (\(matcher)))",
-            args
-        )
+        MatchingSubqueryBuilder.tagFragment(matcher: matcher, args: args, negated: negated)
     }
 
     /// §8: All negative ao3TagFragment branches use correlated NOT EXISTS, matching
@@ -841,30 +927,15 @@ extension CalibreLibrary {
     private func ao3TagFragment(op: FilterOperator, value: String) -> (String, [Binding?])? {
         switch op {
         case .equals:
-            return (
-                "EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND t2.name = ?)",
-                [value]
-            )
+            return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name = ?", args: [value], negated: false)
         case .notEquals:
-            return (
-                "NOT EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND t2.name = ?)",
-                [value]
-            )
+            return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name = ?", args: [value], negated: true)
         case .contains:
-            return (
-                "EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND t2.name LIKE ?)",
-                ["%\(value)%"]
-            )
+            return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name LIKE ?", args: ["%\(value)%"], negated: false)
         case .notContains:
-            return (
-                "NOT EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND t2.name LIKE ?)",
-                ["%\(value)%"]
-            )
+            return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name LIKE ?", args: ["%\(value)%"], negated: true)
         case .startsWith:
-            return (
-                "EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND t2.name LIKE ?)",
-                ["\(value)%"]
-            )
+            return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name LIKE ?", args: ["\(value)%"], negated: false)
 
         case .ratingAtMost:
             guard let rating = AO3Rating(rawValue: value) else {
@@ -876,10 +947,7 @@ extension CalibreLibrary {
             }
             let placeholders = higher.map { _ in "?" }.joined(separator: ", ")
             let args: [Binding?] = higher.map { $0.rawValue as Binding? }
-            return (
-                "NOT EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND t2.name IN (\(placeholders)))",
-                args
-            )
+            return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name IN (\(placeholders))", args: args, negated: true)
 
         case .ratingAtLeast:
             guard let rating = AO3Rating(rawValue: value) else {
@@ -892,76 +960,8 @@ extension CalibreLibrary {
             if qualified.isEmpty { return ("0 = 1", []) }
             let placeholders = qualified.map { _ in "?" }.joined(separator: ", ")
             let args: [Binding?] = qualified.map { $0.rawValue as Binding? }
-            return (
-                "EXISTS (SELECT 1 FROM books_tags_link btl2 JOIN tags t2 ON t2.id = btl2.tag WHERE btl2.book = b.id AND t2.name IN (\(placeholders)))",
-                args
-            )
+            return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name IN (\(placeholders))", args: args, negated: false)
         }
-    }
-
-    /// §Phase2: authorName is multi-valued per book (books_authors_link is a
-    /// many-to-many join). A correlated EXISTS/NOT EXISTS subquery, evaluated
-    /// independently per rule, is required so that two ANDed authorName rules
-    /// (e.g. "contains Smith" AND "contains Jones") can each match a different
-    /// author row on the same book. A single outer LEFT JOIN alias cannot do
-    /// this — every rule would be forced to test the exact same joined row.
-    private func authorFragment(op: FilterOperator, value: String) -> (String, [Binding?])? {
-        let matcher: String
-        let args: [Binding?]
-        let negated: Bool
-        switch op {
-        case .contains:
-            matcher = "LOWER(a2.name) LIKE ?"; args = ["%\(value.lowercased())%"]; negated = false
-        case .notContains:
-            matcher = "LOWER(a2.name) LIKE ?"; args = ["%\(value.lowercased())%"]; negated = true
-        case .equals:
-            matcher = "LOWER(a2.name) = ?"; args = [value.lowercased()]; negated = false
-        case .notEquals:
-            matcher = "LOWER(a2.name) = ?"; args = [value.lowercased()]; negated = true
-        case .startsWith:
-            matcher = "LOWER(a2.name) LIKE ?"; args = ["\(value.lowercased())%"]; negated = false
-        case .ratingAtMost, .ratingAtLeast:
-            // Not offered for authorName (see FilterRule.availableOperators); no valid SQL shape.
-            return nil
-        }
-        let sub = """
-            SELECT 1 FROM books_authors_link bal2
-            JOIN authors a2 ON a2.id = bal2.author
-            WHERE bal2.book = b.id AND \(matcher)
-            """
-        return (negated ? "NOT EXISTS (\(sub))" : "EXISTS (\(sub))", args)
-    }
-
-    /// §Phase2: same shape as authorFragment — series is also many-to-many via
-    /// books_series_link, so it needs the same correlated-subquery fix. Calibre
-    /// books are usually single-series in practice, but the schema (and the old
-    /// textFragment(column: "s.name", ...) call this replaces) treats it as
-    /// multi-valued, so this stays consistent with that.
-    private func seriesFragment(op: FilterOperator, value: String) -> (String, [Binding?])? {
-        let matcher: String
-        let args: [Binding?]
-        let negated: Bool
-        switch op {
-        case .contains:
-            matcher = "LOWER(s2.name) LIKE ?"; args = ["%\(value.lowercased())%"]; negated = false
-        case .notContains:
-            matcher = "LOWER(s2.name) LIKE ?"; args = ["%\(value.lowercased())%"]; negated = true
-        case .equals:
-            matcher = "LOWER(s2.name) = ?"; args = [value.lowercased()]; negated = false
-        case .notEquals:
-            matcher = "LOWER(s2.name) = ?"; args = [value.lowercased()]; negated = true
-        case .startsWith:
-            matcher = "LOWER(s2.name) LIKE ?"; args = ["\(value.lowercased())%"]; negated = false
-        case .ratingAtMost, .ratingAtLeast:
-            // Not offered for series (see FilterRule.availableOperators); no valid SQL shape.
-            return nil
-        }
-        let sub = """
-            SELECT 1 FROM books_series_link bsl2
-            JOIN series s2 ON s2.id = bsl2.series
-            WHERE bsl2.book = b.id AND \(matcher)
-            """
-        return (negated ? "NOT EXISTS (\(sub))" : "EXISTS (\(sub))", args)
     }
 
     // MARK: - Custom column helpers
