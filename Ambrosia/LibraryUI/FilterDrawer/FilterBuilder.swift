@@ -700,11 +700,14 @@ extension CalibreLibrary {
 
         case .kudosGT:
             guard let n = rule.numericValue else { return nil }
-            return (kudosSQL(sqlOp: ">"), [n as Binding?])
+            // §2b: Returns nil when no custom column is configured — caller handles fallback.
+            guard let sql = kudosSQL(sqlOp: ">") else { return nil }
+            return (sql, [n as Binding?])
 
         case .kudosLT:
             guard let n = rule.numericValue else { return nil }
-            return (kudosSQL(sqlOp: "<"), [n as Binding?])
+            guard let sql = kudosSQL(sqlOp: "<") else { return nil }
+            return (sql, [n as Binding?])
 
         case .crossover:
             // Evaluated in-memory; never produce a SQL fragment.
@@ -942,12 +945,13 @@ extension CalibreLibrary {
         return "b.id IN (SELECT book FROM \(tbl) WHERE value \(sqlOp) ?)"
     }
 
-    private func kudosSQL(sqlOp: String) -> String {
+    /// §2b: Returns nil when no custom column is configured (caller applies ao3KudosFallbackMap in-memory).
+    /// Previously returned "0 = 1" — that silently matched nothing. Now signals the caller
+    /// to apply the kudos fallback in-memory instead.
+    private func kudosSQL(sqlOp: String) -> String? {
         let label = CustomColumnConfig.shared.kudosLabel ?? "kudos"
-        if let tbl = customColumnTableName(label: label) {
-            return "b.id IN (SELECT book FROM \(tbl) WHERE value \(sqlOp) ?)"
-        }
-        return "0 = 1"
+        guard let tbl = customColumnTableName(label: label) else { return nil }
+        return "b.id IN (SELECT book FROM \(tbl) WHERE value \(sqlOp) ?)"
     }
 
     internal func db_prepare(_ sql: String, _ args: [Binding?]) throws -> [[Binding?]] {
