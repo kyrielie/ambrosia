@@ -25,8 +25,8 @@ import ZIPFoundation
 /// Split across several files to stay under SwiftLint's file_length limit:
 /// this file (core types + parse()), EPUBParser+Rendering.swift (html/mergedHTML/
 /// plainText + their private helpers), EPUBParser+ImagesAndTOC.swift (image
-/// extraction, TOC parsing, OPFDescriptionReader), and
-/// EPUBParser+XMLDelegates.swift (the private XMLParserDelegate classes).
+/// extraction, TOC parsing), and EPUBParser+XMLDelegates.swift (the private
+/// XMLParserDelegate classes).
 struct EPUBParser {
 
     let epubURL: URL
@@ -51,6 +51,14 @@ struct EPUBParser {
     /// see `FullOPFParser.dcCreators`). Populated by `parse()` alongside
     /// `title`, since the OPF is already being parsed for spine/title.
     private(set) var opfCreators: [String] = []
+    /// dc:description, dc:date, dc:publisher, dc:subject — captured in the same
+    /// single OPF parse pass as title/opfCreators (§7.2, Phase 6). Feeds
+    /// BookIndexRecord in LibrarySession.extractOneBook; not otherwise wired
+    /// into any filter/sort/UI surface in this phase (§7.4).
+    private(set) var opfDescription: String?
+    private(set) var opfDate: String?
+    private(set) var opfPublisher: String?
+    private(set) var opfSubjects: [String] = []
 
     // MARK: - TOCEntry
 
@@ -117,6 +125,10 @@ struct EPUBParser {
 
         title = opfParser.dcTitle ?? ""
         opfCreators = opfParser.dcCreators
+        opfDescription = opfParser.dcDescription
+        opfDate = opfParser.dcDate
+        opfPublisher = opfParser.dcPublisher
+        opfSubjects = opfParser.dcSubjects
 
         // Build spine in order
         var items: [SpineItem] = []
