@@ -677,7 +677,7 @@ final class LibrarySession {
         // independent task in the group below. Identical logic to the former
         // serial loop body — only the fan-out changed, not what each book does.
         enum ExtractionOutcome {
-            case success(AO3MetadataRecord, Int)
+            case success(AO3MetadataRecord, BookIndexRecord, Int)
             case indexed(BookIndexRecord, Int)     // parsed fine, no AO3 preface found
             case failure(AO3ExtractionDiagnostic)
         }
@@ -708,6 +708,11 @@ final class LibrarySession {
                     do {
                         var parser = EPUBParser(epubURL: epub)
                         try parser.parse()
+                        // §7.3 (Phase 6): book_index gets a row for every book where
+                        // parse() succeeds, AO3 or not — build it here, before the
+                        // preface scan below, so it's available regardless of which
+                        // branch (AO3 preface found or not) this book takes.
+                        indexedRecord = buildBookIndexRecord(from: parser)
                         // AO3 EPUBs always place the preface (dl.tags metadata block) in
                         // spine[0]. Try it first as the fast path; only continue scanning
                         // up to 4 more items for non-standard EPUBs where something (a
@@ -755,10 +760,6 @@ final class LibrarySession {
                         }
                         spineItemsChecked = checked
                         failureReason = "no dl.tags AO3 preface metadata in first \(checked) spine items"
-                        // §7.3: parser parsed fine, just no AO3 preface — build a
-                        // book_index row instead of falling through to .failure.
-                        // Reuses plainText(for:) rather than a second text-extraction path.
-                        indexedRecord = buildBookIndexRecord(from: parser)
                         return nil
                     } catch {
                         failureStatus = "failed"
@@ -781,7 +782,10 @@ final class LibrarySession {
                         AO3AuthorEntry(username: $0, pseud: nil, profileURL: nil, source: .calibre)
                     }
                 }
-                return .success(metadata, id)
+                // indexedRecord is always set here: metadata is only non-nil when
+                // parse() succeeded above, and indexedRecord is built unconditionally
+                // right after parse() succeeds, before metadata can be returned.
+                return .success(metadata, indexedRecord!, id)
             } else if let indexedRecord {
                 return .indexed(indexedRecord, id)
             } else {
@@ -809,8 +813,9 @@ final class LibrarySession {
 
             while let result = await group.next() {
                 switch result {
-                case .success(let metadata, let id):
+                case .success(let metadata, let indexRecord, let id):
                     pendingSuccess.append((metadata, id))
+                    pendingIndexed.append((indexRecord, id))
                 case .indexed(let record, let id):
                     pendingIndexed.append((record, id))
                 case .failure(let diagnostic):
