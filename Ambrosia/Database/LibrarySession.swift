@@ -318,9 +318,10 @@ final class LibrarySession {
     /// Cancels the AO3 extraction task without the rest of close()'s teardown
     /// (library/metaDB/caches). Task cancellation is a cheap, synchronous flag
     /// set — safe to call from applicationWillTerminate, unlike close() as a
-    /// whole. Does not flush pendingSuccess/pendingFailure; any work not yet
-    /// flushed to the DB is simply re-attempted on next launch, since `missing`
-    /// in startAO3Extraction is always recomputed from what's actually stored.
+    /// whole. Does not flush pendingSuccess/pendingFailure/pendingIndexed; any
+    /// work not yet flushed to the DB is simply re-attempted on next launch,
+    /// since `missing` in startAO3Extraction is always recomputed from what's
+    /// actually stored.
     func cancelExtractionTaskIfRunning() {
         extractionTask?.cancel()
     }
@@ -640,10 +641,11 @@ final class LibrarySession {
         let flushInterval: TimeInterval = 2
         var pendingSuccess: [(AO3MetadataRecord, Int)] = []
         var pendingFailure: [AO3ExtractionDiagnostic] = []
+        var pendingIndexed: [(BookIndexRecord, Int)] = []
         var lastFlushAt = Date()
 
         func flushBatch() async {
-            guard !pendingSuccess.isEmpty || !pendingFailure.isEmpty else { return }
+            guard !pendingSuccess.isEmpty || !pendingFailure.isEmpty || !pendingIndexed.isEmpty else { return }
             // Only clear the pending buffers once the write has actually
             // succeeded. This used to copy-then-clear-then-write-with-try?,
             // so any transient insertBatch failure (e.g. the nested
@@ -652,9 +654,10 @@ final class LibrarySession {
             // log line — those books would then look "never attempted" and
             // get needlessly reprocessed on every subsequent launch.
             do {
-                try await metaDB.insertBatch(pendingSuccess, diagnostics: pendingFailure)
+                try await metaDB.insertBatch(pendingSuccess, diagnostics: pendingFailure, indexed: pendingIndexed)
                 pendingSuccess.removeAll()
                 pendingFailure.removeAll()
+                pendingIndexed.removeAll()
             } catch {
                 #if DEBUG
                 print("[LibrarySession] AO3 batch flush failed, will retry next flush: \(error)")
@@ -801,6 +804,8 @@ final class LibrarySession {
                 switch result {
                 case .success(let metadata, let id):
                     pendingSuccess.append((metadata, id))
+                case .indexed(let record, let id):
+                    pendingIndexed.append((record, id))
                 case .failure(let diagnostic):
                     pendingFailure.append(diagnostic)
                     #if DEBUG
