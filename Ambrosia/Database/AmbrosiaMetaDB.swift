@@ -103,6 +103,7 @@ actor AmbrosiaMetaDB {
         try createAO3Metadata(db: db)
         try createBookIndex(db: db)
         try createBookAuthors(db: db)
+        try createBookTags(db: db)
         try createSchemaMigrations(db: db)
         try bridgeLegacyUserVersionMigrations(db: db)
         try migrateSeriesPlaceholdersToKeyedIfNeeded(db: db)
@@ -472,6 +473,30 @@ actor AmbrosiaMetaDB {
         );
         CREATE INDEX IF NOT EXISTS idx_book_authors_name ON book_authors(name);
         CREATE INDEX IF NOT EXISTS idx_book_authors_calibre ON book_authors(calibre_id);
+        """)
+    }
+
+    /// Phase 4 (§5.2): normalized AO3 tag membership, one row per (book, tag,
+    /// type). Sourced from ao3_metadata's already-typed JSON columns at write
+    /// time (§5.3): `tag_type` uses AO3FacetField's granularity (fandom/
+    /// relationship/character/freeform/rating/warning/category), not the
+    /// coarser FilterField.tag "any type" bucket a rule searches against.
+    /// Composite primary key on (calibre_id, tag_name, tag_type) rather than
+    /// tag_name alone: a freeform tag and a fandom tag could collide on the
+    /// exact same string in principle (AO3 doesn't prevent it), and the type
+    /// is part of the identity here, not just a label.
+    private static func createBookTags(db: Connection) throws {
+        try db.execute("""
+        CREATE TABLE IF NOT EXISTS book_tags (
+            calibre_id  INTEGER NOT NULL,
+            tag_name    TEXT    NOT NULL,
+            tag_type    TEXT    NOT NULL,
+            PRIMARY KEY (calibre_id, tag_name, tag_type)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_book_tags_name ON book_tags(tag_name);
+        CREATE INDEX IF NOT EXISTS idx_book_tags_calibre ON book_tags(calibre_id);
+        CREATE INDEX IF NOT EXISTS idx_book_tags_type ON book_tags(tag_type, tag_name);
         """)
     }
 
@@ -986,6 +1011,75 @@ actor AmbrosiaMetaDB {
         return Set(rows.compactMap { $0.int(at: 0) })
     }
 
+    /// Phase 4 (§5.4): the book_tags/Calibre-fallback partition's "covered"
+    /// side -- every calibre_id with at least one `book_tags` row. Mirrors
+    /// `existingBookAuthorsIDs()`'s own role for authorName.
+    func calibreIDsWithBookTags() throws -> Set<Int> {
+        let rows = try prepare("SELECT DISTINCT calibre_id FROM book_tags")
+        return Set(rows.compactMap { $0.int(at: 0) })
+    }
+
+    /// Phase 4 (§5.4): positive-match calibre_ids for a tag/rating/warning/
+    /// category rule against `book_tags`, already normalized to its
+    /// positive-match form by the caller (mirrors `bookAuthorMatchIDs`).
+    /// `terms` is the already-expanded synonym list for `.tag` rules (so
+    /// `TagExpansionResolver` keeps working here, same as it does for the
+    /// Calibre-side fallback); for rating/warning/category it's always a
+    /// single-element list. `tagType` restricts to one column ("rating"/
+    /// "warning"/"category"), or nil to match any type (`.tag`'s "any of
+    /// this book's tags" scope).
+    func bookTagMatchIDs(op: FilterOperator, terms: [String], tagType: String?) throws -> Set<Int> {
+        guard !terms.isEmpty else { return [] }
+
+        // ratingAtMost/ratingAtLeast compare against AO3Rating's ordinal
+        // hierarchy rather than a simple string match -- mirrors
+        // FilterBuilder's own ao3TagFragment logic, just queried directly
+        // against this table instead of built as a Calibre SQL fragment.
+        if op == .ratingAtMost || op == .ratingAtLeast {
+            guard let rating = AO3Rating(rawValue: terms[0]) else {
+                return try bookTagMatchIDs(op: .equals, terms: terms, tagType: tagType)
+            }
+            if op == .ratingAtMost {
+                let higher = rating.higherRatings
+                if higher.isEmpty { return try calibreIDsWithBookTags() }
+                let higherMatches = try bookTagMatchIDs(op: .equals, terms: higher.map(\.rawValue), tagType: tagType)
+                return try calibreIDsWithBookTags().subtracting(higherMatches)
+            } else {
+                guard let myLevel = rating.level else {
+                    return try bookTagMatchIDs(op: .equals, terms: terms, tagType: tagType)
+                }
+                let qualified = AO3Rating.allCases.filter { ($0.level ?? 0) >= myLevel }
+                if qualified.isEmpty { return [] }
+                return try bookTagMatchIDs(op: .equals, terms: qualified.map(\.rawValue), tagType: tagType)
+            }
+        }
+
+        let matcher: String
+        let args: [Binding?]
+        switch op {
+        case .contains, .notContains:
+            matcher = terms.map { _ in "tag_name LIKE ?" }.joined(separator: " OR ")
+            args = terms.map { "%\($0)%" as Binding? }
+        case .startsWith:
+            matcher = terms.map { _ in "tag_name LIKE ?" }.joined(separator: " OR ")
+            args = terms.map { "\($0)%" as Binding? }
+        case .equals, .notEquals:
+            matcher = terms.map { _ in "tag_name = ?" }.joined(separator: " OR ")
+            args = terms.map { $0 as Binding? }
+        case .ratingAtMost, .ratingAtLeast:
+            fatalError("handled above")
+        }
+
+        var allArgs = args
+        var sql = "SELECT DISTINCT calibre_id FROM book_tags WHERE (\(matcher))"
+        if let tagType {
+            sql += " AND tag_type = ?"
+            allArgs.append(tagType)
+        }
+        let rows = try prepare(sql, allArgs)
+        return Set(rows.compactMap { $0.int(at: 0) })
+    }
+
     func ao3CompletionStatusIDs(_ status: AO3CompletionStatus) throws -> Set<Int> {
         let predicate: String
         switch status {
@@ -1215,6 +1309,32 @@ actor AmbrosiaMetaDB {
         }
     }
 
+    /// Phase 4 (§5.3): (calibre_id, tag_name, tag_type) rows for one book,
+    /// sourced directly from `AO3MetadataRecord`'s already-typed fields (no
+    /// string-matching heuristic at insert time, unlike today's row-render
+    /// classification via `AO3TagKind.classify()`). `rating` is a scalar
+    /// field on the record rather than an array, so it gets at most one row.
+    private func writeBookTags(_ metadata: AO3MetadataRecord, calibreID: Int) throws {
+        try run("DELETE FROM book_tags WHERE calibre_id = ?", [calibreID])
+        func insertAll(_ names: [String], type: String) throws {
+            for name in names where !name.isEmpty {
+                try run(
+                    "INSERT OR REPLACE INTO book_tags (calibre_id, tag_name, tag_type) VALUES (?, ?, ?)",
+                    [calibreID, name, type]
+                )
+            }
+        }
+        try insertAll(metadata.fandoms, type: "fandom")
+        try insertAll(metadata.relationships, type: "relationship")
+        try insertAll(metadata.characters, type: "character")
+        try insertAll(metadata.additionalTags, type: "freeform")
+        try insertAll(metadata.categories, type: "category")
+        try insertAll(metadata.warnings, type: "warning")
+        if let rating = metadata.rating, !rating.isEmpty {
+            try insertAll([rating], type: "rating")
+        }
+    }
+
     private func invalidateAO3MetadataCaches(for calibreID: Int) {
         ao3MetadataCache[calibreID] = nil
         // series_cache rows for this calibreID were replaced wholesale above
@@ -1298,6 +1418,7 @@ actor AmbrosiaMetaDB {
             for (metadata, calibreID) in records {
                 try writeAO3Metadata(metadata, calibreID: calibreID)
                 try writeBookAuthors(metadata.authors, calibreID: calibreID)
+                try writeBookTags(metadata, calibreID: calibreID)
             }
             for diagnostic in diagnostics {
                 try writeAO3Diagnostic(diagnostic)

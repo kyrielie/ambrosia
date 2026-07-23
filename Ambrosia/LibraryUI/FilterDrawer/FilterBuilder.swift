@@ -218,7 +218,8 @@ extension FilterExpression {
         guard !completeRules.isEmpty else { return false }
         return completeRules.allSatisfy { rule in
             switch rule.field {
-            case .collection, .status, .fulltext, .crossover, .series, .authorName:
+            case .collection, .status, .fulltext, .crossover, .series, .authorName,
+                 .tag, .rating, .warning, .category:
                 return false
             default:
                 return true
@@ -399,17 +400,26 @@ struct FilterBuilder {
         //      lives in ambrosia_meta.db, a separate connection metadata.db
         //      SQL can't reach (§1's Option A), unlike word count/kudos which
         //      only fall back to in-memory when unconfigured.
+        // Phase 4: .tag/.rating/.warning/.category are in-memory (backed by
+        //      AmbrosiaMetaDB's book_tags, unioned with a Calibre-side fallback
+        //      for non-AO3 books via CalibreLibrary.tagFamilyMatchIDs) — see
+        //      §5 of the dependency-reduction plan. Same dual-source-by-
+        //      exclusion shape as .authorName above.
         let sqlRules        = complete.filter {
             $0.field != .collection &&
             $0.field != .status && $0.field != .fulltext && $0.field != .crossover &&
             $0.field != .series &&
-            $0.field != .authorName
+            $0.field != .authorName &&
+            $0.field != .tag && $0.field != .rating && $0.field != .warning && $0.field != .category
         }
         let collectionRules = complete.filter { $0.field == .collection }
         let statusRules     = complete.filter { $0.field == .status }
         let crossoverRules  = complete.filter { $0.field == .crossover }  // §6
         let seriesRules     = complete.filter { $0.field == .series }     // Phase 5
         let authorRules     = complete.filter { $0.field == .authorName }  // §4.3 (Phase 3)
+        let tagFamilyRules  = complete.filter {
+            $0.field == .tag || $0.field == .rating || $0.field == .warning || $0.field == .category
+        }  // Phase 4
 
         // SQL rules: pass word-count rules through SQL if custom column is available;
         // signal nil back (by returning nil from sqlFragment) when not — handle below.
@@ -554,6 +564,47 @@ struct FilterBuilder {
                     case .contains, .equals, .startsWith: unionIDs.formUnion(idSet.intersection(memberIDs))
                     case .notContains, .notEquals:        unionIDs.formUnion(idSet.subtracting(memberIDs))
                     case .ratingAtMost, .ratingAtLeast:    break
+                    }
+                }
+                idSet = unionIDs
+            }
+            ids = Array(idSet).sorted()
+        }
+
+        // Phase 4 (§5.4): apply tag/rating/warning/category rules in-memory.
+        // Same shape as .authorName above: each rule's positive match set
+        // comes from CalibreLibrary.tagFamilyMatchIDs (book_tags unioned with
+        // a Calibre-side fallback for non-AO3 books), then intersected/
+        // subtracted against the running id set. ratingAtMost/ratingAtLeast
+        // have no negated counterpart (absolute range checks), so they only
+        // ever intersect.
+        if !tagFamilyRules.isEmpty {
+            var idSet = Set(ids)
+            if group.conjunction == .and {
+                for rule in tagFamilyRules {
+                    let memberIDs = await library.tagFamilyMatchIDs(
+                        field: rule.field, op: rule.op, value: rule.value,
+                        tagExpansions: tagExpansions, metaDB: metaDB
+                    )
+                    switch rule.op {
+                    case .contains, .equals, .startsWith, .ratingAtMost, .ratingAtLeast:
+                        idSet = idSet.intersection(memberIDs)
+                    case .notContains, .notEquals:
+                        idSet = idSet.subtracting(memberIDs)
+                    }
+                }
+            } else {
+                var unionIDs = Set<Int>()
+                for rule in tagFamilyRules {
+                    let memberIDs = await library.tagFamilyMatchIDs(
+                        field: rule.field, op: rule.op, value: rule.value,
+                        tagExpansions: tagExpansions, metaDB: metaDB
+                    )
+                    switch rule.op {
+                    case .contains, .equals, .startsWith, .ratingAtMost, .ratingAtLeast:
+                        unionIDs.formUnion(idSet.intersection(memberIDs))
+                    case .notContains, .notEquals:
+                        unionIDs.formUnion(idSet.subtracting(memberIDs))
                     }
                 }
                 idSet = unionIDs
@@ -855,6 +906,55 @@ extension CalibreLibrary {
         return bookAuthorsMatches.union(calibreMatches(excluding: coverage))
     }
 
+    /// Phase 4 (§5.4): positive match set for a tag/rating/warning/category
+    /// rule, combining `book_tags` (ambrosia_meta.db, via `metaDB`) with a
+    /// Calibre-side fallback for books `book_tags` doesn't cover -- the same
+    /// dual-source-by-exclusion shape as `authorMatchIDs` just above.
+    /// `ratingAtMost`/`ratingAtLeast` have no negated counterpart (they're
+    /// absolute range checks, not equality), so they pass through unchanged;
+    /// `.notContains`/`.notEquals` are normalized to their positive form here
+    /// too, same as authorMatchIDs -- the caller (`matchingIDsForGroup`)
+    /// applies negation via `.subtracting` against the full library, correct
+    /// only because `book_tags` and the Calibre-side fallback partition the
+    /// full calibre_id space cleanly (see `AmbrosiaMetaDB.calibreIDsWithBookTags`).
+    func tagFamilyMatchIDs(field: FilterField, op: FilterOperator, value: String,
+                           tagExpansions: [String: [String]], metaDB: AmbrosiaMetaDB?) async -> Set<Int> {
+        let positiveOp: FilterOperator
+        switch op {
+        case .notContains: positiveOp = .contains
+        case .notEquals:   positiveOp = .equals
+        default:           positiveOp = op
+        }
+        let tagType: String?
+        switch field {
+        case .rating:   tagType = "rating"
+        case .warning:  tagType = "warning"
+        case .category: tagType = "category"
+        default:        tagType = nil  // .tag matches across all types
+        }
+        let terms = field == .tag ? (tagExpansions[value] ?? [value]) : [value]
+
+        func calibreMatches(excluding coverage: Set<Int>) -> Set<Int> {
+            let fragmentResult: (String, [Binding?])? = field == .tag
+                ? expandedTagFragment(op: positiveOp, value: value, tagExpansions: tagExpansions)
+                : ao3TagFragment(op: positiveOp, value: value)
+            guard let (fragment, args) = fragmentResult else { return [] }
+            let sql = "SELECT b.id FROM books b WHERE \(fragment)"
+            guard let rows = try? db_prepare(sql, args) else { return [] }
+            let matches = Set(rows.compactMap { row in (row[0] as? Int64).map(Int.init) })
+            return coverage.isEmpty ? matches : matches.subtracting(coverage)
+        }
+
+        guard let metaDB else {
+            // No ambrosia_meta.db handle in scope -- fall back to the
+            // pre-Phase-4 Calibre-only behavior rather than matching nothing.
+            return calibreMatches(excluding: [])
+        }
+        let bookTagsMatches = (try? await metaDB.bookTagMatchIDs(op: positiveOp, terms: terms, tagType: tagType)) ?? []
+        let coverage = (try? await metaDB.calibreIDsWithBookTags()) ?? []
+        return bookTagsMatches.union(calibreMatches(excluding: coverage))
+    }
+
     func sqlFilterClause(for expression: FilterExpression,
                          tagExpansions: [String: [String]] = [:]) -> (String, [Binding?])? {
         guard expression.isSQLPageable else { return nil }
@@ -982,13 +1082,19 @@ extension CalibreLibrary {
             return nil
 
         case .tag:
-            return expandedTagFragment(op: rule.op, value: v, tagExpansions: tagExpansions)
+            // Phase 4 (§5.4): no longer SQL against metadata.db -- book_tags
+            // lives in ambrosia_meta.db, a separate connection (§1's Option A).
+            // Evaluated in-memory via CalibreLibrary.tagFamilyMatchIDs; see
+            // matchingIDsForGroup and isSQLPageable above. expandedTagFragment
+            // itself is unchanged and still used internally by
+            // tagFamilyMatchIDs for the Calibre-side fallback query.
+            return nil
         case .rating:
-            return ao3TagFragment(op: rule.op, value: v)
+            return nil
         case .warning:
-            return ao3TagFragment(op: rule.op, value: v)
+            return nil
         case .category:
-            return ao3TagFragment(op: rule.op, value: v)
+            return nil
 
         case .wordCountGT:
             guard let n = rule.numericValue else { return nil }
