@@ -1597,6 +1597,7 @@ struct LibraryRootView: View {
                 for: expression, metaDB: session.metaDB
             )
             let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary,
+                                        metaDB: session.metaDB,
                                         tagExpansions: filterTagExpansions)
 
             // Pass 1: run all non-wordcount, non-kudos rules.
