@@ -1553,6 +1553,18 @@ struct LibraryRootView: View {
             if needsCrossover {
                 crossoverMap = await library.crossoverBookIDs()
             }
+            // Phase 5: series map — calibre_id -> that book's series_cache
+            // series_name values (genuine AO3 rows and Calibre-fallback rows
+            // alike; every book has some row, so this is a complete partition
+            // and needs no separate Calibre-side query).
+            var seriesNamesMap: [Int: [String]] = [:]
+            let needsSeries = expression.groups.flatMap(\.rules).contains { $0.field == .series }
+            if needsSeries, let metaDB = session.metaDB {
+                let allIDs = await library.allCalibreIDs()
+                let entries = (try? await metaDB.seriesEntries(for: allIDs)) ?? []
+                seriesNamesMap = Dictionary(grouping: entries, by: \.calibreID)
+                    .mapValues { $0.map(\.seriesName) }
+            }
             // §perf Fix 6: Two-pass word-count filter.
             // Pass 1 runs all non-wordcount rules to get candidates; pass 2 fetches
             // word counts only for candidates, then applies wordcount rules in-memory.
@@ -1595,7 +1607,8 @@ struct LibraryRootView: View {
                 fulltextMap: fulltextMap,
                 crossoverMap: crossoverMap,
                 wordCountFallbackMap: nil,
-                kudosFallbackMap: nil
+                kudosFallbackMap: nil,
+                seriesNamesMap: seriesNamesMap
             )
 
             // Pass 2: if wordcount and/or kudos fallback is needed, fetch values for
@@ -1627,7 +1640,8 @@ struct LibraryRootView: View {
                         fulltextMap: [:],
                         crossoverMap: [],
                         wordCountFallbackMap: wordCountFallback,
-                        kudosFallbackMap: kudosFallback
+                        kudosFallbackMap: kudosFallback,
+                        seriesNamesMap: [:]
                     )
                     let pass2Set = Set(pass2Result.calibreIDs)
                     let combined = candidateIDs.filter { pass2Set.contains($0) }

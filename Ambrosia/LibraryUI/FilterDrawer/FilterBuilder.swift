@@ -218,7 +218,7 @@ extension FilterExpression {
         guard !completeRules.isEmpty else { return false }
         return completeRules.allSatisfy { rule in
             switch rule.field {
-            case .collection, .status, .fulltext, .crossover:
+            case .collection, .status, .fulltext, .crossover, .series:
                 return false
             default:
                 return true
@@ -271,7 +271,8 @@ struct FilterBuilder {
         fulltextMap: [String: Set<Int>] = [:],
         crossoverMap: Set<Int> = [],
         wordCountFallbackMap: [Int: Int]? = nil,
-        kudosFallbackMap: [Int: Int]? = nil
+        kudosFallbackMap: [Int: Int]? = nil,
+        seriesNamesMap: [Int: [String]] = [:]
     ) async -> FilterResult {
         await matchingIDsSync(
             expression:           expression,
@@ -280,7 +281,8 @@ struct FilterBuilder {
             fulltextMap:          fulltextMap,
             crossoverMap:         crossoverMap,
             wordCountFallbackMap: wordCountFallbackMap,
-            kudosFallbackMap:     kudosFallbackMap
+            kudosFallbackMap:     kudosFallbackMap,
+            seriesNamesMap:       seriesNamesMap
         )
     }
 
@@ -291,7 +293,8 @@ struct FilterBuilder {
                      fulltextMap: [String: Set<Int>] = [:],
                      crossoverMap: Set<Int> = [],
                      wordCountFallbackMap: [Int: Int]? = nil,
-                     kudosFallbackMap: [Int: Int]? = nil) async -> FilterResult {
+                     kudosFallbackMap: [Int: Int]? = nil,
+                     seriesNamesMap: [Int: [String]] = [:]) async -> FilterResult {
         let start = LibraryFilterDebug.now()
         LibraryFilterDebug.log("matchingIDs.start", [
             "mode": "explicitIDs",
@@ -327,7 +330,8 @@ struct FilterBuilder {
                                     statusMap: statusMap,
                                     crossoverMap: crossoverMap,
                                     wordCountFallbackMap: wordCountFallbackMap,
-                                    kudosFallbackMap: kudosFallbackMap)
+                                    kudosFallbackMap: kudosFallbackMap,
+                                    seriesNamesMap: seriesNamesMap)
             groupResults.append(Set(ids))
         }
 
@@ -369,7 +373,8 @@ struct FilterBuilder {
                                      statusMap: [AO3CompletionStatus: Set<Int>],
                                      crossoverMap: Set<Int> = [],
                                      wordCountFallbackMap: [Int: Int]? = nil,
-                                     kudosFallbackMap: [Int: Int]? = nil) async -> [Int] {
+                                     kudosFallbackMap: [Int: Int]? = nil,
+                                     seriesNamesMap: [Int: [String]] = [:]) async -> [Int] {
         let complete = group.completeRules
         guard !complete.isEmpty else { return await library.allCalibreIDs() }
 
@@ -377,13 +382,18 @@ struct FilterBuilder {
         // §6: .crossover is in-memory (backed by ao3_metadata fandoms).
         // §2a: .wordCountGT/.wordCountLT are SQL when custom column configured,
         //      in-memory via wordCountFallbackMap when not.
+        // Phase 5: .series is in-memory (backed by AmbrosiaMetaDB's series_cache
+        //      via seriesNamesMap), replacing the direct Calibre books_series_link/
+        //      series SQL join — see §6 of the dependency-reduction plan.
         let sqlRules        = complete.filter {
             $0.field != .collection &&
-            $0.field != .status && $0.field != .fulltext && $0.field != .crossover
+            $0.field != .status && $0.field != .fulltext && $0.field != .crossover &&
+            $0.field != .series
         }
         let collectionRules = complete.filter { $0.field == .collection }
         let statusRules     = complete.filter { $0.field == .status }
         let crossoverRules  = complete.filter { $0.field == .crossover }  // §6
+        let seriesRules     = complete.filter { $0.field == .series }     // Phase 5
 
         // SQL rules: pass word-count rules through SQL if custom column is available;
         // signal nil back (by returning nil from sqlFragment) when not — handle below.
@@ -467,7 +477,61 @@ struct FilterBuilder {
             ids = Array(idSet).sorted()
         }
 
+        // Phase 5: apply series rules in-memory against series_cache (via
+        // seriesNamesMap, keyed by calibre_id -> that book's series_cache
+        // series_name values). series_cache already carries a row — genuine
+        // AO3 or Calibre-fallback — for every book, so unlike Phases 3/4 this
+        // needs no union with a Calibre-side exclusion query; the map alone
+        // is a complete partition of the library.
+        if !seriesRules.isEmpty {
+            var idSet = Set(ids)
+            if group.conjunction == .and {
+                for rule in seriesRules {
+                    idSet = idSet.filter { id in
+                        seriesRuleMatches(rule, names: seriesNamesMap[id] ?? [])
+                    }
+                }
+            } else {
+                var unionIDs = Set<Int>()
+                for rule in seriesRules {
+                    unionIDs.formUnion(idSet.filter { id in
+                        seriesRuleMatches(rule, names: seriesNamesMap[id] ?? [])
+                    })
+                }
+                idSet = unionIDs
+            }
+            ids = Array(idSet).sorted()
+        }
+
         return ids
+    }
+
+    /// Phase 5: mirrors `MatchingSubqueryBuilder.seriesFragment`'s op/matcher
+    /// semantics (case-insensitive contains/equals/startsWith), but evaluated
+    /// against a book's already-fetched `series_cache` names in memory rather
+    /// than as a SQL fragment. A book can belong to more than one series
+    /// (`names` may have more than one entry), so a rule matches if it matches
+    /// any of them — the same "any row for this book" semantics the correlated
+    /// EXISTS subquery had.
+    private func seriesRuleMatches(_ rule: FilterRule, names: [String]) -> Bool {
+        let value = rule.value.trimmingCharacters(in: .whitespaces).lowercased()
+        let lowerNames = names.map { $0.lowercased() }
+        switch rule.op {
+        case .contains:
+            return lowerNames.contains { $0.contains(value) }
+        case .notContains:
+            return !lowerNames.contains { $0.contains(value) }
+        case .equals:
+            return lowerNames.contains { $0 == value }
+        case .notEquals:
+            return !lowerNames.contains { $0 == value }
+        case .startsWith:
+            return lowerNames.contains { $0.hasPrefix(value) }
+        case .ratingAtMost, .ratingAtLeast:
+            // Not offered for series (see FilterRule.availableOperators), matching
+            // MatchingSubqueryBuilder.seriesFragment's own "no valid SQL shape" nil.
+            return false
+        }
     }
 
     private func applyFulltextGroupsAsGlobalRefinement(
@@ -801,7 +865,12 @@ extension CalibreLibrary {
             return textFragment(column: "b.title", op: rule.op, value: v)
 
         case .series:
-            return MatchingSubqueryBuilder.seriesFragment(op: rule.op, value: v)
+            // Phase 5: evaluated in-memory against series_cache (via seriesNamesMap)
+            // instead of a SQL fragment against Calibre's books_series_link/series.
+            // See matchingIDsForGroup. MatchingSubqueryBuilder.seriesFragment still
+            // backs the quick search-bar path in CalibreLibrarySearch.swift, which is
+            // out of scope here.
+            return nil
 
         case .comment:
             return textFragment(column: "c.text", op: rule.op, value: v,
