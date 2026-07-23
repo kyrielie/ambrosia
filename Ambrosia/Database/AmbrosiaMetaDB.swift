@@ -102,6 +102,7 @@ actor AmbrosiaMetaDB {
         try createReadingHistory(db: db)
         try createAO3Metadata(db: db)
         try createBookIndex(db: db)
+        try createBookAuthors(db: db)
         try createSchemaMigrations(db: db)
         try bridgeLegacyUserVersionMigrations(db: db)
         try migrateSeriesPlaceholdersToKeyedIfNeeded(db: db)
@@ -447,6 +448,30 @@ actor AmbrosiaMetaDB {
             indexed_at   TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_book_index_wordcount ON book_index(word_count);
+        """)
+    }
+
+    /// §4.1 (Phase 3): normalizes AO3-sourced author data out of Calibre's
+    /// `authors`/`books_authors_link` and into Ambrosia's own table, scoped
+    /// to books that reach `.success` in `extractOneBook` -- mirrors
+    /// `ao3_metadata`'s own scope, not universal like `book_index` (see
+    /// `writeBookAuthors`, called from `insertBatch`). `sort_order` preserves
+    /// multi-author ordering; composite primary key on (calibre_id,
+    /// sort_order) rather than a surrogate key, following this codebase's
+    /// other additive-table convention (`series_cache`, `book_tags`-shaped
+    /// tables). No migration needed beyond `CREATE TABLE IF NOT EXISTS`
+    /// itself -- brand-new table, not a destructive change (Invariant 11).
+    private static func createBookAuthors(db: Connection) throws {
+        try db.execute("""
+        CREATE TABLE IF NOT EXISTS book_authors (
+            calibre_id  INTEGER NOT NULL,
+            name        TEXT    NOT NULL,
+            source      TEXT    NOT NULL,
+            sort_order  INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (calibre_id, sort_order)
+        );
+        CREATE INDEX IF NOT EXISTS idx_book_authors_name ON book_authors(name);
+        CREATE INDEX IF NOT EXISTS idx_book_authors_calibre ON book_authors(calibre_id);
         """)
     }
 
@@ -916,6 +941,51 @@ actor AmbrosiaMetaDB {
         return Set(rows.compactMap { $0.int(at: 0) })
     }
 
+    /// §4.3 (Phase 3): the book_authors/Calibre-fallback partition's
+    /// "covered" side -- every calibre_id with at least one `book_authors`
+    /// row. `CalibreLibrary.authorMatchIDs` subtracts this from its
+    /// Calibre-side positive matches, so a book with a `book_authors` row
+    /// (whose AO3-sourced author name may differ from Calibre's own author
+    /// field) is never double-counted via that Calibre field. Mirrors
+    /// `existingAO3MetadataIDs()`/`existingBookIndexIDs()`'s own shape.
+    func existingBookAuthorsIDs() throws -> Set<Int> {
+        let rows = try prepare("SELECT DISTINCT calibre_id FROM book_authors")
+        return Set(rows.compactMap { $0.int(at: 0) })
+    }
+
+    /// §4.3 (Phase 3): positive-match calibre_ids for an authorName rule
+    /// against `book_authors`. Always the *positive* matcher regardless of
+    /// the rule's op sign -- `.notContains`/`.notEquals` use the identical
+    /// matcher to `.contains`/`.equals`. The caller
+    /// (`CalibreLibrary.authorMatchIDs`) applies negation via `.subtracting`
+    /// against the full library, the same way `matchingIDsForGroup` already
+    /// does for collection/status membership maps -- correct only because
+    /// `book_authors` and the Calibre-side fallback query partition the
+    /// full calibre_id space cleanly; see the plan's §4.3 for why that's a
+    /// named precondition here, not an incidental property.
+    func bookAuthorMatchIDs(nameFragment: String, op: FilterOperator) throws -> Set<Int> {
+        let value = nameFragment.trimmingCharacters(in: .whitespaces)
+        guard !value.isEmpty else { return [] }
+        let matcher: String
+        let arg: Binding?
+        switch op {
+        case .contains, .notContains:
+            matcher = "LOWER(name) LIKE ?"
+            arg = "%\(value.lowercased())%"
+        case .equals, .notEquals:
+            matcher = "LOWER(name) = ?"
+            arg = value.lowercased()
+        case .startsWith:
+            matcher = "LOWER(name) LIKE ?"
+            arg = "\(value.lowercased())%"
+        case .ratingAtMost, .ratingAtLeast:
+            // Not offered for authorName (see FilterRule.availableOperators); no valid SQL shape.
+            return []
+        }
+        let rows = try prepare("SELECT DISTINCT calibre_id FROM book_authors WHERE \(matcher)", [arg])
+        return Set(rows.compactMap { $0.int(at: 0) })
+    }
+
     func ao3CompletionStatusIDs(_ status: AO3CompletionStatus) throws -> Set<Int> {
         let predicate: String
         switch status {
@@ -1124,6 +1194,27 @@ actor AmbrosiaMetaDB {
         }
     }
 
+    /// §4.2 (Phase 3): writes one book's `book_authors` rows, replacing any
+    /// existing set for that calibre_id -- called inside `insertBatch`'s
+    /// transaction alongside `writeAO3Metadata`, so a partial-batch failure
+    /// can't leave `ao3_metadata` and `book_authors` out of sync for the same
+    /// book. `name` is `pseud ?? username` -- the same display-name
+    /// derivation `author_names_json` above already uses; reused verbatim
+    /// rather than re-derived, per the plan's explicit decision (§4.1).
+    private func writeBookAuthors(_ authors: [AO3AuthorEntry], calibreID: Int) throws {
+        try run("DELETE FROM book_authors WHERE calibre_id = ?", [calibreID])
+        for (index, author) in authors.enumerated() {
+            try run(
+                """
+                INSERT OR REPLACE INTO book_authors
+                (calibre_id, name, source, sort_order)
+                VALUES (?, ?, ?, ?)
+                """,
+                [calibreID, author.pseud ?? author.username, author.source.rawValue, index]
+            )
+        }
+    }
+
     private func invalidateAO3MetadataCaches(for calibreID: Int) {
         ao3MetadataCache[calibreID] = nil
         // series_cache rows for this calibreID were replaced wholesale above
@@ -1206,6 +1297,7 @@ actor AmbrosiaMetaDB {
         try transaction {
             for (metadata, calibreID) in records {
                 try writeAO3Metadata(metadata, calibreID: calibreID)
+                try writeBookAuthors(metadata.authors, calibreID: calibreID)
             }
             for diagnostic in diagnostics {
                 try writeAO3Diagnostic(diagnostic)
@@ -1230,6 +1322,7 @@ actor AmbrosiaMetaDB {
             try run("DELETE FROM ao3_metadata")
             try run("DELETE FROM ao3_extraction_diagnostics")
             try run("DELETE FROM series_cache")
+            try run("DELETE FROM book_authors")
         }
         ao3MetadataCache.removeAll()
         ao3DiagnosticsCache.removeAll()
