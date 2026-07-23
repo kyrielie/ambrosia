@@ -59,6 +59,12 @@ actor AmbrosiaMetaDB {
     private var seriesEntriesByKeyCache: [String: [SeriesCacheEntry]] = [:]
     private var singletonWarningsCache: [Int: [SingletonSeriesWarning]] = [:]
     private var placeholdersCache: [String: [SeriesPlaceholder]] = [:]
+    /// §7.3 (Phase 6): no reader caches book_index rows yet (§7.4 — the table
+    /// isn't wired into any filter/sort/UI surface in this phase), but this
+    /// exists now and is invalidated on every write so a future reader can
+    /// adopt the same pattern the other per-book caches above use, without a
+    /// second migration to add cache invalidation retroactively.
+    private var bookIndexCache: [Int: BookIndexRecord] = [:]
 
     init(libraryURL: URL) throws {
         self.libraryHash = Ambrosia.libraryHash(for: libraryURL)
@@ -895,6 +901,16 @@ actor AmbrosiaMetaDB {
         return Set(rows.compactMap { $0.int(at: 0) })
     }
 
+    /// §7.3 (Phase 6): mirrors existingAO3MetadataIDs()'s own shape. Required
+    /// as a third exclusion set in startAO3Extraction's `missing` computation
+    /// — without it, every non-AO3 book (which writes to book_index but
+    /// neither ao3_metadata nor ao3_extraction_diagnostics) gets fully
+    /// re-parsed on every library open, forever.
+    func existingBookIndexIDs() throws -> Set<Int> {
+        let rows = try prepare("SELECT calibre_id FROM book_index")
+        return Set(rows.compactMap { $0.int(at: 0) })
+    }
+
     func attemptedAO3ExtractionIDs() throws -> Set<Int> {
         let rows = try prepare("SELECT calibre_id FROM ao3_extraction_diagnostics")
         return Set(rows.compactMap { $0.int(at: 0) })
@@ -1146,6 +1162,33 @@ actor AmbrosiaMetaDB {
         )
     }
 
+    /// Writes one `book_index` row without opening its own transaction — same
+    /// reason as `writeAO3Metadata`/`writeAO3Diagnostic`: `insertBatch` calls
+    /// this directly inside its own single transaction (§7.3).
+    private func writeBookIndex(_ record: BookIndexRecord, calibreID: Int) throws {
+        try run(
+            """
+            INSERT OR REPLACE INTO book_index
+            (calibre_id, title, description, word_count, pub_date, publisher, subject, indexed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                calibreID,
+                record.title,
+                record.description,
+                record.wordCount,
+                record.pubDate,
+                record.publisher,
+                record.subject,
+                record.indexedAt,
+            ]
+        )
+    }
+
+    private func invalidateBookIndexCaches(for calibreID: Int) {
+        bookIndexCache[calibreID] = nil
+    }
+
     /// Flush a batch of extraction results in a single transaction.
     ///
     /// Called from the AO3 extraction loop every N books. Grouping writes into one
@@ -1157,7 +1200,9 @@ actor AmbrosiaMetaDB {
     /// rather than `insert(_:calibreID:)`/`insert(_:)` — those each open their own
     /// `transaction { }`, which used to nest a transaction per row inside this
     /// function's outer transaction.
-    func insertBatch(_ records: [(AO3MetadataRecord, Int)], diagnostics: [AO3ExtractionDiagnostic]) throws {
+    func insertBatch(_ records: [(AO3MetadataRecord, Int)],
+                      diagnostics: [AO3ExtractionDiagnostic],
+                      indexed: [(BookIndexRecord, Int)] = []) throws {
         try transaction {
             for (metadata, calibreID) in records {
                 try writeAO3Metadata(metadata, calibreID: calibreID)
@@ -1165,12 +1210,18 @@ actor AmbrosiaMetaDB {
             for diagnostic in diagnostics {
                 try writeAO3Diagnostic(diagnostic)
             }
+            for (record, calibreID) in indexed {
+                try writeBookIndex(record, calibreID: calibreID)
+            }
         }
         for (_, calibreID) in records {
             invalidateAO3MetadataCaches(for: calibreID)
         }
         for diagnostic in diagnostics {
             ao3DiagnosticsCache[diagnostic.calibreID] = nil
+        }
+        for (_, calibreID) in indexed {
+            invalidateBookIndexCaches(for: calibreID)
         }
     }
 
