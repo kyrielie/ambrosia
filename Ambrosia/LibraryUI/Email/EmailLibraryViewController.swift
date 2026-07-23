@@ -802,11 +802,18 @@ final class EmailLibraryViewController: NSViewController {
             }
             let needsWordCountFallback = needsWordCount && CustomColumnConfig.shared.wordCountLabel == nil
 
-            let expressionWithoutWordCount: FilterExpression = needsWordCountFallback ? {
+            // §2.2c: Two-pass kudos filter, mirroring the word-count pattern exactly.
+            let needsKudos = expression.groups.flatMap(\.rules).contains {
+                $0.field == .kudosGT || $0.field == .kudosLT
+            }
+            let needsKudosFallback = needsKudos && CustomColumnConfig.shared.kudosLabel == nil
+
+            let expressionWithoutWordCount: FilterExpression = (needsWordCountFallback || needsKudosFallback) ? {
                 var stripped = expression
                 stripped.groups = expression.groups.compactMap { group in
                     let rules = group.rules.filter {
-                        $0.field != .wordCountGT && $0.field != .wordCountLT
+                        (!needsWordCountFallback || ($0.field != .wordCountGT && $0.field != .wordCountLT)) &&
+                        (!needsKudosFallback || ($0.field != .kudosGT && $0.field != .kudosLT))
                     }
                     guard !rules.isEmpty else { return nil }
                     return FilterGroup(rules: rules, conjunction: group.conjunction)
@@ -826,30 +833,36 @@ final class EmailLibraryViewController: NSViewController {
                 statusMap: statusMap,
                 fulltextMap: fulltextMap,
                 crossoverMap: crossoverMap,
-                wordCountFallbackMap: nil
+                wordCountFallbackMap: nil,
+                kudosFallbackMap: nil
             )
 
             var result: FilterResult
-            if needsWordCountFallback {
+            if needsWordCountFallback || needsKudosFallback {
                 let candidateIDs = pass1Result.calibreIDs
-                let fallbackMap = await library.ao3WordCounts(ids: candidateIDs)
-                var wcOnlyExpression = FilterExpression()
-                wcOnlyExpression.groups = expression.groups.compactMap { group in
+                let wordCountFallback = needsWordCountFallback
+                    ? await library.ao3WordCounts(ids: candidateIDs) : nil
+                let kudosFallback = needsKudosFallback
+                    ? await library.ao3Kudos(ids: candidateIDs) : nil
+                var fallbackOnlyExpression = FilterExpression()
+                fallbackOnlyExpression.groups = expression.groups.compactMap { group in
                     let rules = group.rules.filter {
-                        ($0.field == .wordCountGT || $0.field == .wordCountLT) && $0.isComplete
+                        (needsWordCountFallback && ($0.field == .wordCountGT || $0.field == .wordCountLT) && $0.isComplete) ||
+                        (needsKudosFallback && ($0.field == .kudosGT || $0.field == .kudosLT) && $0.isComplete)
                     }
                     guard !rules.isEmpty else { return nil }
                     return FilterGroup(rules: rules, conjunction: group.conjunction)
                 }
-                wcOnlyExpression.groupConjunction = expression.groupConjunction
-                if wcOnlyExpression.hasCompleteRules {
+                fallbackOnlyExpression.groupConjunction = expression.groupConjunction
+                if fallbackOnlyExpression.hasCompleteRules {
                     let pass2Result = await builder.matchingIDs(
-                        expression: wcOnlyExpression,
+                        expression: fallbackOnlyExpression,
                         collectionMap: [:],
                         statusMap: [:],
                         fulltextMap: [:],
                         crossoverMap: [],
-                        wordCountFallbackMap: fallbackMap
+                        wordCountFallbackMap: wordCountFallback,
+                        kudosFallbackMap: kudosFallback
                     )
                     let pass2Set = Set(pass2Result.calibreIDs)
                     let combined = candidateIDs.filter { pass2Set.contains($0) }
