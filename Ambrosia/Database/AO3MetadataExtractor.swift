@@ -68,6 +68,26 @@ struct AO3ExtractionDiagnostic: Codable, Equatable, Sendable {
     let attemptedAt: String
 }
 
+/// §7.1/§7.3 (Phase 6): one row per book where `EPUBParser.parse()` succeeds,
+/// AO3 or not. `title`/`description`/`pubDate`/`publisher`/`subject` are
+/// captured opportunistically from the same OPF parse pass and are not wired
+/// into any filter/sort/UI surface in this phase (§7.4) — only `wordCount` is
+/// a genuinely new capability (word count for non-AO3 books with no
+/// configured custom column).
+struct BookIndexRecord: Codable, Equatable, Sendable {
+    let title: String?
+    let description: String?
+    /// Computed by summing word counts across the spine's plain text
+    /// (`EPUBParser.plainText(for:)`); nil if uncountable.
+    let wordCount: Int?
+    /// dc:date, captured as raw text — not validated/parsed as ISO-8601.
+    let pubDate: String?
+    let publisher: String?
+    /// dc:subject values, joined — the OPF spec allows multiple elements.
+    let subject: String?
+    let indexedAt: String
+}
+
 enum AO3MetadataExtractor {
     static func extract(from html: String) -> AO3MetadataRecord? {
         do {

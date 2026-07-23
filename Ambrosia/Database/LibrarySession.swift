@@ -668,6 +668,7 @@ final class LibrarySession {
         // serial loop body — only the fan-out changed, not what each book does.
         enum ExtractionOutcome {
             case success(AO3MetadataRecord, Int)
+            case indexed(BookIndexRecord, Int)     // parsed fine, no AO3 preface found
             case failure(AO3ExtractionDiagnostic)
         }
 
@@ -685,6 +686,7 @@ final class LibrarySession {
             var failureStatus = "skipped"
             var diagnosticEPUB: URL?
             var spineItemsChecked: Int?
+            var indexedRecord: BookIndexRecord?
             // epubURL is an actor-isolated (async) CalibreLibrary call now, and
             // autoreleasepool's closure is synchronous, so resolve it first —
             // the CPU-bound parse/extract work below never touches `library`.
@@ -743,6 +745,10 @@ final class LibrarySession {
                         }
                         spineItemsChecked = checked
                         failureReason = "no dl.tags AO3 preface metadata in first \(checked) spine items"
+                        // §7.3: parser parsed fine, just no AO3 preface — build a
+                        // book_index row instead of falling through to .failure.
+                        // Reuses plainText(for:) rather than a second text-extraction path.
+                        indexedRecord = buildBookIndexRecord(from: parser)
                         return nil
                     } catch {
                         failureStatus = "failed"
@@ -766,6 +772,8 @@ final class LibrarySession {
                     }
                 }
                 return .success(metadata, id)
+            } else if let indexedRecord {
+                return .indexed(indexedRecord, id)
             } else {
                 return .failure(AO3ExtractionDiagnostic(
                     calibreID: id,
@@ -899,4 +907,31 @@ final class LibrarySession {
             #endif
         }
     }
+}
+
+/// §7.3 (Phase 6): builds a `BookIndexRecord` from an already-`parse()`d
+/// `EPUBParser` — called from `extractOneBook` at the point a book parses
+/// fine but has no AO3 preface. Word count is computed by summing
+/// `plainText(for:)` across the spine (the reader's own existing text
+/// machinery, not a second extraction path); per-item failures are skipped
+/// rather than aborting the whole count, and `wordCount` is nil only if
+/// every spine item failed to yield text.
+private func buildBookIndexRecord(from parser: EPUBParser) -> BookIndexRecord {
+    var totalWords = 0
+    var anySucceeded = false
+    for item in parser.spine {
+        guard let text = try? parser.plainText(for: item) else { continue }
+        anySucceeded = true
+        totalWords += text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+    }
+    let subject = parser.opfSubjects.isEmpty ? nil : parser.opfSubjects.joined(separator: ", ")
+    return BookIndexRecord(
+        title: parser.title.isEmpty ? nil : parser.title,
+        description: parser.opfDescription,
+        wordCount: anySucceeded ? totalWords : nil,
+        pubDate: parser.opfDate,
+        publisher: parser.opfPublisher,
+        subject: subject,
+        indexedAt: ISO8601DateFormatter().string(from: Date())
+    )
 }
