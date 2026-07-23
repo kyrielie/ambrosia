@@ -31,37 +31,19 @@ extension CalibreLibrary {
 
         for term in query.tagTerms {
             let expandedTerms = query.expandedTagTerms[term] ?? [term]
-            if expandedTerms.count <= 1 {
-                clauses.append("""
-                EXISTS (
-                    SELECT 1 FROM books_tags_link btl2
-                    JOIN tags t2 ON t2.id = btl2.tag
-                    WHERE btl2.book = b.id AND LOWER(t2.name) LIKE ?
-                )
-                """)
-                args.append("%\((expandedTerms.first ?? term).lowercased())%" as Binding?)
-            } else {
-                let conditions = expandedTerms.map { _ in "LOWER(t2.name) LIKE ?" }.joined(separator: " OR ")
-                clauses.append("""
-                EXISTS (
-                    SELECT 1 FROM books_tags_link btl2
-                    JOIN tags t2 ON t2.id = btl2.tag
-                    WHERE btl2.book = b.id AND (\(conditions))
-                )
-                """)
-                args.append(contentsOf: expandedTerms.map { "%\($0.lowercased())%" as Binding? })
+            let matcher = expandedTerms.map { _ in "LOWER(t2.name) LIKE ?" }.joined(separator: " OR ")
+            let termArgs: [Binding?] = expandedTerms.map { "%\($0.lowercased())%" as Binding? }
+            if let (clause, fragArgs) = MatchingSubqueryBuilder.tagFragment(matcher: matcher, args: termArgs, negated: false) {
+                clauses.append(clause)
+                args.append(contentsOf: fragArgs)
             }
         }
 
         for term in query.authorTerms {
-            clauses.append("""
-                EXISTS (
-                    SELECT 1 FROM books_authors_link bal2
-                    JOIN authors a2 ON a2.id = bal2.author
-                    WHERE bal2.book = b.id AND LOWER(a2.name) LIKE ?
-                )
-                """)
-            args.append("%\(term.lowercased())%" as Binding?)
+            if let (clause, fragArgs) = MatchingSubqueryBuilder.authorFragment(op: .contains, value: term) {
+                clauses.append(clause)
+                args.append(contentsOf: fragArgs)
+            }
         }
 
         for term in query.titleTerms {
@@ -70,14 +52,10 @@ extension CalibreLibrary {
         }
 
         for term in query.seriesTerms {
-            clauses.append("""
-                EXISTS (
-                    SELECT 1 FROM books_series_link bsl2
-                    JOIN series s2 ON s2.id = bsl2.series
-                    WHERE bsl2.book = b.id AND LOWER(s2.name) LIKE ?
-                )
-                """)
-            args.append("%\(term.lowercased())%" as Binding?)
+            if let (clause, fragArgs) = MatchingSubqueryBuilder.seriesFragment(op: .contains, value: term) {
+                clauses.append(clause)
+                args.append(contentsOf: fragArgs)
+            }
         }
 
         if clauses.isEmpty { return ("", []) }
