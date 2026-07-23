@@ -412,6 +412,25 @@ actor CalibreLibrary {
         }
     }
 
+    /// §2.2d: kudos sort, mirroring sortedByWordCount exactly.
+    ///
+    /// Primary source: a configured Calibre custom column (bulk-fetched, not
+    /// per-book). Fallback: ao3_metadata.kudos_count, supplied by the caller via
+    /// `ao3Kudos` (already bulk-fetched from ambrosia_meta.db).
+    func sortedByKudos(books: [CalibreBook], ascending: Bool,
+                        ao3Kudos: [Int: Int]) -> [CalibreBook] {
+        let valuesByID: [Int: Int]
+        if let label = CustomColumnConfig.shared.kudosLabel,
+           let tbl = customColumnTableName(label: label) {
+            valuesByID = bulkCustomColumnInts(table: tbl, ids: books.map(\.id))
+        } else {
+            valuesByID = ao3Kudos
+        }
+        return books.sorted { a, b in
+            compareNilsLast(valuesByID[a.id], valuesByID[b.id], ascending: ascending)
+        }
+    }
+
     /// Fetches the full matching set (capped at exportCap, same cap as export),
     /// sorts it by word count in memory, and returns just the requested page plus
     /// whether more pages remain. Used in place of the normal offset/limit SQL
@@ -466,6 +485,79 @@ actor CalibreLibrary {
         // 3. Sort IDs by word count in Swift. Unknown word count sorts last.
         let sortedIDs = allIDs.sorted { a, b in
             compareNilsLast(wordCounts[a], wordCounts[b], ascending: ascending)
+        }
+
+        // 4. Slice the requested page.
+        let start = min(offset, sortedIDs.count)
+        let end   = min(offset + limit, sortedIDs.count)
+        guard start < end else {
+            pageCache.set(([], false), for: cacheKey)
+            return ([], false)
+        }
+        let pageIDs = Array(sortedIDs[start..<end])
+
+        // 5. Hydrate only the page (authors, tags, comments).
+        let page = booksForIDs(pageIDs)
+        let result = (page, end < sortedIDs.count)
+        pageCache.set(result, for: cacheKey)
+        return result
+    }
+
+    /// §2.2d: Fetches the full matching set (capped at exportCap, same cap as
+    /// export), sorts it by kudos in memory, and returns just the requested
+    /// page plus whether more pages remain. Used in place of the normal
+    /// offset/limit SQL path whenever sort == .kudos. Mirrors
+    /// wordCountSortedPage exactly.
+    func kudosSortedPage(offset: Int, limit: Int, ascending: Bool,
+                          query: SearchQuery, filter: FilterExpression?,
+                          restrictIDs: [Int]?,
+                          visibility: LibraryVisibilityPolicy = .allowAll,
+                          filterTagExpansions: [String: [String]] = [:],
+                          visibilityVersion: Int = 0,
+                          metaDB: AmbrosiaMetaDB? = nil) async -> (page: [CalibreBook], hasMore: Bool) {
+        let cacheKey = PageCacheKey(
+            querySignature: LibraryFilterDebug.summary(query: query),
+            filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
+            tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
+            visibilityVersion: visibilityVersion,
+            sortField: .kudos,
+            ascending: ascending,
+            randomSeed: randomSeed,
+            offset: offset,
+            limit: limit
+        )
+        if let cached = pageCache[cacheKey] { return cached }
+        // 1. Fetch all matching IDs (no author/tag/comment hydration), then
+        // apply the visibility policy (skip/series-grouping/AO3-publisher-only/
+        // anthology) once, here, instead of callers pre-intersecting restrictIDs
+        // with individual ID sets at each call site.
+        let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
+                                         filterTagExpansions: filterTagExpansions)
+        // §SeriesGrouping Phase 1: a hit on a non-leading series member
+        // (e.g. book 3) must pull in the rest of the series so its leader
+        // survives the seriesOrMergedIDs deny-list below, instead of the
+        // whole group silently disappearing. No-op when grouping is off.
+        let matchedIDs = await SeriesMatchExpansion.expand(
+            matchedIDs: rawMatchedIDs,
+            shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
+            filter: filter,
+            library: self,
+            metaDB: metaDB
+        )
+        let allIDs = visibility.filter(matchedIDs)
+
+        // 2. Bulk-fetch kudos for this ID set only.
+        let kudos: [Int: Int]
+        if let label = CustomColumnConfig.shared.kudosLabel,
+           let tbl = customColumnTableName(label: label) {
+            kudos = bulkCustomColumnInts(table: tbl, ids: allIDs)
+        } else {
+            kudos = ao3Kudos(ids: allIDs)
+        }
+
+        // 3. Sort IDs by kudos in Swift. Unknown kudos sorts last.
+        let sortedIDs = allIDs.sorted { a, b in
+            compareNilsLast(kudos[a], kudos[b], ascending: ascending)
         }
 
         // 4. Slice the requested page.

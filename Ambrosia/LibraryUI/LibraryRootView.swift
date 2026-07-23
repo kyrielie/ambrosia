@@ -624,6 +624,45 @@ struct LibraryRootView: View {
             books = page
             hasNextPage = hasMore
             triggerDeferredSQLCountIfNeeded(query: query)
+        } else if toolbarState.sortField == .kudos {
+            // §2.2d: kudos can't be sorted by a single SQL ORDER BY when no custom
+            // column is configured — see orderByClause(.kudos) and kudosSortedPage(...),
+            // mirroring the word-count case immediately above exactly.
+            let restrictIDs: [Int]?
+            let filterForSQL: FilterExpression?
+            if let result = toolbarState.activeFilterResult, result.isSQLBacked {
+                restrictIDs = nil
+                filterForSQL = toolbarState.filterExpression
+            } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
+                restrictIDs = intersect(result.calibreIDs, with: query.ftsMatchedIDs)
+                filterForSQL = nil
+            } else if toolbarState.activeFilterResult != nil {
+                LibraryFilterDebug.log("loadPage.start", [
+                    "surface": "list", "mode": "emptyExplicitIDs.kudos", "page": offsetState.currentPage
+                ])
+                books = []; items = []; hasNextPage = false
+                rebuildItems(); loadAO3MetadataForCurrentPage()
+                return
+            } else {
+                restrictIDs = nil
+                filterForSQL = nil
+            }
+            LibraryFilterDebug.log("loadPage.start", [
+                "surface": "list", "mode": "kudosSorted", "page": offsetState.currentPage,
+                "query": LibraryFilterDebug.summary(query: query)
+            ])
+            let (kudosPage, kudosHasMore) = await library.kudosSortedPage(
+                offset: offsetState.currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
+                query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                visibility: currentVisibilityPolicy,
+                filterTagExpansions: cachedFilterTagExpansions,
+                visibilityVersion: session.membershipVersion
+            )
+            guard !toolbarState.isListSurfaceTornDown else { return }
+            guard !Task.isCancelled else { return }
+            books = kudosPage
+            hasNextPage = kudosHasMore
+            triggerDeferredSQLCountIfNeeded(query: query)
         } else if toolbarState.sortField == .title && shouldGroupSeriesRows {
             // §SeriesGrouping Phase 2: title sort needs the same
             // materialize-then-sort treatment as word count once grouping is
