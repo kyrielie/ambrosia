@@ -1203,6 +1203,50 @@ final class EmailLibraryViewController: NSViewController {
             }
             raw = []
             triggerDeferredSQLCountIfNeeded(query: query)
+        } else if toolbarState.sortField == .kudos {
+            // §2.2d: mirrors the .wordCount branch immediately above exactly —
+            // kudos can't be sorted via a single SQL ORDER BY when no custom
+            // column is configured, so it's resolved in memory over the full
+            // matching set. Reuses the wordCountPage/wordCountHasMore sink,
+            // same precedent as the title-grouping branch below.
+            let restrictIDs: [Int]?
+            let filterForSQL: FilterExpression?
+            var isEmptyExplicitIDs = false
+            if let result = toolbarState.activeFilterResult, result.isSQLBacked {
+                restrictIDs = nil
+                filterForSQL = toolbarState.filterExpression
+            } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
+                restrictIDs = intersect(result.calibreIDs, with: query.ftsMatchedIDs)
+                filterForSQL = nil
+            } else if toolbarState.activeFilterResult != nil {
+                restrictIDs = nil
+                filterForSQL = nil
+                isEmptyExplicitIDs = true
+            } else {
+                restrictIDs = nil
+                filterForSQL = nil
+            }
+            LibraryFilterDebug.log("loadPage.start", [
+                "surface": "email", "mode": "kudosSorted", "page": offsetState.currentPage,
+                "query": LibraryFilterDebug.summary(query: query)
+            ])
+            if isEmptyExplicitIDs {
+                wordCountPage = []
+                wordCountHasMore = false
+            } else {
+                let (page, hasMore) = await library.kudosSortedPage(
+                    offset: offsetState.currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
+                    query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                    visibility: currentVisibilityPolicy,
+                    filterTagExpansions: cachedFilterTagExpansions,
+                    visibilityVersion: session.membershipVersion
+                )
+                guard !isTornDown, !Task.isCancelled else { return }
+                wordCountPage = page
+                wordCountHasMore = hasMore
+            }
+            raw = []
+            triggerDeferredSQLCountIfNeeded(query: query)
         } else if toolbarState.sortField == .title && shouldGroupSidebarRows {
             // §SeriesGrouping Phase 2: mirrors LibraryRootView's equivalent
             // branch — title sort needs materialize-then-sort once grouping
