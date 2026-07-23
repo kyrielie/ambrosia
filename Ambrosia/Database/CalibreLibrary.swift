@@ -57,6 +57,7 @@ actor CalibreLibrary {
     // and after AO3 extraction completes) via `updateAO3MetaCaches`. The
     // methods below read from these caches instead of querying a database.
     private(set) var ao3WordCountCache: [Int: Int] = [:]
+    private(set) var ao3KudosCache: [Int: Int] = [:]
     private(set) var ao3DateCache: [Int: (published: String?, updated: String?)] = [:]
     private(set) var crossoverIDCache: Set<Int> = []
     private(set) var ao3WorkIDCache: [Int: String] = [:]
@@ -87,11 +88,13 @@ actor CalibreLibrary {
     /// batches complete).
     func updateAO3MetaCaches(
         wordCounts: [Int: Int],
+        kudos: [Int: Int],
         dates: [Int: (published: String?, updated: String?)],
         crossoverIDs: Set<Int>,
         workIDs: [Int: String]
     ) {
         ao3WordCountCache = wordCounts
+        ao3KudosCache = kudos
         ao3DateCache = dates
         crossoverIDCache = crossoverIDs
         ao3WorkIDCache = workIDs
@@ -327,6 +330,18 @@ actor CalibreLibrary {
         guard !ids.isEmpty else { return [:] }
         let idSet = Set(ids)
         return ao3WordCountCache.filter { idSet.contains($0.key) }
+    }
+
+    // MARK: - §2.2a: Bulk AO3 kudos fallback
+    //
+    // When no Calibre custom column for kudos is configured, this bulk-fetches
+    // ao3_metadata.kudos_count values via the cached ao3KudosCache, which
+    // is bulk-fetched by AmbrosiaMetaDB and pushed in by LibrarySession.
+    // Mirrors ao3WordCounts(ids:) exactly.
+    func ao3Kudos(ids: [Int]) -> [Int: Int] {
+        guard !ids.isEmpty else { return [:] }
+        let idSet = Set(ids)
+        return ao3KudosCache.filter { idSet.contains($0.key) }
     }
 
     /// Bulk-fetch AO3 published/updated dates for a set of IDs from the

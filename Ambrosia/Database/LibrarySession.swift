@@ -255,10 +255,12 @@ final class LibrarySession {
         guard let library, let metaDB else { return }
         Task { [weak self] in
             async let wordCounts = metaDB.allAO3WordCounts()
+            async let kudos = metaDB.allAO3Kudos()
             async let dates = metaDB.allAO3Dates()
             async let crossoverIDs = metaDB.allCrossoverBookIDs()
             async let workIDs = metaDB.allAO3WorkIDs()
             let resolvedWordCounts = await wordCounts
+            let resolvedKudos = await kudos
             let resolvedDates = await dates
             let resolvedCrossoverIDs = await crossoverIDs
             let resolvedWorkIDs = await workIDs
@@ -268,6 +270,7 @@ final class LibrarySession {
             guard self?.library === library else { return }
             await library.updateAO3MetaCaches(
                 wordCounts: resolvedWordCounts,
+                kudos: resolvedKudos,
                 dates: resolvedDates,
                 crossoverIDs: resolvedCrossoverIDs,
                 workIDs: resolvedWorkIDs
