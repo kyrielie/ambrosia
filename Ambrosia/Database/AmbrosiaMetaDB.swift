@@ -95,6 +95,7 @@ actor AmbrosiaMetaDB {
         try createAnnotations(db: db)
         try createReadingHistory(db: db)
         try createAO3Metadata(db: db)
+        try createBookIndex(db: db)
         try createSchemaMigrations(db: db)
         try bridgeLegacyUserVersionMigrations(db: db)
         try migrateSeriesPlaceholdersToKeyedIfNeeded(db: db)
@@ -420,6 +421,27 @@ actor AmbrosiaMetaDB {
             }
             try markMigrationApplied(migrationNameDropAO3AuthorUsername, db: db)
         }
+    }
+
+    /// §7.1 (Phase 6): universal per-book index. Every book for which
+    /// `EPUBParser.parse()` succeeds gets a row here, AO3 or not — see
+    /// LibrarySession.extractOneBook's `.indexed` outcome. `title`/`description`
+    /// are captured but intentionally not wired into any filter/sort surface;
+    /// title/comment filtering stays Calibre-backed per §7's opening decision.
+    private static func createBookIndex(db: Connection) throws {
+        try db.execute("""
+        CREATE TABLE IF NOT EXISTS book_index (
+            calibre_id   INTEGER PRIMARY KEY,
+            title        TEXT,
+            description  TEXT,
+            word_count   INTEGER,
+            pub_date     TEXT,
+            publisher    TEXT,
+            subject      TEXT,
+            indexed_at   TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_book_index_wordcount ON book_index(word_count);
+        """)
     }
 
     private static func createAO3TagSynonyms(db: Connection) throws {
