@@ -218,7 +218,7 @@ extension FilterExpression {
         guard !completeRules.isEmpty else { return false }
         return completeRules.allSatisfy { rule in
             switch rule.field {
-            case .collection, .status, .fulltext, .crossover, .series:
+            case .collection, .status, .fulltext, .crossover, .series, .authorName:
                 return false
             default:
                 return true
@@ -249,15 +249,25 @@ struct FilterBuilder {
     let library: CalibreLibrary
     let ftsLibrary: CalibreFTSLibrary?
 
+    /// §4.3 (Phase 3): needed for authorName rules -- `book_authors` lives in
+    /// ambrosia_meta.db, a separate connection from `library`'s Calibre
+    /// metadata.db (§1's Option A), so matching against it can't ride along
+    /// on `library`'s own connection. Optional/nil-defaulted like this
+    /// struct's other dependencies; a nil metaDB just means authorName rules
+    /// fall back to Calibre-only matching (see `CalibreLibrary.authorMatchIDs`).
+    let metaDB: AmbrosiaMetaDB?
+
     /// Pre-resolved synonym expansions for tag rule values, keyed by raw value.
     /// Populated async by the call site via `AmbrosiaMetaDB.expandedTerms(for:)`
     /// before the `Task.detached` is launched (Invariant 10).
     let tagExpansions: [String: [String]]
 
     init(library: CalibreLibrary, ftsLibrary: CalibreFTSLibrary? = nil,
+         metaDB: AmbrosiaMetaDB? = nil,
          tagExpansions: [String: [String]] = [:]) {
         self.library = library
         self.ftsLibrary = ftsLibrary
+        self.metaDB = metaDB
         self.tagExpansions = tagExpansions
     }
 
@@ -385,15 +395,21 @@ struct FilterBuilder {
         // Phase 5: .series is in-memory (backed by AmbrosiaMetaDB's series_cache
         //      via seriesNamesMap), replacing the direct Calibre books_series_link/
         //      series SQL join — see §6 of the dependency-reduction plan.
+        // §4.3 (Phase 3): .authorName is always in-memory now -- book_authors
+        //      lives in ambrosia_meta.db, a separate connection metadata.db
+        //      SQL can't reach (§1's Option A), unlike word count/kudos which
+        //      only fall back to in-memory when unconfigured.
         let sqlRules        = complete.filter {
             $0.field != .collection &&
             $0.field != .status && $0.field != .fulltext && $0.field != .crossover &&
-            $0.field != .series
+            $0.field != .series &&
+            $0.field != .authorName
         }
         let collectionRules = complete.filter { $0.field == .collection }
         let statusRules     = complete.filter { $0.field == .status }
         let crossoverRules  = complete.filter { $0.field == .crossover }  // §6
         let seriesRules     = complete.filter { $0.field == .series }     // Phase 5
+        let authorRules     = complete.filter { $0.field == .authorName }  // §4.3 (Phase 3)
 
         // SQL rules: pass word-count rules through SQL if custom column is available;
         // signal nil back (by returning nil from sqlFragment) when not — handle below.
@@ -497,6 +513,48 @@ struct FilterBuilder {
                     unionIDs.formUnion(idSet.filter { id in
                         seriesRuleMatches(rule, names: seriesNamesMap[id] ?? [])
                     })
+                }
+                idSet = unionIDs
+            }
+            ids = Array(idSet).sorted()
+        }
+
+        // §4.3 (Phase 3): apply authorName rules in-memory. book_authors lives in
+        // ambrosia_meta.db, a separate connection from Calibre's metadata.db, so
+        // this can no longer be a single SQL query (§1's Option A) -- each rule's
+        // positive match set comes from CalibreLibrary.authorMatchIDs (which
+        // itself unions book_authors with a Calibre-side fallback for books
+        // book_authors doesn't cover) and is combined the same way collection/
+        // status membership maps are above. notContains/notEquals subtract the
+        // same positive set contains/equals would intersect with -- correct only
+        // because of the book_authors/Calibre-fallback partition invariant
+        // documented on CalibreLibrary.authorMatchIDs.
+        if !authorRules.isEmpty {
+            var idSet = Set(ids)
+            if group.conjunction == .and {
+                for rule in authorRules {
+                    let memberIDs = await library.authorMatchIDs(
+                        nameFragment: rule.value.trimmingCharacters(in: .whitespaces),
+                        op: rule.op, metaDB: metaDB
+                    )
+                    switch rule.op {
+                    case .contains, .equals, .startsWith: idSet = idSet.intersection(memberIDs)
+                    case .notContains, .notEquals:        idSet = idSet.subtracting(memberIDs)
+                    case .ratingAtMost, .ratingAtLeast:    break
+                    }
+                }
+            } else {
+                var unionIDs = Set<Int>()
+                for rule in authorRules {
+                    let memberIDs = await library.authorMatchIDs(
+                        nameFragment: rule.value.trimmingCharacters(in: .whitespaces),
+                        op: rule.op, metaDB: metaDB
+                    )
+                    switch rule.op {
+                    case .contains, .equals, .startsWith: unionIDs.formUnion(idSet.intersection(memberIDs))
+                    case .notContains, .notEquals:        unionIDs.formUnion(idSet.subtracting(memberIDs))
+                    case .ratingAtMost, .ratingAtLeast:    break
+                    }
                 }
                 idSet = unionIDs
             }
@@ -757,6 +815,46 @@ extension CalibreLibrary {
         return ids
     }
 
+    /// §4.3 (Phase 3): positive match set for an authorName rule, combining
+    /// `book_authors` (ambrosia_meta.db, via `metaDB`) with a Calibre-side
+    /// fallback for books `book_authors` doesn't cover (non-`.success`
+    /// extractions, or no `metaDB` in scope at all). Always returns the
+    /// *positive* matcher regardless of the rule's op sign --
+    /// `matchingIDsForGroup` applies negation via `.subtracting` against the
+    /// full library, the same way it already does for collection/status
+    /// membership maps. That's correct here only because `book_authors` and
+    /// the Calibre-side fallback query partition the full calibre_id space
+    /// cleanly (every book is either covered by a `book_authors` row set or
+    /// falls through to the live Calibre query, never both) -- see the plan's
+    /// §4.3 for why that partition is a named precondition, not incidental.
+    func authorMatchIDs(nameFragment: String, op: FilterOperator, metaDB: AmbrosiaMetaDB?) async -> Set<Int> {
+        let positiveOp: FilterOperator
+        switch op {
+        case .notContains: positiveOp = .contains
+        case .notEquals:   positiveOp = .equals
+        default:           positiveOp = op
+        }
+
+        func calibreMatches(excluding coverage: Set<Int>) -> Set<Int> {
+            guard let (fragment, args) = MatchingSubqueryBuilder.authorFragment(op: positiveOp, value: nameFragment) else {
+                return []
+            }
+            let sql = "SELECT b.id FROM books b WHERE \(fragment)"
+            guard let rows = try? db_prepare(sql, args) else { return [] }
+            let matches = Set(rows.compactMap { row in (row[0] as? Int64).map(Int.init) })
+            return coverage.isEmpty ? matches : matches.subtracting(coverage)
+        }
+
+        guard let metaDB else {
+            // No ambrosia_meta.db handle in scope -- fall back to the
+            // pre-Phase-3 Calibre-only behavior rather than matching nothing.
+            return calibreMatches(excluding: [])
+        }
+        let bookAuthorsMatches = (try? await metaDB.bookAuthorMatchIDs(nameFragment: nameFragment, op: positiveOp)) ?? []
+        let coverage = (try? await metaDB.existingBookAuthorsIDs()) ?? []
+        return bookAuthorsMatches.union(calibreMatches(excluding: coverage))
+    }
+
     func sqlFilterClause(for expression: FilterExpression,
                          tagExpansions: [String: [String]] = [:]) -> (String, [Binding?])? {
         guard expression.isSQLPageable else { return nil }
@@ -877,7 +975,11 @@ extension CalibreLibrary {
                                 nullClause: "c.text IS NULL")
 
         case .authorName:
-            return MatchingSubqueryBuilder.authorFragment(op: rule.op, value: v)
+            // §4.3 (Phase 3): no longer SQL against metadata.db -- book_authors
+            // lives in ambrosia_meta.db, a separate connection (§1's Option A).
+            // Evaluated in-memory via CalibreLibrary.authorMatchIDs; see
+            // matchingIDsForGroup and isSQLPageable above.
+            return nil
 
         case .tag:
             return expandedTagFragment(op: rule.op, value: v, tagExpansions: tagExpansions)

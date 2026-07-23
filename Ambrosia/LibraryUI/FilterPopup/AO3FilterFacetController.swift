@@ -72,7 +72,7 @@ final class AO3FilterFacetController {
                       collectionStore: CollectionStore?) async -> AO3FilterFacetController {
         let expression = toolbarState.filterExpression
         let tagExpansions = await TagExpansionResolver.filterTagExpansions(for: expression, metaDB: metaDB)
-        let filterBuilder = FilterBuilder(library: library, ftsLibrary: ftsLibrary, tagExpansions: tagExpansions)
+        let filterBuilder = FilterBuilder(library: library, ftsLibrary: ftsLibrary, metaDB: metaDB, tagExpansions: tagExpansions)
 
         // Always computed, unconditionally: unlike LibraryRootView's per-query
         // path, these maps back scoping queries built from the popup's OWN

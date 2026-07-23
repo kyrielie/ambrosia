@@ -837,6 +837,7 @@ final class EmailLibraryViewController: NSViewController {
                 for: expression, metaDB: session.metaDB
             )
             let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary,
+                                        metaDB: session.metaDB,
                                         tagExpansions: filterTagExpansions)
 
             let pass1Result = await builder.matchingIDs(
