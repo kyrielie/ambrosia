@@ -1622,6 +1622,19 @@ actor AmbrosiaMetaDB {
         return result
     }
 
+    /// §2.2a: mirrors allAO3WordCounts() exactly, for the kudos fallback cache.
+    func allAO3Kudos() -> [Int: Int] {
+        let sql = "SELECT calibre_id, kudos_count FROM ao3_metadata WHERE kudos_count IS NOT NULL"
+        guard let rows = try? readDB.prepare(sql).map({ $0 }) else { return [:] }
+        var result: [Int: Int] = [:]
+        for row in rows {
+            if let idBind = row[0] as? Int64, let kc = row[1] as? Int64 {
+                result[Int(idBind)] = Int(kc)
+            }
+        }
+        return result
+    }
+
     func allAO3Dates() -> [Int: (published: String?, updated: String?)] {
         let sql = "SELECT calibre_id, published_date, updated_date FROM ao3_metadata"
         guard let rows = try? readDB.prepare(sql).map({ $0 }) else { return [:] }
