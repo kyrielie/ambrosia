@@ -107,10 +107,6 @@ extension CalibreLibrary {
         let sql = """
             SELECT COUNT(DISTINCT b.id)
             FROM books b
-            LEFT JOIN books_authors_link bal ON bal.book = b.id
-            LEFT JOIN authors a ON a.id = bal.author
-            LEFT JOIN books_series_link bsl ON bsl.book = b.id
-            LEFT JOIN series s ON s.id = bsl.series
             \(where_)
             """
         let rows = try db.prepare(sql, qArgs).map { $0 }
