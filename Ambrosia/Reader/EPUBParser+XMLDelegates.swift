@@ -18,40 +18,6 @@ class ContainerParser: NSObject, XMLParserDelegate {
     }
 }
 
-/// Parses OPF for dc:description only (used by OPFDescriptionReader).
-class OPFParser: NSObject, XMLParserDelegate {
-    var dcDescription: String?
-    private var inDescription = false
-    private var buffer = ""
-
-    func parser(_ parser: XMLParser, didStartElement element: String,
-                namespaceURI: String?, qualifiedName _: String?,
-                attributes: [String: String] = [:]) {
-        if element == "dc:description" || element == "description" {
-            inDescription = true; buffer = ""
-        }
-    }
-
-    func parser(_ parser: XMLParser, foundCharacters string: String) {
-        if inDescription { buffer += string }
-    }
-
-    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
-        if inDescription, let str = String(data: CDATABlock, encoding: .utf8) { buffer += str }
-    }
-
-    func parser(_ parser: XMLParser, didEndElement element: String,
-                namespaceURI: String?, qualifiedName _: String?) {
-        if element == "dc:description" || element == "description", inDescription {
-            inDescription = false
-            if dcDescription == nil,
-               !buffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                dcDescription = buffer
-            }
-        }
-    }
-}
-
 /// Parses an EPUB3 nav document's `<nav epub:type="toc">` list, tracking
 /// `<ol>` nesting depth for TOCEntry.depth.
 class NavTOCParser: NSObject, XMLParserDelegate {
@@ -193,7 +159,8 @@ class NCXParser: NSObject, XMLParserDelegate {
     }
 }
 
-/// Full OPF parser: extracts manifest (id→href, id→mediaType), spine order, dc:title, and dc:creator.
+/// Full OPF parser: extracts manifest (id→href, id→mediaType), spine order, dc:title, dc:creator,
+/// and (§7.2, Phase 6) dc:description, dc:date, dc:publisher, dc:subject — all in the same single pass.
 class FullOPFParser: NSObject, XMLParserDelegate {
     /// manifest id → href (relative to OPF directory)
     var manifest: [String: String] = [:]
@@ -211,6 +178,18 @@ class FullOPFParser: NSObject, XMLParserDelegate {
     /// element's raw text without splitting it further — callers decide how
     /// to split.
     var dcCreators: [String] = []
+    /// dc:description value (§7.2). First non-empty element wins, same
+    /// first-wins convention as dcTitle.
+    var dcDescription: String?
+    /// dc:date value (§7.2), captured as raw text — not yet parsed/validated
+    /// as ISO-8601; see book_index.pub_date.
+    var dcDate: String?
+    /// dc:publisher value (§7.2).
+    var dcPublisher: String?
+    /// dc:subject value (§7.2). The OPF spec allows multiple `<dc:subject>`
+    /// elements; joined with ", " the same way dcCreators' individual
+    /// elements are captured whole rather than split.
+    var dcSubjects: [String] = []
 
     private var inManifest  = false
     private var inSpine     = false
@@ -218,6 +197,14 @@ class FullOPFParser: NSObject, XMLParserDelegate {
     private var titleBuffer = ""
     private var inCreator     = false
     private var creatorBuffer = ""
+    private var inDescription  = false
+    private var descriptionBuffer = ""
+    private var inDate         = false
+    private var dateBuffer     = ""
+    private var inPublisher    = false
+    private var publisherBuffer = ""
+    private var inSubject      = false
+    private var subjectBuffer  = ""
 
     func parser(_ parser: XMLParser, didStartElement element: String,
                 namespaceURI: String?, qualifiedName _: String?,
@@ -242,6 +229,14 @@ class FullOPFParser: NSObject, XMLParserDelegate {
             if dcTitle == nil { inTitle = true; titleBuffer = "" }
         case "dc:creator", "creator":
             inCreator = true; creatorBuffer = ""
+        case "dc:description", "description":
+            if dcDescription == nil { inDescription = true; descriptionBuffer = "" }
+        case "dc:date", "date":
+            if dcDate == nil { inDate = true; dateBuffer = "" }
+        case "dc:publisher", "publisher":
+            if dcPublisher == nil { inPublisher = true; publisherBuffer = "" }
+        case "dc:subject", "subject":
+            inSubject = true; subjectBuffer = ""
         default:
             break
         }
@@ -250,6 +245,14 @@ class FullOPFParser: NSObject, XMLParserDelegate {
     func parser(_ parser: XMLParser, foundCharacters string: String) {
         if inTitle { titleBuffer += string }
         if inCreator { creatorBuffer += string }
+        if inDescription { descriptionBuffer += string }
+        if inDate { dateBuffer += string }
+        if inPublisher { publisherBuffer += string }
+        if inSubject { subjectBuffer += string }
+    }
+
+    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+        if inDescription, let str = String(data: CDATABlock, encoding: .utf8) { descriptionBuffer += str }
     }
 
     func parser(_ parser: XMLParser, didEndElement element: String,
@@ -268,6 +271,30 @@ class FullOPFParser: NSObject, XMLParserDelegate {
                 inCreator = false
                 let trimmed = creatorBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty { dcCreators.append(trimmed) }
+            }
+        case "dc:description", "description":
+            if inDescription {
+                inDescription = false
+                let trimmed = descriptionBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+                if dcDescription == nil, !trimmed.isEmpty { dcDescription = trimmed }
+            }
+        case "dc:date", "date":
+            if inDate {
+                inDate = false
+                let trimmed = dateBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+                if dcDate == nil, !trimmed.isEmpty { dcDate = trimmed }
+            }
+        case "dc:publisher", "publisher":
+            if inPublisher {
+                inPublisher = false
+                let trimmed = publisherBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+                if dcPublisher == nil, !trimmed.isEmpty { dcPublisher = trimmed }
+            }
+        case "dc:subject", "subject":
+            if inSubject {
+                inSubject = false
+                let trimmed = subjectBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { dcSubjects.append(trimmed) }
             }
         default: break
         }
