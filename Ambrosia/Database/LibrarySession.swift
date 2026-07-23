@@ -611,7 +611,14 @@ final class LibrarySession {
             let allIDs = await library.allBookIDs()
             let existing = (try? await metaDB.existingAO3MetadataIDs()) ?? []
             let attempted = (try? await metaDB.attemptedAO3ExtractionIDs()) ?? []
-            let missing = forceAll ? allIDs : allIDs.filter { !existing.contains($0) && !attempted.contains($0) }
+            // §7.3 (Phase 6): a book that reaches `.indexed` writes to neither
+            // ao3_metadata nor ao3_extraction_diagnostics, so without this third
+            // exclusion set every non-AO3 book would be fully re-decompressed and
+            // re-parsed on every single library open, forever.
+            let indexed = (try? await metaDB.existingBookIndexIDs()) ?? []
+            let missing = forceAll ? allIDs : allIDs.filter {
+                !existing.contains($0) && !attempted.contains($0) && !indexed.contains($0)
+            }
 
             DispatchQueue.main.async { [weak self] in
                 self?.extractionProgress.total = missing.count
