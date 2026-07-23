@@ -81,3 +81,8 @@ Backups.backupdb
 .MobileBackups.trash
 MobileBackups.trash
 tmbootpicker.efi
+
+# Scratch patch/bundle output from AI-assisted engineering sessions --
+# never meant to be committed (accidentally landed in 6d5f91d).
+/patches/
+*.patch

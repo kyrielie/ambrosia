@@ -91,6 +91,23 @@ final class AO3FilterFacetController {
             statusMap[status] = (try? await metaDB.ao3CompletionStatusIDs(status)) ?? []
         }
 
+        // Phase 5 fix: same bug class as the crossoverMap/statusMap note above.
+        // `baseIDs` below is scoped to the real drawer/toolbar `expression`,
+        // which (unlike the popup's own otherFieldsExpression) can contain a
+        // `.series` rule -- FilterBuilder.matchingIDsForGroup needs
+        // seriesNamesMap to evaluate it, and the default `[:]` silently turns
+        // a positive series rule into "match nothing" (empty baseIDs, every
+        // facet count zero) or a negated one into "match everything" (series
+        // filter silently ignored). Computed unconditionally, not gated on
+        // whether `expression` currently has a `.series` rule, for the same
+        // reason crossoverMap/statusMap are: it's cheap (seriesEntries(for:)
+        // is itself cache-backed in AmbrosiaMetaDB), and gating is exactly
+        // the failure mode this comment block exists to warn about.
+        let allIDsForSeries = await library.allCalibreIDs()
+        let seriesEntries = (try? await metaDB.seriesEntries(for: allIDsForSeries)) ?? []
+        let seriesNamesMap: [Int: [String]] = Dictionary(grouping: seriesEntries, by: \.calibreID)
+            .mapValues { $0.map(\.seriesName) }
+
         // `FilterBuilder.matchingIDs` treats an expression with no complete
         // rules as "match nothing" (see matchingIDsSync's early-return
         // branch), not "match everything" — it's designed to be called only
@@ -103,7 +120,8 @@ final class AO3FilterFacetController {
             let baseResult = await filterBuilder.matchingIDs(
                 expression: expression,
                 statusMap: statusMap,
-                crossoverMap: crossoverMap
+                crossoverMap: crossoverMap,
+                seriesNamesMap: seriesNamesMap
             )
             baseIDs = Set(baseResult.calibreIDs)
         } else {
