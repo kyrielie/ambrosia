@@ -1,16 +1,18 @@
 
 # AI tool output / scratch dumps
-   *repomix*
-   *dump*.xml
-   *dump*.txt
-   *.zip
-   *.tar
-   *.tar.gz
+*repomix*
+*dump*.xml
+*dump*.txt
+*.zip
+*.tar
+*.tar.gz
+repo.zip
+Archive.zip
 
-   # DB artifacts
-   *.db
-   *.db-shm
-   *.db-wal
+# DB artifacts
+*.db
+*.db-shm
+*.db-wal
 
 .serena
 .pytest_cache
