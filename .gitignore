@@ -1,7 +1,16 @@
 
-repo.zip
-repomix-output.xml
-*.zip
+# AI tool output / scratch dumps
+   *repomix*
+   *dump*.xml
+   *dump*.txt
+   *.zip
+   *.tar
+   *.tar.gz
+
+   # DB artifacts
+   *.db
+   *.db-shm
+   *.db-wal
 
 .serena
 .pytest_cache
