@@ -1,4 +1,8 @@
 
+repo.zip
+repomix-output.xml
+*.zip
+
 .serena
 .pytest_cache
 __pycache__
