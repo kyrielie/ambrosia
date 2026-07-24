@@ -22,7 +22,12 @@ final class PreferencesWindowController: NSWindowController {
         window.toolbarStyle = .preference
         window.animationBehavior = .documentWindow
         super.init(window: window)
-        window.contentView = NSHostingView(rootView: PreferencesRootView())
+        // Safe to force-unwrap: `shared` is a lazily-initialized `static let`,
+        // only ever reached via `show()`, which is always called well after
+        // `AppDelegate.shared.session` is set in `AmbrosiaApp.init()`.
+        window.contentView = NSHostingView(
+            rootView: PreferencesRootView().environment(AppDelegate.shared!.session)
+        )
     }
 
     @available(*, unavailable)
@@ -682,7 +687,19 @@ private struct LibraryPreviewRows: View {
 // MARK: - Data Tab
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Summarizes how much of the active library has AO3 metadata, using the
+/// same three-set union (`existingAO3MetadataIDs`, `attemptedAO3ExtractionIDs`,
+/// `existingBookIndexIDs`) that `LibrarySession.startAO3Extraction` uses to
+/// compute what's still missing.
+private enum AO3ExtractionStatus {
+    case noLibrary
+    case running(completed: Int, total: Int)
+    case complete(extracted: Int, total: Int)
+    case partial(extracted: Int, total: Int, pending: Int)
+}
+
 private struct DataTab: View {
+    @Environment(LibrarySession.self) private var session
     @ObservedObject private var prefs = ReaderPreferences.shared
     @ObservedObject private var tagSeedConfig = AO3TagSeedDatabaseConfig.shared
     @State private var knownLibraries: [LibraryIndexEntry] = []
@@ -690,6 +707,7 @@ private struct DataTab: View {
     @State private var wordCountLabel: String = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
     @State private var kudosLabel: String = CustomColumnConfig.shared.kudosLabel ?? "(none)"
     @State private var availableColumns: [String] = []
+    @State private var ao3ExtractionStatus: AO3ExtractionStatus = .noLibrary
 
     var body: some View {
         Form {
@@ -760,6 +778,7 @@ private struct DataTab: View {
                     .disabled(AppDelegate.shared?.session?.isOpen != true)
                     Spacer()
                 }
+                ao3ExtractionStatusView
             } header: {
                 Label("AO3 Metadata", systemImage: "text.magnifyingglass").font(.headline)
             } footer: {
@@ -809,6 +828,27 @@ private struct DataTab: View {
             reloadKnownLibraries()
             tagSeedConfig.refreshValidation()
             Task { await loadAvailableColumns() }
+            Task { await reloadAO3ExtractionStatus() }
+            scheduleObservingExtraction()
+        }
+    }
+
+    @ViewBuilder
+    private var ao3ExtractionStatusView: some View {
+        switch ao3ExtractionStatus {
+        case .noLibrary:
+            Label("Open a library to see extraction status.", systemImage: "pause.circle")
+                .foregroundStyle(.secondary)
+        case .running(let completed, let total):
+            Label("Enriching library \(completed)/\(total)…", systemImage: "arrow.triangle.2.circlepath")
+                .foregroundStyle(.secondary)
+        case .complete(let extracted, let total):
+            Label("\(extracted) of \(total) books have AO3 metadata", systemImage: "checkmark.circle")
+                .foregroundStyle(.green)
+        case .partial(let extracted, let total, let pending):
+            Label("\(extracted) of \(total) books have AO3 metadata — \(pending) not yet processed",
+                  systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
         }
     }
 
@@ -913,6 +953,51 @@ private struct DataTab: View {
         availableColumns = await library.customColumns().map(\.label).sorted()
         wordCountLabel = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
         kudosLabel = CustomColumnConfig.shared.kudosLabel ?? "(none)"
+    }
+
+    /// Recomputes the persistent extracted/total/pending counts. Called once
+    /// on appear, and again whenever `extractionProgress.isRunning` flips
+    /// back to false (a run just finished) — the same trigger the toolbar's
+    /// fic-count label uses to snap back from `statusText` to a plain count.
+    private func reloadAO3ExtractionStatus() async {
+        guard let library = session.library, let metaDB = session.metaDB else {
+            ao3ExtractionStatus = .noLibrary
+            return
+        }
+        let allIDs = await library.allBookIDs()
+        let extracted = (try? await metaDB.existingAO3MetadataIDs()) ?? []
+        let attempted = (try? await metaDB.attemptedAO3ExtractionIDs()) ?? []
+        let indexed = (try? await metaDB.existingBookIndexIDs()) ?? []
+        let processed = extracted.union(attempted).union(indexed)
+        let pending = allIDs.filter { !processed.contains($0) }.count
+        let total = allIDs.count
+        ao3ExtractionStatus = pending == 0
+            ? .complete(extracted: extracted.count, total: total)
+            : .partial(extracted: extracted.count, total: total, pending: pending)
+    }
+
+    /// Mirrors `LibraryWindowController.scheduleCounting()`: re-observes
+    /// `extractionProgress` after every change so the status row updates
+    /// live while a run is in progress, rather than only refreshing on tab
+    /// re-open.
+    private func scheduleObservingExtraction() {
+        withObservationTracking {
+            _ = session.extractionProgress.completed
+            _ = session.extractionProgress.total
+            _ = session.extractionProgress.isRunning
+        } onChange: {
+            Task { @MainActor in
+                if session.extractionProgress.isRunning {
+                    ao3ExtractionStatus = .running(
+                        completed: session.extractionProgress.completed,
+                        total: session.extractionProgress.total
+                    )
+                } else {
+                    await reloadAO3ExtractionStatus()
+                }
+                scheduleObservingExtraction()
+            }
+        }
     }
 
     private func confirmReextract() {

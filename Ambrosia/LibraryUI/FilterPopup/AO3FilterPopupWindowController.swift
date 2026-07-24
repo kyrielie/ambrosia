@@ -3,24 +3,37 @@ import SwiftUI
 
 // MARK: - AO3FilterPopupWindowController
 //
-// A separate `NSWindow`, modeled directly on `ReaderWindowController`
-// (singleton-tracked, `NSWindow` built directly rather than a SwiftUI
-// `Scene`/`WindowGroup`, `NSHostingController` as the content view
-// controller, `setFrameAutosaveName` for persisted size/position,
-// `NSWindowDelegate` for close-time cleanup). Since there is only ever one
-// library open at a time, a single static optional is sufficient instead of
-// a keyed dictionary.
+// An `NSPanel` docked to the right edge of the library window, modeled on
+// `ReaderViewController`'s annotation/TOC sidebar panels
+// (`isFloatingPanel`/`.level = .floating`, tracks the anchor window's
+// didMove/didResize to stay flush, `NSHostingController` as the content view
+// controller, `NSWindowDelegate` for close-time cleanup). Previously this was
+// a fully independent `NSWindow` positioned by `setFrameAutosaveName`, with
+// no relationship to the library window — wherever AppKit's cascade or the
+// user's last drag left it. Only the panel's width is persisted (in
+// UserDefaults, not a frame autosave); position and height are always
+// re-derived from the anchor window, so there's nothing to drift. Since
+// there is only ever one library open at a time, a single static optional
+// is sufficient instead of a keyed dictionary.
 @MainActor
 final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate {
     private static var shared: AO3FilterPopupWindowController?
 
-    static func open(toolbarState: LibraryToolbarState,
+    private static let widthDefaultsKey = "AmbrosiaAO3FilterPopupWidth"
+    private static let defaultWidth: CGFloat = 420
+    private static let minWidth: CGFloat = 360
+
+    static func open(anchorWindow: NSWindow,
+                      toolbarState: LibraryToolbarState,
                       metaDB: AmbrosiaMetaDB,
                       library: CalibreLibrary,
                       ftsLibrary: CalibreFTSLibrary?,
                       collectionStore: CollectionStore?,
                       membershipVersion: Int) {
         if let existing = shared {
+            existing.anchorWindow = anchorWindow
+            existing.installAnchorObservers()
+            existing.syncPanelPosition()
             existing.showWindow(nil)
             existing.window?.makeKeyAndOrderFront(nil)
             existing.loadTask?.cancel()
@@ -29,8 +42,10 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
             }
             return
         }
-        let wc = AO3FilterPopupWindowController(toolbarState: toolbarState)
+        let wc = AO3FilterPopupWindowController(toolbarState: toolbarState, anchorWindow: anchorWindow)
         shared = wc
+        wc.installAnchorObservers()
+        wc.syncPanelPosition()
         wc.showWindow(nil)
         wc.loadTask = Task {
             let facetController = await AO3FilterFacetController.make(
@@ -57,23 +72,31 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
     // See fix plan §3a.
     private var loadTask: Task<Void, Never>?
 
-    private init(toolbarState: LibraryToolbarState) {
+    /// The library window this panel docks to. Weak — the panel closes
+    /// itself (via windowWillClose) well before the library window could be
+    /// deallocated, but there's no reason to hold it strongly either way.
+    private weak var anchorWindow: NSWindow?
+    private var anchorObservers: [NSObjectProtocol] = []
+
+    private init(toolbarState: LibraryToolbarState, anchorWindow: NSWindow) {
         self.toolbarState = toolbarState
+        self.anchorWindow = anchorWindow
         self.state = AO3FilterPopupState(capturedDigest: AO3FilterPopupDigest.current(toolbarState: toolbarState))
         self.hostingController = NSHostingController(rootView: AnyView(ProgressView("Loading filters…").padding()))
 
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 640),
+        let width = Self.persistedWidth()
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: 640),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered, defer: false
         )
-        window.title = "AO3 Style Filter"
-        window.minSize = NSSize(width: 360, height: 400)
-        super.init(window: window)
-        window.delegate = self
-        window.setFrameAutosaveName("AmbrosiaAO3FilterPopup")
-        _ = window.setFrameUsingName("AmbrosiaAO3FilterPopup")
-        window.contentViewController = hostingController
+        panel.title = "AO3 Style Filter"
+        panel.minSize = NSSize(width: Self.minWidth, height: 400)
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        super.init(window: panel)
+        panel.delegate = self
+        panel.contentViewController = hostingController
     }
 
     @available(*, unavailable)
@@ -86,6 +109,58 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
                                 membershipVersion: membershipVersion,
                                 onApply: { [weak self] in self?.applyDidCommit(toolbarState: toolbarState) })
         )
+    }
+
+    // MARK: - Docking
+
+    private static func persistedWidth() -> CGFloat {
+        let stored = UserDefaults.standard.double(forKey: widthDefaultsKey)
+        return stored >= minWidth ? stored : defaultWidth
+    }
+
+    private func installAnchorObservers() {
+        removeAnchorObservers()
+        guard let anchorWindow else { return }
+        let nc = NotificationCenter.default
+        let move = nc.addObserver(forName: NSWindow.didMoveNotification, object: anchorWindow, queue: .main) {
+            [weak self] _ in self?.syncPanelPosition()
+        }
+        let resize = nc.addObserver(forName: NSWindow.didResizeNotification, object: anchorWindow, queue: .main) {
+            [weak self] _ in self?.syncPanelPosition()
+        }
+        anchorObservers = [move, resize]
+    }
+
+    private func removeAnchorObservers() {
+        anchorObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        anchorObservers = []
+    }
+
+    /// Docks the panel flush to the anchor window's right edge, matching its
+    /// full height. Falls back to the left edge, then clamps into the
+    /// screen's visible frame, if there isn't room on the right — same
+    /// clamping shape as the search-suggestion popup's `repositionPanel(_:)`
+    /// in `LibraryWindowController`.
+    private func syncPanelPosition() {
+        guard let panel = window as? NSPanel, let anchorWindow else { return }
+        let anchorFrame = anchorWindow.frame
+        let width = panel.frame.width
+        let screenFrame = anchorWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? anchorFrame
+
+        let rightX = anchorFrame.maxX
+        let leftX = anchorFrame.minX - width
+        let x: CGFloat
+        if rightX + width <= screenFrame.maxX {
+            x = rightX
+        } else if leftX >= screenFrame.minX {
+            x = leftX
+        } else {
+            x = min(max(rightX, screenFrame.minX), max(screenFrame.minX, screenFrame.maxX - width))
+        }
+
+        let contentRect = CGRect(x: x, y: anchorFrame.minY, width: width, height: anchorFrame.height)
+        let newFrame = NSPanel.frameRect(forContentRect: contentRect, styleMask: panel.styleMask)
+        panel.setFrame(newFrame, display: true)
     }
 
     /// Discards checkbox state if the underlying search/filter changed since
@@ -142,9 +217,15 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
         }
     }
 
+    func windowDidResize(_ notification: Notification) {
+        guard let panel = window else { return }
+        UserDefaults.standard.set(panel.frame.width, forKey: Self.widthDefaultsKey)
+    }
+
     func windowWillClose(_ notification: Notification) {
         loadTask?.cancel()
         loadTask = nil
+        removeAnchorObservers()
         Self.shared = nil
     }
 }
