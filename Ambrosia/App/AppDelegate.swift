@@ -25,6 +25,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             ghostWindow.orderOut(nil)
         }
 
+        // Tabbing the Library window together with independent Reader windows
+        // doesn't make sense for this app; NSWindow.allowsAutomaticWindowTabbing
+        // defaults to true, so it must be explicitly turned off.
+        NSWindow.allowsAutomaticWindowTabbing = false
+
         // Reopen last used library silently on launch
         Task { await session.reopenIfNeeded() }
 

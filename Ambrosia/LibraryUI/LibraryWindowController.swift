@@ -761,7 +761,26 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         toolbarState?.syncFullTextFieldFromSearchText()
         toolbarState?.showFilterDrawer = true
     }
-    @objc private func triggerSidebarToggle(){ toolbarState?.toggleEmailSidebar.toggle() }
+    /// In email mode this collapses/expands the split-view sidebar via
+    /// `toggleEmailSidebar`, observed by `EmailLibraryViewController`. In
+    /// list/ranking mode there is no such observer — previously a silent
+    /// no-op (bug #7) — so this now opens the same docked AO3 filter panel
+    /// the toolbar/menu "Open AO3 Style Filter" action opens.
+    @objc private func triggerSidebarToggle() {
+        switch toolbarState?.viewMode {
+        case .email:
+            toolbarState?.toggleEmailSidebar.toggle()
+        default:
+            guard let window, let toolbarState, let session,
+                  let metaDB = session.metaDB, let library = session.library else { return }
+            AO3FilterPopupWindowController.open(
+                anchorWindow: window,
+                toolbarState: toolbarState, metaDB: metaDB, library: library,
+                ftsLibrary: session.ftsLibrary, collectionStore: session.collectionStore,
+                membershipVersion: session.membershipVersion
+            )
+        }
+    }
 
     /// Called by the Show Annotations menu item (⌘B) when the library window is key.
     /// Sets the requested mode then flips showEmailReaderSidebar, observed by

@@ -60,6 +60,16 @@ struct AmbrosiaApp: App {
                 .keyboardShortcut(",", modifiers: [.command])
             }
             
+            // Dead menu items: no NSDocument (no Save/Save As/Revert target),
+            // no NSPrintOperation usage anywhere (no Print target), and the
+            // app's real find is a hand-rolled WKWebView.find(...) under
+            // Reader ▸ Find — this drops AppKit's unused NSTextFinder-backed
+            // Edit ▸ Find submenu so there isn't a second, dead Find sitting
+            // next to the working one.
+            CommandGroup(replacing: .saveItem) { }
+            CommandGroup(replacing: .printItem) { }
+            CommandGroup(replacing: .textEditing) { }
+
             CommandGroup(replacing: .newItem) {
                 Button("Open Calibre Library…") {
                     AppDelegate.shared?.chooseLibraryFolder()
@@ -109,7 +119,9 @@ struct AmbrosiaApp: App {
                           let metaDB = session.metaDB,
                           let library = session.library
                     else { return }
+                    guard let anchorWindow = libraryWindowController.window else { return }
                     AO3FilterPopupWindowController.open(
+                        anchorWindow: anchorWindow,
                         toolbarState: toolbarState, metaDB: metaDB, library: library,
                         ftsLibrary: session.ftsLibrary, collectionStore: session.collectionStore,
                         membershipVersion: session.membershipVersion
