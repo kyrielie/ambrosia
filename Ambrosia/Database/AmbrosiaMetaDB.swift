@@ -336,14 +336,45 @@ actor AmbrosiaMetaDB {
             attempted_at TEXT NOT NULL
         );
 
-        CREATE INDEX IF NOT EXISTS idx_series_cache_key
-            ON series_cache(COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name));
-
         CREATE INDEX IF NOT EXISTS idx_ao3_extraction_diagnostics_status
             ON ao3_extraction_diagnostics(status);
 
         """)
+        // calibre_series_id: Calibre's own series.id for a Calibre-fallback
+        // row (NULL for AO3-derived rows, and for rows written before this
+        // column existed). Lets seriesKey disambiguate two distinct Calibre
+        // series that happen to share a display name, instead of colliding
+        // under a name-only key. Additive per the table's existing
+        // convention (see rating/warnings_json above) since ALTER TABLE ADD
+        // COLUMN can't be expressed inside CREATE TABLE IF NOT EXISTS.
+        //
+        // idx_series_cache_key's expression must mirror seriesKeySQL exactly
+        // (see that constant's doc comment). It only needs rebuilding the
+        // one time the column is introduced — not on every cold start, which
+        // would mean an unnecessary DROP+CREATE index pass over the whole
+        // table on every launch for libraries that already have the column.
+        if try !columnExists("series_cache", "calibre_series_id", db: db) {
+            try db.run("ALTER TABLE series_cache ADD COLUMN calibre_series_id INTEGER")
+            try db.run("DROP INDEX IF EXISTS idx_series_cache_key")
+            try db.run("CREATE INDEX idx_series_cache_key ON series_cache(\(seriesKeySQL))")
+        }
     }
+
+    /// Single source of truth for the series-membership key expression used
+    /// throughout series grouping (index, all read queries, and
+    /// `SeriesCacheEntry.seriesKey` above, which this must stay in sync
+    /// with). Precedence: an AO3-derived series id, then Calibre's own
+    /// series.id (added in `calibre_series_id`, bug #3 — disambiguates two
+    /// distinct Calibre series sharing a display name), then bare series
+    /// name as a last resort for rows written before `calibre_series_id`
+    /// existed. Previously each call site duplicated this COALESCE
+    /// independently, which is how it silently drifted out of sync with
+    /// `SeriesCacheEntry.seriesKey` for the Calibre-name case.
+    private static let seriesKeySQL = """
+        COALESCE('ao3:' || NULLIF(ao3_series_id, ''), \
+        CASE WHEN calibre_series_id IS NOT NULL THEN 'calibre:' || calibre_series_id \
+        ELSE 'calibre-name:' || series_name END)
+        """
 
     /// One-time migration: the original `series_placeholders` table predates
     /// the `series_key` column. This rekeys it onto `series_key` as the
@@ -1280,8 +1311,8 @@ actor AmbrosiaMetaDB {
             try run(
                 """
                 INSERT OR REPLACE INTO series_cache
-                (calibre_id, series_name, series_index, ao3_series_id, is_anthology)
-                VALUES (?, ?, ?, ?, 0)
+                (calibre_id, series_name, series_index, ao3_series_id, is_anthology, calibre_series_id)
+                VALUES (?, ?, ?, ?, 0, NULL)
                 """,
                 [calibreID, entry.name, entry.index, entry.ao3ID]
             )
@@ -1474,7 +1505,7 @@ actor AmbrosiaMetaDB {
         guard !calibreIDs.isEmpty else { return [] }
         let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")
         let sql = """
-        SELECT calibre_id, series_name, series_index, ao3_series_id, is_anthology
+        SELECT calibre_id, series_name, series_index, ao3_series_id, is_anthology, calibre_series_id
         FROM series_cache
         WHERE calibre_id IN (\(placeholders))
         ORDER BY series_name, series_index
@@ -1488,7 +1519,8 @@ actor AmbrosiaMetaDB {
                 seriesName: seriesName,
                 seriesIndex: seriesIndex,
                 ao3SeriesID: row[safe: 3] as? String,
-                isAnthology: (row.int(at: 4) ?? 0) != 0
+                isAnthology: (row.int(at: 4) ?? 0) != 0,
+                calibreSeriesID: row.int(at: 5)
             )
         }
     }
@@ -1516,9 +1548,9 @@ actor AmbrosiaMetaDB {
         guard !keys.isEmpty else { return [] }
         let placeholders = keys.map { _ in "?" }.joined(separator: ",")
         let sql = """
-        SELECT calibre_id, series_name, series_index, ao3_series_id, is_anthology
+        SELECT calibre_id, series_name, series_index, ao3_series_id, is_anthology, calibre_series_id
         FROM series_cache
-        WHERE COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name) IN (\(placeholders))
+        WHERE \(Self.seriesKeySQL) IN (\(placeholders))
         ORDER BY series_name, series_index
         """
         return try prepare(sql, keys.map { $0 as Binding? }).compactMap { row in
@@ -1530,7 +1562,8 @@ actor AmbrosiaMetaDB {
                 seriesName: seriesName,
                 seriesIndex: seriesIndex,
                 ao3SeriesID: row[safe: 3] as? String,
-                isAnthology: (row.int(at: 4) ?? 0) != 0
+                isAnthology: (row.int(at: 4) ?? 0) != 0,
+                calibreSeriesID: row.int(at: 5)
             )
         }
     }
@@ -1560,7 +1593,7 @@ actor AmbrosiaMetaDB {
         let sql = """
         WITH keyed AS (
             SELECT calibre_id,
-                   COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name) AS series_key,
+                   \(Self.seriesKeySQL) AS series_key,
                    is_anthology
             FROM series_cache
         ),
@@ -1604,7 +1637,7 @@ actor AmbrosiaMetaDB {
         let sql = """
         WITH keyed AS (
             SELECT calibre_id, series_name,
-                   COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name) AS series_key,
+                   \(Self.seriesKeySQL) AS series_key,
                    is_anthology
             FROM series_cache
         ),
@@ -1653,12 +1686,12 @@ actor AmbrosiaMetaDB {
         let sql = """
         WITH counted AS (
             SELECT calibre_id, series_name, series_index, is_anthology,
-                   COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name) AS series_key,
+                   \(Self.seriesKeySQL) AS series_key,
                    COUNT(*) OVER (
-                       PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
+                       PARTITION BY \(Self.seriesKeySQL)
                    ) AS series_count,
                    MAX(is_anthology) OVER (
-                       PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
+                       PARTITION BY \(Self.seriesKeySQL)
                    ) AS anthology
             FROM series_cache
         )
@@ -1743,19 +1776,26 @@ actor AmbrosiaMetaDB {
         singletonWarningsCache.removeAll()
     }
 
-    /// Inserts Calibre-derived series fallback entries, but only for books that
-    /// have no `series_cache` row at all yet. `INSERT OR IGNORE` alone is not
-    /// sufficient here: the table's primary key is `(calibre_id, series_name)`,
-    /// and a Calibre series name is almost never identical to the AO3-extracted
-    /// series name for the same book, so a plain `INSERT OR IGNORE` does not
-    /// collide with an existing AO3 row — it silently adds a second, spurious
-    /// row for that `calibre_id` under an unrelated `series_key`. That row then
-    /// pulls the book into whatever (often much larger, cross-author) group
-    /// shares that Calibre series name, breaking series-or-merged stripping
-    /// and grouped display for every book affected. The `WHERE NOT EXISTS`
-    /// guard below ensures Calibre fallback data is only ever written for a
+    /// Inserts Calibre-derived series fallback entries for books with no
+    /// `series_cache` row at all yet, and separately backfills
+    /// `calibre_series_id` onto existing Calibre-sourced rows
+    /// (`ao3_series_id IS NULL`) that predate that column. `INSERT OR
+    /// IGNORE` alone is not sufficient for the insert half: the table's
+    /// primary key is `(calibre_id, series_name)`, and a Calibre series name
+    /// is almost never identical to the AO3-extracted series name for the
+    /// same book, so a plain `INSERT OR IGNORE` does not collide with an
+    /// existing AO3 row — it silently adds a second, spurious row for that
+    /// `calibre_id` under an unrelated `series_key`. That row then pulls the
+    /// book into whatever (often much larger, cross-author) group shares
+    /// that Calibre series name, breaking series-or-merged stripping and
+    /// grouped display for every book affected. The `WHERE NOT EXISTS`
+    /// guard below ensures Calibre fallback data is only ever inserted for a
     /// book that has no series_cache membership yet (i.e. AO3 extraction
-    /// either hasn't run for it or found no series).
+    /// either hasn't run for it or found no series). The backfill half is
+    /// separate and unconditional (per row, only touching AO3-untouched
+    /// rows) so libraries seeded before `calibre_series_id` existed get it
+    /// retroactively too, not just newly-inserted rows — see Bug 3 decision
+    /// 2.
     func insertCalibreSeriesFallback(_ entries: [SeriesCacheEntry]) throws {
         guard !entries.isEmpty else { return }
         try transaction {
@@ -1763,8 +1803,8 @@ actor AmbrosiaMetaDB {
                 try run(
                     """
                     INSERT INTO series_cache
-                    (calibre_id, series_name, series_index, ao3_series_id, is_anthology)
-                    SELECT ?, ?, ?, ?, ?
+                    (calibre_id, series_name, series_index, ao3_series_id, is_anthology, calibre_series_id)
+                    SELECT ?, ?, ?, ?, ?, ?
                     WHERE NOT EXISTS (
                         SELECT 1 FROM series_cache WHERE calibre_id = ?
                     )
@@ -1775,14 +1815,33 @@ actor AmbrosiaMetaDB {
                         entry.seriesIndex,
                         entry.ao3SeriesID,
                         entry.isAnthology ? 1 : 0,
+                        entry.calibreSeriesID,
                         entry.calibreID,
                     ]
                 )
+                // Backfill: an already-existing Calibre-sourced row for this
+                // exact (calibre_id, series_name) that predates
+                // calibre_series_id. Scoped to ao3_series_id IS NULL so an
+                // AO3-derived row is never touched (decision 1), and to a
+                // NULL calibre_series_id so a row already backfilled isn't
+                // needlessly rewritten.
+                if let calibreSeriesID = entry.calibreSeriesID {
+                    try run(
+                        """
+                        UPDATE series_cache
+                        SET calibre_series_id = ?
+                        WHERE calibre_id = ? AND series_name = ?
+                          AND ao3_series_id IS NULL
+                          AND calibre_series_id IS NULL
+                        """,
+                        [calibreSeriesID, entry.calibreID, entry.seriesName]
+                    )
+                }
             }
         }
-        // WHERE NOT EXISTS means only calibreIDs with no prior series_cache
-        // row are actually written; conservatively evict all of them along
-        // with the by-key/singleton caches they can affect.
+        // Both the insert and the backfill above only ever touch rows for
+        // calibreIDs present in `entries`; conservatively evict all of them
+        // along with the by-key/singleton caches they can affect.
         for entry in entries { seriesEntriesCache[entry.calibreID] = nil }
         seriesEntriesByKeyCache.removeAll()
         singletonWarningsCache.removeAll()
@@ -1804,7 +1863,7 @@ actor AmbrosiaMetaDB {
         // which would indicate a COALESCE key collision rather than real series data).
         #if DEBUG
         let diagSQL = """
-        SELECT COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name) AS series_key,
+        SELECT \(Self.seriesKeySQL) AS series_key,
                COUNT(*) AS member_count
         FROM series_cache
         GROUP BY series_key
@@ -1813,7 +1872,7 @@ actor AmbrosiaMetaDB {
         """
         let totalRows: Int? = (try? prepare("SELECT COUNT(*) FROM series_cache").first)?.int(at: 0)
         let distinctKeys: Int? = (try? prepare("""
-            SELECT COUNT(DISTINCT COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name))
+            SELECT COUNT(DISTINCT \(Self.seriesKeySQL))
             FROM series_cache
             """).first)?.int(at: 0)
         let topSeries = (try? prepare(diagSQL).map { row -> (String, Int) in
@@ -1867,16 +1926,16 @@ actor AmbrosiaMetaDB {
     private static let seriesLeadershipCTE = """
     WITH ordered AS (
         SELECT calibre_id,
-               COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name) AS series_key,
+               \(seriesKeySQL) AS series_key,
                ROW_NUMBER() OVER (
-                   PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
+                   PARTITION BY \(seriesKeySQL)
                    ORDER BY series_index ASC, calibre_id ASC
                ) AS rn,
                COUNT(*) OVER (
-                   PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
+                   PARTITION BY \(seriesKeySQL)
                ) AS series_count,
                MAX(is_anthology) OVER (
-                   PARTITION BY COALESCE('ao3:' || NULLIF(ao3_series_id, ''), 'calibre:' || series_name)
+                   PARTITION BY \(seriesKeySQL)
                ) AS anthology
         FROM series_cache
     ),

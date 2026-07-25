@@ -280,27 +280,44 @@ struct ExportManager {
                 guard let source = book.epubURL(libraryRoot: libraryRoot) else {
                     skipped.append(book.displayTitle); progress(copied + skipped.count); continue
                 }
-                let targetFolders: [URL]
+                let targetFolders: [(url: URL, seriesIndex: Int)]
                 if groupBySeries, let entries = seriesEntries[book.id], !entries.isEmpty {
                     // A book that's a member of more than one series (e.g. #1 of A and
                     // #3 of B) gets copied into every one of its series' folders, not
-                    // just the first. Dedup folder names in case two entries somehow
-                    // resolve to the same series name.
+                    // just the first. Folder name includes the series id (AO3 id, else
+                    // Calibre series id) so two distinct series sharing a display name
+                    // don't collide into the same export folder (bug #3). Dedup on the
+                    // resulting folder name regardless, in case two entries somehow
+                    // still resolve to the same one.
                     var seenFolderNames = Set<String>()
-                    targetFolders = entries.compactMap { entry -> URL? in
-                        let folderName = CalibreBook.sanitizedForFilename(entry.seriesName)
+                    targetFolders = entries.compactMap { entry -> (URL, Int)? in
+                        let sanitizedName = CalibreBook.sanitizedForFilename(entry.seriesName)
+                        let idSuffix = entry.ao3SeriesID ?? entry.calibreSeriesID.map(String.init) ?? ""
+                        let folderName = idSuffix.isEmpty ? sanitizedName : "\(sanitizedName)-\(idSuffix)"
                         guard seenFolderNames.insert(folderName).inserted else { return nil }
-                        return destination.appendingPathComponent(folderName)
+                        return (destination.appendingPathComponent(folderName), entry.seriesIndex)
                     }
                 } else {
-                    targetFolders = [destination]
+                    // seriesIndex is never read here: seriesIndexPrefix passed to
+                    // exportFilename below is gated on groupBySeries, and per bug #3
+                    // touch point 9, the prefix only applies within series-grouped
+                    // export folders — ungrouped/single-book export is unaffected.
+                    targetFolders = [(destination, 0)]
                 }
 
-                let filename = book.exportFilename(ao3: ao3Map[book.id], idSource: filenameIDSource)
                 var copiedThisBook = false
                 for targetFolder in targetFolders {
-                    try? FileManager.default.createDirectory(at: targetFolder, withIntermediateDirectories: true)
-                    let dest = uniqueDestination(for: filename, in: targetFolder)
+                    // Filename is computed per folder, not hoisted once outside this
+                    // loop: a book's index differs across series (#1 of A and #3 of
+                    // B), so the zero-padded prefix must match the specific folder
+                    // it's being copied into (bug #3, touch point 10).
+                    let filename = book.exportFilename(
+                        ao3: ao3Map[book.id],
+                        idSource: filenameIDSource,
+                        seriesIndexPrefix: groupBySeries ? targetFolder.seriesIndex : nil
+                    )
+                    try? FileManager.default.createDirectory(at: targetFolder.url, withIntermediateDirectories: true)
+                    let dest = uniqueDestination(for: filename, in: targetFolder.url)
                     do {
                         try FileManager.default.copyItem(at: source, to: dest)
                         copiedThisBook = true
@@ -446,13 +463,19 @@ struct ExportManager {
 extension CalibreBook {
 
     /// §3: Produce a filesystem-safe EPUB filename.
-    /// Format: "<sanitised-title>-<id>.epub"
+    /// Format: "<index-prefix><sanitised-title>-<id>.epub"
     /// ID: AO3 work ID when available; Calibre ID as fallback.
+    /// `seriesIndexPrefix`, when present, is zero-padded to 2 digits and
+    /// prepended (e.g. "01 - Title-12345.epub") — used only within
+    /// series-grouped export folders (bug #3); ungrouped/single-book export
+    /// passes `nil` and is unaffected.
     func exportFilename(ao3: AO3MetadataRecord?,
-                        idSource: ExportFilenameIDSource = .ao3ThenCalibre) -> String {
+                        idSource: ExportFilenameIDSource = .ao3ThenCalibre,
+                        seriesIndexPrefix: Int? = nil) -> String {
         let base = Self.sanitizedForFilename(displayTitle)
         let suffix = ao3?.workID ?? String(id)
-        return "\(base)-\(suffix).epub"
+        let prefix = seriesIndexPrefix.map { String(format: "%02d - ", $0) } ?? ""
+        return "\(prefix)\(base)-\(suffix).epub"
     }
 
     /// Strip characters that are illegal or problematic in macOS filenames.
