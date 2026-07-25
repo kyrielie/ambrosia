@@ -107,12 +107,26 @@ struct SeriesCacheEntry: Hashable, Sendable {
     let seriesIndex: Int
     let ao3SeriesID: String?
     let isAnthology: Bool
+    /// Calibre's own `series.id` for this membership, when known. `NULL` for
+    /// AO3-derived rows (see Bug 3 decision log: AO3 series are already
+    /// uniquely identified per-row by `ao3SeriesID`, no Calibre cross-
+    /// reference needed) and for rows backfilled before this column existed.
+    let calibreSeriesID: Int?
 
+    /// Precedence: an AO3-derived series id, then a persisted Calibre
+    /// series id, then bare series name as a last-resort fallback (the only
+    /// option before `calibre_series_id` existed, and still needed for
+    /// libraries/rows that haven't been backfilled). Two distinct Calibre
+    /// series sharing a name previously collided under the name-only key;
+    /// this fixes that as soon as `calibreSeriesID` is populated. See Bug 3.
     var seriesKey: String {
         if let ao3SeriesID, !ao3SeriesID.isEmpty {
             return "ao3:\(ao3SeriesID)"
         }
-        return "calibre:\(seriesName)"
+        if let calibreSeriesID {
+            return "calibre:\(calibreSeriesID)"
+        }
+        return "calibre-name:\(seriesName)"
     }
 }
 

@@ -164,7 +164,7 @@ actor CalibreLibrary {
 
     func allCalibreSeriesEntries() -> [SeriesCacheEntry] {
         let sql = """
-        SELECT b.id, s.name, b.series_index
+        SELECT b.id, s.id, s.name, b.series_index
         FROM books b
         JOIN books_series_link bsl ON bsl.book = b.id
         JOIN series s ON s.id = bsl.series
@@ -174,21 +174,36 @@ actor CalibreLibrary {
         let rows = (try? db.prepare(sql).map { $0 }) ?? []
         return rows.compactMap { row in
             guard let idBind = row[0] as? Int64,
-                  let name = row[1] as? String else { return nil }
-            let index: Int
-            if let raw = row[2] as? Double {
-                index = Int(raw.rounded())
-            } else if let raw = row[2] as? Int64 {
-                index = Int(raw)
+                  let seriesIDBind = row[1] as? Int64,
+                  let name = row[2] as? String else { return nil }
+            // Calibre natively supports fractional series_index (unlike
+            // series_cache.series_index, which is Int). A fractional value
+            // here indicates unexpected/bad data for this library, not a
+            // case to silently truncate (which would collide, e.g. 1.5 ->
+            // 1, with book #1). Exclude only this series membership row —
+            // the book still appears via any other valid membership or as a
+            // standalone item. See Bug 3 decision log.
+            let rawIndex: Double
+            if let d = row[3] as? Double {
+                rawIndex = d
+            } else if let i = row[3] as? Int64 {
+                rawIndex = Double(i)
             } else {
-                index = 1
+                rawIndex = 1
+            }
+            guard rawIndex.truncatingRemainder(dividingBy: 1) == 0 else {
+                #if DEBUG
+                print("[allCalibreSeriesEntries] DIAGNOSTIC fractional series_index: book=\(idBind) series=\(name) value=\(rawIndex)")
+                #endif
+                return nil
             }
             return SeriesCacheEntry(
                 calibreID: Int(idBind),
                 seriesName: name,
-                seriesIndex: index,
+                seriesIndex: Int(rawIndex),
                 ao3SeriesID: nil,
-                isAnthology: false
+                isAnthology: false,
+                calibreSeriesID: Int(seriesIDBind)
             )
         }
     }
