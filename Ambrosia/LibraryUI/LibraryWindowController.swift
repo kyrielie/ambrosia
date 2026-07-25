@@ -23,6 +23,12 @@ extension NSToolbarItem.Identifier {
 
 class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFieldDelegate, NSMenuDelegate, NSMenuItemValidation {
 
+    /// Shared symbol config for every toolbar glyph, including the view-mode
+    /// segmented control, so all icons render at the same weight/size instead
+    /// of the segmented control picking up AppKit's default (thinner/smaller)
+    /// rendering. See bug #9.
+    private static let toolbarSymbolConfig = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+
     private weak var toolbarState: LibraryToolbarState?
 
     /// Exposes `toolbarState` to call sites outside this class — currently
@@ -214,9 +220,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         let item = NSToolbarItem(itemIdentifier: identifier)
         item.label   = label
         item.toolTip = label
-        let cfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
         item.image  = NSImage(systemSymbolName: image, accessibilityDescription: label)?
-            .withSymbolConfiguration(cfg)
+            .withSymbolConfiguration(Self.toolbarSymbolConfig)
         item.target = self
         item.action = action
         return item
@@ -242,9 +247,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         let item = NSMenuToolbarItem(itemIdentifier: identifier)
         item.label   = "Export"
         item.toolTip = "Export library"
-        let cfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
         item.image = NSImage(systemSymbolName: "arrow.up.doc",
-                             accessibilityDescription: "Export")?.withSymbolConfiguration(cfg)
+                             accessibilityDescription: "Export")?.withSymbolConfiguration(Self.toolbarSymbolConfig)
         item.showsIndicator = true
         item.menu = makeExportMenu()
         exportMenuToolbarItem = item
@@ -279,9 +283,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         let item = NSMenuToolbarItem(itemIdentifier: identifier)
         item.label   = "Sort"
         item.toolTip = "Sort order"
-        let cfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
         item.image = NSImage(systemSymbolName: "arrow.up.arrow.down",
-                             accessibilityDescription: "Sort")?.withSymbolConfiguration(cfg)
+                             accessibilityDescription: "Sort")?.withSymbolConfiguration(Self.toolbarSymbolConfig)
         item.showsIndicator = true
 
         let menu = NSMenu()
@@ -339,9 +342,12 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private func makeViewModeItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
         let seg = NSSegmentedControl(
             images: [
-                NSImage(systemSymbolName: "list.bullet",  accessibilityDescription: "List")!,
-                NSImage(systemSymbolName: "envelope",     accessibilityDescription: "Email")!,
-                NSImage(systemSymbolName: "list.number",  accessibilityDescription: "Ranking")!,
+                NSImage(systemSymbolName: "list.bullet",  accessibilityDescription: "List")!
+                    .withSymbolConfiguration(Self.toolbarSymbolConfig)!,
+                NSImage(systemSymbolName: "envelope",     accessibilityDescription: "Email")!
+                    .withSymbolConfiguration(Self.toolbarSymbolConfig)!,
+                NSImage(systemSymbolName: "list.number",  accessibilityDescription: "Ranking")!
+                    .withSymbolConfiguration(Self.toolbarSymbolConfig)!,
             ],
             trackingMode: .selectOne,
             target: self,
@@ -666,14 +672,38 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         } else {
             size = NSSize(width: max(panel.frame.width, anchorFrameOnScreen.width), height: panel.frame.height)
         }
-        let screenFrame = anchorWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? anchorFrameOnScreen
+        // Fall back to the screen under the anchor's own point rather than
+        // NSScreen.main (the key screen), since anchorWindow.screen can be
+        // transiently nil independent of which screen the anchor is
+        // actually on.
+        let screenFrame = anchorWindow.screen?.visibleFrame
+            ?? Self.screen(containing: anchorFrameOnScreen.origin)?.visibleFrame
+            ?? anchorFrameOnScreen
         let proposedX = anchorFrameOnScreen.minX
         let clampedX = min(max(proposedX, screenFrame.minX), max(screenFrame.minX, screenFrame.maxX - size.width))
-        let origin = NSPoint(
-            x: clampedX,
-            y: anchorFrameOnScreen.minY - size.height - 4
-        )
+
+        // Prefer the panel below the anchor (standard autocomplete UX). If
+        // there isn't ~size.height of room below, flip it above the anchor
+        // instead of clamping into overlap with the anchor itself. Only
+        // clamp into the screen's vertical bounds as a last resort, when
+        // neither placement fully fits (a screen shorter than the panel).
+        let belowY = anchorFrameOnScreen.minY - size.height - 4
+        let aboveY = anchorFrameOnScreen.maxY + 4
+        let y: CGFloat
+        if belowY >= screenFrame.minY {
+            y = belowY
+        } else if aboveY + size.height <= screenFrame.maxY {
+            y = aboveY
+        } else {
+            y = min(max(belowY, screenFrame.minY), max(screenFrame.minY, screenFrame.maxY - size.height))
+        }
+        let origin = NSPoint(x: clampedX, y: y)
         panel.setFrame(NSRect(origin: origin, size: size), display: true)
+    }
+
+    /// The screen whose frame contains the given point, if any.
+    private static func screen(containing point: NSPoint) -> NSScreen? {
+        NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
     }
 
     private func searchPanelAnchorView() -> NSView? {
