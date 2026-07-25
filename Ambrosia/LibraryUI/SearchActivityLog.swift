@@ -91,7 +91,14 @@ final class SearchActivityLog {
     // MARK: - Lifecycle
 
     /// Persist then discard entries. Call before switching or closing the library.
-    func clear() {
+    func clear(libraryHash: String) {
+        save(libraryHash: libraryHash)
+        entries.removeAll()
+    }
+
+    /// Discard entries without persisting. Only for the case where no library
+    /// hash is available (activePath == nil), so there is nowhere to persist to.
+    func discardWithoutPersisting() {
         entries.removeAll()
     }
 

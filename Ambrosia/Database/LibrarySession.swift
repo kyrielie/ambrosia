@@ -296,7 +296,9 @@ final class LibrarySession {
         collectionStore = nil
         totalCount = 0
         if let path = activePath {
-            SearchActivityLog.shared.save(libraryHash: Ambrosia.libraryHash(for: URL(fileURLWithPath: path)))
+            SearchActivityLog.shared.clear(libraryHash: Ambrosia.libraryHash(for: URL(fileURLWithPath: path)))
+        } else {
+            SearchActivityLog.shared.discardWithoutPersisting()
         }
         activePath = nil
         ReaderPreferences.shared.reloadFeedPrefs(forLibraryHash: nil)
@@ -308,7 +310,6 @@ final class LibrarySession {
         cachedSkippedIDs = []
         cachedSeriesOrMergedIDs = []
         cachedReadLaterIDs = []
-        SearchActivityLog.shared.clear()
         cachedAO3PublisherIDs = []
         cachedAnthologyIDs = []
         cachedDuplicateLoserIDs = []
