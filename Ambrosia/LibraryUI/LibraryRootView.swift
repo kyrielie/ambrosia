@@ -366,6 +366,13 @@ struct LibraryRootView: View {
                 ReadingGoalView()
                     .preferredColorScheme(prefs.resolvedLibraryColorScheme)
             }
+            .sheet(isPresented: Binding(
+                get: { toolbarState.showErrorLog },
+                set: { toolbarState.showErrorLog = $0 }
+            )) {
+                ErrorLogView()
+                    .preferredColorScheme(prefs.resolvedLibraryColorScheme)
+            }
             .onChange(of: toolbarState.triggerExport) {
                 if toolbarState.triggerExport {
                     ExportManager.presentExportPanel(         // §1
@@ -375,6 +382,12 @@ struct LibraryRootView: View {
                         toolbarState: toolbarState
                     )
                     toolbarState.triggerExport = false
+                }
+            }
+            .onChange(of: toolbarState.triggerAnnotationExport) {
+                if toolbarState.triggerAnnotationExport {
+                    AnnotationExportManager.presentExportPanel(session: session)
+                    toolbarState.triggerAnnotationExport = false
                 }
             }
             .onChange(of: toolbarState.triggerEPUBExport) {

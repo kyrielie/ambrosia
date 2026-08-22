@@ -2246,6 +2246,14 @@ struct FilterSheetCarrier: View {
                     toolbarState.triggerExport = false
                 }
             }
+            .onChange(of: toolbarState.triggerAnnotationExport) {
+                if toolbarState.triggerAnnotationExport {
+                    if let session = emailVC?.session {
+                        AnnotationExportManager.presentExportPanel(session: session)
+                    }
+                    toolbarState.triggerAnnotationExport = false
+                }
+            }
             .onChange(of: toolbarState.triggerEPUBExport) {
                 if toolbarState.triggerEPUBExport {
                     if let books = emailVC?.currentBooks,

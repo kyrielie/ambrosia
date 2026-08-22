@@ -11,7 +11,6 @@ See `CLAUDE.md` for which doc to update when one of these ships.
 - Saved searches.
 - Favourite authors.
 - Saved quotes.
-- Annotation export/sharing.
 - Standalone mode without Calibre.
 - Music integration.
 

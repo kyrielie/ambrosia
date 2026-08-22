@@ -17,6 +17,7 @@ see `swiftdata-store.md`.
 - `series_cache`, `series_placeholders`.
 - `canonical_tags`, `tag_synonyms`, `tag_parent_links`, `tag_subtag_sections`.
 - `reading_history`, `book_opens` (write path wired up: `startReadingSession`, `updateReadingSession`, `closeZombieReadingSessions` are called from the reader session lifecycle).
+- `error_log` — a general-purpose, prunable failure trail (`logError`/`recentErrors`/`pruneErrorLog`/`clearErrorLog`), viewable via `ErrorLogView` (Export menu → "Error Log…"). Complements, not replaces, `ao3_extraction_diagnostics`'s scoped-per-subsystem diagnostics.
 
 `CollectionStore` wraps collection operations. Bootstrapped system collections:
 

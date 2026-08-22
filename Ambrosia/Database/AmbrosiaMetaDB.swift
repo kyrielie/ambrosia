@@ -104,6 +104,7 @@ actor AmbrosiaMetaDB {
         try createBookIndex(db: db)
         try createBookAuthors(db: db)
         try createBookTags(db: db)
+        try createErrorLog(db: db)
         try createSchemaMigrations(db: db)
         try bridgeLegacyUserVersionMigrations(db: db)
         try migrateSeriesPlaceholdersToKeyedIfNeeded(db: db)
@@ -531,6 +532,35 @@ actor AmbrosiaMetaDB {
         """)
     }
 
+    /// `error_log` is the durable counterpart to the `#if DEBUG print`
+    /// statements used elsewhere in the app: those are fine for development
+    /// but leave no trail once a release build is running in the field. This
+    /// gives failures in AO3 extraction, EPUB parsing, and `LocalFeedServer`
+    /// routes (none of which had any durable diagnostic trail before this) a
+    /// queryable, prunable record, viewable via `ErrorLogView`. Scoped-per-
+    /// subsystem diagnostics that already exist (`ao3_extraction_diagnostics`)
+    /// are unaffected -- this is a general-purpose complement, not a
+    /// replacement. Additive-only (`CREATE TABLE IF NOT EXISTS`), so no
+    /// `schema_migrations` gating is needed -- see the migration note in
+    /// `docs/metadb-and-migrations.md`.
+    private static func createErrorLog(db: Connection) throws {
+        try db.execute("""
+        CREATE TABLE IF NOT EXISTS error_log (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            occurred_at  TEXT    NOT NULL,
+            subsystem    TEXT    NOT NULL,
+            operation    TEXT    NOT NULL,
+            message      TEXT    NOT NULL,
+            file         TEXT,
+            line         INTEGER,
+            calibre_id   INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_error_log_occurred_at ON error_log(occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_error_log_calibre ON error_log(calibre_id);
+        """)
+    }
+
     private static func createAO3TagSynonyms(db: Connection) throws {
         try db.execute("""
         CREATE TABLE IF NOT EXISTS canonical_tags (
@@ -888,6 +918,77 @@ actor AmbrosiaMetaDB {
         }
     }
 
+    // MARK: - Error log
+
+    /// Records one failure into `error_log`. `file`/`line` default to the
+    /// call site via `#fileID`/`#line` -- callers normally omit both.
+    func logError(
+        subsystem: String,
+        operation: String,
+        message: String,
+        calibreID: Int? = nil,
+        file: String = #fileID,
+        line: Int = #line
+    ) throws {
+        try run(
+            """
+            INSERT INTO error_log (occurred_at, subsystem, operation, message, file, line, calibre_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [ISO8601DateFormatter().string(from: Date()), subsystem, operation, message, file, line, calibreID]
+        )
+    }
+
+    /// Returns up to `limit` error-log entries, newest first.
+    func recentErrors(limit: Int = 200) throws -> [ErrorLogEntry] {
+        let rows = try prepare(
+            """
+            SELECT id, occurred_at, subsystem, operation, message, file, line, calibre_id
+            FROM error_log
+            ORDER BY occurred_at DESC, id DESC
+            LIMIT ?
+            """,
+            [limit]
+        )
+        let iso = ISO8601DateFormatter()
+        return rows.compactMap { row in
+            guard let id = row.int64(at: 0),
+                  let occurredAtString = row[safe: 1] as? String,
+                  let occurredAt = iso.date(from: occurredAtString),
+                  let subsystem = row[safe: 2] as? String,
+                  let operation = row[safe: 3] as? String,
+                  let message = row[safe: 4] as? String else { return nil }
+            return ErrorLogEntry(
+                id: id,
+                occurredAt: occurredAt,
+                subsystem: subsystem,
+                operation: operation,
+                message: message,
+                file: row[safe: 5] as? String,
+                line: row.int(at: 6),
+                calibreID: row.int(at: 7)
+            )
+        }
+    }
+
+    /// Deletes every row except the `count` most recent, so the table can be
+    /// pruned periodically instead of growing unbounded.
+    func pruneErrorLog(keeping count: Int) throws {
+        try run(
+            """
+            DELETE FROM error_log
+            WHERE id NOT IN (
+                SELECT id FROM error_log ORDER BY occurred_at DESC, id DESC LIMIT ?
+            )
+            """,
+            [count]
+        )
+    }
+
+    func clearErrorLog() throws {
+        try run("DELETE FROM error_log")
+    }
+
     // MARK: - Activity feed queries
 
     /// Returns up to `limit` annotations across all books, newest first.
@@ -903,6 +1004,48 @@ actor AmbrosiaMetaDB {
             LIMIT ?
             """,
             [limit as Binding?]
+        )
+        return rows.compactMap { row in
+            guard let idString  = row[safe: 0] as? String,
+                  let id        = UUID(uuidString: idString),
+                  let calibreID = row.int(at: 1),
+                  let spine     = row.int(at: 2),
+                  let start     = row.int(at: 3),
+                  let end       = row.int(at: 4),
+                  let text      = row[safe: 5] as? String,
+                  let dateStr   = row[safe: 8] as? String,
+                  let created   = iso.date(from: dateStr)
+            else { return nil }
+
+            var annotation = Annotation(
+                spineIndex: spine,
+                startChar: start,
+                endChar: end,
+                selectedText: text,
+                colorHex: (row[safe: 7] as? String) ?? "#FFD60A"
+            )
+            annotation.id          = id
+            annotation.note        = row[safe: 6] as? String
+            annotation.createdDate = created
+            return (annotation, calibreID)
+        }
+    }
+
+    /// Returns every annotation in the library, newest first. Unlike
+    /// `recentAnnotations(limit:)` (used for the bounded Activity Feed
+    /// stream), this has no LIMIT — it exists for exhaustive export
+    /// (`AnnotationExportManager`), where a partial list would silently
+    /// drop rows. Uses readDB (read-only connection) — no contention with
+    /// the write actor. Same decode logic as `recentAnnotations`.
+    func allAnnotations() throws -> [(annotation: Annotation, calibreID: Int)] {
+        let iso = ISO8601DateFormatter()
+        let rows = try prepare(
+            """
+            SELECT id, calibre_id, spine_index, start_char, end_char,
+                   selected_text, note, color_hex, created_at
+            FROM annotations
+            ORDER BY created_at DESC, rowid DESC
+            """
         )
         return rows.compactMap { row in
             guard let idString  = row[safe: 0] as? String,

@@ -424,7 +424,8 @@ struct ExportManager {
     // MARK: - Helpers
 
     /// ISO date string for a Date value (yyyy-MM-dd).
-    private static func isoDate(_ date: Date) -> String {
+    /// Internal (not private): reused by AnnotationExportManager.
+    static func isoDate(_ date: Date) -> String {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -439,12 +440,14 @@ struct ExportManager {
     }
 
     /// Encode a single CSV row. Each field is escaped individually.
-    private static func csvRow(_ fields: [String]) -> String {
+    /// Internal (not private): reused by AnnotationExportManager so both
+    /// CSV writers share one RFC 4180 escaping implementation.
+    static func csvRow(_ fields: [String]) -> String {
         fields.map { csvEscape($0) }.joined(separator: ",")
     }
 
     /// Escape a single field per RFC 4180.
-    private static func csvEscape(_ field: String) -> String {
+    static func csvEscape(_ field: String) -> String {
         let sanitised = field
             .replacingOccurrences(of: "\r\n", with: " ")
             .replacingOccurrences(of: "\n", with: " ")

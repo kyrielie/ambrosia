@@ -29,7 +29,7 @@ Ambrosia is a native macOS EPUB library reader for AO3-heavy Calibre libraries. 
 - Renders EPUBs with a custom `WKWebView` reader in scroll or paginated mode, including a table-of-contents popup and continuous reading across an entire series in one window.
 - Stores highlights and point annotations in `ambrosia_meta.db`.
 - Tracks reading goals against a configurable period, and surfaces an activity feed of recent reading sessions, annotations, collection changes, and searches.
-- Includes CSV export, an optional local read-only RSS feed server, and reader/library preferences.
+- Includes CSV export of library metadata and annotations, an optional local read-only RSS feed server, and reader/library preferences.
 - Can import an external AO3 tag seed database for canonical tag and synonym expansion, with in-app validation feedback.
 - Remembers recently opened Calibre libraries.
 
@@ -63,6 +63,10 @@ rtk xcodebuild -scheme Ambrosia -destination 'platform=macOS' build
 ```
 
 The repository uses Xcode/SPM package management. Do not hand-edit `Package.resolved`; add or update packages through Xcode.
+
+## Testing
+
+Run `./test.sh` from the repo root to lint and test locally, the same way `.github/workflows/swift.yml` does in CI. See `./test.sh --help` for options (`--no-lint`, `--lint-only`, `--filter PATTERN`, `--quiet`). Requires Xcode and, unless `--no-lint` is passed, SwiftLint (`brew install swiftlint`).
 
 ## Library Setup
 
@@ -110,7 +114,7 @@ Ambrosia is a local macOS app. It reads local Calibre libraries and writes local
 
 ## Contributing
 
-This is a work-in-progress app. Keep changes scoped, preserve Calibre read-only behavior, and verify with `xcodebuild` before claiming a clean build. Documentation-only changes should at least pass:
+This is a work-in-progress app. Keep changes scoped, preserve Calibre read-only behavior, and verify with `./test.sh` before claiming a clean build. Documentation-only changes should at least pass `./test.sh --lint-only`.
 
 ## License
 

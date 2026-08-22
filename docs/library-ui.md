@@ -42,6 +42,15 @@ AmbrosiaApp
 
 CSV export of library books through `ExportManager`.
 
+## Error Log
+
+`ErrorLogView` (sheet, presented from the Export menu's "Error Log…" item)
+lists `error_log` rows via `AmbrosiaMetaDB.recentErrors` — see
+`metadb-and-migrations.md` for the table/actor methods. Kept as its own
+sheet rather than folded into `ActivityFeedView` since most entries aren't
+book-linked and errors aren't a user-facing "activity" the way
+sessions/annotations/collection changes are.
+
 ---
 
 ## Key invariant
