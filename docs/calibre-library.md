@@ -40,4 +40,4 @@ Optional FTS search through Calibre's `full-text-search.db` (FTS5), via `Calibre
 
 3. SQLite.swift SQL bindings always use `[Binding?]`.
 
-12. Force-unwraps are prohibited in any code path reachable from database read results. Use `guard let` with a logged fallback or propagate the error. The `series.works.first!` in `ReadingTarget.primaryBook` is a known crash site.
+See `overview.md`'s Invariant 12 for the repo-wide force-unwrap ban. (`ReadingTarget.primaryBook`'s `series.works.first!` -- previously flagged here as a known crash site -- was already fixed; it now uses `precondition` plus indexed access, not a force-unwrap.)

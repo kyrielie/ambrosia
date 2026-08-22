@@ -37,6 +37,15 @@ jobs:
       - name: Select Xcode 26.3
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
 
+      # Ambrosia.xcodeproj is generated from project.yml, not committed (see
+      # CLAUDE.md's "Keeping this current" / project.yml's header comment).
+      # Without this step there is no .xcodeproj on disk for xcodebuild to use.
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
       - name: Run macOS Tests
         shell: bash
         run: |
@@ -52,10 +61,30 @@ jobs:
             -scheme Ambrosia \
             -destination "platform=macOS,arch=arm64" \
             -resultBundlePath "$result_bundle" \
+            -enableCodeCoverage YES \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             test 2>&1 | tee "$build_log" | xcbeautify --renderer github-actions
+
+      # Cheap, dependency-free backstop for the exact bug XcodeGen's
+      # folder-based `sources:` fixed once (8 of 11 AmbrosiaTests files
+      # silently dropped from the Sources build phase). This only confirms
+      # xcodegen generate's *input* is complete (every .swift file under
+      # AmbrosiaTests/ is a real file on disk, which folder-based `sources:`
+      # always picks up); it is not a substitute for reading the actual
+      # xcresult test list, which needs a real Xcode environment to inspect
+      # once (see docs/testing.md's "CI test-completeness gap" note).
+      - name: Sanity-check AmbrosiaTests file count
+        shell: bash
+        run: |
+          set -euo pipefail
+          on_disk=$(find AmbrosiaTests -name '*.swift' | wc -l | tr -d ' ')
+          echo "AmbrosiaTests/*.swift on disk: $on_disk"
+          if [ "$on_disk" -lt 1 ]; then
+            echo "::error::No files found under AmbrosiaTests/ -- checkout or path problem" >&2
+            exit 1
+          fi
 
       - name: Upload macOS Result Bundle
         if: failure()
