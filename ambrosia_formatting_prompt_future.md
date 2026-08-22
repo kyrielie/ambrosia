@@ -2,7 +2,7 @@
 
 ## Context
 
-Ambrosia is a native macOS EPUB reader (macOS 14.0+) built around AO3-heavy Calibre libraries. Read `ambrosia_architecture.md` in full before proceeding. This brief adds a formatting and theming layer across three areas: the EPUB reader, the AO3 preface renderer, and the library view. All work must respect the existing key invariants, particularly invariant 8 (full HTML regeneration on style changes, no live DOM patching).
+Ambrosia is a native macOS EPUB reader (macOS 14.0+) built around AO3-heavy Calibre libraries. Read `CLAUDE.md` and its linked docs (particularly `docs/overview.md`, `docs/reader.md`, and `docs/library-ui.md`) in full before proceeding. This brief adds a formatting and theming layer across three areas: the EPUB reader, the AO3 preface renderer, and the library view. All work must respect the existing key invariants, particularly Invariant 8 in `docs/reader.md` (full HTML regeneration on style changes, no live DOM patching).
 
 ---
 
@@ -298,7 +298,7 @@ The settings for a specific book's formatting rules (manual sections, speaker ru
 
 ## 6. Invariants and Constraints
 
-These apply in addition to the existing key invariants in `ambrosia_architecture.md`:
+These apply in addition to the existing key invariants documented under `docs/` (see `CLAUDE.md`):
 
 - `LibraryTheme` selection is a sealed choice. Do not expose `LibraryStyleTokens` fields as individual user-settable preferences.
 - `BookFormattingRuleset` is per-library data and lives in `AmbrosiaMetaDB`, accessed through `LibrarySession`. It is never stored in `UserDefaults` or SwiftData.

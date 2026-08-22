@@ -13,7 +13,7 @@ struct AmbrosiaApp: App {
         // Schema contains only app-owned state. Calibre metadata is never copied.
         let schema = Schema([
             BookState.self,
-            ReadingGoal.self,
+            ReadingGoal.self
         ])
         let config = ModelConfiguration("Ambrosia", schema: schema, isStoredInMemoryOnly: false)
         do {
@@ -59,7 +59,7 @@ struct AmbrosiaApp: App {
                 }
                 .keyboardShortcut(",", modifiers: [.command])
             }
-            
+
             // Dead menu items: no NSDocument (no Save/Save As/Revert target),
             // no NSPrintOperation usage anywhere (no Print target), and the
             // app's real find is a hand-rolled WKWebView.find(...) under
@@ -75,7 +75,7 @@ struct AmbrosiaApp: App {
                     AppDelegate.shared?.chooseLibraryFolder()
                 }
                 .keyboardShortcut("o", modifiers: [.command])
-                
+
                 Menu("Recent Libraries") {
                     RecentLibrariesMenuContent(session: session)
                 }
@@ -97,7 +97,7 @@ struct AmbrosiaApp: App {
                                      to: nil, from: nil)
                 }
             }
-            
+
             // Shortcuts for every item in this menu are rebindable from
             // Preferences → Shortcuts. Intentionally no `.keyboardShortcut(...)`
             // modifiers here: SwiftUI's `Commands` builder is evaluated once

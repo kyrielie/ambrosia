@@ -130,7 +130,7 @@ class LibraryViewController: NSViewController {
                     hv.topAnchor.constraint(equalTo: view.topAnchor),
                     hv.bottomAnchor.constraint(equalTo: view.bottomAnchor),
                     hv.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                    hv.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                    hv.trailingAnchor.constraint(equalTo: view.trailingAnchor)
                 ])
                 listHostingView = hv
             }
@@ -154,7 +154,7 @@ class LibraryViewController: NSViewController {
                 childVC.view.topAnchor.constraint(equalTo: view.topAnchor),
                 childVC.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
                 childVC.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                childVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                childVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor)
             ])
 
         case .ranking:
@@ -173,7 +173,7 @@ class LibraryViewController: NSViewController {
                 childVC.view.topAnchor.constraint(equalTo: view.topAnchor),
                 childVC.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
                 childVC.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                childVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                childVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor)
             ])
         }
     }

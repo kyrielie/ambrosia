@@ -16,20 +16,20 @@ final class LibraryToolbarState {
 
     // MARK: - Toolbar-driven fields
 
-    var searchText:   String          = ""
-    var sortField:    SortField       = .title
-    var ascending:    Bool            = true
-    var viewMode:     LibraryViewMode = .list
+    var searchText: String          = ""
+    var sortField: SortField       = .title
+    var ascending: Bool            = true
+    var viewMode: LibraryViewMode = .list
     var groupBySeries: Bool {
         didSet { UserDefaults.standard.set(groupBySeries, forKey: "groupBySeries") }
     }
 
-    var showFilterDrawer:   Bool = false
-    var showCollections:    Bool = false
-    var showReadingGoal:    Bool = false
-    var triggerExport:      Bool = false
-    var triggerEPUBExport:  Bool = false
-    var reshuffleToken:     Bool = false
+    var showFilterDrawer: Bool = false
+    var showCollections: Bool = false
+    var showReadingGoal: Bool = false
+    var triggerExport: Bool = false
+    var triggerEPUBExport: Bool = false
+    var reshuffleToken: Bool = false
     var toggleEmailSidebar: Bool = false
     var toggleEmailReaderSidebar: Bool = false
     var showEmailReaderSidebar: Bool = false
@@ -38,11 +38,11 @@ final class LibraryToolbarState {
 
     // MARK: - Filter state
 
-    var filterExpression:   FilterExpression = FilterExpression()
-    var activeFilterResult: FilterResult?    = nil
-    var pendingFullTextSearch: PendingFullTextSearch? = nil
+    var filterExpression: FilterExpression = FilterExpression()
+    var activeFilterResult: FilterResult?
+    var pendingFullTextSearch: PendingFullTextSearch?
     var isApplyingLibraryFilter: Bool = false
-    var libraryFilterApplicationToken: UUID? = nil
+    var libraryFilterApplicationToken: UUID?
     private var shouldSuppressNextSearchTextReload = false
 
     // MARK: - Search → filter commit

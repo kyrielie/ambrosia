@@ -13,29 +13,29 @@ final class AO3FilterPopupState {
 
     // MARK: Tag facet fields (checkbox, include/exclude, mutually exclusive per value)
 
-    var includedFandoms:       Set<String> = []
-    var excludedFandoms:       Set<String> = []
+    var includedFandoms: Set<String> = []
+    var excludedFandoms: Set<String> = []
     var includedRelationships: Set<String> = []
     var excludedRelationships: Set<String> = []
-    var includedCharacters:    Set<String> = []
-    var excludedCharacters:    Set<String> = []
-    var includedFreeforms:     Set<String> = []
-    var excludedFreeforms:     Set<String> = []
-    var includedAuthors:       Set<String> = []
-    var excludedAuthors:       Set<String> = []
+    var includedCharacters: Set<String> = []
+    var excludedCharacters: Set<String> = []
+    var includedFreeforms: Set<String> = []
+    var excludedFreeforms: Set<String> = []
+    var includedAuthors: Set<String> = []
+    var excludedAuthors: Set<String> = []
 
     // Warning/Category use AO3's own fixed vocabularies (AO3Warning/AO3Category)
     // rather than free-form facet strings, but are still include/exclude pairs.
-    var includedWarnings:      Set<AO3Warning> = []
-    var excludedWarnings:      Set<AO3Warning> = []
-    var includedCategories:    Set<AO3Category> = []
-    var excludedCategories:    Set<AO3Category> = []
+    var includedWarnings: Set<AO3Warning> = []
+    var excludedWarnings: Set<AO3Warning> = []
+    var includedCategories: Set<AO3Category> = []
+    var excludedCategories: Set<AO3Category> = []
 
     // MARK: Rating — AO3 renders this as a radio group when including (only one
     // rating can be "included" at a time), but still allows several ratings to
     // be excluded independently. Mirrors that asymmetry exactly (see
     // _filters.html.erb: radio only when filter_action == "include").
-    var includedRating: AO3Rating? = nil
+    var includedRating: AO3Rating?
     var excludedRatings: Set<AO3Rating> = []
 
     // MARK: More Options — 3-way, matching AO3's blank/F/T radio groups exactly.
@@ -107,40 +107,30 @@ final class AO3FilterPopupState {
     func toggleInclude(_ value: String, field: StringTagField) {
         switch field {
         case .fandom:
-            if includedFandoms.contains(value) { includedFandoms.remove(value) }
-            else { includedFandoms.insert(value); excludedFandoms.remove(value) }
+            if includedFandoms.contains(value) { includedFandoms.remove(value) } else { includedFandoms.insert(value); excludedFandoms.remove(value) }
         case .relationship:
-            if includedRelationships.contains(value) { includedRelationships.remove(value) }
-            else { includedRelationships.insert(value); excludedRelationships.remove(value) }
+            if includedRelationships.contains(value) { includedRelationships.remove(value) } else { includedRelationships.insert(value); excludedRelationships.remove(value) }
         case .character:
-            if includedCharacters.contains(value) { includedCharacters.remove(value) }
-            else { includedCharacters.insert(value); excludedCharacters.remove(value) }
+            if includedCharacters.contains(value) { includedCharacters.remove(value) } else { includedCharacters.insert(value); excludedCharacters.remove(value) }
         case .freeform:
-            if includedFreeforms.contains(value) { includedFreeforms.remove(value) }
-            else { includedFreeforms.insert(value); excludedFreeforms.remove(value) }
+            if includedFreeforms.contains(value) { includedFreeforms.remove(value) } else { includedFreeforms.insert(value); excludedFreeforms.remove(value) }
         case .author:
-            if includedAuthors.contains(value) { includedAuthors.remove(value) }
-            else { includedAuthors.insert(value); excludedAuthors.remove(value) }
+            if includedAuthors.contains(value) { includedAuthors.remove(value) } else { includedAuthors.insert(value); excludedAuthors.remove(value) }
         }
     }
 
     func toggleExclude(_ value: String, field: StringTagField) {
         switch field {
         case .fandom:
-            if excludedFandoms.contains(value) { excludedFandoms.remove(value) }
-            else { excludedFandoms.insert(value); includedFandoms.remove(value) }
+            if excludedFandoms.contains(value) { excludedFandoms.remove(value) } else { excludedFandoms.insert(value); includedFandoms.remove(value) }
         case .relationship:
-            if excludedRelationships.contains(value) { excludedRelationships.remove(value) }
-            else { excludedRelationships.insert(value); includedRelationships.remove(value) }
+            if excludedRelationships.contains(value) { excludedRelationships.remove(value) } else { excludedRelationships.insert(value); includedRelationships.remove(value) }
         case .character:
-            if excludedCharacters.contains(value) { excludedCharacters.remove(value) }
-            else { excludedCharacters.insert(value); includedCharacters.remove(value) }
+            if excludedCharacters.contains(value) { excludedCharacters.remove(value) } else { excludedCharacters.insert(value); includedCharacters.remove(value) }
         case .freeform:
-            if excludedFreeforms.contains(value) { excludedFreeforms.remove(value) }
-            else { excludedFreeforms.insert(value); includedFreeforms.remove(value) }
+            if excludedFreeforms.contains(value) { excludedFreeforms.remove(value) } else { excludedFreeforms.insert(value); includedFreeforms.remove(value) }
         case .author:
-            if excludedAuthors.contains(value) { excludedAuthors.remove(value) }
-            else { excludedAuthors.insert(value); includedAuthors.remove(value) }
+            if excludedAuthors.contains(value) { excludedAuthors.remove(value) } else { excludedAuthors.insert(value); includedAuthors.remove(value) }
         }
     }
 }

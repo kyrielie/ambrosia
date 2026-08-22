@@ -146,8 +146,8 @@ enum AO3MetadataExtractor {
 
             record.isComplete = (
                 record.chapterCurrent != nil &&
-                record.chapterTotal != nil &&
-                record.chapterCurrent == record.chapterTotal
+                    record.chapterTotal != nil &&
+                    record.chapterCurrent == record.chapterTotal
             ) || completedDate != nil
 
             logMissingParsedFieldsIfNeeded(record)

@@ -18,20 +18,20 @@ struct AnnotationPopover: View {
     // MARK: - Input
 
     let selectedText: String
-    let onSave:   (String?, String) -> Void   // (note?, colorHex)
+    let onSave: (String?, String) -> Void   // (note?, colorHex)
     let onCancel: () -> Void
 
     // MARK: - State
 
-    @State private var noteText:  String = ""
+    @State private var noteText: String = ""
     @State private var colorHex: String = "#FFD60A"
 
     private let palette: [(label: String, hex: String)] = [
-        ("Yellow",  "#FFD60A"),
-        ("Red",     "#FF453A"),
-        ("Green",   "#30D158"),
-        ("Blue",    "#0A84FF"),
-        ("Purple",  "#BF5AF2"),
+        ("Yellow", "#FFD60A"),
+        ("Red", "#FF453A"),
+        ("Green", "#30D158"),
+        ("Blue", "#0A84FF"),
+        ("Purple", "#BF5AF2")
     ]
 
     // MARK: - Body

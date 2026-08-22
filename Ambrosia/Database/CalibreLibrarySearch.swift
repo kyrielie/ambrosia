@@ -105,7 +105,7 @@ extension CalibreLibrary {
             LIMIT ?
             """
         let rows = (try? db.prepare(sql, ["%\(prefix.lowercased())%" as Binding?,
-                                           limit as Binding?]).map { $0 }) ?? []
+                                          limit as Binding?]).map { $0 }) ?? []
         return rows.compactMap { $0[0] as? String }
     }
 
@@ -118,7 +118,7 @@ extension CalibreLibrary {
             LIMIT ?
             """
         let rows = (try? db.prepare(sql, ["%\(prefix.lowercased())%" as Binding?,
-                                           limit as Binding?]).map { $0 }) ?? []
+                                          limit as Binding?]).map { $0 }) ?? []
         return rows.compactMap { $0[0] as? String }
     }
 
@@ -126,7 +126,7 @@ extension CalibreLibrary {
         guard !prefix.isEmpty else { return [] }
         let sql = "SELECT title FROM books WHERE LOWER(title) LIKE ? ORDER BY title LIMIT ?"
         let rows = (try? db.prepare(sql, ["%\(prefix.lowercased())%" as Binding?,
-                                           limit as Binding?]).map { $0 }) ?? []
+                                          limit as Binding?]).map { $0 }) ?? []
         return rows.compactMap { $0[0] as? String }
     }
 
@@ -134,7 +134,7 @@ extension CalibreLibrary {
         guard !prefix.isEmpty else { return [] }
         let sql = "SELECT name FROM series WHERE LOWER(name) LIKE ? ORDER BY name LIMIT ?"
         let rows = (try? db.prepare(sql, ["%\(prefix.lowercased())%" as Binding?,
-                                           limit as Binding?]).map { $0 }) ?? []
+                                          limit as Binding?]).map { $0 }) ?? []
         return rows.compactMap { $0[0] as? String }
     }
 

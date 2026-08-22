@@ -740,7 +740,7 @@ actor AmbrosiaMetaDB {
                 annotation.selectedText,
                 annotation.note,
                 annotation.colorHex,
-                ISO8601DateFormatter().string(from: annotation.createdDate),
+                ISO8601DateFormatter().string(from: annotation.createdDate)
             ]
         )
         try run(
@@ -765,7 +765,7 @@ actor AmbrosiaMetaDB {
     //
     // These three methods manage `reading_history` and `book_opens` row lifecycle.
     // The schema and query logic are complete. The call sites in `ReaderWindowController`
-    // have not been wired up. See "Not Yet Built" in ambrosia_architecture.md.
+    // have not been wired up. See "Not Yet Built" in docs/not-yet-built.md.
     // Do not delete; do not treat as live code.
 
     func closeZombieReadingSessions(calibreID: Int, endedAt: Date = Date()) throws {
@@ -917,11 +917,11 @@ actor AmbrosiaMetaDB {
             else { return nil }
 
             var annotation = Annotation(
-                spineIndex:   spine,
-                startChar:    start,
-                endChar:      end,
+                spineIndex: spine,
+                startChar: start,
+                endChar: end,
                 selectedText: text,
-                colorHex:     (row[safe: 7] as? String) ?? "#FFD60A"
+                colorHex: (row[safe: 7] as? String) ?? "#FFD60A"
             )
             annotation.id          = id
             annotation.note        = row[safe: 6] as? String
@@ -961,18 +961,16 @@ actor AmbrosiaMetaDB {
             else { return nil }
 
             let isSystem: Bool
-            if let v64 = row[safe: 3] as? Int64 { isSystem = v64 != 0 }
-            else if let v = row[safe: 3] as? Int { isSystem = v != 0 }
-            else { isSystem = false }
+            if let v64 = row[safe: 3] as? Int64 { isSystem = v64 != 0 } else if let v = row[safe: 3] as? Int { isSystem = v != 0 } else { isSystem = false }
 
             return CollectionActivityEntry(
-                id:             "\(collectionID)-\(calibreID)",
-                collectionID:   collectionID,
+                id: "\(collectionID)-\(calibreID)",
+                collectionID: collectionID,
                 collectionName: name,
-                kind:           kind,
-                calibreID:      calibreID,
-                addedAt:        date,
-                isSystem:       isSystem
+                kind: kind,
+                calibreID: calibreID,
+                addedAt: date,
+                isSystem: isSystem
             )
         }
     }
@@ -1302,7 +1300,7 @@ actor AmbrosiaMetaDB {
                 seriesJSON,
                 metadata.rating,
                 json(metadata.warnings),
-                metadata.extractedAt,
+                metadata.extractedAt
             ]
         )
 
@@ -1399,7 +1397,7 @@ actor AmbrosiaMetaDB {
                 diagnostic.epubPath,
                 diagnostic.epubFilename,
                 diagnostic.spineItemsChecked,
-                diagnostic.attemptedAt,
+                diagnostic.attemptedAt
             ]
         )
     }
@@ -1422,7 +1420,7 @@ actor AmbrosiaMetaDB {
                 record.pubDate,
                 record.publisher,
                 record.subject,
-                record.indexedAt,
+                record.indexedAt
             ]
         )
     }
@@ -1443,8 +1441,8 @@ actor AmbrosiaMetaDB {
     /// `transaction { }`, which used to nest a transaction per row inside this
     /// function's outer transaction.
     func insertBatch(_ records: [(AO3MetadataRecord, Int)],
-                      diagnostics: [AO3ExtractionDiagnostic],
-                      indexed: [(BookIndexRecord, Int)] = []) throws {
+                     diagnostics: [AO3ExtractionDiagnostic],
+                     indexed: [(BookIndexRecord, Int)] = []) throws {
         try transaction {
             for (metadata, calibreID) in records {
                 try writeAO3Metadata(metadata, calibreID: calibreID)
@@ -1816,7 +1814,7 @@ actor AmbrosiaMetaDB {
                         entry.ao3SeriesID,
                         entry.isAnthology ? 1 : 0,
                         entry.calibreSeriesID,
-                        entry.calibreID,
+                        entry.calibreID
                     ]
                 )
                 // Backfill: an already-existing Calibre-sourced row for this

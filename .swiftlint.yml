@@ -1,0 +1,71 @@
+excluded:
+  - Ambrosia.xcodeproj
+  - docs
+
+# force_unwrapping, force_try, force_cast are the rules that directly
+# enforce Invariant 12 (overview.md, "Repo-wide engineering rules") —
+# force-unwraps are prohibited on any code path reachable from database
+# read results. force_try/force_cast are enabled by default in SwiftLint
+# and are left that way (not in disabled_rules below). force_unwrapping is
+# opt-in by default in SwiftLint (unlike force_try/force_cast) and must be
+# explicitly listed under opt_in_rules or it silently never runs — it is
+# listed there below. Every exception to Invariant 12 (AppKit
+# view-lifecycle IUOs) is a declared `!`-typed property, not an inline
+# force-unwrap expression, so it is not caught by these rules in the first
+# place; nothing needs a line-level disable/exemption comment for it.
+disabled_rules:
+  # File/type/function length: this codebase organizes by feature
+  # (ReaderViewController.swift, LocalFeedServer.swift, AmbrosiaMetaDB.swift
+  # are all 2000+ lines) rather than by splitting every type into its own
+  # small file. That's an existing, deliberate structural choice (see
+  # overview.md's stack notes and library-ui.md's row-file split history),
+  # not something this lint pass is trying to relitigate. Flagging every
+  # large file here would bury the signal from genuinely new problems.
+  - file_length
+  - type_body_length
+  - function_body_length
+  - cyclomatic_complexity
+
+  # todo: this repo tracks follow-up work as inline `// TODO:`/`// FIXME:`
+  # comments in several places already (grep confirms real ones exist
+  # alongside the eight dangling-plan-file references CLAUDE.md tracks).
+  # Failing lint on those doesn't fix the tracking gap CLAUDE.md already
+  # names explicitly; it would just make CI red for reasons unrelated to
+  # this change.
+  - todo
+
+  # closure_body_length, large_tuple: this app leans on completion-handler
+  # and multi-field-return patterns (e.g. `ExtractionOutcome`'s tuple-ish
+  # cases, `LocalFeedServer` route closures) in a few load-bearing spots.
+  # Not disabling these outright would mean immediately silencing the rule
+  # per-call-site with disable comments scattered through the two busiest
+  # files instead of naming the exception once, here, which is exactly the
+  # anti-pattern this config is trying to avoid.
+  - closure_body_length
+  - large_tuple
+
+opt_in_rules:
+  - force_unwrapping
+  - empty_count
+  - fatal_error_message
+  - first_where
+  - overridden_super_call
+  - redundant_nil_coalescing
+  - unneeded_parentheses_in_closure_argument
+
+line_length:
+  warning: 160
+  error: 220
+  ignores_urls: true
+  ignores_comments: true
+
+identifier_name:
+  min_length: 2
+  excluded:
+    - id
+    - db
+    - to
+    - x
+    - y
+
+reporter: "xcode"

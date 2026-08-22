@@ -224,4 +224,3 @@ func logMissingVisibleWorkMetadata(
     print("[LibraryMetadata] visible work missing displayed metadata reason=\(reasons.joined(separator: "; ")) calibreID=\(book.id) title=\"\(book.displayTitle)\" hasAO3Metadata=\(ao3Metadata != nil) ao3WorkID=\(ao3Metadata?.workID ?? "nil") ao3Words=\(ao3Metadata?.wordCount.map(String.init) ?? "nil") ao3ChapterCurrent=\(ao3Metadata?.chapterCurrent.map(String.init) ?? "nil") ao3ChapterTotal=\(ao3Metadata?.chapterTotal.map(String.init) ?? "nil") calibreWords=\(book.wordCount.map(String.init) ?? "nil") extractedAt=\(ao3Metadata?.extractedAt ?? "nil") extractionStatus=\(diagnostic?.status ?? "nil") extractionReason=\"\(diagnostic?.reason ?? "nil")\" attemptedAt=\(diagnostic?.attemptedAt ?? "nil") epubFilename=\"\(diagnostic?.epubFilename ?? "nil")\" epubPath=\"\(diagnostic?.epubPath ?? "nil")\" spineItemsChecked=\(diagnostic?.spineItemsChecked.map(String.init) ?? "nil")")
     #endif
 }
-

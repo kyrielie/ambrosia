@@ -213,7 +213,7 @@ struct BookListRow: View, Equatable {
         let pct = bookState.map { $0.totalReadPercent }
         if !k.isEmpty || ao3Kudos != nil || (pct ?? 0) > 0 {
             HStack(spacing: 14) {
-                if !k.isEmpty  { statChip(k,  icon: "heart") }
+                if !k.isEmpty { statChip(k, icon: "heart") }
                 if let ao3Kudos { statChip(Self.formatKudos(ao3Kudos), icon: "heart") }
                 if let p = pct, p > 0 {
                     statChip(String(format: "%.0f%% read", min(p, 1.0) * 100), icon: "book.pages")
@@ -428,9 +428,9 @@ struct TagPillDisplay: Identifiable, Equatable {
         let buckets = AO3TagBuckets.from(tags: tags)
         let regularTags = buckets.regular.filter { tag in
             !additionalTags.contains(tag) &&
-            !fandoms.contains(tag) &&
-            !relationships.contains(tag) &&
-            !characters.contains(tag)
+                !fandoms.contains(tag) &&
+                !relationships.contains(tag) &&
+                !characters.contains(tag)
         }
         var seen = Set<String>()
         var pills: [TagPillDisplay] = []
@@ -457,4 +457,3 @@ struct TagPillDisplay: Identifiable, Equatable {
         !(hideFanworks && tag == "Fanworks")
     }
 }
-

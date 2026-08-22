@@ -326,11 +326,9 @@ struct FilterDirectionSection: View {
     private func warningSelect(_ w: AO3Warning, _ isOn: Bool) {
         switch direction {
         case .include:
-            if isOn { state.includedWarnings.insert(w); state.excludedWarnings.remove(w) }
-            else { state.includedWarnings.remove(w) }
+            if isOn { state.includedWarnings.insert(w); state.excludedWarnings.remove(w) } else { state.includedWarnings.remove(w) }
         case .exclude:
-            if isOn { state.excludedWarnings.insert(w); state.includedWarnings.remove(w) }
-            else { state.excludedWarnings.remove(w) }
+            if isOn { state.excludedWarnings.insert(w); state.includedWarnings.remove(w) } else { state.excludedWarnings.remove(w) }
         }
         onToggle()
     }
@@ -344,11 +342,9 @@ struct FilterDirectionSection: View {
     private func categorySelect(_ c: AO3Category, _ isOn: Bool) {
         switch direction {
         case .include:
-            if isOn { state.includedCategories.insert(c); state.excludedCategories.remove(c) }
-            else { state.includedCategories.remove(c) }
+            if isOn { state.includedCategories.insert(c); state.excludedCategories.remove(c) } else { state.includedCategories.remove(c) }
         case .exclude:
-            if isOn { state.excludedCategories.insert(c); state.includedCategories.remove(c) }
-            else { state.excludedCategories.remove(c) }
+            if isOn { state.excludedCategories.insert(c); state.includedCategories.remove(c) } else { state.excludedCategories.remove(c) }
         }
         onToggle()
     }
@@ -386,8 +382,7 @@ struct DirectionalTagFacetSection: View {
     }
 
     private func toggle(_ value: String) {
-        if direction == .include { state.toggleInclude(value, field: stringField) }
-        else { state.toggleExclude(value, field: stringField) }
+        if direction == .include { state.toggleInclude(value, field: stringField) } else { state.toggleExclude(value, field: stringField) }
         onToggle()
     }
 

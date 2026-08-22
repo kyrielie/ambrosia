@@ -98,11 +98,11 @@ actor CalibreFTSLibrary {
         do {
             return try db.prepare(sql, [sanitised as Binding?, limit as Binding?])
                 .compactMap { row -> Int? in
-                guard let v = row[0] else { return nil }
-                if let i = v as? Int64 { return Int(i) }
-                if let i = v as? Int   { return i }
-                return nil
-            }
+                    guard let v = row[0] else { return nil }
+                    if let i = v as? Int64 { return Int(i) }
+                    if let i = v as? Int { return i }
+                    return nil
+                }
         } catch {
             Self.log("MATCH query failed for strategy \(strategyDescription): \(error)")
             return nil
@@ -130,7 +130,7 @@ actor CalibreFTSLibrary {
                 .compactMap { row -> Int? in
                     guard let v = row[0] else { return nil }
                     if let i = v as? Int64 { return Int(i) }
-                    if let i = v as? Int   { return i }
+                    if let i = v as? Int { return i }
                     return nil
                 }
         } catch {

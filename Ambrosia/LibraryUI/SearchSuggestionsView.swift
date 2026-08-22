@@ -126,7 +126,7 @@ enum FilterRuleFactory {
 
 struct SearchSuggestion: Identifiable {
     let id    = UUID()
-    let kind:  SuggestionKind
+    let kind: SuggestionKind
     let value: String
 
     /// The FilterRule this suggestion produces when committed.
@@ -140,7 +140,7 @@ struct SearchSuggestion: Identifiable {
 /// Individual row with macOS-native hover highlight.
 private struct SuggestionRowView: View {
     let suggestion: SearchSuggestion
-    let onSelect:   (SearchSuggestion) -> Void
+    let onSelect: (SearchSuggestion) -> Void
     @State private var isHovered = false
 
     var body: some View {
@@ -160,19 +160,18 @@ private struct SuggestionRowView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .background(isHovered ? Color(NSColor.selectedContentBackgroundColor).opacity(0.15)
-                                  : Color.clear)
+                            : Color.clear)
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
     }
 }
 
-
 // MARK: - SuggestionSection
 
 struct SuggestionSection: Identifiable {
     let id          = UUID()
-    let kind:        SuggestionKind
+    let kind: SuggestionKind
     let suggestions: [SearchSuggestion]
 }
 
@@ -182,9 +181,9 @@ struct SuggestionSection: Identifiable {
 /// Carries its own .regularMaterial background so the panel window can be
 /// fully transparent — the same approach used by Spotlight and Xcode Quick Open.
 struct SearchSuggestionsView: View {
-    let sections:  [SuggestionSection]
+    let sections: [SuggestionSection]
     let showsTrailingPrefixWarning: Bool
-    let onSelect:  (SearchSuggestion) -> Void
+    let onSelect: (SearchSuggestion) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -261,7 +260,7 @@ struct SearchSuggestionsView: View {
 /// Computes sectioned suggestions for the current raw search text.
 /// Detects whether a prefix is active and narrows accordingly.
 func computeSectionedSuggestions(for searchText: String,
-                                  library: CalibreLibrary) async -> [SuggestionSection] {
+                                 library: CalibreLibrary) async -> [SuggestionSection] {
     let text = searchText.trimmingCharacters(in: .whitespaces)
     guard !text.isEmpty else { return [] }
 
@@ -312,11 +311,11 @@ func computeSectionedSuggestions(for searchText: String,
     guard text.count >= 2 else { return [] }
 
     let titleSugs  = await library.titleSuggestions(prefix: text, limit: 3)
-        .map { SearchSuggestion(kind: .title,  value: $0) }
+        .map { SearchSuggestion(kind: .title, value: $0) }
     let authorSugs = await library.authorSuggestions(prefix: text, limit: 3)
         .map { SearchSuggestion(kind: .author, value: $0) }
     let tagSugs    = await library.tagSuggestions(prefix: text, limit: 4)
-        .map { SearchSuggestion(kind: .tag,    value: $0) }
+        .map { SearchSuggestion(kind: .tag, value: $0) }
     let seriesSugs = await library.seriesSuggestions(prefix: text, limit: 3)
         .map { SearchSuggestion(kind: .series, value: $0) }
     let statusSugs = statusSuggestions(prefix: text)
@@ -324,11 +323,11 @@ func computeSectionedSuggestions(for searchText: String,
 
     return [
         SuggestionSection(kind: .fulltext, suggestions: fulltextSugs),
-        SuggestionSection(kind: .title,  suggestions: titleSugs),
+        SuggestionSection(kind: .title, suggestions: titleSugs),
         SuggestionSection(kind: .author, suggestions: authorSugs),
-        SuggestionSection(kind: .tag,    suggestions: tagSugs),
+        SuggestionSection(kind: .tag, suggestions: tagSugs),
         SuggestionSection(kind: .series, suggestions: seriesSugs),
-        SuggestionSection(kind: .status, suggestions: statusSugs),
+        SuggestionSection(kind: .status, suggestions: statusSugs)
     ].filter { !$0.suggestions.isEmpty }
 }
 

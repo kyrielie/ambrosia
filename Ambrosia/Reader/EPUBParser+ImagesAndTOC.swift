@@ -91,7 +91,7 @@ extension EPUBParser {
         }
 
         // EPUB3 nav document
-        if let navID = opfParser.manifestProperties.first(where: { key, value in
+        if let navID = opfParser.manifestProperties.first(where: { _, value in
             value.split(separator: " ").map(String.init).contains("nav")
         })?.key, let navHref = opfParser.manifest[navID] {
             let navPath = resolvedPath(navHref)

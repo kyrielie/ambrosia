@@ -10,7 +10,7 @@ import SQLite
 /// shape for tag/author/series matching; living here as static functions on a
 /// value-less enum means neither call site pays for or requires actor isolation,
 /// and there is exactly one function body instead of one copy-pasted into two files.
-/// See Invariant 24 in ambrosia_architecture.md for why the subquery shape itself
+/// See Invariant 24 in `docs/search-and-filter.md` for why the subquery shape itself
 /// (correlated on `book = b.id`, no outer join) matters.
 enum MatchingSubqueryBuilder {
 
@@ -230,15 +230,15 @@ extension FilterExpression {
     var hasSeriesOrMergedEqualsRule: Bool {
         groups.flatMap(\.rules).contains {
             $0.field == .collection &&
-            $0.op == .equals &&
-            $0.value == SystemCollectionID.seriesOrMergedName
+                $0.op == .equals &&
+                $0.value == SystemCollectionID.seriesOrMergedName
         }
     }
 
     var referencesSeriesOrMergedCollection: Bool {
         groups.flatMap(\.rules).contains {
             $0.field == .collection &&
-            $0.value == SystemCollectionID.seriesOrMergedName
+                $0.value == SystemCollectionID.seriesOrMergedName
         }
     }
 }
@@ -286,26 +286,26 @@ struct FilterBuilder {
         seriesNamesMap: [Int: [String]] = [:]
     ) async -> FilterResult {
         await matchingIDsSync(
-            expression:           expression,
-            collectionMap:        collectionMap,
-            statusMap:            statusMap,
-            fulltextMap:          fulltextMap,
-            crossoverMap:         crossoverMap,
+            expression: expression,
+            collectionMap: collectionMap,
+            statusMap: statusMap,
+            fulltextMap: fulltextMap,
+            crossoverMap: crossoverMap,
             wordCountFallbackMap: wordCountFallbackMap,
-            kudosFallbackMap:     kudosFallbackMap,
-            seriesNamesMap:       seriesNamesMap
+            kudosFallbackMap: kudosFallbackMap,
+            seriesNamesMap: seriesNamesMap
         )
     }
 
     /// Evaluate a full FilterExpression (multiple groups joined by groupConjunction).
     private func matchingIDsSync(expression: FilterExpression,
-                     collectionMap: [String: Set<Int>] = [:],
-                     statusMap: [AO3CompletionStatus: Set<Int>] = [:],
-                     fulltextMap: [String: Set<Int>] = [:],
-                     crossoverMap: Set<Int> = [],
-                     wordCountFallbackMap: [Int: Int]? = nil,
-                     kudosFallbackMap: [Int: Int]? = nil,
-                     seriesNamesMap: [Int: [String]] = [:]) async -> FilterResult {
+                                 collectionMap: [String: Set<Int>] = [:],
+                                 statusMap: [AO3CompletionStatus: Set<Int>] = [:],
+                                 fulltextMap: [String: Set<Int>] = [:],
+                                 crossoverMap: Set<Int> = [],
+                                 wordCountFallbackMap: [Int: Int]? = nil,
+                                 kudosFallbackMap: [Int: Int]? = nil,
+                                 seriesNamesMap: [Int: [String]] = [:]) async -> FilterResult {
         let start = LibraryFilterDebug.now()
         LibraryFilterDebug.log("matchingIDs.start", [
             "mode": "explicitIDs",
@@ -337,12 +337,12 @@ struct FilterBuilder {
         var groupResults: [Set<Int>] = []
         for group in nonFulltextGroups {
             let ids = await matchingIDsForGroup(group,
-                                    collectionMap: collectionMap,
-                                    statusMap: statusMap,
-                                    crossoverMap: crossoverMap,
-                                    wordCountFallbackMap: wordCountFallbackMap,
-                                    kudosFallbackMap: kudosFallbackMap,
-                                    seriesNamesMap: seriesNamesMap)
+                                                collectionMap: collectionMap,
+                                                statusMap: statusMap,
+                                                crossoverMap: crossoverMap,
+                                                wordCountFallbackMap: wordCountFallbackMap,
+                                                kudosFallbackMap: kudosFallbackMap,
+                                                seriesNamesMap: seriesNamesMap)
             groupResults.append(Set(ids))
         }
 
@@ -407,10 +407,10 @@ struct FilterBuilder {
         //      exclusion shape as .authorName above.
         let sqlRules        = complete.filter {
             $0.field != .collection &&
-            $0.field != .status && $0.field != .fulltext && $0.field != .crossover &&
-            $0.field != .series &&
-            $0.field != .authorName &&
-            $0.field != .tag && $0.field != .rating && $0.field != .warning && $0.field != .category
+                $0.field != .status && $0.field != .fulltext && $0.field != .crossover &&
+                $0.field != .series &&
+                $0.field != .authorName &&
+                $0.field != .tag && $0.field != .rating && $0.field != .warning && $0.field != .category
         }
         let collectionRules = complete.filter { $0.field == .collection }
         let statusRules     = complete.filter { $0.field == .status }
@@ -428,10 +428,10 @@ struct FilterBuilder {
             ids = await library.allCalibreIDs()
         } else {
             ids = await library.calibreIDs(matchingRules: sqlRules,
-                                     conjunction: group.conjunction,
-                                     wordCountFallbackMap: wordCountFallbackMap,
-                                     kudosFallbackMap: kudosFallbackMap,
-                                     tagExpansions: tagExpansions)
+                                           conjunction: group.conjunction,
+                                           wordCountFallbackMap: wordCountFallbackMap,
+                                           kudosFallbackMap: kudosFallbackMap,
+                                           tagExpansions: tagExpansions)
         }
 
         // Apply collection rules in-memory

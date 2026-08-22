@@ -72,7 +72,7 @@ enum HighlightBridge {
         }
         for annotation in sorted {
             let highlightJS = restoreHighlightJS(annotation: annotation,
-                                        useUnderline: overlapping.contains(annotation.id))
+                                                 useUnderline: overlapping.contains(annotation.id))
             webView.evaluateJavaScript(highlightJS, completionHandler: nil)
         }
     }

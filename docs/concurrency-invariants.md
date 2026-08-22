@@ -1,0 +1,21 @@
+# Concurrency invariants
+
+Scope: repo-wide Swift concurrency rules — actor-vs-parameter state
+ownership, `async`/`Task` pitfalls, refactor-safety, and the build gate.
+These are cited (not restated) from other docs where they apply to a
+specific system: `search-and-filter.md` cites 17, `caching.md` cites 23,
+`swiftui-appkit-bridging.md` cites 18.
+
+---
+
+17. Values that configure a multi-call operation (e.g. `FilterBuilder`'s tag-synonym `tagExpansions`) are stored as a property set once at `init`, not threaded as a parameter through every downstream method across multiple files — but only when the type doing the storing is itself fresh per call, like `FilterBuilder`. This does not apply to methods living on `CalibreLibrary`: it is a long-lived `actor` shared across both surfaces and across overlapping in-flight queries, so caching a per-query value (e.g. `tagExpansions`) as actor state would let a stale query silently overwrite a newer one's value before it reads it back — the exact bug class Invariant 23 generalizes. `sqlFilterClause`, `sqlFragment`, `calibreIDs(matchingRules:)`, `bookCount`, `wordCountSortedPage`, `randomSortedPage`, and `fetchAllMatchingIDs` correctly keep `tagExpansions`/`filterTagExpansions` as an explicit parameter for this reason, confirmed by audit (some are called only through `FilterBuilder`, some directly from view code — either way, `CalibreLibrary`'s side of the call needs the value handed to it, not remembered). If a code review adds a default-valued parameter to more than two or three function signatures in the same change on a type that is itself fresh per call, stop and ask whether the value should be captured once as state instead; if the type is a shared actor or singleton, threading the parameter is very likely the correct choice, not a smell. See `search-and-filter.md`.
+
+18. Do not invoke an `async` closure as a bare trailing argument (`someInit(x: { ... await ... }())`). The closure literal becomes implicitly `async` the moment its body contains `await`, and the call site needs `await` too, but nothing forces this to be visually obvious — the `await` keyword is buried inside the closure body, not next to the call. Resolve async values into a `let` on the line(s) before the call and pass the `let`. See `swiftui-appkit-bridging.md`.
+
+19. Combining `async let` with a `Task.detached { ... }.value` initializer, where the detached closure captures a non-`Sendable` reference type (e.g. `CalibreLibrary?`), fails Swift 6 strict-concurrency checking even though the identical `Task.detached(...).value` pattern compiles fine as a plain (non-`async let`) assignment elsewhere in the same function. Prefer the plain sequential `let x = await Task.detached { ... }.value` form when the captured value is a non-Sendable type; do not assume `async let` and plain `await` are interchangeable here.
+
+20. Renaming or removing a type or top-level function (e.g. an earlier `SeriesEntry` becoming `SeriesCacheEntry`) must be done with a project-wide search (Xcode's rename refactor or `grep -rl`), not by editing the declaration site from memory. A stale type name left at a call site does not always fail with a clear "unknown type" error in isolation — it can surface as a cascading "ambiguous expression" error several lines away, at the point where type inference depends on it.
+
+21. Every commit that touches `.swift` files must pass `xcodebuild build` (or `swift build`) before merge. The bugs in invariants 16-20 (16 lives in `library-ui.md`) are all hard compiler errors, not runtime bugs — a build gate catches all of them for free. There is no historical instance of one of these mistakes shipping that would have survived a green build.
+
+23. Async work that writes to shared or cached state on behalf of a UI surface must gate *every* one of its writes behind the same staleness check (task-cancellation or a generation/token guard) as its other results — not just the ones that are obviously part of the "final" result. A guard that protects some writes but not others is worse than no guard: code that reads the guarded writes assumes the whole function is safe, so the unguarded write's staleness is invisible on read. See `caching.md` for the confirmed instance of this bug class in `applyFilterRules()`.

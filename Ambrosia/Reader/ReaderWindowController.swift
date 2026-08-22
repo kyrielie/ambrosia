@@ -51,9 +51,9 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         // since window.screen is nil until then.
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 700, height: 900),
-            styleMask:   [.titled, .closable, .miniaturizable, .resizable],
-            backing:     .buffered,
-            defer:       false
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
         )
         window.title   = target.displayTitle
         window.minSize = NSSize(width: 600, height: 500)

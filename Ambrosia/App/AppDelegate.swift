@@ -89,7 +89,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// SwiftUI's WindowGroup scene manager to restore its scene windows, which recreates
     /// the ghost window we hid at launch.
     func applicationShouldHandleReopen(_ sender: NSApplication,
-                                        hasVisibleWindows: Bool) -> Bool {
+                                       hasVisibleWindows: Bool) -> Bool {
         if !hasVisibleWindows {
             libraryWindowController?.showWindow(nil)
             libraryWindowController?.window?.makeKeyAndOrderFront(nil)

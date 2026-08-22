@@ -50,7 +50,7 @@ extension AO3MetadataExtractor {
             // Normalise http:// -> https://, matching the existing story_url
             // normalisation rule in extract().
             let profileURL = ("https://archiveofourown.org/users/\(username)/"
-                + (pseud != nil ? "pseuds/\(pseud!)" : ""))
+                                + (pseud != nil ? "pseuds/\(pseud!)" : ""))
                 .replacingOccurrences(of: "http://", with: "https://")
             return AO3AuthorEntry(username: username, pseud: pseud, profileURL: profileURL, source: .byline)
         }

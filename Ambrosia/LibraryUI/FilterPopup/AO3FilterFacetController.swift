@@ -66,10 +66,10 @@ final class AO3FilterFacetController {
     /// resolved up front. crossoverMap/statusMap are always computed (not
     /// gated on the base expression) — see fix note below.
     static func make(toolbarState: LibraryToolbarState,
-                      metaDB: AmbrosiaMetaDB,
-                      library: CalibreLibrary,
-                      ftsLibrary: CalibreFTSLibrary?,
-                      collectionStore: CollectionStore?) async -> AO3FilterFacetController {
+                     metaDB: AmbrosiaMetaDB,
+                     library: CalibreLibrary,
+                     ftsLibrary: CalibreFTSLibrary?,
+                     collectionStore: CollectionStore?) async -> AO3FilterFacetController {
         let expression = toolbarState.filterExpression
         let tagExpansions = await TagExpansionResolver.filterTagExpansions(for: expression, metaDB: metaDB)
         let filterBuilder = FilterBuilder(library: library, ftsLibrary: ftsLibrary, metaDB: metaDB, tagExpansions: tagExpansions)
@@ -168,7 +168,7 @@ final class AO3FilterFacetController {
     /// is narrowing this facet at all, and falls back to the existing
     /// scoped-and-uncached path as soon as any filter/selection applies.
     func topFacets(for field: AO3FacetField, state: AO3FilterPopupState,
-                    limit: Int, membershipVersion: Int) async -> [(name: String, count: Int)] {
+                   limit: Int, membershipVersion: Int) async -> [(name: String, count: Int)] {
         if isWhollyUnconstrained(ignoring: field, state: state) {
             if let cached = Self.wholeLibraryFacetCache[field],
                cached.version == membershipVersion, cached.entries.count >= limit {

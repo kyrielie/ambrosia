@@ -122,7 +122,7 @@ final class PagingOffsetStateNavigationIntentTests: XCTestCase {
             XCTAssertLessThan(state.currentPage, state.rawSQLOffsetByPage.count)
             let restored = state.rawSQLOffsetByPage[state.currentPage]
             XCTAssertEqual(restored, recordedStartOffsets[state.currentPage],
-                            "page \(state.currentPage) must restore its own recorded start offset")
+                           "page \(state.currentPage) must restore its own recorded start offset")
         }
     }
 

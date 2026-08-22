@@ -149,8 +149,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.librarySidebarToggle, .libraryTitle, .librarySearch, .libraryFilter, .librarySort,
          .flexibleSpace,
-         .libraryCollections, .libraryReadingGoal, .libraryExport, .libraryViewMode,
-         ]
+         .libraryCollections, .libraryReadingGoal, .libraryExport, .libraryViewMode
+        ]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -215,8 +215,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     // MARK: - Item builders
 
     private func makeIconItem(_ identifier: NSToolbarItem.Identifier,
-                               label: String, image: String,
-                               action: Selector) -> NSToolbarItem {
+                              label: String, image: String,
+                              action: Selector) -> NSToolbarItem {
         let item = NSToolbarItem(itemIdentifier: identifier)
         item.label   = label
         item.toolTip = label
@@ -226,7 +226,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         item.action = action
         return item
     }
-
 
     private func scheduleSearchTextObservation() {
         withObservationTracking {
@@ -301,7 +300,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         reshuffleItem.target = self
         menu.addItem(reshuffleItem)
         menu.addItem(.separator())
-        let asc  = NSMenuItem(title: "Ascending",  action: #selector(setSortAscending),  keyEquivalent: "")
+        let asc  = NSMenuItem(title: "Ascending", action: #selector(setSortAscending), keyEquivalent: "")
         let desc = NSMenuItem(title: "Descending", action: #selector(setSortDescending), keyEquivalent: "")
         asc.target  = self
         desc.target = self
@@ -342,12 +341,12 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private func makeViewModeItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
         let seg = NSSegmentedControl(
             images: [
-                NSImage(systemSymbolName: "list.bullet",  accessibilityDescription: "List")!
+                NSImage(systemSymbolName: "list.bullet", accessibilityDescription: "List")!
                     .withSymbolConfiguration(Self.toolbarSymbolConfig)!,
-                NSImage(systemSymbolName: "envelope",     accessibilityDescription: "Email")!
+                NSImage(systemSymbolName: "envelope", accessibilityDescription: "Email")!
                     .withSymbolConfiguration(Self.toolbarSymbolConfig)!,
-                NSImage(systemSymbolName: "list.number",  accessibilityDescription: "Ranking")!
-                    .withSymbolConfiguration(Self.toolbarSymbolConfig)!,
+                NSImage(systemSymbolName: "list.number", accessibilityDescription: "Ranking")!
+                    .withSymbolConfiguration(Self.toolbarSymbolConfig)!
             ],
             trackingMode: .selectOne,
             target: self,
@@ -729,7 +728,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         let notifications: [Notification.Name] = [
             NSWindow.didMoveNotification,
             NSWindow.didResizeNotification,
-            NSWindow.didEndLiveResizeNotification,
+            NSWindow.didEndLiveResizeNotification
         ]
         windowMoveResizeObservers = notifications.map { name in
             center.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
@@ -824,10 +823,10 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         toolbarState?.emailReaderSidebarMode = .tableOfContents
         toolbarState?.showEmailReaderSidebar.toggle()
     }
-    @objc private func showCollections()     { toolbarState?.showCollections    = true }
-    @objc private func showReadingGoal()     { toolbarState?.showReadingGoal    = true }
-    @objc private func triggerCSVExport()    { toolbarState?.triggerExport      = true }
-    @objc private func triggerEPUBExport()   { toolbarState?.triggerEPUBExport  = true }
+    @objc private func showCollections() { toolbarState?.showCollections    = true }
+    @objc private func showReadingGoal() { toolbarState?.showReadingGoal    = true }
+    @objc private func triggerCSVExport() { toolbarState?.triggerExport      = true }
+    @objc private func triggerEPUBExport() { toolbarState?.triggerEPUBExport  = true }
     @objc private func showRSSPanel() {
         guard let session else { return }
 
@@ -1042,7 +1041,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         guard let field = sender.representedObject as? SortField else { return }
         toolbarState?.sortField = field
     }
-    @objc private func setSortAscending()  { toolbarState?.ascending = true  }
+    @objc private func setSortAscending() { toolbarState?.ascending = true  }
     @objc private func setSortDescending() { toolbarState?.ascending = false }
 
     @objc private func viewModeSegmentChanged(_ sender: NSSegmentedControl) {
