@@ -87,8 +87,8 @@ enum AO3TagKind: Equatable {
 
 extension AO3TagKind {
     static func classify(_ tag: String) -> AO3TagKind {
-        if let r = AO3Rating(rawValue: tag)   { return .rating(r) }
-        if let w = AO3Warning(rawValue: tag)  { return .warning(w) }
+        if let r = AO3Rating(rawValue: tag) { return .rating(r) }
+        if let w = AO3Warning(rawValue: tag) { return .warning(w) }
         if let c = AO3Category(rawValue: tag) { return .category(c) }
         return .regular
     }
@@ -118,10 +118,10 @@ extension AO3TagKind {
 
 /// All tags for a book split into their four buckets, in display order.
 struct AO3TagBuckets {
-    var ratings:    [String] = []
-    var warnings:   [String] = []
+    var ratings: [String] = []
+    var warnings: [String] = []
     var categories: [String] = []
-    var regular:    [String] = []
+    var regular: [String] = []
 
     init() {}   // empty — used as @State initial value
 

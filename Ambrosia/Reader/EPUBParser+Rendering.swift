@@ -40,8 +40,8 @@ extension EPUBParser {
         else { throw EPUBError.missingSpineItem(item.href) }
 
         let raw = String(data: data, encoding: .utf8)
-                ?? String(data: data, encoding: .isoLatin1)
-                ?? ""
+            ?? String(data: data, encoding: .isoLatin1)
+            ?? ""
         var html = Self.sanitise(
             raw,
             userCSS: userCSS,
@@ -107,8 +107,8 @@ extension EPUBParser {
             else { continue }
 
             let raw = String(data: data, encoding: .utf8)
-                    ?? String(data: data, encoding: .isoLatin1)
-                    ?? ""
+                ?? String(data: data, encoding: .isoLatin1)
+                ?? ""
 
             // Extract only the <body>…</body> content
             var bodyContent = Self.extractBodyContent(
@@ -164,8 +164,8 @@ extension EPUBParser {
         else { throw EPUBError.missingSpineItem(item.href) }
 
         let raw = String(data: data, encoding: .utf8)
-                ?? String(data: data, encoding: .isoLatin1)
-                ?? ""
+            ?? String(data: data, encoding: .isoLatin1)
+            ?? ""
         return Self.stripAllTags(from: raw)
     }
 

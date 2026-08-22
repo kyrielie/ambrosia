@@ -289,7 +289,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         engine.positionDidChange = { [weak self] _, _ in
             self?.savePaginatedProgress()
         }
-        engine.spineDidLoad = { [weak self] totalCols in
+        engine.spineDidLoad = { [weak self] _ in
             guard let self else { return }
             // Re-inject highlights for the newly loaded spine item.
             let ranged = self.annotations
@@ -310,7 +310,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             webView.topAnchor.constraint(equalTo: container.topAnchor),
-            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
 
         // enclosingScrollView is nil until the WKWebView is part of a view
@@ -645,7 +645,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private func buildScrollHTML() throws -> String {
         guard case .series(let series) = target else {
             guard let p = workParsers.first else { return "" }
-            return try p.mergedHTML(userCSS: ReaderPreferences.shared.css, ao3Record: workAO3Records.first ?? nil, removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents)
+            return try p.mergedHTML(userCSS: ReaderPreferences.shared.css, ao3Record: workAO3Records.first, removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents)
         }
 
         var parts: [String] = []
@@ -1390,7 +1390,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     // MARK: - WKScriptMessageHandler
 
     func userContentController(_ userContentController: WKUserContentController,
-                                didReceive message: WKScriptMessage) {
+                               didReceive message: WKScriptMessage) {
         switch message.name {
 
         case "consoleLog":
@@ -1427,8 +1427,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             guard let body = message.body as? String else { return }
             // JS ambrosiaNextPage/PrevPage posts JSON only when crossing spine boundaries.
             if let data = body.data(using: .utf8),
-                    let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                    let action = dict["action"] as? String {
+               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let action = dict["action"] as? String {
                 switch action {
                 case "nextSpineItem": loadNextSpineItem()
                 case "prevSpineItem": loadPreviousSpineItem()
@@ -1606,11 +1606,11 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             let previewText = (result as? String) ?? ""
 
             let annotation = Annotation(
-                spineIndex:   spineIndex,
-                startChar:    offset,
-                endChar:      offset,
+                spineIndex: spineIndex,
+                startChar: offset,
+                endChar: offset,
                 selectedText: previewText,
-                colorHex:     "#FFD60A"
+                colorHex: "#FFD60A"
             )
 
             var existing = self.annotations
@@ -1909,12 +1909,12 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             return
         }
         let barView = FindBarView(
-            searchText:   Binding(get: { self.findSearchText }, set: { self.setLocalFindText($0) }),
+            searchText: Binding(get: { self.findSearchText }, set: { self.setLocalFindText($0) }),
             matchCurrent: findMatchCurrent,
-            matchTotal:   findMatchTotal,
-            onNext:       { [weak self] in self?.findNext() },
-            onPrevious:   { [weak self] in self?.findPrevious() },
-            onClose:      { [weak self] in self?.hideFindBar() }
+            matchTotal: findMatchTotal,
+            onNext: { [weak self] in self?.findNext() },
+            onPrevious: { [weak self] in self?.findPrevious() },
+            onClose: { [weak self] in self?.hideFindBar() }
         )
         let hosting = NSHostingView(rootView: barView)
         hosting.translatesAutoresizingMaskIntoConstraints = false
@@ -1927,7 +1927,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             hosting.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             hosting.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             hosting.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            hosting.heightAnchor.constraint(equalToConstant: 44),
+            hosting.heightAnchor.constraint(equalToConstant: 44)
         ])
         findBarHostingView = hosting
         publishLocalFindState()
@@ -2076,12 +2076,12 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private func updateFindBar() {
         guard let hosting = findBarHostingView else { return }
         hosting.rootView = FindBarView(
-            searchText:   Binding(get: { self.findSearchText }, set: { self.setLocalFindText($0) }),
+            searchText: Binding(get: { self.findSearchText }, set: { self.setLocalFindText($0) }),
             matchCurrent: findMatchCurrent,
-            matchTotal:   findMatchTotal,
-            onNext:       { [weak self] in self?.findNext() },
-            onPrevious:   { [weak self] in self?.findPrevious() },
-            onClose:      { [weak self] in self?.hideFindBar() }
+            matchTotal: findMatchTotal,
+            onNext: { [weak self] in self?.findNext() },
+            onPrevious: { [weak self] in self?.findPrevious() },
+            onClose: { [weak self] in self?.hideFindBar() }
         )
     }
 
@@ -2367,9 +2367,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     // MARK: - Helpers
 
     private static func cgFloat(from value: Any?) -> CGFloat {
-        if let v = value as? CGFloat  { return v }
-        if let v = value as? Double   { return CGFloat(v) }
-        if let v = value as? Int      { return CGFloat(v) }
+        if let v = value as? CGFloat { return v }
+        if let v = value as? Double { return CGFloat(v) }
+        if let v = value as? Int { return CGFloat(v) }
         if let v = value as? NSNumber { return CGFloat(truncating: v) }
         return 0
     }
@@ -2386,9 +2386,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         if value.hasPrefix("#") { value.removeFirst() }
         guard value.count == 6, let intValue = Int(value, radix: 16) else { return nil }
         return NSColor(
-            red:   CGFloat((intValue >> 16) & 0xFF) / 255,
+            red: CGFloat((intValue >> 16) & 0xFF) / 255,
             green: CGFloat((intValue >>  8) & 0xFF) / 255,
-            blue:  CGFloat( intValue        & 0xFF) / 255,
+            blue: CGFloat( intValue        & 0xFF) / 255,
             alpha: 1
         )
     }
@@ -2547,17 +2547,6 @@ private class ReaderMenuWebView: WKWebView {
         let distance = max(80, bounds.height * abs(multiplier))
         let direction = multiplier < 0 ? -distance : distance
         evaluateJavaScript("window.scrollBy({ top: \(Int(direction)), left: 0, behavior: 'auto' });", completionHandler: nil)
-    }
-
-    // Real paginated-mode scroll suppression happens in ReaderViewController's
-    // window-level NSEvent local monitor (installScrollWheelMonitor), which
-    // intercepts scrollWheel events before AppKit dispatch reaches this view
-    // at all. This override is unreachable for that input path — WKWebView's
-    // internal scrolling consumes trackpad/mouse wheel input itself without
-    // calling up through a subclass override — but it's left as a passthrough
-    // rather than removed, in case a future WebKit version changes that.
-    override func scrollWheel(with event: NSEvent) {
-        super.scrollWheel(with: event)
     }
 
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {

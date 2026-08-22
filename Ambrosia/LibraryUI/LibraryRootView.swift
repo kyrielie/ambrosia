@@ -25,9 +25,9 @@ struct LibraryRootView: View {
         case .systemDefault: return Color(nsColor: .windowBackgroundColor)
         case .accentColor:   return Color(nsColor: .controlAccentColor).opacity(0.08)
         case .custom:        return Color(hex: effectiveIsDark
-                                    ? prefs.libraryDarkBackgroundColor
-                                    : prefs.libraryLightBackgroundColor)
-                                    ?? Color(nsColor: .windowBackgroundColor)
+                                            ? prefs.libraryDarkBackgroundColor
+                                            : prefs.libraryLightBackgroundColor)
+            ?? Color(nsColor: .windowBackgroundColor)
         }
     }
 
@@ -37,7 +37,7 @@ struct LibraryRootView: View {
         case .custom: return Color(hex: effectiveIsDark
                                     ? prefs.libraryDarkTextColor
                                     : prefs.libraryLightTextColor)
-                                    ?? Color(nsColor: .labelColor)
+            ?? Color(nsColor: .labelColor)
         }
     }
 
@@ -57,7 +57,7 @@ struct LibraryRootView: View {
     // this stays owned per-view rather than shared, and for the history of
     // the rawSQLOffsetByPage design (its incident notes).
     @State private var offsetState = PagingOffsetState()
-    @State private var filteredCount: Int? = nil
+    @State private var filteredCount: Int?
 
     @State private var bookStates: [Int: BookState] = [:]
     @State private var ao3Metadata: [Int: AO3MetadataRecord] = [:]
@@ -83,16 +83,16 @@ struct LibraryRootView: View {
     // EmailLibraryViewController. Stateless aside from its debug-log label,
     // so a plain `let` (not `@State`) is correct here.
     private let queryController = LibraryQueryController(surfaceLabel: "list")
-    @State private var fullTextTask: Task<Void, Never>? = nil
-    @State private var filterCountTask: Task<Void, Never>? = nil
-    @State private var rebuildTask: Task<Void, Never>? = nil
+    @State private var fullTextTask: Task<Void, Never>?
+    @State private var filterCountTask: Task<Void, Never>?
+    @State private var rebuildTask: Task<Void, Never>?
     // F.3: series-grouped, visibility-aware total, computed by
     // CalibreLibrary.visibleBookCount and used for "Page X of Y" in the
     // footer while shouldGroupSeriesRows is true. nil is the "not yet
     // computed" sentinel — the footer must not show a stale/wrong number
     // while a recompute (triggered by loadPage()) is in flight.
-    @State private var groupAwareTotalCount: Int? = nil
-    @State private var groupAwareCountTask: Task<Void, Never>? = nil
+    @State private var groupAwareTotalCount: Int?
+    @State private var groupAwareCountTask: Task<Void, Never>?
     // Every `Task { await loadPage() }` call site below now goes through this
     // instead of being fire-and-forget. Previously ~20 sites (sort/filter/page
     // changes) could each spawn an untracked Task, and nothing cancelled a
@@ -153,9 +153,9 @@ struct LibraryRootView: View {
 
     var body: some View {
         attachSheets(to: attachLifecycleHandlers(to: rootContent
-            .background(libraryBGColor)
-            .foregroundStyle(libraryTextColor)
-            .preferredColorScheme(prefs.resolvedLibraryColorScheme)))
+                                                    .background(libraryBGColor)
+                                                    .foregroundStyle(libraryTextColor)
+                                                    .preferredColorScheme(prefs.resolvedLibraryColorScheme)))
     }
 
     // Split into two methods so the Swift type-checker doesn't time out
@@ -167,10 +167,10 @@ struct LibraryRootView: View {
     /// Pagination, sort, search-text, and filter-result changes.
     private func attachDataHandlers<V: View>(to view: V) -> some View {
         view
-            .onChange(of: offsetState.currentPage)                { Task { await loadPage() } }
-            .onChange(of: toolbarState.sortField)     { offsetState.resetForNewFilter(); Task { await loadPage() } }
-            .onChange(of: toolbarState.ascending)     { offsetState.resetForNewFilter(); Task { await loadPage() } }
-            .onChange(of: toolbarState.reshuffleToken)   { Task { await loadPage() } }
+            .onChange(of: offsetState.currentPage) { Task { await loadPage() } }
+            .onChange(of: toolbarState.sortField) { offsetState.resetForNewFilter(); Task { await loadPage() } }
+            .onChange(of: toolbarState.ascending) { offsetState.resetForNewFilter(); Task { await loadPage() } }
+            .onChange(of: toolbarState.reshuffleToken) { Task { await loadPage() } }
             .onChange(of: toolbarState.groupBySeries) { offsetState.resetForNewFilter(); Task { await loadPage() } }
             .onChange(of: toolbarState.filterExpression) {
                 // AO3FilterPopupWindowController's popup lives in its own NSWindow
@@ -767,7 +767,7 @@ struct LibraryRootView: View {
                         query: query,
                         filter: toolbarState.filterExpression,
                         filterTagExpansions: cachedFilterTagExpansions,
-    visibilityVersion: session.membershipVersion
+                        visibilityVersion: session.membershipVersion
                     )
                     LibraryFilterDebug.log("visibleBooks.fetch", [
                         "surface": "list", "offset": offset, "raw": raw.count
@@ -809,7 +809,7 @@ struct LibraryRootView: View {
                     query: query,
                     filter: toolbarState.filterExpression,
                     filterTagExpansions: cachedFilterTagExpansions,
-    visibilityVersion: session.membershipVersion
+                    visibilityVersion: session.membershipVersion
                 )
                 let visible = visibleBooks(raw)
                 guard !toolbarState.isListSurfaceTornDown else { return }
@@ -1033,8 +1033,7 @@ struct LibraryRootView: View {
             let entries: [SeriesCacheEntry]
             let singletonWarnings: [Int: [SingletonSeriesWarning]]
             guard !Task.isCancelled else { return }
-            do { pageMetadata   = try await pageMetadataTask }
-            catch {
+            do { pageMetadata   = try await pageMetadataTask } catch {
                 pageMetadata = [:]
                 #if DEBUG
                 degraded = true
@@ -1042,8 +1041,7 @@ struct LibraryRootView: View {
                 #endif
             }
             guard !Task.isCancelled else { return }
-            do { pageDiagnostics = try await pageDiagnosticsTask }
-            catch {
+            do { pageDiagnostics = try await pageDiagnosticsTask } catch {
                 pageDiagnostics = [:]
                 #if DEBUG
                 degraded = true
@@ -1051,8 +1049,7 @@ struct LibraryRootView: View {
                 #endif
             }
             guard !Task.isCancelled else { return }
-            do { entries = try await entriesTask }
-            catch {
+            do { entries = try await entriesTask } catch {
                 entries = []
                 #if DEBUG
                 degraded = true
@@ -1060,8 +1057,7 @@ struct LibraryRootView: View {
                 #endif
             }
             guard !Task.isCancelled else { return }
-            do { singletonWarnings = try await singletonWarningsTask }
-            catch {
+            do { singletonWarnings = try await singletonWarningsTask } catch {
                 singletonWarnings = [:]
                 #if DEBUG
                 degraded = true
@@ -1079,8 +1075,7 @@ struct LibraryRootView: View {
             let allEntries: [SeriesCacheEntry]
             let placeholders: [String: [SeriesPlaceholder]]
             guard !Task.isCancelled else { return }
-            do { allEntries = try await allEntriesTask }
-            catch {
+            do { allEntries = try await allEntriesTask } catch {
                 allEntries = []
                 #if DEBUG
                 degraded = true
@@ -1088,8 +1083,7 @@ struct LibraryRootView: View {
                 #endif
             }
             guard !Task.isCancelled else { return }
-            do { placeholders = try await placeholdersTask }
-            catch {
+            do { placeholders = try await placeholdersTask } catch {
                 placeholders = [:]
                 #if DEBUG
                 degraded = true
@@ -1115,8 +1109,7 @@ struct LibraryRootView: View {
             let seriesMetadata: [Int: AO3MetadataRecord]
             let seriesDiagnostics: [Int: AO3ExtractionDiagnostic]
             guard !Task.isCancelled else { return }
-            do { seriesMetadata   = try await seriesMetadataTask }
-            catch {
+            do { seriesMetadata   = try await seriesMetadataTask } catch {
                 seriesMetadata = [:]
                 #if DEBUG
                 degraded = true
@@ -1124,8 +1117,7 @@ struct LibraryRootView: View {
                 #endif
             }
             guard !Task.isCancelled else { return }
-            do { seriesDiagnostics = try await seriesDiagnosticsTask }
-            catch {
+            do { seriesDiagnostics = try await seriesDiagnosticsTask } catch {
                 seriesDiagnostics = [:]
                 #if DEBUG
                 degraded = true
@@ -1399,7 +1391,7 @@ struct LibraryRootView: View {
         ])
         filterCountTask = Task {
             let count = await library.bookCount(query: query, filter: expression,
-                                          filterTagExpansions: cachedFilterTagExpansions)
+                                                filterTagExpansions: cachedFilterTagExpansions)
             await session.refreshLastSearchError()
             await MainActor.run {
                 guard !Task.isCancelled,
@@ -1407,8 +1399,8 @@ struct LibraryRootView: View {
                       toolbarState.activeFilterResult?.totalCount == nil,
                       LibraryFilterDebug.summary(expression: toolbarState.filterExpression) == filterSignature,
                       LibraryFilterDebug.summary(query: queryWithCachedFullText(toolbarState.searchText.isEmpty
-                          ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
-                          : SearchQueryParser.parse(toolbarState.searchText))) == querySignature else {
+                                                                                    ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+                                                                                    : SearchQueryParser.parse(toolbarState.searchText))) == querySignature else {
                     LibraryFilterDebug.log("deferredCount.discard", [
                         "surface": "list",
                         "mode": "sqlPagedDeferredCount"
@@ -1520,9 +1512,9 @@ struct LibraryRootView: View {
             let needsCollection = expression.groups.flatMap(\.rules).contains { $0.field == .collection }
             var collectionMap = needsCollection ? ((try? await session.collectionStore?.membershipMap()) ?? [:]) : [:]
             let statusValues = Set(expression.groups
-                .flatMap(\.rules)
-                .filter { $0.field == .status }
-                .compactMap { AO3CompletionStatus(userValue: $0.value) })
+                                    .flatMap(\.rules)
+                                    .filter { $0.field == .status }
+                                    .compactMap { AO3CompletionStatus(userValue: $0.value) })
             var statusMap: [AO3CompletionStatus: Set<Int>] = [:]
             if let metaDB = session.metaDB {
                 for status in statusValues {
@@ -1585,7 +1577,7 @@ struct LibraryRootView: View {
                 stripped.groups = expression.groups.compactMap { group in
                     let rules = group.rules.filter {
                         (!needsWordCountFallback || ($0.field != .wordCountGT && $0.field != .wordCountLT)) &&
-                        (!needsKudosFallback || ($0.field != .kudosGT && $0.field != .kudosLT))
+                            (!needsKudosFallback || ($0.field != .kudosGT && $0.field != .kudosLT))
                     }
                     guard !rules.isEmpty else { return nil }
                     return FilterGroup(rules: rules, conjunction: group.conjunction)
@@ -1626,7 +1618,7 @@ struct LibraryRootView: View {
                 fallbackOnlyExpression.groups = expression.groups.compactMap { group in
                     let rules = group.rules.filter {
                         (needsWordCountFallback && ($0.field == .wordCountGT || $0.field == .wordCountLT) && $0.isComplete) ||
-                        (needsKudosFallback && ($0.field == .kudosGT || $0.field == .kudosLT) && $0.isComplete)
+                            (needsKudosFallback && ($0.field == .kudosGT || $0.field == .kudosLT) && $0.isComplete)
                     }
                     guard !rules.isEmpty else { return nil }
                     return FilterGroup(rules: rules, conjunction: group.conjunction)
@@ -1746,7 +1738,7 @@ struct LibraryRootView: View {
                 guard toolbarState.pendingFullTextSearch?.token == token,
                       toolbarState.libraryFilterApplicationToken == applicationToken,
                       toolbarState.filterExpression.groups.flatMap(\.rules).contains(where: {
-                          $0.field == .fulltext && $0.value == phrase && $0.isComplete
+                        $0.field == .fulltext && $0.value == phrase && $0.isComplete
                       }) else { return }
                 toolbarState.clearPendingFullTextSearch()
                 toolbarState.finishLibraryFilterApplication(token: applicationToken)
@@ -1850,8 +1842,8 @@ struct LibraryRootView: View {
                     .background(negated ? Color.red.opacity(0.08) : Color.accentColor.opacity(0.12))
                     .clipShape(Capsule())
                     .overlay(Capsule().stroke(
-                        negated ? Color.red.opacity(0.3) : Color.accentColor.opacity(0.3),
-                        lineWidth: 0.5))
+                                negated ? Color.red.opacity(0.3) : Color.accentColor.opacity(0.3),
+                                lineWidth: 0.5))
                 }
                 if let phrase = activeFullTextPhrase {
                     HStack(spacing: 3) {
@@ -1992,9 +1984,9 @@ struct LibraryRootView: View {
             onOpen: { AppDelegate.shared?.openReaderWindow(target: .series(series), modelContext: modelContext) },
             isInReadLater: series.works.allSatisfy { readLaterIDs.contains($0.id) },
             onReadLaterToggle: { toggleReadLater(for: series) },
-            onSkip:           { skip(series.works) },
-            onMarkRead:       { markRead(series.works) },
-            onResetProgress:  { resetProgress(series.works) },
+            onSkip: { skip(series.works) },
+            onMarkRead: { markRead(series.works) },
+            onResetProgress: { resetProgress(series.works) },
             onCollectionChanged: {
                 CollectionAssignment.didAssign(session: session) {
                     refreshBookStates()
@@ -2263,4 +2255,3 @@ struct LibraryRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
-

@@ -21,18 +21,18 @@ struct TagExportOptions {
 /// Because §2 gives those buckets their own dedicated CSV columns, the Tags column
 /// in the CSV carries whatever subset the user has opted into — freeform by default off.
 func filteredTagsForExport(book: CalibreBook,
-                            ao3: AO3MetadataRecord?,
-                            options: TagExportOptions) -> [String] {
+                           ao3: AO3MetadataRecord?,
+                           options: TagExportOptions) -> [String] {
     var result: [String] = []
-    if options.includeFandom,       let ao3 { result += ao3.fandoms }
+    if options.includeFandom, let ao3 { result += ao3.fandoms }
     if options.includeRelationship, let ao3 { result += ao3.relationships }
-    if options.includeCharacter,    let ao3 { result += ao3.characters }
-    if options.includeFreeform,     let ao3 { result += ao3.additionalTags }
+    if options.includeCharacter, let ao3 { result += ao3.characters }
+    if options.includeFreeform, let ao3 { result += ao3.additionalTags }
     // Classify Calibre tags so we can separate rating/warning/category from freeform.
     let buckets = AO3TagBuckets.from(tags: book.tags)
     if options.includeCategory { result += buckets.categories }
-    if options.includeRating   { result += buckets.ratings }
-    if options.includeWarning  { result += buckets.warnings }
+    if options.includeRating { result += buckets.ratings }
+    if options.includeWarning { result += buckets.warnings }
     return result
 }
 
@@ -78,7 +78,7 @@ struct ExportManager {
     /// AO3 Collections, AO3 Series, Story URL, AO3 Work ID,
     /// Collections (all Ambrosia), File Location.
     static func exportToCSV(rows: [ExportRow],
-                             tagOptions: TagExportOptions = TagExportOptions()) -> String {
+                            tagOptions: TagExportOptions = TagExportOptions()) -> String {
         let header = [
             "Title", "Authors", "Series", "Tags",
             "Word Count", "Kudos",
@@ -173,9 +173,9 @@ struct ExportManager {
 
     @MainActor
     static func buildExportRows(currentPageBooks: [CalibreBook],
-                                 session: LibrarySession?,
-                                 filterResult: FilterResult?,
-                                 toolbarState: LibraryToolbarState?) async -> [ExportRow] {
+                                session: LibrarySession?,
+                                filterResult: FilterResult?,
+                                toolbarState: LibraryToolbarState?) async -> [ExportRow] {
         guard let session, let library = session.library else {
             // Fallback: export current page only, no enrichment
             return currentPageBooks.map { ExportRow(book: $0, ao3: nil, collectionNames: [], epubAbsolutePath: nil) }
@@ -349,11 +349,11 @@ struct ExportManager {
     /// only needs to be implemented and tested in one place.
     @MainActor
     static func presentEPUBExportPanel(books: [CalibreBook],
-                                        libraryRoot: URL,
-                                        ao3Map: [Int: AO3MetadataRecord],
-                                        groupBySeries: Bool = false,
-                                        seriesEntries: [Int: [SeriesCacheEntry]] = [:],
-                                        filenameIDSource: ExportFilenameIDSource = .ao3ThenCalibre) {
+                                       libraryRoot: URL,
+                                       ao3Map: [Int: AO3MetadataRecord],
+                                       groupBySeries: Bool = false,
+                                       seriesEntries: [Int: [SeriesCacheEntry]] = [:],
+                                       filenameIDSource: ExportFilenameIDSource = .ao3ThenCalibre) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -447,8 +447,8 @@ struct ExportManager {
     private static func csvEscape(_ field: String) -> String {
         let sanitised = field
             .replacingOccurrences(of: "\r\n", with: " ")
-            .replacingOccurrences(of: "\n",   with: " ")
-            .replacingOccurrences(of: "\r",   with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
         let needsQuoting = sanitised.contains(",") || sanitised.contains("\"")
         if needsQuoting {
             let escaped = sanitised.replacingOccurrences(of: "\"", with: "\"\"")

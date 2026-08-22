@@ -223,8 +223,7 @@ actor CalibreLibrary {
         for row in rows {
             guard let text = row[1] as? String else { continue }
             let bookID: Int?
-            if let value = row[0] as? Int64 { bookID = Int(value) }
-            else { bookID = row[0] as? Int }
+            if let value = row[0] as? Int64 { bookID = Int(value) } else { bookID = row[0] as? Int }
             guard let id = bookID else { continue }
             // Real, accurate check against HTML-stripped text, using the same
             // anchored detector CalibreBook.isDescriptionAnthology uses, so the
@@ -414,7 +413,7 @@ actor CalibreLibrary {
     /// baseline (see orderByClause(.wordCount)); this function re-sorts that full
     /// set in memory and the caller slices out the requested page.
     func sortedByWordCount(books: [CalibreBook], ascending: Bool,
-                            ao3WordCounts: [Int: Int]) -> [CalibreBook] {
+                           ao3WordCounts: [Int: Int]) -> [CalibreBook] {
         let valuesByID: [Int: Int]
         if let label = CustomColumnConfig.shared.wordCountLabel,
            let tbl = customColumnTableName(label: label) {
@@ -433,7 +432,7 @@ actor CalibreLibrary {
     /// per-book). Fallback: ao3_metadata.kudos_count, supplied by the caller via
     /// `ao3Kudos` (already bulk-fetched from ambrosia_meta.db).
     func sortedByKudos(books: [CalibreBook], ascending: Bool,
-                        ao3Kudos: [Int: Int]) -> [CalibreBook] {
+                       ao3Kudos: [Int: Int]) -> [CalibreBook] {
         let valuesByID: [Int: Int]
         if let label = CustomColumnConfig.shared.kudosLabel,
            let tbl = customColumnTableName(label: label) {
@@ -451,12 +450,12 @@ actor CalibreLibrary {
     /// whether more pages remain. Used in place of the normal offset/limit SQL
     /// path whenever sort == .wordCount.
     func wordCountSortedPage(offset: Int, limit: Int, ascending: Bool,
-                              query: SearchQuery, filter: FilterExpression?,
-                              restrictIDs: [Int]?,
-                              visibility: LibraryVisibilityPolicy = .allowAll,
-                              filterTagExpansions: [String: [String]] = [:],
-                              visibilityVersion: Int = 0,
-                              metaDB: AmbrosiaMetaDB? = nil) async -> (page: [CalibreBook], hasMore: Bool) {
+                             query: SearchQuery, filter: FilterExpression?,
+                             restrictIDs: [Int]?,
+                             visibility: LibraryVisibilityPolicy = .allowAll,
+                             filterTagExpansions: [String: [String]] = [:],
+                             visibilityVersion: Int = 0,
+                             metaDB: AmbrosiaMetaDB? = nil) async -> (page: [CalibreBook], hasMore: Bool) {
         let cacheKey = PageCacheKey(
             querySignature: LibraryFilterDebug.summary(query: query),
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
@@ -474,7 +473,7 @@ actor CalibreLibrary {
         // anthology) once, here, instead of callers pre-intersecting restrictIDs
         // with individual ID sets at each call site.
         let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
-                                         filterTagExpansions: filterTagExpansions)
+                                                filterTagExpansions: filterTagExpansions)
         // §SeriesGrouping Phase 1: a hit on a non-leading series member
         // (e.g. book 3) must pull in the rest of the series so its leader
         // survives the seriesOrMergedIDs deny-list below, instead of the
@@ -524,12 +523,12 @@ actor CalibreLibrary {
     /// offset/limit SQL path whenever sort == .kudos. Mirrors
     /// wordCountSortedPage exactly.
     func kudosSortedPage(offset: Int, limit: Int, ascending: Bool,
-                          query: SearchQuery, filter: FilterExpression?,
-                          restrictIDs: [Int]?,
-                          visibility: LibraryVisibilityPolicy = .allowAll,
-                          filterTagExpansions: [String: [String]] = [:],
-                          visibilityVersion: Int = 0,
-                          metaDB: AmbrosiaMetaDB? = nil) async -> (page: [CalibreBook], hasMore: Bool) {
+                         query: SearchQuery, filter: FilterExpression?,
+                         restrictIDs: [Int]?,
+                         visibility: LibraryVisibilityPolicy = .allowAll,
+                         filterTagExpansions: [String: [String]] = [:],
+                         visibilityVersion: Int = 0,
+                         metaDB: AmbrosiaMetaDB? = nil) async -> (page: [CalibreBook], hasMore: Bool) {
         let cacheKey = PageCacheKey(
             querySignature: LibraryFilterDebug.summary(query: query),
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
@@ -547,7 +546,7 @@ actor CalibreLibrary {
         // anthology) once, here, instead of callers pre-intersecting restrictIDs
         // with individual ID sets at each call site.
         let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
-                                         filterTagExpansions: filterTagExpansions)
+                                                filterTagExpansions: filterTagExpansions)
         // §SeriesGrouping Phase 1: a hit on a non-leading series member
         // (e.g. book 3) must pull in the rest of the series so its leader
         // survives the seriesOrMergedIDs deny-list below, instead of the
@@ -662,12 +661,12 @@ actor CalibreLibrary {
     /// using `books()`; this is only correct to call when
     /// `visibility.shouldGroupSeriesRows` is true.
     func groupAwareTitleSortedPage(offset: Int, limit: Int, ascending: Bool,
-                                    query: SearchQuery, filter: FilterExpression?,
-                                    restrictIDs: [Int]?,
-                                    visibility: LibraryVisibilityPolicy,
-                                    filterTagExpansions: [String: [String]] = [:],
-                                    visibilityVersion: Int = 0,
-                                    metaDB: AmbrosiaMetaDB?) async -> (page: [CalibreBook], hasMore: Bool) {
+                                   query: SearchQuery, filter: FilterExpression?,
+                                   restrictIDs: [Int]?,
+                                   visibility: LibraryVisibilityPolicy,
+                                   filterTagExpansions: [String: [String]] = [:],
+                                   visibilityVersion: Int = 0,
+                                   metaDB: AmbrosiaMetaDB?) async -> (page: [CalibreBook], hasMore: Bool) {
         let cacheKey = PageCacheKey(
             querySignature: LibraryFilterDebug.summary(query: query),
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
@@ -682,7 +681,7 @@ actor CalibreLibrary {
         if let cached = pageCache[cacheKey] { return cached }
 
         let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
-                                                 filterTagExpansions: filterTagExpansions)
+                                                filterTagExpansions: filterTagExpansions)
         let matchedIDs = await SeriesMatchExpansion.expand(
             matchedIDs: rawMatchedIDs,
             shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
@@ -754,7 +753,7 @@ actor CalibreLibrary {
         )
         if let cached = groupAwareCountCache[cacheKey] { return cached }
         let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
-                                              filterTagExpansions: filterTagExpansions)
+                                                filterTagExpansions: filterTagExpansions)
         let matchedIDs = await SeriesMatchExpansion.expand(
             matchedIDs: rawMatchedIDs,
             shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
@@ -770,12 +769,12 @@ actor CalibreLibrary {
     /// Random-sorted page, analogous to wordCountSortedPage.
     /// Fetches all matching IDs, shuffles with the current seed, slices the page.
     func randomSortedPage(offset: Int, limit: Int,
-                           query: SearchQuery, filter: FilterExpression?,
-                           restrictIDs: [Int]?,
-                           visibility: LibraryVisibilityPolicy = .allowAll,
-                           filterTagExpansions: [String: [String]] = [:],
-                           visibilityVersion: Int = 0,
-                           metaDB: AmbrosiaMetaDB? = nil) async -> (page: [CalibreBook], hasMore: Bool) {
+                          query: SearchQuery, filter: FilterExpression?,
+                          restrictIDs: [Int]?,
+                          visibility: LibraryVisibilityPolicy = .allowAll,
+                          filterTagExpansions: [String: [String]] = [:],
+                          visibilityVersion: Int = 0,
+                          metaDB: AmbrosiaMetaDB? = nil) async -> (page: [CalibreBook], hasMore: Bool) {
         let cacheKey = PageCacheKey(
             querySignature: LibraryFilterDebug.summary(query: query),
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
@@ -789,7 +788,7 @@ actor CalibreLibrary {
         )
         if let cached = pageCache[cacheKey] { return cached }
         let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
-                                         filterTagExpansions: filterTagExpansions)
+                                                filterTagExpansions: filterTagExpansions)
         let matchedIDs = await SeriesMatchExpansion.expand(
             matchedIDs: rawMatchedIDs,
             shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
@@ -1072,15 +1071,15 @@ actor CalibreLibrary {
                   let title     = row[1] as? String,
                   let path      = row[2] as? String else { return nil }
             return CalibreBook(
-                id:            Int(idBind),
-                title:         title,
-                series:        row[4] as? String,
-                seriesIndex:   row[5] as? Double,
-                wordCount:     nil,  // populated by bulk custom-column fetch in caller
-                kudos:         nil,
+                id: Int(idBind),
+                title: title,
+                series: row[4] as? String,
+                seriesIndex: row[5] as? Double,
+                wordCount: nil,  // populated by bulk custom-column fetch in caller
+                kudos: nil,
                 publishedDate: (row[3] as? String).flatMap(parseDate),
-                publisher:     row[6] as? String,
-                relativePath:  path
+                publisher: row[6] as? String,
+                relativePath: path
             )
         }
     }
@@ -1316,7 +1315,7 @@ extension CalibreLibrary {
               let relativePath = row[0] as? String else { return nil }
         let folder = root.appendingPathComponent(relativePath)
         let contents = (try? FileManager.default.contentsOfDirectory(
-            at: folder, includingPropertiesForKeys: nil)) ?? []
+                            at: folder, includingPropertiesForKeys: nil)) ?? []
         return contents.first { $0.pathExtension.lowercased() == "epub" }
     }
 }

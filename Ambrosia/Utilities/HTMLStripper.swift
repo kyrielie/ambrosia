@@ -37,12 +37,12 @@ enum HTMLStripper {
 
         // Replace common block tags with newlines before stripping
         var result = html
-            .replacingOccurrences(of: "<br>",   with: "\n", options: .caseInsensitive)
-            .replacingOccurrences(of: "<br/>",  with: "\n", options: .caseInsensitive)
+            .replacingOccurrences(of: "<br>", with: "\n", options: .caseInsensitive)
+            .replacingOccurrences(of: "<br/>", with: "\n", options: .caseInsensitive)
             .replacingOccurrences(of: "<br />", with: "\n", options: .caseInsensitive)
-            .replacingOccurrences(of: "</p>",   with: "\n", options: .caseInsensitive)
+            .replacingOccurrences(of: "</p>", with: "\n", options: .caseInsensitive)
             .replacingOccurrences(of: "</div>", with: "\n", options: .caseInsensitive)
-            .replacingOccurrences(of: "</li>",  with: "\n", options: .caseInsensitive)
+            .replacingOccurrences(of: "</li>", with: "\n", options: .caseInsensitive)
 
         // Strip all remaining tags
         result = result.replacingOccurrences(
@@ -53,13 +53,13 @@ enum HTMLStripper {
 
         // Decode common HTML entities
         result = result
-            .replacingOccurrences(of: "&amp;",   with: "&")
-            .replacingOccurrences(of: "&lt;",    with: "<")
-            .replacingOccurrences(of: "&gt;",    with: ">")
-            .replacingOccurrences(of: "&quot;",  with: "\"")
-            .replacingOccurrences(of: "&#39;",   with: "'")
-            .replacingOccurrences(of: "&apos;",  with: "'")
-            .replacingOccurrences(of: "&nbsp;",  with: " ")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&apos;", with: "'")
+            .replacingOccurrences(of: "&nbsp;", with: " ")
             .replacingOccurrences(of: "&#8203;", with: "") // zero-width space
 
         // Collapse runs of whitespace/newlines

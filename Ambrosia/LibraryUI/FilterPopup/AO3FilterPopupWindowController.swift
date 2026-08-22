@@ -24,12 +24,12 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
     private static let minWidth: CGFloat = 360
 
     static func open(anchorWindow: NSWindow,
-                      toolbarState: LibraryToolbarState,
-                      metaDB: AmbrosiaMetaDB,
-                      library: CalibreLibrary,
-                      ftsLibrary: CalibreFTSLibrary?,
-                      collectionStore: CollectionStore?,
-                      membershipVersion: Int) {
+                     toolbarState: LibraryToolbarState,
+                     metaDB: AmbrosiaMetaDB,
+                     library: CalibreLibrary,
+                     ftsLibrary: CalibreFTSLibrary?,
+                     collectionStore: CollectionStore?,
+                     membershipVersion: Int) {
         if let existing = shared {
             existing.anchorWindow = anchorWindow
             existing.installAnchorObservers()
@@ -54,7 +54,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
             )
             guard !Task.isCancelled else { return }
             wc.installContent(state: wc.state, toolbarState: toolbarState,
-                               facetController: facetController, membershipVersion: membershipVersion)
+                              facetController: facetController, membershipVersion: membershipVersion)
         }
     }
 
@@ -103,11 +103,11 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
     required init?(coder: NSCoder) { fatalError() }
 
     private func installContent(state: AO3FilterPopupState, toolbarState: LibraryToolbarState,
-                                 facetController: AO3FilterFacetController, membershipVersion: Int) {
+                                facetController: AO3FilterFacetController, membershipVersion: Int) {
         hostingController.rootView = AnyView(
             AO3FilterPopupView(state: state, toolbarState: toolbarState, facetController: facetController,
-                                membershipVersion: membershipVersion,
-                                onApply: { [weak self] in self?.applyDidCommit(toolbarState: toolbarState) })
+                               membershipVersion: membershipVersion,
+                               onApply: { [weak self] in self?.applyDidCommit(toolbarState: toolbarState) })
         )
     }
 
@@ -178,7 +178,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
         )
         guard !Task.isCancelled else { return }
         installContent(state: state, toolbarState: toolbarState, facetController: facetController,
-                        membershipVersion: membershipVersion)
+                       membershipVersion: membershipVersion)
     }
 
     // §9: Runs after AO3FilterPopupView.apply() writes a fresh expression to
@@ -213,7 +213,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
             )
             guard !Task.isCancelled else { return }
             installContent(state: state, toolbarState: toolbarState, facetController: facetController,
-                            membershipVersion: session.membershipVersion)
+                           membershipVersion: session.membershipVersion)
         }
     }
 

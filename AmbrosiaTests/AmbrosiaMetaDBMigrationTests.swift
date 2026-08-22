@@ -41,9 +41,9 @@ final class AmbrosiaMetaDBMigrationTests: XCTestCase {
         let tablesAfterSecond = try tableNames(db)
 
         XCTAssertEqual(versionAfterFirst, versionAfterSecond,
-                        "PRAGMA user_version must not change on a second migration run")
+                       "PRAGMA user_version must not change on a second migration run")
         XCTAssertEqual(tablesAfterFirst, tablesAfterSecond,
-                        "Table set must be identical after a second migration run")
+                       "Table set must be identical after a second migration run")
         for table in tablesAfterSecond {
             XCTAssertEqual(
                 rowCountsAfterFirst[table], try rowCount(db, table),

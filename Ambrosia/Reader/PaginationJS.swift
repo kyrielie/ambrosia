@@ -73,49 +73,49 @@ private let _pjsSetupAndColumnCount: String = #"""
     // to pass — everything else is read from the already-applied CSS.
 
     window.ambrosiaSetup = function (colsPerScreen) {
-        _colsPerScreen = colsPerScreen || 1;
+    _colsPerScreen = colsPerScreen || 1;
 
-        // Read the column width and gap from computed style on :root.
-        // These are set by the pre-loaded CSS, so they are already correct.
-        var cs = window.getComputedStyle(document.documentElement);
-        var colWidth = parseFloat(cs.columnWidth) || window.innerWidth;
-        var colGap   = parseFloat(cs.columnGap)   || 0;
-        _colAndGap   = colWidth + colGap;
+    // Read the column width and gap from computed style on :root.
+    // These are set by the pre-loaded CSS, so they are already correct.
+    var cs = window.getComputedStyle(document.documentElement);
+    var colWidth = parseFloat(cs.columnWidth) || window.innerWidth;
+    var colGap   = parseFloat(cs.columnGap)   || 0;
+    _colAndGap   = colWidth + colGap;
 
-        if (_colAndGap <= 0) {
-            // Fallback: divide viewport by colsPerScreen
-            _colAndGap = window.innerWidth / _colsPerScreen;
-        }
+    if (_colAndGap <= 0) {
+    // Fallback: divide viewport by colsPerScreen
+    _colAndGap = window.innerWidth / _colsPerScreen;
+    }
 
-        _ready = true;
-        window._colAndGap = _colAndGap;
+    _ready = true;
+    window._colAndGap = _colAndGap;
 
-        console.log('[ambrosiaSetup] colWidth=' + colWidth + ' colGap=' + colGap +
-            ' colAndGap=' + _colAndGap + ' scrollWidth=' + document.documentElement.scrollWidth +
-            ' clientWidth=' + document.documentElement.clientWidth +
-            ' paddingLeft=' + cs.paddingLeft + ' paddingRight=' + cs.paddingRight +
-            ' innerWidth=' + window.innerWidth +
-            ' devicePixelRatio=' + window.devicePixelRatio +
-            ' htmlRect=' + JSON.stringify(document.documentElement.getBoundingClientRect()));
+    console.log('[ambrosiaSetup] colWidth=' + colWidth + ' colGap=' + colGap +
+    ' colAndGap=' + _colAndGap + ' scrollWidth=' + document.documentElement.scrollWidth +
+    ' clientWidth=' + document.documentElement.clientWidth +
+    ' paddingLeft=' + cs.paddingLeft + ' paddingRight=' + cs.paddingRight +
+    ' innerWidth=' + window.innerWidth +
+    ' devicePixelRatio=' + window.devicePixelRatio +
+    ' htmlRect=' + JSON.stringify(document.documentElement.getBoundingClientRect()));
 
-        // Prevent margin-collapse from creating a blank leading column.
-        var first = _firstElementChild(document.body);
-        if (first) {
-            first.style.setProperty('break-before', 'avoid', 'important');
-            if (first.tagName && first.tagName.toLowerCase() === 'div') {
-                var inner = _firstElementChild(first);
-                if (inner) inner.style.setProperty('break-before', 'avoid', 'important');
-            }
-        }
+    // Prevent margin-collapse from creating a blank leading column.
+    var first = _firstElementChild(document.body);
+    if (first) {
+    first.style.setProperty('break-before', 'avoid', 'important');
+    if (first.tagName && first.tagName.toLowerCase() === 'div') {
+    var inner = _firstElementChild(first);
+    if (inner) inner.style.setProperty('break-before', 'avoid', 'important');
+    }
+    }
     };
 
     function _firstElementChild(parent) {
-        var c = parent ? parent.firstChild : null, limit = 20;
-        while (c && limit-- > 0) {
-            if (c.nodeType === 1) return c;
-            c = c.nextSibling;
-        }
-        return null;
+    var c = parent ? parent.firstChild : null, limit = 20;
+    while (c && limit-- > 0) {
+    if (c.nodeType === 1) return c;
+    c = c.nextSibling;
+    }
+    return null;
     }
 
     // ─── Column count ──────────────────────────────────────────────────────────
@@ -138,37 +138,37 @@ private let _pjsSetupAndColumnCount: String = #"""
     // Subtract the leading padding back out before dividing.
 
     window.ambrosiaColumnCount = function () {
-        if (!_ready || _colAndGap <= 0) return 1;
-        var cs       = window.getComputedStyle(document.documentElement);
-        var gap      = parseFloat(cs.columnGap)    || 0;
-        var padLeft  = parseFloat(cs.paddingLeft)  || 0;
-        var padRight = parseFloat(cs.paddingRight) || 0;
-        var swRaw    = document.documentElement.scrollWidth;
-        var sw       = swRaw - padLeft;
+    if (!_ready || _colAndGap <= 0) return 1;
+    var cs       = window.getComputedStyle(document.documentElement);
+    var gap      = parseFloat(cs.columnGap)    || 0;
+    var padLeft  = parseFloat(cs.paddingLeft)  || 0;
+    var padRight = parseFloat(cs.paddingRight) || 0;
+    var swRaw    = document.documentElement.scrollWidth;
+    var sw       = swRaw - padLeft;
 
-        var total = Math.max(1, Math.round((sw + gap) / _colAndGap));
+    var total = Math.max(1, Math.round((sw + gap) / _colAndGap));
 
-        // DIAGNOSTIC: if the leading-padding-only hypothesis above is wrong
-        // (e.g. this WebKit version counts trailing padding too, or counts
-        // neither), the three candidate totals below will disagree. If
-        // next-spine problems persist after this fix, check the console for
-        // this line: whichever candidate matches the actually-correct page
-        // count (count real pages by eye and compare) tells us which
-        // padding-counting model this WebKit build actually uses, and `sw`
-        // above should be changed to match (swRaw, swRaw - padLeft, or
-        // swRaw - padLeft - padRight).
-        var totalNoSub   = Math.max(1, Math.round((swRaw + gap) / _colAndGap));
-        var totalSubBoth = Math.max(1, Math.round((swRaw - padLeft - padRight + gap) / _colAndGap));
-        if (totalNoSub !== total || total !== totalSubBoth) {
-            console.log('[ambrosiaColumnCount] DIAGNOSTIC candidates disagree' +
-                ' swRaw=' + swRaw + ' padLeft=' + padLeft + ' padRight=' + padRight +
-                ' gap=' + gap + ' colAndGap=' + _colAndGap +
-                ' total(noSub)=' + totalNoSub +
-                ' total(subLeftOnly, IN USE)=' + total +
-                ' total(subBoth)=' + totalSubBoth);
-        }
+    // DIAGNOSTIC: if the leading-padding-only hypothesis above is wrong
+    // (e.g. this WebKit version counts trailing padding too, or counts
+    // neither), the three candidate totals below will disagree. If
+    // next-spine problems persist after this fix, check the console for
+    // this line: whichever candidate matches the actually-correct page
+    // count (count real pages by eye and compare) tells us which
+    // padding-counting model this WebKit build actually uses, and `sw`
+    // above should be changed to match (swRaw, swRaw - padLeft, or
+    // swRaw - padLeft - padRight).
+    var totalNoSub   = Math.max(1, Math.round((swRaw + gap) / _colAndGap));
+    var totalSubBoth = Math.max(1, Math.round((swRaw - padLeft - padRight + gap) / _colAndGap));
+    if (totalNoSub !== total || total !== totalSubBoth) {
+    console.log('[ambrosiaColumnCount] DIAGNOSTIC candidates disagree' +
+    ' swRaw=' + swRaw + ' padLeft=' + padLeft + ' padRight=' + padRight +
+    ' gap=' + gap + ' colAndGap=' + _colAndGap +
+    ' total(noSub)=' + totalNoSub +
+    ' total(subLeftOnly, IN USE)=' + total +
+    ' total(subBoth)=' + totalSubBoth);
+    }
 
-        return total;
+    return total;
     };
 
     // ─── Current column ───────────────────────────────────────────────────────
@@ -190,16 +190,16 @@ private let _pjsSetupAndColumnCount: String = #"""
     // called with in normal (non-clamped) navigation.
 
     window.ambrosiaCurrentColumn = function () {
-        if (!_ready || _colAndGap <= 0) return 0;
-        var floored = Math.floor((window.scrollX + 2) / _colAndGap);
-        var rounded = Math.round(window.scrollX / _colAndGap);
-        if (floored !== rounded) {
-            console.log('[ambrosiaCurrentColumn] DIAGNOSTIC floor/round disagree' +
-                ' scrollX=' + window.scrollX + ' colAndGap=' + _colAndGap +
-                ' floor(IN USE PREVIOUSLY)=' + floored + ' round(IN USE NOW)=' + rounded +
-                ' shortfall_px=' + (window.scrollX - rounded * _colAndGap));
-        }
-        return Math.max(0, rounded);
+    if (!_ready || _colAndGap <= 0) return 0;
+    var floored = Math.floor((window.scrollX + 2) / _colAndGap);
+    var rounded = Math.round(window.scrollX / _colAndGap);
+    if (floored !== rounded) {
+    console.log('[ambrosiaCurrentColumn] DIAGNOSTIC floor/round disagree' +
+    ' scrollX=' + window.scrollX + ' colAndGap=' + _colAndGap +
+    ' floor(IN USE PREVIOUSLY)=' + floored + ' round(IN USE NOW)=' + rounded +
+    ' shortfall_px=' + (window.scrollX - rounded * _colAndGap));
+    }
+    return Math.max(0, rounded);
     };
     """#
 
@@ -210,75 +210,75 @@ private let _pjsScrollAndPaging: String = #"""
     // ─── Scroll to column n ───────────────────────────────────────────────────
 
     window.ambrosiaScrollToColumn = function (n) {
-        if (!_ready) return;
-        var max = window.ambrosiaColumnCount() - 1;
-        var col = Math.max(0, Math.min(Math.round(n), max));
-        var target = col * _colAndGap;
-        window.scrollTo({ left: target, top: 0, behavior: 'instant' });
+    if (!_ready) return;
+    var max = window.ambrosiaColumnCount() - 1;
+    var col = Math.max(0, Math.min(Math.round(n), max));
+    var target = col * _colAndGap;
+    window.scrollTo({ left: target, top: 0, behavior: 'instant' });
 
-        // WebKit undercounts html's trailing padding-right in scrollWidth once
-        // content overflows (see ambrosiaColumnCount comment above), so the
-        // native scroll clamp can land short of `target` — visible only on the
-        // terminal column of a spine, where target actually reaches that edge.
-        // Measure the real shortfall (don't assume it equals marginH — a
-        // partially filled final screen at colsPerScreen > 1 can add more) and
-        // compensate visually by shifting the multicol container itself.
-        // html is the unfragmented column container (unlike body, which gets
-        // fragmented per-column) so this is a pure repaint offset, not a relayout.
-        var shortfall = target - window.scrollX;
-        document.documentElement.style.transform = shortfall > 0
-            ? 'translateX(-' + shortfall + 'px)'
-            : '';
+    // WebKit undercounts html's trailing padding-right in scrollWidth once
+    // content overflows (see ambrosiaColumnCount comment above), so the
+    // native scroll clamp can land short of `target` — visible only on the
+    // terminal column of a spine, where target actually reaches that edge.
+    // Measure the real shortfall (don't assume it equals marginH — a
+    // partially filled final screen at colsPerScreen > 1 can add more) and
+    // compensate visually by shifting the multicol container itself.
+    // html is the unfragmented column container (unlike body, which gets
+    // fragmented per-column) so this is a pure repaint offset, not a relayout.
+    var shortfall = target - window.scrollX;
+    document.documentElement.style.transform = shortfall > 0
+    ? 'translateX(-' + shortfall + 'px)'
+    : '';
 
-        console.log('[ambrosiaScrollToColumn] requested=' + n + ' clamped=' + col +
-            ' target=' + target + ' actualScrollX=' + window.scrollX +
-            ' delta=' + (window.scrollX - target) + ' shortfall=' + shortfall);
+    console.log('[ambrosiaScrollToColumn] requested=' + n + ' clamped=' + col +
+    ' target=' + target + ' actualScrollX=' + window.scrollX +
+    ' delta=' + (window.scrollX - target) + ' shortfall=' + shortfall);
     };
 
     // ─── Progress fraction (0–1) ──────────────────────────────────────────────
 
     window.ambrosiaProgressFraction = function () {
-        var total = window.ambrosiaColumnCount();
-        if (total <= _colsPerScreen) return 1.0;
-        var denom = total - _colsPerScreen;
-        return Math.min(1.0, window.ambrosiaCurrentColumn() / denom);
+    var total = window.ambrosiaColumnCount();
+    if (total <= _colsPerScreen) return 1.0;
+    var denom = total - _colsPerScreen;
+    return Math.min(1.0, window.ambrosiaCurrentColumn() / denom);
     };
 
     window.ambrosiaScrollToFraction = function (frac) {
-        if (!_ready) return;
-        var total = window.ambrosiaColumnCount();
-        var denom = total - _colsPerScreen;
-        var col   = denom > 0 ? Math.round(Math.max(0, Math.min(1, frac)) * denom) : 0;
-        window.ambrosiaScrollToColumn(col);
+    if (!_ready) return;
+    var total = window.ambrosiaColumnCount();
+    var denom = total - _colsPerScreen;
+    var col   = denom > 0 ? Math.round(Math.max(0, Math.min(1, frac)) * denom) : 0;
+    window.ambrosiaScrollToColumn(col);
     };
 
     // ─── Page navigation ──────────────────────────────────────────────────────
 
     window.ambrosiaNextPage = function () {
-        if (!_ready) return;
-        var cur   = window.ambrosiaCurrentColumn();
-        var total = window.ambrosiaColumnCount();
-        var next  = cur + _colsPerScreen;
-        console.log('[ambrosiaNextPage] cur=' + cur + ' total=' + total +
-            ' next=' + next + ' scrollX=' + window.scrollX);
-        if (next >= total) {
-            _postPageAction('nextSpineItem');
-            return;
-        }
-        window.ambrosiaScrollToColumn(next);
-        _postPositionUpdate();
+    if (!_ready) return;
+    var cur   = window.ambrosiaCurrentColumn();
+    var total = window.ambrosiaColumnCount();
+    var next  = cur + _colsPerScreen;
+    console.log('[ambrosiaNextPage] cur=' + cur + ' total=' + total +
+    ' next=' + next + ' scrollX=' + window.scrollX);
+    if (next >= total) {
+    _postPageAction('nextSpineItem');
+    return;
+    }
+    window.ambrosiaScrollToColumn(next);
+    _postPositionUpdate();
     };
 
     window.ambrosiaPrevPage = function () {
-        if (!_ready) return;
-        var cur = window.ambrosiaCurrentColumn();
-        console.log('[ambrosiaPrevPage] cur=' + cur + ' scrollX=' + window.scrollX);
-        if (cur === 0) {
-            _postPageAction('prevSpineItem');
-            return;
-        }
-        window.ambrosiaScrollToColumn(Math.max(0, cur - _colsPerScreen));
-        _postPositionUpdate();
+    if (!_ready) return;
+    var cur = window.ambrosiaCurrentColumn();
+    console.log('[ambrosiaPrevPage] cur=' + cur + ' scrollX=' + window.scrollX);
+    if (cur === 0) {
+    _postPageAction('prevSpineItem');
+    return;
+    }
+    window.ambrosiaScrollToColumn(Math.max(0, cur - _colsPerScreen));
+    _postPositionUpdate();
     };
     """#
 
@@ -293,58 +293,58 @@ private let _pjsNavigateAndHighlight: String = #"""
     // offset convention: UTF-16 code units, text nodes only.
 
     window.ambrosiaNavigateToOffset = function (charOffset) {
-        if (!_ready) return;
-        var pos = _nodeAtChar(charOffset);
-        if (!pos) return;
-        var range = document.createRange();
-        range.setStart(pos.node, pos.localOffset);
-        range.collapse(true);
-        var marker = document.createElement('span');
-        marker.style.cssText = 'display:inline;font-size:0;line-height:0;';
-        range.insertNode(marker);
-        var docX = marker.getBoundingClientRect().left + window.scrollX;
-        marker.parentNode.removeChild(marker);
-        var col = _colAndGap > 0 ? Math.max(0, Math.floor(docX / _colAndGap)) : 0;
-        window.ambrosiaScrollToColumn(col);
-        _postPositionUpdate();
+    if (!_ready) return;
+    var pos = _nodeAtChar(charOffset);
+    if (!pos) return;
+    var range = document.createRange();
+    range.setStart(pos.node, pos.localOffset);
+    range.collapse(true);
+    var marker = document.createElement('span');
+    marker.style.cssText = 'display:inline;font-size:0;line-height:0;';
+    range.insertNode(marker);
+    var docX = marker.getBoundingClientRect().left + window.scrollX;
+    marker.parentNode.removeChild(marker);
+    var col = _colAndGap > 0 ? Math.max(0, Math.floor(docX / _colAndGap)) : 0;
+    window.ambrosiaScrollToColumn(col);
+    _postPositionUpdate();
     };
 
     window.ambrosiaScrollToAnchor = function (id) {
-        if (!_ready) return;
-        var el = document.getElementById(id)
-              || document.querySelector('[name="' + id + '"]');
-        if (!el) return;
-        var docX = el.getBoundingClientRect().left + window.scrollX;
-        var col = _colAndGap > 0 ? Math.max(0, Math.floor(docX / _colAndGap)) : 0;
-        window.ambrosiaScrollToColumn(col);
-        _postPositionUpdate();
+    if (!_ready) return;
+    var el = document.getElementById(id)
+    || document.querySelector('[name="' + id + '"]');
+    if (!el) return;
+    var docX = el.getBoundingClientRect().left + window.scrollX;
+    var col = _colAndGap > 0 ? Math.max(0, Math.floor(docX / _colAndGap)) : 0;
+    window.ambrosiaScrollToColumn(col);
+    _postPositionUpdate();
     };
 
     // ─── Highlight (find / bookmark flash) ───────────────────────────────────
 
     window.ambrosiaHighlight = function (offset) {
-        var existing = document.getElementById('__ambrosia_highlight__');
-        if (existing) existing.parentNode.removeChild(existing);
-        var pos = _nodeAtChar(offset);
-        if (!pos) return;
-        var endPos = _nodeAtChar(Math.min(offset + 80, _countAllChars()));
-        if (!endPos) return;
-        try {
-            var range = document.createRange();
-            range.setStart(pos.node, pos.localOffset);
-            if (endPos.node === pos.node) range.setEnd(endPos.node, endPos.localOffset);
-            else range.setEndAfter(pos.node);
-            var span = document.createElement('span');
-            span.id = '__ambrosia_highlight__';
-            span.style.cssText =
-                'background-color:rgba(255,214,10,0.55);border-radius:2px;transition:opacity 1.5s;opacity:1;';
-            range.surroundContents(span);
-            window.ambrosiaNavigateToOffset(offset);
-            setTimeout(function () {
-                span.style.opacity = '0';
-                setTimeout(function () { if (span.parentNode) span.parentNode.removeChild(span); }, 1500);
-            }, 500);
-        } catch (e) { /* surroundContents throws across element boundaries — ignore */ }
+    var existing = document.getElementById('__ambrosia_highlight__');
+    if (existing) existing.parentNode.removeChild(existing);
+    var pos = _nodeAtChar(offset);
+    if (!pos) return;
+    var endPos = _nodeAtChar(Math.min(offset + 80, _countAllChars()));
+    if (!endPos) return;
+    try {
+    var range = document.createRange();
+    range.setStart(pos.node, pos.localOffset);
+    if (endPos.node === pos.node) range.setEnd(endPos.node, endPos.localOffset);
+    else range.setEndAfter(pos.node);
+    var span = document.createElement('span');
+    span.id = '__ambrosia_highlight__';
+    span.style.cssText =
+    'background-color:rgba(255,214,10,0.55);border-radius:2px;transition:opacity 1.5s;opacity:1;';
+    range.surroundContents(span);
+    window.ambrosiaNavigateToOffset(offset);
+    setTimeout(function () {
+    span.style.opacity = '0';
+    setTimeout(function () { if (span.parentNode) span.parentNode.removeChild(span); }, 1500);
+    }, 500);
+    } catch (e) { /* surroundContents throws across element boundaries — ignore */ }
     };
     """#
 
@@ -355,61 +355,61 @@ private let _pjsMetricsAndHelpers: String = #"""
     // ─── Metrics (used by Swift to read column count after load) ─────────────
 
     window.ambrosiaPaginationMetrics = function () {
-        return JSON.stringify({
-            colAndGap: _colAndGap,
-            colsPerScreen: _colsPerScreen,
-            scrollWidth: document.documentElement.scrollWidth,
-            innerWidth: window.innerWidth,
-            columns: window.ambrosiaColumnCount(),
-            ready: _ready
-        });
+    return JSON.stringify({
+    colAndGap: _colAndGap,
+    colsPerScreen: _colsPerScreen,
+    scrollWidth: document.documentElement.scrollWidth,
+    innerWidth: window.innerWidth,
+    columns: window.ambrosiaColumnCount(),
+    ready: _ready
+    });
     };
 
     // ─── Internal helpers ─────────────────────────────────────────────────────
 
     function _postPageAction(action) {
-        window.webkit.messageHandlers.pageAction.postMessage(
-            JSON.stringify({ action: action })
-        );
+    window.webkit.messageHandlers.pageAction.postMessage(
+    JSON.stringify({ action: action })
+    );
     }
 
     function _postPositionUpdate() {
-        window.webkit.messageHandlers.positionUpdate.postMessage(
-            JSON.stringify({
-                fraction:     window.ambrosiaProgressFraction(),
-                column:       window.ambrosiaCurrentColumn(),
-                totalColumns: window.ambrosiaColumnCount()
-            })
-        );
+    window.webkit.messageHandlers.positionUpdate.postMessage(
+    JSON.stringify({
+    fraction:     window.ambrosiaProgressFraction(),
+    column:       window.ambrosiaCurrentColumn(),
+    totalColumns: window.ambrosiaColumnCount()
+    })
+    );
     }
 
     function _countAllChars() {
-        var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
-        var n, total = 0;
-        while ((n = walker.nextNode()) !== null) total += n.length;
-        return total;
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+    var n, total = 0;
+    while ((n = walker.nextNode()) !== null) total += n.length;
+    return total;
     }
 
     function _nodeAtChar(globalOffset) {
-        var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
-        var rem = globalOffset, n;
-        while ((n = walker.nextNode()) !== null) {
-            if (rem <= n.length) return { node: n, localOffset: rem };
-            rem -= n.length;
-        }
-        return n ? { node: n, localOffset: n.length } : null;
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+    var rem = globalOffset, n;
+    while ((n = walker.nextNode()) !== null) {
+    if (rem <= n.length) return { node: n, localOffset: rem };
+    rem -= n.length;
+    }
+    return n ? { node: n, localOffset: n.length } : null;
     }
 
     // Global UTF-16 offset for a DOM node + local offset.
     // Called by HighlightBridge from JS selection events.
     window.ambrosiaCharOffset = function (node, localOffset) {
-        var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
-        var count = 0, current;
-        while ((current = walker.nextNode()) !== null) {
-            if (current === node) return count + localOffset;
-            count += current.length;
-        }
-        return count + localOffset;
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+    var count = 0, current;
+    while ((current = walker.nextNode()) !== null) {
+    if (current === node) return count + localOffset;
+    count += current.length;
+    }
+    return count + localOffset;
     };
 
     })();

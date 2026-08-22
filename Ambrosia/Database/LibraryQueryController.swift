@@ -81,7 +81,6 @@ struct PagingOffsetState {
     }
 }
 
-
 /// Filtering logic shared by `LibraryRootView` and `EmailLibraryViewController`.
 ///
 /// §Phase2 (partial): this extracts the lowest-risk, genuinely pure pieces of

@@ -78,7 +78,7 @@ struct CalibreBook: Identifiable, Hashable {
     func epubURL(libraryRoot: URL) -> URL? {
         let folder = libraryRoot.appendingPathComponent(relativePath)
         let contents = (try? FileManager.default.contentsOfDirectory(
-            at: folder, includingPropertiesForKeys: nil)) ?? []
+                            at: folder, includingPropertiesForKeys: nil)) ?? []
         return contents.first { $0.pathExtension.lowercased() == "epub" }
     }
 
@@ -242,10 +242,10 @@ struct SeriesGroup: Identifiable, Hashable {
 
     var displayChapterCount: String {
         guard let chapterCurrentTotal else { return "" }
-        if hasUnknownChapterTotal || chapterTotalTotal == nil {
+        guard !hasUnknownChapterTotal, let chapterTotalTotal else {
             return "\(chapterCurrentTotal)/? ch"
         }
-        return "\(chapterCurrentTotal)/\(chapterTotalTotal!) ch"
+        return "\(chapterCurrentTotal)/\(chapterTotalTotal) ch"
     }
 
     var dateRangeText: String {

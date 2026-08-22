@@ -19,9 +19,9 @@ struct CollectionsView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var prefs = ReaderPreferences.shared
 
-    var bookToAdd: CalibreBook? = nil
+    var bookToAdd: CalibreBook?
     var calibreIDsToAdd: [Int] = []
-    var onSelectCollection: ((CollectionRow) -> Void)? = nil
+    var onSelectCollection: ((CollectionRow) -> Void)?
 
     @State private var collections: [CollectionRow] = []
     @State private var membership: [String: Set<Int>] = [:]
@@ -325,8 +325,8 @@ struct CollectionsView: View {
 
 struct CollectionSearchPickerView: View {
     let calibreIDs: [Int]
-    var onChange: (() async -> Void)? = nil
-    var onComplete: (() -> Void)? = nil
+    var onChange: (() async -> Void)?
+    var onComplete: (() -> Void)?
 
     @Environment(LibrarySession.self) private var session
     @FocusState private var searchFocused: Bool

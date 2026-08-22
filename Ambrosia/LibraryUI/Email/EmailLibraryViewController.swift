@@ -10,15 +10,15 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Dependencies
 
     let modelContainer: ModelContainer
-    let session:        LibrarySession
-    let toolbarState:   LibraryToolbarState
+    let session: LibrarySession
+    let toolbarState: LibraryToolbarState
     // §Phase2: shared visibility-filtering logic, also owned by
     // LibraryRootView. Stateless aside from its debug-log label.
     private let queryController = LibraryQueryController(surfaceLabel: "email")
 
     // MARK: - Child VCs
 
-    private var splitVC:   AmbrosiaEmailSplitViewController!
+    private var splitVC: AmbrosiaEmailSplitViewController!
     private var sidebarVC: EmailSidebarViewController!
     private var readerSidebarHostingVC: NSHostingController<EmailReaderSidebarView>!
     private var librarySidebarItem: NSSplitViewItem!
@@ -41,8 +41,8 @@ final class EmailLibraryViewController: NSViewController {
 
     // MARK: - Pagination
 
-    private var books:      [CalibreBook]    = []
-    private var items:      [LibraryItem]    = []
+    private var books: [CalibreBook]    = []
+    private var items: [LibraryItem]    = []
     var currentBooks: [CalibreBook] { books }
     var bookStates: [Int: BookState] = [:]
     private var ao3Metadata: [Int: AO3MetadataRecord] = [:]
@@ -88,11 +88,11 @@ final class EmailLibraryViewController: NSViewController {
 
     // MARK: - Toolbar snapshots
 
-    private var lastSearch:    String    = ""
-    private var lastSort:      SortField = .title
+    private var lastSearch: String    = ""
+    private var lastSort: SortField = .title
     private var lastAscending: Bool      = true
-    private var lastFilterIDs: [Int]?    = nil
-    private var lastFilterToken: String? = nil
+    private var lastFilterIDs: [Int]?
+    private var lastFilterToken: String?
 
     /// Set immediately before `applyFilterRules()` triggers its own reload, so the
     /// Observation-driven trigger in `toolbarStateDidChange()` does not also fire a
@@ -155,8 +155,8 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Init
 
     init(modelContainer: ModelContainer,
-         session:        LibrarySession,
-         toolbarState:   LibraryToolbarState) {
+         session: LibrarySession,
+         toolbarState: LibraryToolbarState) {
         self.modelContainer = modelContainer
         self.session        = session
         self.toolbarState   = toolbarState
@@ -392,7 +392,7 @@ final class EmailLibraryViewController: NSViewController {
             splitVC.view.topAnchor.constraint(equalTo: view.topAnchor),
             splitVC.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             splitVC.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            splitVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            splitVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
         DispatchQueue.main.async { [weak self] in
             self?.rememberSidebarThickness()
@@ -403,10 +403,10 @@ final class EmailLibraryViewController: NSViewController {
 
     private func addFilterSheetHost() {
         let carrier = FilterSheetCarrier(
-            toolbarState:   toolbarState,
+            toolbarState: toolbarState,
             modelContainer: modelContainer,
-            session:        session,
-            emailVC:        self
+            session: session,
+            emailVC: self
         )
         let hv = NSHostingView(rootView: carrier)
         hv.sizingOptions = []
@@ -417,7 +417,7 @@ final class EmailLibraryViewController: NSViewController {
             hv.widthAnchor.constraint(equalToConstant: 0),
             hv.heightAnchor.constraint(equalToConstant: 0),
             hv.topAnchor.constraint(equalTo: view.topAnchor),
-            hv.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            hv.leadingAnchor.constraint(equalTo: view.leadingAnchor)
         ])
         filterSheetHost = hv
     }
@@ -466,21 +466,21 @@ final class EmailLibraryViewController: NSViewController {
 
     private func makePlaceholderVC() -> NSViewController {
         NSHostingController(rootView:
-            VStack(spacing: 14) {
-                Image(systemName: "book.closed")
-                    .font(.system(size: 48))
-                    .foregroundStyle(.quaternary)
-                Text("Select a book to read")
-                    .font(.title3)
-                    .foregroundStyle(.tertiary)
-                Text("Filter by tag in the list view, then switch here to read through results.")
-                    .font(.callout)
-                    .foregroundStyle(.quaternary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 280)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
+                                VStack(spacing: 14) {
+                                    Image(systemName: "book.closed")
+                                        .font(.system(size: 48))
+                                        .foregroundStyle(.quaternary)
+                                    Text("Select a book to read")
+                                        .font(.title3)
+                                        .foregroundStyle(.tertiary)
+                                    Text("Filter by tag in the list view, then switch here to read through results.")
+                                        .font(.callout)
+                                        .foregroundStyle(.quaternary)
+                                        .multilineTextAlignment(.center)
+                                        .frame(maxWidth: 280)
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
         )
     }
 
@@ -598,9 +598,9 @@ final class EmailLibraryViewController: NSViewController {
         }
 
         let changed = newSearch    != lastSearch
-                   || newSort      != lastSort
-                   || newAscending != lastAscending
-                   || newFilterToken != lastFilterToken
+            || newSort      != lastSort
+            || newAscending != lastAscending
+            || newFilterToken != lastFilterToken
 
         guard changed else { return }
 
@@ -772,9 +772,9 @@ final class EmailLibraryViewController: NSViewController {
                 .flatMap(\.rules).contains { $0.field == .collection }
             var collectionMap = needsCollection ? ((try? await session.collectionStore?.membershipMap()) ?? [:]) : [:]
             let statusValues = Set(expression.groups
-                .flatMap(\.rules)
-                .filter { $0.field == .status }
-                .compactMap { AO3CompletionStatus(userValue: $0.value) })
+                                    .flatMap(\.rules)
+                                    .filter { $0.field == .status }
+                                    .compactMap { AO3CompletionStatus(userValue: $0.value) })
             var statusMap: [AO3CompletionStatus: Set<Int>] = [:]
             if let metaDB = session.metaDB {
                 for status in statusValues {
@@ -825,7 +825,7 @@ final class EmailLibraryViewController: NSViewController {
                 stripped.groups = expression.groups.compactMap { group in
                     let rules = group.rules.filter {
                         (!needsWordCountFallback || ($0.field != .wordCountGT && $0.field != .wordCountLT)) &&
-                        (!needsKudosFallback || ($0.field != .kudosGT && $0.field != .kudosLT))
+                            (!needsKudosFallback || ($0.field != .kudosGT && $0.field != .kudosLT))
                     }
                     guard !rules.isEmpty else { return nil }
                     return FilterGroup(rules: rules, conjunction: group.conjunction)
@@ -862,7 +862,7 @@ final class EmailLibraryViewController: NSViewController {
                 fallbackOnlyExpression.groups = expression.groups.compactMap { group in
                     let rules = group.rules.filter {
                         (needsWordCountFallback && ($0.field == .wordCountGT || $0.field == .wordCountLT) && $0.isComplete) ||
-                        (needsKudosFallback && ($0.field == .kudosGT || $0.field == .kudosLT) && $0.isComplete)
+                            (needsKudosFallback && ($0.field == .kudosGT || $0.field == .kudosLT) && $0.isComplete)
                     }
                     guard !rules.isEmpty else { return nil }
                     return FilterGroup(rules: rules, conjunction: group.conjunction)
@@ -978,7 +978,7 @@ final class EmailLibraryViewController: NSViewController {
                 guard self.toolbarState.pendingFullTextSearch?.token == token,
                       self.toolbarState.libraryFilterApplicationToken == applicationToken,
                       self.toolbarState.filterExpression.groups.flatMap(\.rules).contains(where: {
-                          $0.field == .fulltext && $0.value == phrase && $0.isComplete
+                        $0.field == .fulltext && $0.value == phrase && $0.isComplete
                       }) else { return }
                 self.toolbarState.clearPendingFullTextSearch()
                 self.toolbarState.finishLibraryFilterApplication(token: applicationToken)
@@ -1021,7 +1021,7 @@ final class EmailLibraryViewController: NSViewController {
         filterCountTask = Task { [weak self] in
             let tagExpansions = self?.cachedFilterTagExpansions ?? [:]
             let count = await library.bookCount(query: query, filter: expression,
-                                          filterTagExpansions: tagExpansions)
+                                                filterTagExpansions: tagExpansions)
             await self?.session.refreshLastSearchError()
             await MainActor.run {
                 guard let self,
@@ -1030,8 +1030,8 @@ final class EmailLibraryViewController: NSViewController {
                       self.toolbarState.activeFilterResult?.totalCount == nil,
                       LibraryFilterDebug.summary(expression: self.toolbarState.filterExpression) == filterSignature,
                       LibraryFilterDebug.summary(query: self.queryWithCachedFullText(self.toolbarState.searchText.isEmpty
-                          ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
-                          : SearchQueryParser.parse(self.toolbarState.searchText))) == querySignature else {
+                                                                                        ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+                                                                                        : SearchQueryParser.parse(self.toolbarState.searchText))) == querySignature else {
                     LibraryFilterDebug.log("deferredCount.discard", [
                         "surface": "email",
                         "mode": "sqlPagedDeferredCount"
@@ -1113,7 +1113,7 @@ final class EmailLibraryViewController: NSViewController {
         }
 
         let raw: [CalibreBook]
-        var wordCountPage: [CalibreBook]? = nil
+        var wordCountPage: [CalibreBook]?
         var wordCountHasMore = false
         // §grouping-pagination fix: when shouldGroupSidebarRows is true, the
         // sqlPagedDeferredCount and unfiltered branches below populate this directly
@@ -1123,7 +1123,7 @@ final class EmailLibraryViewController: NSViewController {
         // most rows. nil means "use the shared raw-based path below" (ungrouped, or a
         // branch — explicitIDs, emptyExplicitIDs, random, wordCount — that already
         // computes its own page).
-        var groupAwareVisible: [CalibreBook]? = nil
+        var groupAwareVisible: [CalibreBook]?
         if toolbarState.sortField == .random {
             let restrictIDs: [Int]?
             let filterForSQL: FilterExpression?
@@ -1588,8 +1588,7 @@ final class EmailLibraryViewController: NSViewController {
             async let singletonWarningsTask = metaDB.singletonNonLeadingSeriesEntries(for: pageIDs)
 
             guard !Task.isCancelled else { return }
-            do { entries = try await entriesTask }
-            catch {
+            do { entries = try await entriesTask } catch {
                 entries = []
                 #if DEBUG
                 print("[EmailLibraryViewController] rebuildSidebarItems: seriesEntries(page) failed: \(error)")
@@ -1604,8 +1603,7 @@ final class EmailLibraryViewController: NSViewController {
             async let placeholdersTask = metaDB.placeholders(for: seriesKeys)
 
             guard !Task.isCancelled else { return }
-            do { allEntries = try await allEntriesTask }
-            catch {
+            do { allEntries = try await allEntriesTask } catch {
                 allEntries = []
                 #if DEBUG
                 print("[EmailLibraryViewController] rebuildSidebarItems: seriesEntries(keys) failed: \(error)")
@@ -1627,8 +1625,7 @@ final class EmailLibraryViewController: NSViewController {
 
             let allBooks = await allBooksTask
             guard !Task.isCancelled else { return }
-            do { metadata = try await metadataTask }
-            catch {
+            do { metadata = try await metadataTask } catch {
                 metadata = [:]
                 #if DEBUG
                 print("[EmailLibraryViewController] rebuildSidebarItems: ao3Metadata failed: \(error)")
@@ -1636,8 +1633,7 @@ final class EmailLibraryViewController: NSViewController {
                 degraded = true
             }
             guard !Task.isCancelled else { return }
-            do { placeholders = try await placeholdersTask }
-            catch {
+            do { placeholders = try await placeholdersTask } catch {
                 placeholders = [:]
                 #if DEBUG
                 print("[EmailLibraryViewController] rebuildSidebarItems: placeholders failed: \(error)")
@@ -1645,8 +1641,7 @@ final class EmailLibraryViewController: NSViewController {
                 degraded = true
             }
             guard !Task.isCancelled else { return }
-            do { singletonWarnings = try await singletonWarningsTask }
-            catch {
+            do { singletonWarnings = try await singletonWarningsTask } catch {
                 singletonWarnings = [:]
                 #if DEBUG
                 print("[EmailLibraryViewController] rebuildSidebarItems: singletonNonLeadingSeriesEntries failed: \(error)")
@@ -2159,10 +2154,10 @@ final class EmailLibraryViewController: NSViewController {
 // MARK: - FilterSheetCarrier
 
 struct FilterSheetCarrier: View {
-    let toolbarState:   LibraryToolbarState
+    let toolbarState: LibraryToolbarState
     let modelContainer: ModelContainer
-    let session:        LibrarySession
-    weak var emailVC:   EmailLibraryViewController?
+    let session: LibrarySession
+    weak var emailVC: EmailLibraryViewController?
 
     var body: some View {
         Color.clear

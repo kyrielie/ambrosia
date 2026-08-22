@@ -91,7 +91,7 @@ enum GzipEncoder {
             UInt8(value & 0xff),
             UInt8((value >> 8) & 0xff),
             UInt8((value >> 16) & 0xff),
-            UInt8((value >> 24) & 0xff),
+            UInt8((value >> 24) & 0xff)
         ])
     }
 }

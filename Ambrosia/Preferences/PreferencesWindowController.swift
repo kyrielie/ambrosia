@@ -11,9 +11,9 @@ final class PreferencesWindowController: NSWindowController {
     private init() {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 580, height: 680),
-            styleMask:   [.titled, .closable, .miniaturizable],
-            backing:     .buffered,
-            defer:       false
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
         )
         window.title   = "Preferences"
         window.minSize = NSSize(width: 540, height: 500)
@@ -89,7 +89,7 @@ private struct ReaderTab: View {
     @Namespace private var a11y
 
     // Reader colour local state
-    @State private var readerBgColor:   Color = Color(hex: ReaderPreferences.shared.readerBackgroundColor) ?? .white
+    @State private var readerBgColor: Color = Color(hex: ReaderPreferences.shared.readerBackgroundColor) ?? .white
     @State private var readerTextColor: Color = Color(hex: ReaderPreferences.shared.readerTextColor) ?? .black
     @State private var isPresentingSaveThemeSheet = false
     @State private var newThemeName = ""
@@ -100,11 +100,11 @@ private struct ReaderTab: View {
             // ── Typography ────────────────────────────────────────────────
             Section {
                 fontFamilyRow
-                stepperRow("Font size",          int: $prefs.fontSize,    range: 10...36, step: 1,  unit: "pt")
-                stepperRow("Line height",      dbl: $prefs.lineHeight,    range: 1.0...3.0, step: 0.1)
-                stepperRow("Max line width",     int: $prefs.maxWidth,    range: 400...1400, step: 20, unit: "px")
-                stepperRow("Horizontal padding", int: $prefs.paddingH,    range: 0...120, step: 4,  unit: "px")
-                stepperRow("Vertical padding",   int: $prefs.paddingV,    range: 0...120, step: 4,  unit: "px")
+                stepperRow("Font size", int: $prefs.fontSize, range: 10...36, step: 1, unit: "pt")
+                stepperRow("Line height", dbl: $prefs.lineHeight, range: 1.0...3.0, step: 0.1)
+                stepperRow("Max line width", int: $prefs.maxWidth, range: 400...1400, step: 20, unit: "px")
+                stepperRow("Horizontal padding", int: $prefs.paddingH, range: 0...120, step: 4, unit: "px")
+                stepperRow("Vertical padding", int: $prefs.paddingV, range: 0...120, step: 4, unit: "px")
             } header: {
                 Label("Typography", systemImage: "textformat").font(.headline)
             }
@@ -241,15 +241,15 @@ private struct ReaderTab: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 5)
                         .background(selected
-                            ? Color.accentColor.opacity(0.12)
-                            : Color(nsColor: .controlBackgroundColor))
+                                        ? Color.accentColor.opacity(0.12)
+                                        : Color(nsColor: .controlBackgroundColor))
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
                                 .stroke(selected
-                                    ? Color.accentColor.opacity(0.4)
-                                    : Color(nsColor: .separatorColor),
-                                    lineWidth: 0.5)
+                                            ? Color.accentColor.opacity(0.4)
+                                            : Color(nsColor: .separatorColor),
+                                        lineWidth: 0.5)
                         )
                     }
                     .buttonStyle(.plain)
@@ -370,7 +370,7 @@ private struct ReaderTab: View {
 
     @ViewBuilder
     private func stepperRow(_ label: String, int value: Binding<Int>,
-                             range: ClosedRange<Int>, step: Int, unit: String) -> some View {
+                            range: ClosedRange<Int>, step: Int, unit: String) -> some View {
         HStack {
             Text(label)
                 .accessibilityLabeledPair(role: .label, id: label, in: a11y)
@@ -382,7 +382,7 @@ private struct ReaderTab: View {
 
     @ViewBuilder
     private func stepperRow(_ label: String, dbl value: Binding<Double>,
-                             range: ClosedRange<Double>, step: Double) -> some View {
+                            range: ClosedRange<Double>, step: Double) -> some View {
         HStack {
             Text(label)
                 .accessibilityLabeledPair(role: .label, id: label, in: a11y)
@@ -403,10 +403,10 @@ private struct LibraryTab: View {
     @Namespace private var a11y
 
     // Local colour state for the custom pickers
-    @State private var lightBG:   Color = Color(hex: ReaderPreferences.shared.libraryLightBackgroundColor) ?? .white
+    @State private var lightBG: Color = Color(hex: ReaderPreferences.shared.libraryLightBackgroundColor) ?? .white
     @State private var lightText: Color = Color(hex: ReaderPreferences.shared.libraryLightTextColor)       ?? .black
-    @State private var darkBG:    Color = Color(hex: ReaderPreferences.shared.libraryDarkBackgroundColor)  ?? Color(nsColor: .windowBackgroundColor)
-    @State private var darkText:  Color = Color(hex: ReaderPreferences.shared.libraryDarkTextColor)        ?? Color(nsColor: .labelColor)
+    @State private var darkBG: Color = Color(hex: ReaderPreferences.shared.libraryDarkBackgroundColor)  ?? Color(nsColor: .windowBackgroundColor)
+    @State private var darkText: Color = Color(hex: ReaderPreferences.shared.libraryDarkTextColor)        ?? Color(nsColor: .labelColor)
 
     private var effectiveIsDark: Bool {
         switch prefs.libraryAppearanceMode {
@@ -545,14 +545,14 @@ private struct LibraryTab: View {
             colourPairRow(
                 label: "Light mode",
                 bg: $lightBG, text: $lightText,
-                onBGChange:   { prefs.libraryLightBackgroundColor = $0 },
+                onBGChange: { prefs.libraryLightBackgroundColor = $0 },
                 onTextChange: { prefs.libraryLightTextColor = $0 }
             )
             Divider()
             colourPairRow(
                 label: "Dark mode",
                 bg: $darkBG, text: $darkText,
-                onBGChange:   { prefs.libraryDarkBackgroundColor = $0 },
+                onBGChange: { prefs.libraryDarkBackgroundColor = $0 },
                 onTextChange: { prefs.libraryDarkTextColor = $0 }
             )
             HStack(spacing: 6) {
@@ -644,8 +644,8 @@ private struct LibraryPreviewRows: View {
     let textColor: Color
     let accentMode: Bool
 
-    private let sampleTitles  = ["A Memory Called Empire",   "The Left Hand of Darkness", "Piranesi"]
-    private let sampleAuthors = ["Arkady Martine",           "Ursula K. Le Guin",          "Susanna Clarke"]
+    private let sampleTitles  = ["A Memory Called Empire", "The Left Hand of Darkness", "Piranesi"]
+    private let sampleAuthors = ["Arkady Martine", "Ursula K. Le Guin", "Susanna Clarke"]
     private let sampleWidths  = [CGFloat(160), CGFloat(130), CGFloat(145)]
 
     var body: some View {
@@ -1040,8 +1040,8 @@ private struct RSSTab: View {
 
                 if rssCollections.isEmpty {
                     Text(rssCollections.isEmpty && AppDelegate.shared?.session?.isOpen == true
-                         ? "No collections in the current library."
-                         : "Open a library to configure per-collection publishing.")
+                            ? "No collections in the current library."
+                            : "Open a library to configure per-collection publishing.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {
@@ -1255,16 +1255,14 @@ struct ShortcutRecorderView: NSViewRepresentable {
             }
             var modifiers: Set<ModifierKey> = []
             if event.modifierFlags.contains(.command) { modifiers.insert(.command) }
-            if event.modifierFlags.contains(.shift)   { modifiers.insert(.shift) }
-            if event.modifierFlags.contains(.option)  { modifiers.insert(.option) }
+            if event.modifierFlags.contains(.shift) { modifiers.insert(.shift) }
+            if event.modifierFlags.contains(.option) { modifiers.insert(.option) }
             if event.modifierFlags.contains(.control) { modifiers.insert(.control) }
             let binding = KeyBinding(character: character, modifiers: modifiers)
             onRecord?(binding)
         }
     }
 }
-
-
 
 extension Color {
     init?(hex: String) {
@@ -1273,9 +1271,9 @@ extension Color {
         if h.count == 3 { h = h.map { "\($0)\($0)" }.joined() }
         guard h.count == 6, let value = UInt64(h, radix: 16) else { return nil }
         self.init(
-            red:   Double((value >> 16) & 0xFF) / 255,
+            red: Double((value >> 16) & 0xFF) / 255,
             green: Double((value >>  8) & 0xFF) / 255,
-            blue:  Double( value        & 0xFF) / 255
+            blue: Double( value        & 0xFF) / 255
         )
     }
 

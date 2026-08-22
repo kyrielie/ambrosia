@@ -18,17 +18,17 @@ import Foundation
 /// FilterRule and the search field is cleared. The parser is also used to
 /// detect the active prefix while the user is still typing, to drive suggestions.
 struct SearchQuery {
-    let tagTerms:    [String]
+    let tagTerms: [String]
     let authorTerms: [String]
-    let titleTerms:  [String]
+    let titleTerms: [String]
     let seriesTerms: [String]
     let statusTerms: [String]
     let fulltextPhrase: String?
-    let plainTerms:  [String]
+    let plainTerms: [String]
 
     /// IDs matched by full-text search. When non-nil, plainTerms are replaced
     /// by this explicit ID set in the SQL layer.
-    var ftsMatchedIDs: [Int]? = nil
+    var ftsMatchedIDs: [Int]?
 
     /// Pre-resolved synonym expansions for each tag term, populated asynchronously
     /// by the caller via `AmbrosiaMetaDB.expandedTerms(for:)` before any SQL is built.
@@ -45,11 +45,11 @@ struct SearchQuery {
 
     var isEmpty: Bool {
         tagTerms.isEmpty && authorTerms.isEmpty &&
-        titleTerms.isEmpty && seriesTerms.isEmpty &&
-        statusTerms.isEmpty &&
-        (fulltextPhrase == nil || fulltextPhrase!.isEmpty) &&
-        plainTerms.isEmpty &&
-        (ftsMatchedIDs == nil || ftsMatchedIDs!.isEmpty)
+            titleTerms.isEmpty && seriesTerms.isEmpty &&
+            statusTerms.isEmpty &&
+            (fulltextPhrase?.isEmpty ?? true) &&
+            plainTerms.isEmpty &&
+            (ftsMatchedIDs?.isEmpty ?? true)
     }
 
     // MARK: - Scoped token detection
@@ -164,8 +164,8 @@ struct SearchQueryParser {
             ("series:", { v in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [v], plainTerms: []) }),
             ("status:", { v in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [], statusTerms: [v], plainTerms: []) }),
             ("fulltext:", { v in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [], statusTerms: [], fulltextPhrase: v, plainTerms: []) }),
-            ("title:",  { v in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [v], seriesTerms: [], plainTerms: []) }),
-            ("tag:",    { v in SearchQuery(tagTerms: [v], authorTerms: [], titleTerms: [], seriesTerms: [], plainTerms: []) }),
+            ("title:", { v in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [v], seriesTerms: [], plainTerms: []) }),
+            ("tag:", { v in SearchQuery(tagTerms: [v], authorTerms: [], titleTerms: [], seriesTerms: [], plainTerms: []) })
         ]
 
         for (prefix, builder) in prefixes {

@@ -169,10 +169,10 @@ private struct BookDetailContent: View {
 
     private var tagsBlock: some View {
         FlowLayout(spacing: 4) {
-            ForEach(buckets.ratings, id: \.self)    { tag in tagPill(tag, .orange) }
+            ForEach(buckets.ratings, id: \.self) { tag in tagPill(tag, .orange) }
             ForEach(buckets.categories, id: \.self) { tag in tagPill(tag, .blue)   }
-            ForEach(buckets.warnings, id: \.self)   { tag in tagPill(tag, .red)    }
-            ForEach(buckets.regular, id: \.self)    { tag in tagPill(tag, nil)     }
+            ForEach(buckets.warnings, id: \.self) { tag in tagPill(tag, .red)    }
+            ForEach(buckets.regular, id: \.self) { tag in tagPill(tag, nil)     }
         }
     }
 
@@ -192,7 +192,7 @@ private struct BookDetailContent: View {
         if !wc.isEmpty || !k.isEmpty {
             HStack(spacing: 16) {
                 if !wc.isEmpty { Label(wc, systemImage: "text.word.spacing").font(.caption).foregroundStyle(.secondary) }
-                if !k.isEmpty  { Label(k,  systemImage: "heart").font(.caption).foregroundStyle(.secondary) }
+                if !k.isEmpty { Label(k, systemImage: "heart").font(.caption).foregroundStyle(.secondary) }
                 Spacer()
             }
         }

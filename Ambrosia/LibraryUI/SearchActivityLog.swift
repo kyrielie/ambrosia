@@ -106,7 +106,7 @@ final class SearchActivityLog {
 
     private func activityFileURL(libraryHash: String) -> URL? {
         guard let support = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask).first
+                for: .applicationSupportDirectory, in: .userDomainMask).first
         else { return nil }
         let dir = support
             .appendingPathComponent("Ambrosia")

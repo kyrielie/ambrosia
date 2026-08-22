@@ -288,11 +288,11 @@ actor LocalFeedServer {
     /// listening, `false` if the timeout elapsed first.
     @discardableResult
     func startAndWaitUntilListening(library: CalibreLibrary,
-                                     metaDB: AmbrosiaMetaDB,
-                                     collectionStore: CollectionStore,
-                                     modelContainer: ModelContainer? = nil,
-                                     config: Config = Config(),
-                                     timeout: TimeInterval = 5) async -> Bool {
+                                    metaDB: AmbrosiaMetaDB,
+                                    collectionStore: CollectionStore,
+                                    modelContainer: ModelContainer? = nil,
+                                    config: Config = Config(),
+                                    timeout: TimeInterval = 5) async -> Bool {
         start(library: library, metaDB: metaDB, collectionStore: collectionStore,
               modelContainer: modelContainer, config: config)
         guard let server = httpServer else { return _isRunning }
@@ -425,17 +425,17 @@ actor LocalFeedServer {
             .filter { !excluded.contains($0.id) }
         var links = collections.map { col in
             "<li><a href=\"/feed/collection/\(col.id).xml\">\(htmlEscape(col.name))</a> " +
-            "(<a href=\"/feed/collection/\(col.id).json\">JSON</a>)</li>"
+                "(<a href=\"/feed/collection/\(col.id).json\">JSON</a>)</li>"
         }.joined(separator: "\n")
 
         if dailyEnabled {
             links += "\n<li><a href=\"/feed/random-daily.xml\">Daily Story</a> " +
-                     "(<a href=\"/feed/random-daily.json\">JSON</a>)</li>"
+                "(<a href=\"/feed/random-daily.json\">JSON</a>)</li>"
         }
 
         if let snapshot = CurrentSearchSnapshot.load(libraryHash: libraryNamespace) {
             links += "\n<li><a href=\"/feed/search.xml\">Current Search: \(htmlEscape(snapshot.label))</a> " +
-                     "(<a href=\"/feed/search.json\">JSON</a>)</li>"
+                "(<a href=\"/feed/search.json\">JSON</a>)</li>"
         }
 
         let html = """
@@ -608,16 +608,16 @@ actor LocalFeedServer {
             switch format {
             case .rss:
                 return HTTPResponse(statusCode: .ok,
-                    headers: [.contentType: "application/rss+xml; charset=utf-8"],
-                    body: Data(buildEmptyFeed(title: "Daily Story",
-                                             message: "No books in library.").utf8))
+                                    headers: [.contentType: "application/rss+xml; charset=utf-8"],
+                                    body: Data(buildEmptyFeed(title: "Daily Story",
+                                                              message: "No books in library.").utf8))
             case .json:
                 let empty = buildEmptyJSONFeed(title: "Daily Story",
                                                feedDescription: "No books in library.",
                                                feedURL: "\(localNetworkURLSync ?? "http://localhost:\(_port)")/feed/random-daily.json")
                 return HTTPResponse(statusCode: .ok,
-                    headers: [.contentType: "application/feed+json; charset=utf-8"],
-                    body: empty)
+                                    headers: [.contentType: "application/feed+json; charset=utf-8"],
+                                    body: empty)
             case .sqlite:
                 assertionFailure("handleRandomDailyFeed(.sqlite) — use handleRandomDailySQLiteFeed")
                 return HTTPResponse(statusCode: .notFound)
@@ -820,7 +820,7 @@ actor LocalFeedServer {
         // one page's worth (see buildJSONFeed's book-count page cap,
         // jsonFeedMaxBooksPerPage).
         let books = await library.books(ids: effectiveIDs, offset: 0, limit: effectiveIDs.count,
-                                   sort: .title, ascending: true, context: context)
+                                        sort: .title, ascending: true, context: context)
         return books.map { ($0, ao3Map[$0.id], seriesByBook[$0.id] ?? []) }
     }
 
@@ -1076,8 +1076,8 @@ actor LocalFeedServer {
     /// uncompressed body with no `Content-Encoding` header rather than
     /// dropping the response — a slightly bigger response beats a broken one.
     private func httpResponse<Body>(for result: FeedBuildResult<Body>,
-                                     contentType: String,
-                                     toData: (Body) -> Data) -> HTTPResponse {
+                                    contentType: String,
+                                    toData: (Body) -> Data) -> HTTPResponse {
         switch result {
         case .notModified(let etag):
             return HTTPResponse(statusCode: .notModified, headers: [.eTag: etag])
@@ -1092,7 +1092,7 @@ actor LocalFeedServer {
                                 headers: [
                                     .contentType: contentType,
                                     .eTag: etag,
-                                    HTTPHeader("Content-Encoding"): "gzip",
+                                    HTTPHeader("Content-Encoding"): "gzip"
                                 ],
                                 body: gzipped)
         }
@@ -1101,9 +1101,9 @@ actor LocalFeedServer {
     // MARK: - RSS generation
 
     private func buildRSSFeed(title: String,
-                               feedDescription: String,
-                               calibreIDs: [Int],
-                               ifNoneMatch: String?) async throws -> FeedBuildResult<String> {
+                              feedDescription: String,
+                              calibreIDs: [Int],
+                              ifNoneMatch: String?) async throws -> FeedBuildResult<String> {
         guard let library else {
             return .body(etag: "\"empty\"", data: buildEmptyFeed(title: title, message: "No library open."))
         }
@@ -1171,9 +1171,9 @@ actor LocalFeedServer {
     }
 
     private func buildRSSItem(book: CalibreBook,
-                               ao3: AO3MetadataRecord?,
-                               seriesEntries: [SeriesCacheEntry],
-                               library: CalibreLibrary) async -> String {
+                              ao3: AO3MetadataRecord?,
+                              seriesEntries: [SeriesCacheEntry],
+                              library: CalibreLibrary) async -> String {
         // §4 point 3: description = stripped comment + AO3 stats line
         let strippedComment = book.comment.map { HTMLStripper.strip($0) } ?? ""
         let statsLine = buildStatsLine(book: book, ao3: ao3)
@@ -1704,7 +1704,7 @@ actor LocalFeedServer {
         return (Array(pairs[start..<end]), end < pairs.count)
     }
 
-#if DEBUG
+    #if DEBUG
     // MARK: - Test hooks (AmbrosiaTests only, via @testable import)
     //
     // FeedDisplayUnit and FeedUnitsCacheEntry are both `private` (correctly —
@@ -1726,23 +1726,23 @@ actor LocalFeedServer {
     func testHook_groupedUnitCount(walkKey: String, calibreIDs: [Int]) async -> Int {
         await groupedUnitsForWalk(walkKey: walkKey, calibreIDs: calibreIDs).count
     }
-#endif
+    #endif
 
     private func buildJSONFeed(title: String,
-                                feedDescription: String,
-                                calibreIDs: [Int],
-                                feedURL: String,
-                                page: Int = 1,
-                                // Accepted for backward source-compatibility with existing call
-                                // sites/query-string parsing, but intentionally unused for page
-                                // sizing (see jsonFeedMaxBooksPerPage) — confirmed decision: the
-                                // book-count cap applies unconditionally, so a client-supplied
-                                // per_page no longer controls page size even when grouping is off.
-                                perPage: Int? = nil,
-                                ifNoneMatch: String?) async throws -> FeedBuildResult<Data> {
+                               feedDescription: String,
+                               calibreIDs: [Int],
+                               feedURL: String,
+                               page: Int = 1,
+                               // Accepted for backward source-compatibility with existing call
+                               // sites/query-string parsing, but intentionally unused for page
+                               // sizing (see jsonFeedMaxBooksPerPage) — confirmed decision: the
+                               // book-count cap applies unconditionally, so a client-supplied
+                               // per_page no longer controls page size even when grouping is off.
+                               perPage: Int? = nil,
+                               ifNoneMatch: String?) async throws -> FeedBuildResult<Data> {
         guard let library else {
             return .body(etag: "\"empty\"",
-                        data: buildEmptyJSONFeed(title: title, feedDescription: "No library open.", feedURL: feedURL))
+                         data: buildEmptyJSONFeed(title: title, feedDescription: "No library open.", feedURL: feedURL))
         }
 
         // Cheap SQL fetch returns every matching book, title-sorted. Then, when
@@ -1938,7 +1938,7 @@ actor LocalFeedServer {
         LibraryFilterDebug.log("feed.sqlite.end", [
             "candidates": calibreIDs.count,
             "filtered": allPairs.count,
-            "rows": rows.count,
+            "rows": rows.count
         ])
 
         let manifest = TransferDatabaseBuilder.ManifestRow(
@@ -1987,11 +1987,11 @@ actor LocalFeedServer {
     /// pre-serialized JSON-text columns here (Wire Contract: `*_json`
     /// columns), since SQLite has no native array type.
     private func transferRow(for pair: FeedBookPair,
-                              library: CalibreLibrary,
-                              isReadLater: Bool,
-                              isLiked: Bool,
-                              isFinished: Bool,
-                              readingProgress: Double?) async -> TransferDatabaseBuilder.Row {
+                             library: CalibreLibrary,
+                             isReadLater: Bool,
+                             isLiked: Bool,
+                             isFinished: Bool,
+                             readingProgress: Double?) async -> TransferDatabaseBuilder.Row {
         let book = pair.book
         let ao3 = pair.ao3
 
@@ -2117,9 +2117,9 @@ actor LocalFeedServer {
     }
 
     private func buildJSONFeedItem(book: CalibreBook,
-                                    ao3: AO3MetadataRecord?,
-                                    seriesEntries: [SeriesCacheEntry],
-                                    library: CalibreLibrary) async -> JSONFeedItem {
+                                   ao3: AO3MetadataRecord?,
+                                   seriesEntries: [SeriesCacheEntry],
+                                   library: CalibreLibrary) async -> JSONFeedItem {
         // summary is just the stripped comment now — word count, chapters,
         // completion, fandoms/rating/warnings/categories/series all ride as
         // structured data in `_ambrosia` instead of a prose stats line.
@@ -2439,10 +2439,10 @@ actor LocalFeedServer {
     // MARK: - Helpers
 
     private func xmlEscape(_ s: String) -> String {
-        s.replacingOccurrences(of: "&",  with: "&amp;")
-         .replacingOccurrences(of: "<",  with: "&lt;")
-         .replacingOccurrences(of: ">",  with: "&gt;")
-         .replacingOccurrences(of: "\"", with: "&quot;")
+        s.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
     private func htmlEscape(_ s: String) -> String { xmlEscape(s) }

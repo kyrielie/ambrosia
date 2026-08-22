@@ -13,7 +13,7 @@ struct FilterValueTextField: View {
 
     @State private var suggestions: [String] = []
     @State private var showSuggestions = false
-    @State private var fetchTask: Task<Void, Never>? = nil
+    @State private var fetchTask: Task<Void, Never>?
     /// Most recently selected suggestion value. scheduleFetch skips queries
     /// whose trimmed text equals this, preventing the panel reopening after
     /// a selection even if an in-flight Task delivers results asynchronously.

@@ -4,7 +4,7 @@ import Foundation
 /// `EmailLibraryViewController`. Both views previously carried their own
 /// copies of these two call-site blocks (Phase 2 already removed one instance
 /// of this duplication; this is a smaller recurrence in the filter/search
-/// pipeline — see `ambrosia_architecture.md` Invariant 17 and the gap-closure
+/// pipeline — see Invariant 17 in `docs/concurrency-invariants.md` and the gap-closure
 /// plan Phase 3).
 enum TagExpansionResolver {
     /// Resolves synonym expansions for every complete `.tag` rule value in
@@ -16,8 +16,8 @@ enum TagExpansionResolver {
     ) async -> [String: [String]] {
         guard let metaDB else { return [:] }
         let tagValues = Set(expression.groups.flatMap(\.rules)
-            .filter { $0.field == .tag && $0.isComplete }
-            .map(\.value))
+                                .filter { $0.field == .tag && $0.isComplete }
+                                .map(\.value))
         guard !tagValues.isEmpty else { return [:] }
         return await metaDB.expandedTermsBatch(for: Array(tagValues))
     }

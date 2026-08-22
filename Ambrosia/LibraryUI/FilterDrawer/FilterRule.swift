@@ -114,7 +114,7 @@ enum FilterOperator: String, CaseIterable, Identifiable, Codable {
         case .notEquals:    return "is not"
         case .startsWith:   return "starts with"
         case .ratingAtMost: return "max rating"
-        case .ratingAtLeast:return "min rating"
+        case .ratingAtLeast: return "min rating"
         }
     }
 

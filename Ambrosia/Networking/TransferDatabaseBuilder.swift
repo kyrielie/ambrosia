@@ -181,7 +181,7 @@ enum TransferDatabaseBuilder {
                     row.isReadLater ? 1 : 0,
                     row.isLiked ? 1 : 0,
                     row.isFinished ? 1 : 0,
-                    row.readingProgress,
+                    row.readingProgress
                 ])
             }
         }

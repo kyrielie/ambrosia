@@ -229,7 +229,7 @@ struct ActivityFeedView: View {
             var merged: [ActivityFeedEntry] = []
             merged.reserveCapacity(
                 sessions.count + annotations.count + collections.count
-                + SearchActivityLog.shared.entries.count
+                    + SearchActivityLog.shared.entries.count
             )
 
             for entry in sessions {
@@ -278,7 +278,7 @@ private struct ActivityFilterChip: View {
                     .font(.caption.weight(.medium))
                 Text(label)
                     .font(.caption.weight(selected ? .semibold : .regular))
-                if count > 0 {
+                if !isEmpty {
                     Text("\(count)")
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(selected ? .white : .secondary)
@@ -359,7 +359,7 @@ struct ActivityFeedRow: View {
             Text(entry.date, style: .relative)
                 .font(.caption)
                 .foregroundStyle(.tertiary)
-            + Text(" ago")
+                + Text(" ago")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }

@@ -181,18 +181,18 @@ private struct GroupSection: View {
                     .padding(.horizontal, 20).padding(.bottom, 6)
             } else {
                 // CRASH FIX: ForEach($group.rules) creates Binding<FilterRule>
-            // via array index subscript.  When the delete button is clicked,
-            // AppKit resigns the active NSTextField as part of mouse handling,
-            // which causes SwiftUI's PlatformTextFieldCoordinator to enqueue
-            // controlTextDidEndEditing.  That action is dispatched in the same
-            // button-action cycle after onDelete() has already removed the
-            // element — the index is stale and Swift traps.
-            //
-            // Fix: iterate over value-type snapshots (not $bindings) and
-            // construct each rule's Binding via UUID lookup instead of index
-            // subscript.  UUID lookup never goes out of bounds — if the rule
-            // has been removed, the Binding's getter/setter simply no-ops.
-            ForEach(group.rules) { rule in
+                // via array index subscript.  When the delete button is clicked,
+                // AppKit resigns the active NSTextField as part of mouse handling,
+                // which causes SwiftUI's PlatformTextFieldCoordinator to enqueue
+                // controlTextDidEndEditing.  That action is dispatched in the same
+                // button-action cycle after onDelete() has already removed the
+                // element — the index is stale and Swift traps.
+                //
+                // Fix: iterate over value-type snapshots (not $bindings) and
+                // construct each rule's Binding via UUID lookup instead of index
+                // subscript.  UUID lookup never goes out of bounds — if the rule
+                // has been removed, the Binding's getter/setter simply no-ops.
+                ForEach(group.rules) { rule in
                     FilterRuleRow(rule: ruleBinding(for: rule.id)) {
                         if reduceMotion {
                             group.rules.removeAll { $0.id == rule.id }
@@ -244,7 +244,7 @@ struct FilterRuleRow: View {
     /// Captured by WindowAccessorView embedded in the row body.
     /// Used by the delete closure to resign first-responder on the
     /// correct window — NSApp.keyWindow is unreliable inside sheets.
-    @State private var rowWindow: NSWindow? = nil
+    @State private var rowWindow: NSWindow?
 
     var body: some View {
         HStack(spacing: 8) {

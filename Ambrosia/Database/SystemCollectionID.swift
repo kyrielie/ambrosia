@@ -16,6 +16,6 @@ enum SystemCollectionID {
         (finished, "Finished", "automated", 3),
         (inProgress, "In Progress", "automated", 4),
         (hasAnnotations, "Has Annotations", "automated", 5),
-        (seriesOrMerged, seriesOrMergedName, "automated", 6),
+        (seriesOrMerged, seriesOrMergedName, "automated", 6)
     ]
 }

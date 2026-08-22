@@ -433,7 +433,7 @@ final class ReaderPreferences: ObservableObject {
             SystemCollectionID.finished,
             SystemCollectionID.inProgress,
             SystemCollectionID.hasAnnotations,
-            SystemCollectionID.seriesOrMerged,
+            SystemCollectionID.seriesOrMerged
         ]
         static let groupBySeries               = false
         static let defaultReadingMode          = ReadingMode.scroll

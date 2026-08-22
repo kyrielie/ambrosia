@@ -20,21 +20,21 @@ final class EmailSidebarViewController: NSViewController,
 
     // MARK: - Callbacks (set by parent before viewDidLoad)
 
-    var onSelect:      ((CalibreBook?) -> Void)?
-    var onOpen:        ((ReadingTarget) -> Void)?
-    var onLoadMore:    (() -> Void)?
-    var onEditFilter:  (() -> Void)?
+    var onSelect: ((CalibreBook?) -> Void)?
+    var onOpen: ((ReadingTarget) -> Void)?
+    var onLoadMore: (() -> Void)?
+    var onEditFilter: (() -> Void)?
     var onClearFilter: (() -> Void)?
-    var onContextMenuSetLiked:         (([CalibreBook], Bool) -> Void)?
-    var onContextMenuSkip:             (([CalibreBook]) -> Void)?
-    var onContextMenuMarkRead:         (([CalibreBook]) -> Void)?
-    var onContextMenuResetProgress:    (([CalibreBook]) -> Void)?
-    var onContextMenuOpen:             (([CalibreBook]) -> Void)?
-    var onContextMenuReadLater:        (([CalibreBook]) -> Void)?
+    var onContextMenuSetLiked: (([CalibreBook], Bool) -> Void)?
+    var onContextMenuSkip: (([CalibreBook]) -> Void)?
+    var onContextMenuMarkRead: (([CalibreBook]) -> Void)?
+    var onContextMenuResetProgress: (([CalibreBook]) -> Void)?
+    var onContextMenuOpen: (([CalibreBook]) -> Void)?
+    var onContextMenuReadLater: (([CalibreBook]) -> Void)?
     var onContextMenuCollectionPicker: (([CalibreBook], NSView, NSRect) -> Void)?
     var onContextMenuRemoveFromCollection: (([CalibreBook], String) -> Void)?
-    var onToggleLiked:                 (([CalibreBook]) -> Void)?
-    var onToggleReadLater:             (([CalibreBook]) -> Void)?
+    var onToggleLiked: (([CalibreBook]) -> Void)?
+    var onToggleReadLater: (([CalibreBook]) -> Void)?
 
     // MARK: - Dependencies
 
@@ -42,8 +42,8 @@ final class EmailSidebarViewController: NSViewController,
 
     // MARK: - Data (set externally; didSet triggers reload)
 
-    var books:      [CalibreBook]    = [] { didSet { items = books.map { .book($0) } } }
-    var items:      [LibraryItem]    = [] { didSet { reloadItemsPreservingSingleSelection(from: oldValue) } }
+    var books: [CalibreBook]    = [] { didSet { items = books.map { .book($0) } } }
+    var items: [LibraryItem]    = [] { didSet { reloadItemsPreservingSingleSelection(from: oldValue) } }
     var bookStates: [Int: BookState] = [:] { didSet { reloadVisibleRows() } }
     var ao3Metadata: [Int: AO3MetadataRecord] = [:] { didSet { reloadVisibleRows() } }
     var likedIDs: Set<Int> = [] { didSet { reloadVisibleRows() } }
@@ -58,7 +58,7 @@ final class EmailSidebarViewController: NSViewController,
 
     // MARK: - Private
 
-    private var tableView:  NSTableView!
+    private var tableView: NSTableView!
     private var scrollView: NSScrollView!
     private var hasTriggeredLoadMore = false
     private var isRestoringSelection = false
@@ -146,8 +146,6 @@ final class EmailSidebarViewController: NSViewController,
             name: NSScrollView.didLiveScrollNotification, object: scrollView
         )
 
-
-
         NSLayoutConstraint.activate([
             banner.topAnchor.constraint(equalTo: container.topAnchor),
             banner.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -161,7 +159,7 @@ final class EmailSidebarViewController: NSViewController,
             scrollView.topAnchor.constraint(equalTo: banner.bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
 
         view = container
@@ -617,7 +615,7 @@ final class EmailBookCellView: NSTableCellView {
 
             progressFill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
             progressFill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
-            progressFill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
+            progressFill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor)
         ])
     }
 
@@ -719,7 +717,7 @@ final class EmailBookCellView: NSTableCellView {
             (series.allCategories, NSColor.systemBlue),
             (series.allWarnings, NSColor.systemRed),
             (series.allAdditionalTags, NSColor.secondaryLabelColor),
-            (series.allTags, NSColor.secondaryLabelColor),
+            (series.allTags, NSColor.secondaryLabelColor)
         ].flatMap { values, color in
             values.compactMap { value -> (String, NSColor)? in
                 let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -748,7 +746,7 @@ final class EmailBookCellView: NSTableCellView {
         let pills = [
             (metadata.fandoms, NSColor.systemPurple),
             (metadata.relationships, NSColor.systemPink),
-            (metadata.characters, NSColor.systemTeal),
+            (metadata.characters, NSColor.systemTeal)
         ].flatMap { values, color in
             values.compactMap { value -> (String, NSColor)? in
                 let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -768,13 +766,13 @@ final class EmailBookCellView: NSTableCellView {
             string: book.displayAuthors,
             attributes: [
                 .font: NSFont.systemFont(ofSize: 11),
-                .foregroundColor: NSColor.secondaryLabelColor,
+                .foregroundColor: NSColor.secondaryLabelColor
             ]
         )
 
         let details = [
             (ao3Metadata?.wordCount ?? book.wordCount).map(formatWordCount),
-            completionStatus(for: ao3Metadata),
+            completionStatus(for: ao3Metadata)
         ].compactMap { $0 }
 
         guard !details.isEmpty else { return result }
@@ -782,7 +780,7 @@ final class EmailBookCellView: NSTableCellView {
             string: "  \(details.joined(separator: "  "))",
             attributes: [
                 .font: NSFont.systemFont(ofSize: 10),
-                .foregroundColor: NSColor.tertiaryLabelColor,
+                .foregroundColor: NSColor.tertiaryLabelColor
             ]
         ))
         return result
@@ -793,20 +791,20 @@ final class EmailBookCellView: NSTableCellView {
             string: series.displayAuthors,
             attributes: [
                 .font: NSFont.systemFont(ofSize: 11),
-                .foregroundColor: NSColor.secondaryLabelColor,
+                .foregroundColor: NSColor.secondaryLabelColor
             ]
         )
         let details = [
             "\(series.works.count) works",
             series.displayWordCount.isEmpty ? nil : series.displayWordCount,
-            series.displayChapterCount.isEmpty ? nil : series.displayChapterCount,
+            series.displayChapterCount.isEmpty ? nil : series.displayChapterCount
         ].compactMap { $0 }
         if !details.isEmpty {
             result.append(NSAttributedString(
                 string: "  \(details.joined(separator: "  "))",
                 attributes: [
                     .font: NSFont.systemFont(ofSize: 10),
-                    .foregroundColor: NSColor.tertiaryLabelColor,
+                    .foregroundColor: NSColor.tertiaryLabelColor
                 ]
             ))
         }

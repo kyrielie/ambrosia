@@ -380,13 +380,13 @@ final class LibrarySession {
         let cacheKey = fulltextCacheKey(phrase)
         if let cachedIDs = resolvedFulltextCache[cacheKey] {
             return SearchQuery(
-                tagTerms:     query.tagTerms,
-                authorTerms:  query.authorTerms,
-                titleTerms:   query.titleTerms,
-                seriesTerms:  query.seriesTerms,
-                statusTerms:  query.statusTerms,
+                tagTerms: query.tagTerms,
+                authorTerms: query.authorTerms,
+                titleTerms: query.titleTerms,
+                seriesTerms: query.seriesTerms,
+                statusTerms: query.statusTerms,
                 fulltextPhrase: query.fulltextPhrase,
-                plainTerms:   [],
+                plainTerms: [],
                 ftsMatchedIDs: cachedIDs
             )
         }
@@ -423,13 +423,13 @@ final class LibrarySession {
         }
         rememberResolvedFulltext(ids: ftsIDs, key: cacheKey)
         return SearchQuery(
-            tagTerms:     query.tagTerms,
-            authorTerms:  query.authorTerms,
-            titleTerms:   query.titleTerms,
-            seriesTerms:  query.seriesTerms,
-            statusTerms:  query.statusTerms,
+            tagTerms: query.tagTerms,
+            authorTerms: query.authorTerms,
+            titleTerms: query.titleTerms,
+            seriesTerms: query.seriesTerms,
+            statusTerms: query.statusTerms,
             fulltextPhrase: query.fulltextPhrase,
-            plainTerms:   [],
+            plainTerms: [],
             ftsMatchedIDs: ftsIDs
         )
     }
@@ -632,215 +632,232 @@ final class LibrarySession {
                 return
             }
 
-        // Process in batches: parse EPUBs individually (CPU-bound, off-actor),
-        // then flush accumulated results to the DB in one transaction per batch.
-        // Yielding between batches lets higher-priority actor calls (e.g. filter
-        // queries from the UI) cut in without waiting for the full extraction run.
-        //
-        // Quitting (applicationWillTerminate) does not cancel or flush this task —
-        // that's deliberate, since flushing is async and not safe to force
-        // synchronously during termination. Instead, batchSize and flushInterval
-        // together bound how much already-completed work a quit can discard: at
-        // most batchSize books, or flushInterval seconds' worth, whichever comes
-        // first. Anything not flushed simply gets re-attempted on next launch,
-        // since `missing` above is always recomputed from what's actually in the
-        // DB — there is no separate "resume point" to track.
-        let batchSize = 10
-        let flushInterval: TimeInterval = 2
-        var pendingSuccess: [(AO3MetadataRecord, Int)] = []
-        var pendingFailure: [AO3ExtractionDiagnostic] = []
-        var pendingIndexed: [(BookIndexRecord, Int)] = []
-        var lastFlushAt = Date()
+            // Process in batches: parse EPUBs individually (CPU-bound, off-actor),
+            // then flush accumulated results to the DB in one transaction per batch.
+            // Yielding between batches lets higher-priority actor calls (e.g. filter
+            // queries from the UI) cut in without waiting for the full extraction run.
+            //
+            // Quitting (applicationWillTerminate) does not cancel or flush this task —
+            // that's deliberate, since flushing is async and not safe to force
+            // synchronously during termination. Instead, batchSize and flushInterval
+            // together bound how much already-completed work a quit can discard: at
+            // most batchSize books, or flushInterval seconds' worth, whichever comes
+            // first. Anything not flushed simply gets re-attempted on next launch,
+            // since `missing` above is always recomputed from what's actually in the
+            // DB — there is no separate "resume point" to track.
+            let batchSize = 10
+            let flushInterval: TimeInterval = 2
+            var pendingSuccess: [(AO3MetadataRecord, Int)] = []
+            var pendingFailure: [AO3ExtractionDiagnostic] = []
+            var pendingIndexed: [(BookIndexRecord, Int)] = []
+            var lastFlushAt = Date()
 
-        func flushBatch() async {
-            guard !pendingSuccess.isEmpty || !pendingFailure.isEmpty || !pendingIndexed.isEmpty else { return }
-            // Only clear the pending buffers once the write has actually
-            // succeeded. This used to copy-then-clear-then-write-with-try?,
-            // so any transient insertBatch failure (e.g. the nested
-            // transaction AmbrosiaMetaDB.insert(_:calibreID:) used to open)
-            // silently discarded that batch's results with no retry and no
-            // log line — those books would then look "never attempted" and
-            // get needlessly reprocessed on every subsequent launch.
-            do {
-                try await metaDB.insertBatch(pendingSuccess, diagnostics: pendingFailure, indexed: pendingIndexed)
-                pendingSuccess.removeAll()
-                pendingFailure.removeAll()
-                pendingIndexed.removeAll()
-            } catch {
-                #if DEBUG
-                print("[LibrarySession] AO3 batch flush failed, will retry next flush: \(error)")
-                #endif
-            }
-            lastFlushAt = Date()
-        }
-
-        // A single book's parse + extract, factored out so it can run as an
-        // independent task in the group below. Identical logic to the former
-        // serial loop body — only the fan-out changed, not what each book does.
-        enum ExtractionOutcome {
-            case success(AO3MetadataRecord, BookIndexRecord, Int)
-            case indexed(BookIndexRecord, Int)     // parsed fine, no AO3 preface found
-            case failure(AO3ExtractionDiagnostic)
-        }
-
-        // Concurrency is capped rather than unbounded: each task holds a parsed
-        // EPUB DOM in memory for the duration of its parse, so fanning out to
-        // every available core on a large library risks memory pressure rather
-        // than a proportional speedup. 8 is a conservative starting cap.
-        let concurrency = max(1, min(ProcessInfo.processInfo.activeProcessorCount, 8))
-        var nextIndex = 0
-        var completedCount = 0
-
-        @Sendable
-        func extractOneBook(id: Int) async -> ExtractionOutcome {
-            var failureReason: String?
-            var failureStatus = "skipped"
-            var diagnosticEPUB: URL?
-            var spineItemsChecked: Int?
-            var indexedRecord: BookIndexRecord?
-            // epubURL is an actor-isolated (async) CalibreLibrary call now, and
-            // autoreleasepool's closure is synchronous, so resolve it first —
-            // the CPU-bound parse/extract work below never touches `library`.
-            let epub = await library.epubURL(calibreID: id)
-            let metadata: AO3MetadataRecord?
-            if let epub {
-                diagnosticEPUB = epub
-                metadata = autoreleasepool { () -> AO3MetadataRecord? in
-                    do {
-                        var parser = EPUBParser(epubURL: epub)
-                        try parser.parse()
-                        // §7.3 (Phase 6): book_index gets a row for every book where
-                        // parse() succeeds, AO3 or not — build it here, before the
-                        // preface scan below, so it's available regardless of which
-                        // branch (AO3 preface found or not) this book takes.
-                        indexedRecord = buildBookIndexRecord(from: parser)
-                        // AO3 EPUBs always place the preface (dl.tags metadata block) in
-                        // spine[0]. Try it first as the fast path; only continue scanning
-                        // up to 4 more items for non-standard EPUBs where something (a
-                        // cover, a TOC page) precedes the preface.
-                        var checked = 0
-                        for item in parser.spine.prefix(5) {
-                            checked += 1
-                            let html = try parser.html(for: item, userCSS: "")
-                            if var metadata = AO3MetadataExtractor.extract(from: html) {
-                                spineItemsChecked = checked
-                                let prefaceIndex = checked - 1
-
-                                // Byline is the very next spine item in every observed
-                                // case; scan a couple further only in case something
-                                // non-standard sits between preface and chapter 1. Do
-                                // NOT reuse the wide prefix(5) preface scan here — this
-                                // runs on ~70k books, and the covers/TOC pages that
-                                // justify a wide scan before the preface don't exist
-                                // after it.
-                                let bylineRangeEnd = min(prefaceIndex + 3, parser.spine.count)
-                                for candidateIndex in (prefaceIndex + 1)..<bylineRangeEnd {
-                                    let candidate = parser.spine[candidateIndex]
-                                    guard let chapterHTML = try? parser.html(for: candidate, userCSS: "") else { continue }
-                                    let bylineAuthors = AO3MetadataExtractor.parseAuthors(from: chapterHTML)
-                                    if !bylineAuthors.isEmpty {
-                                        metadata.authors = bylineAuthors
-                                        break
-                                    }
-                                }
-
-                                // Tier 2: EPUB's own dc:creator — free, already parsed,
-                                // no Calibre dependency. One dc:creator element may hold
-                                // a comma-joined name list (observed AO3 export shape).
-                                if metadata.authors.isEmpty {
-                                    let names = parser.opfCreators
-                                        .flatMap { $0.components(separatedBy: ", ") }
-                                        .map { $0.trimmingCharacters(in: .whitespaces) }
-                                        .filter { !$0.isEmpty }
-                                    metadata.authors = names.map {
-                                        AO3AuthorEntry(username: $0, pseud: nil, profileURL: nil, source: .opfCreator)
-                                    }
-                                }
-                                return metadata
-                            }
-                        }
-                        spineItemsChecked = checked
-                        failureReason = "no dl.tags AO3 preface metadata in first \(checked) spine items"
-                        return nil
-                    } catch {
-                        failureStatus = "failed"
-                        failureReason = error.localizedDescription
-                        return nil
-                    }
-                }
-            } else {
-                failureReason = "no EPUB found"
-                metadata = nil
-            }
-            if var metadata {
-                // Tier 3: Calibre's own author field, last resort. Deliberately
-                // resolved here rather than inside the inner scan above — this is
-                // the one dependency we're trying to phase out (see 3.4), kept as
-                // a single, isolated, easy-to-delete-later call site.
-                if metadata.authors.isEmpty {
-                    let calibreAuthors = await library.booksForIDs([id]).first?.authors ?? []
-                    metadata.authors = calibreAuthors.map {
-                        AO3AuthorEntry(username: $0, pseud: nil, profileURL: nil, source: .calibre)
-                    }
-                }
-                // indexedRecord is always set here: metadata is only non-nil when
-                // parse() succeeded above, and indexedRecord is built unconditionally
-                // right after parse() succeeds, before metadata can be returned.
-                return .success(metadata, indexedRecord!, id)
-            } else if let indexedRecord {
-                return .indexed(indexedRecord, id)
-            } else {
-                return .failure(AO3ExtractionDiagnostic(
-                    calibreID: id,
-                    status: failureStatus,
-                    reason: failureReason ?? "unknown reason",
-                    epubPath: diagnosticEPUB?.path,
-                    epubFilename: diagnosticEPUB?.lastPathComponent,
-                    spineItemsChecked: spineItemsChecked,
-                    attemptedAt: ISO8601DateFormatter().string(from: Date())
-                ))
-            }
-        }
-
-        await withTaskGroup(of: ExtractionOutcome.self) { group in
-            func addNextTask() {
-                guard !Task.isCancelled, nextIndex < missing.count else { return }
-                let id = missing[nextIndex]
-                nextIndex += 1
-                group.addTask { await extractOneBook(id: id) }
-            }
-
-            for _ in 0..<concurrency { addNextTask() }
-
-            while let result = await group.next() {
-                switch result {
-                case .success(let metadata, let indexRecord, let id):
-                    pendingSuccess.append((metadata, id))
-                    pendingIndexed.append((indexRecord, id))
-                case .indexed(let record, let id):
-                    pendingIndexed.append((record, id))
-                case .failure(let diagnostic):
-                    pendingFailure.append(diagnostic)
+            func flushBatch() async {
+                guard !pendingSuccess.isEmpty || !pendingFailure.isEmpty || !pendingIndexed.isEmpty else { return }
+                // Only clear the pending buffers once the write has actually
+                // succeeded. This used to copy-then-clear-then-write-with-try?,
+                // so any transient insertBatch failure (e.g. the nested
+                // transaction AmbrosiaMetaDB.insert(_:calibreID:) used to open)
+                // silently discarded that batch's results with no retry and no
+                // log line — those books would then look "never attempted" and
+                // get needlessly reprocessed on every subsequent launch.
+                do {
+                    try await metaDB.insertBatch(pendingSuccess, diagnostics: pendingFailure, indexed: pendingIndexed)
+                    pendingSuccess.removeAll()
+                    pendingFailure.removeAll()
+                    pendingIndexed.removeAll()
+                } catch {
                     #if DEBUG
-                    print("[LibrarySession] AO3 extraction skipped calibreID=\(diagnostic.calibreID): \(diagnostic.reason)")
+                    print("[LibrarySession] AO3 batch flush failed, will retry next flush: \(error)")
                     #endif
                 }
-                completedCount += 1
-                DispatchQueue.main.async { [weak self] in
-                    self?.extractionProgress.completed += 1
-                }
-                // Flush and yield every batchSize books, or every flushInterval
-                // seconds if a batch of slow-parsing EPUBs takes longer than that,
-                // so read queries can cut in and a quit mid-run loses little.
-                if completedCount.isMultiple(of: batchSize) || Date().timeIntervalSince(lastFlushAt) >= flushInterval {
-                    await flushBatch()
-                    await Task.yield()
-                }
-                addNextTask()
+                lastFlushAt = Date()
             }
-        }
-        // Flush any remaining records.
-        await flushBatch()
+
+            // A single book's parse + extract, factored out so it can run as an
+            // independent task in the group below. Identical logic to the former
+            // serial loop body — only the fan-out changed, not what each book does.
+            enum ExtractionOutcome {
+                case success(AO3MetadataRecord, BookIndexRecord, Int)
+                case indexed(BookIndexRecord, Int)     // parsed fine, no AO3 preface found
+                case failure(AO3ExtractionDiagnostic)
+            }
+
+            // Concurrency is capped rather than unbounded: each task holds a parsed
+            // EPUB DOM in memory for the duration of its parse, so fanning out to
+            // every available core on a large library risks memory pressure rather
+            // than a proportional speedup. 8 is a conservative starting cap.
+            let concurrency = max(1, min(ProcessInfo.processInfo.activeProcessorCount, 8))
+            var nextIndex = 0
+            var completedCount = 0
+
+            @Sendable
+            func extractOneBook(id: Int) async -> ExtractionOutcome {
+                var failureReason: String?
+                var failureStatus = "skipped"
+                var diagnosticEPUB: URL?
+                var spineItemsChecked: Int?
+                var indexedRecord: BookIndexRecord?
+                // epubURL is an actor-isolated (async) CalibreLibrary call now, and
+                // autoreleasepool's closure is synchronous, so resolve it first —
+                // the CPU-bound parse/extract work below never touches `library`.
+                let epub = await library.epubURL(calibreID: id)
+                let metadata: AO3MetadataRecord?
+                if let epub {
+                    diagnosticEPUB = epub
+                    metadata = autoreleasepool { () -> AO3MetadataRecord? in
+                        do {
+                            var parser = EPUBParser(epubURL: epub)
+                            try parser.parse()
+                            // §7.3 (Phase 6): book_index gets a row for every book where
+                            // parse() succeeds, AO3 or not — build it here, before the
+                            // preface scan below, so it's available regardless of which
+                            // branch (AO3 preface found or not) this book takes.
+                            indexedRecord = buildBookIndexRecord(from: parser)
+                            // AO3 EPUBs always place the preface (dl.tags metadata block) in
+                            // spine[0]. Try it first as the fast path; only continue scanning
+                            // up to 4 more items for non-standard EPUBs where something (a
+                            // cover, a TOC page) precedes the preface.
+                            var checked = 0
+                            for item in parser.spine.prefix(5) {
+                                checked += 1
+                                let html = try parser.html(for: item, userCSS: "")
+                                if var metadata = AO3MetadataExtractor.extract(from: html) {
+                                    spineItemsChecked = checked
+                                    let prefaceIndex = checked - 1
+
+                                    // Byline is the very next spine item in every observed
+                                    // case; scan a couple further only in case something
+                                    // non-standard sits between preface and chapter 1. Do
+                                    // NOT reuse the wide prefix(5) preface scan here — this
+                                    // runs on ~70k books, and the covers/TOC pages that
+                                    // justify a wide scan before the preface don't exist
+                                    // after it.
+                                    let bylineRangeEnd = min(prefaceIndex + 3, parser.spine.count)
+                                    for candidateIndex in (prefaceIndex + 1)..<bylineRangeEnd {
+                                        let candidate = parser.spine[candidateIndex]
+                                        guard let chapterHTML = try? parser.html(for: candidate, userCSS: "") else { continue }
+                                        let bylineAuthors = AO3MetadataExtractor.parseAuthors(from: chapterHTML)
+                                        if !bylineAuthors.isEmpty {
+                                            metadata.authors = bylineAuthors
+                                            break
+                                        }
+                                    }
+
+                                    // Tier 2: EPUB's own dc:creator — free, already parsed,
+                                    // no Calibre dependency. One dc:creator element may hold
+                                    // a comma-joined name list (observed AO3 export shape).
+                                    if metadata.authors.isEmpty {
+                                        let names = parser.opfCreators
+                                            .flatMap { $0.components(separatedBy: ", ") }
+                                            .map { $0.trimmingCharacters(in: .whitespaces) }
+                                            .filter { !$0.isEmpty }
+                                        metadata.authors = names.map {
+                                            AO3AuthorEntry(username: $0, pseud: nil, profileURL: nil, source: .opfCreator)
+                                        }
+                                    }
+                                    return metadata
+                                }
+                            }
+                            spineItemsChecked = checked
+                            failureReason = "no dl.tags AO3 preface metadata in first \(checked) spine items"
+                            return nil
+                        } catch {
+                            failureStatus = "failed"
+                            failureReason = error.localizedDescription
+                            return nil
+                        }
+                    }
+                } else {
+                    failureReason = "no EPUB found"
+                    metadata = nil
+                }
+                if var metadata {
+                    // Tier 3: Calibre's own author field, last resort. Deliberately
+                    // resolved here rather than inside the inner scan above — this is
+                    // the one dependency we're trying to phase out (see 3.4), kept as
+                    // a single, isolated, easy-to-delete-later call site.
+                    if metadata.authors.isEmpty {
+                        let calibreAuthors = await library.booksForIDs([id]).first?.authors ?? []
+                        metadata.authors = calibreAuthors.map {
+                            AO3AuthorEntry(username: $0, pseud: nil, profileURL: nil, source: .calibre)
+                        }
+                    }
+                    // indexedRecord is always set here: metadata is only non-nil when
+                    // parse() succeeded above, and indexedRecord is built unconditionally
+                    // right after parse() succeeds, before metadata can be returned. Guarded
+                    // rather than force-unwrapped per Invariant 12 (overview.md): if that
+                    // ordering is ever broken by a future refactor, this book is skipped
+                    // (logged) instead of crashing the whole extraction batch.
+                    guard let indexedRecord else {
+                        #if DEBUG
+                        print("extractOneBook: indexedRecord unexpectedly nil for id \(id) despite non-nil metadata; skipping")
+                        #endif
+                        return .failure(AO3ExtractionDiagnostic(
+                            calibreID: id,
+                            status: "failed",
+                            reason: "internal inconsistency: indexedRecord missing after successful parse",
+                            epubPath: diagnosticEPUB?.path,
+                            epubFilename: diagnosticEPUB?.lastPathComponent,
+                            spineItemsChecked: spineItemsChecked,
+                            attemptedAt: ISO8601DateFormatter().string(from: Date())
+                        ))
+                    }
+                    return .success(metadata, indexedRecord, id)
+                } else if let indexedRecord {
+                    return .indexed(indexedRecord, id)
+                } else {
+                    return .failure(AO3ExtractionDiagnostic(
+                        calibreID: id,
+                        status: failureStatus,
+                        reason: failureReason ?? "unknown reason",
+                        epubPath: diagnosticEPUB?.path,
+                        epubFilename: diagnosticEPUB?.lastPathComponent,
+                        spineItemsChecked: spineItemsChecked,
+                        attemptedAt: ISO8601DateFormatter().string(from: Date())
+                    ))
+                }
+            }
+
+            await withTaskGroup(of: ExtractionOutcome.self) { group in
+                func addNextTask() {
+                    guard !Task.isCancelled, nextIndex < missing.count else { return }
+                    let id = missing[nextIndex]
+                    nextIndex += 1
+                    group.addTask { await extractOneBook(id: id) }
+                }
+
+                for _ in 0..<concurrency { addNextTask() }
+
+                while let result = await group.next() {
+                    switch result {
+                    case .success(let metadata, let indexRecord, let id):
+                        pendingSuccess.append((metadata, id))
+                        pendingIndexed.append((indexRecord, id))
+                    case .indexed(let record, let id):
+                        pendingIndexed.append((record, id))
+                    case .failure(let diagnostic):
+                        pendingFailure.append(diagnostic)
+                        #if DEBUG
+                        print("[LibrarySession] AO3 extraction skipped calibreID=\(diagnostic.calibreID): \(diagnostic.reason)")
+                        #endif
+                    }
+                    completedCount += 1
+                    DispatchQueue.main.async { [weak self] in
+                        self?.extractionProgress.completed += 1
+                    }
+                    // Flush and yield every batchSize books, or every flushInterval
+                    // seconds if a batch of slow-parsing EPUBs takes longer than that,
+                    // so read queries can cut in and a quit mid-run loses little.
+                    if completedCount.isMultiple(of: batchSize) || Date().timeIntervalSince(lastFlushAt) >= flushInterval {
+                        await flushBatch()
+                        await Task.yield()
+                    }
+                    addNextTask()
+                }
+            }
+            // Flush any remaining records.
+            await flushBatch()
 
             DispatchQueue.main.async { [weak self] in
                 self?.extractionProgress.isRunning = false

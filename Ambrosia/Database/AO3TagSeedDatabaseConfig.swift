@@ -41,7 +41,7 @@ final class AO3TagSeedDatabaseConfig: ObservableObject {
         }
     }
 
-    @Published var databasePath: String? = nil {
+    @Published var databasePath: String? {
         didSet {
             if let databasePath, !databasePath.isEmpty {
                 UserDefaults.standard.set(databasePath, forKey: Keys.path)
