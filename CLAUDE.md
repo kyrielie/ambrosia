@@ -69,6 +69,13 @@ from this list as part of that change.
 
 ## Keeping this current
 
+**Project file:** `Ambrosia.xcodeproj` is generated from `project.yml` via
+`xcodegen generate` — see `project.yml`'s header comment for why (it
+replaced a hand-edited pbxproj where 8 of 11 `AmbrosiaTests/` files had
+silently fallen out of the Sources build phase and stopped running). Add or
+remove a `.swift` file under `Ambrosia/` or `AmbrosiaTests/`, then run
+`xcodegen generate` — do not hand-edit `project.pbxproj`.
+
 **If you're an AI engineer (or anyone) making a change, update the
 relevant doc(s) below as part of the same change — not as a follow-up,
 not "someone will get to it."** A stale doc is worse than no doc, because
@@ -86,7 +93,7 @@ it's trusted by default. Specifically:
 | `AO3MetadataExtractor`, `AO3MetadataRecord`, `canonical_tags`/`tag_synonyms`/`tag_parent_links` | `docs/ao3-metadata-extraction.md` |
 | `EPUBParser` and its extensions, the UTF-16 offset contract | `docs/epub-parsing.md` |
 | `ReaderViewController`, `ReaderWindowController`, `PaginationEngine`/`PaginationJS`, `ReaderPreferences.css` | `docs/reader.md` |
-| `Annotation`, `AnnotationSidebarView`, `AnnotationPopover`, `HighlightBridge` | `docs/annotations.md` |
+| `Annotation`, `AnnotationSidebarView`, `AnnotationPopover`, `HighlightBridge`, `AnnotationExportManager` | `docs/annotations.md` |
 | `LocalFeedServer`, `RSSPublishView`, `GzipEncoder`, `TransferDatabaseBuilder` | `docs/local-feed-server.md` |
 | `NSHostingView` usage, `sizingOptions`, any new async-closure-at-call-site pattern | `docs/swiftui-appkit-bridging.md` |
 | Any new actor, `Task.detached`/`async let` usage, or a build-breaking refactor across multiple files | `docs/concurrency-invariants.md` |

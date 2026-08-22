@@ -265,11 +265,21 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         epubItem.target = self
         menu.addItem(epubItem)
 
+        let annotationItem = NSMenuItem(title: "Export Annotations…", action: #selector(triggerAnnotationExport), keyEquivalent: "")
+        annotationItem.target = self
+        menu.addItem(annotationItem)
+
         menu.addItem(NSMenuItem.separator())
 
         let feedItem = NSMenuItem(title: "RSS Feed Server…", action: #selector(showRSSPanel), keyEquivalent: "")
         feedItem.target = self
         menu.addItem(feedItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let errorLogItem = NSMenuItem(title: "Error Log…", action: #selector(showErrorLog), keyEquivalent: "")
+        errorLogItem.target = self
+        menu.addItem(errorLogItem)
 
         return menu
     }
@@ -825,8 +835,10 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     }
     @objc private func showCollections() { toolbarState?.showCollections    = true }
     @objc private func showReadingGoal() { toolbarState?.showReadingGoal    = true }
+    @objc private func showErrorLog() { toolbarState?.showErrorLog = true }
     @objc private func triggerCSVExport() { toolbarState?.triggerExport      = true }
     @objc private func triggerEPUBExport() { toolbarState?.triggerEPUBExport  = true }
+    @objc private func triggerAnnotationExport() { toolbarState?.triggerAnnotationExport = true }
     @objc private func showRSSPanel() {
         guard let session else { return }
 

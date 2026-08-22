@@ -27,8 +27,10 @@ final class LibraryToolbarState {
     var showFilterDrawer: Bool = false
     var showCollections: Bool = false
     var showReadingGoal: Bool = false
+    var showErrorLog: Bool = false
     var triggerExport: Bool = false
     var triggerEPUBExport: Bool = false
+    var triggerAnnotationExport: Bool = false
     var reshuffleToken: Bool = false
     var toggleEmailSidebar: Bool = false
     var toggleEmailReaderSidebar: Bool = false
