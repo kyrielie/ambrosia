@@ -1,9 +1,9 @@
 import XCTest
 @testable import Ambrosia
 
-// Covers AmbrosiaMetaDB's error_log table (closing the "persisted error
-// log" item from ambrosia-improvement-plan.md §5.4.4 / docs/not-yet-built.md's
-// former "no durable diagnostic trail" gap). Follows CollectionStoreTests'
+// Covers AmbrosiaMetaDB's error_log table -- see docs/metadb-and-migrations.md
+// and docs/library-ui.md for the feature this backs (ErrorLogView, Export
+// menu -> "Error Log..."). Follows CollectionStoreTests'
 // setup convention: a real AmbrosiaMetaDB against a disposable temp-directory
 // "library" path, exercised through the actor rather than mocked, since the
 // actor boundary and the SQL are exactly what's under test here.

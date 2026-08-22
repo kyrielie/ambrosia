@@ -1,0 +1,30 @@
+# SwiftFormat config for Ambrosia.
+#
+# Scope: formatting only (whitespace, import order, brace placement). Does
+# not overlap with .swiftlint.yml, which enforces correctness/style rules
+# (force-unwrap ban, identifier naming, etc.) -- see that file for why
+# file_length/type_body_length/etc. are deliberately disabled there; the
+# same reasoning applies here (large feature files are a deliberate
+# structural choice, not something to fight with a formatter rule).
+
+--swiftversion 6.0
+
+# Matches .swiftlint.yml's line_length (160 warning), so a save-time format
+# doesn't fight the lint step over wrapping.
+--maxwidth 160
+
+--indent 4
+--indentcase false
+--trimwhitespace always
+--voidtype void
+--commas inline
+--elseposition same-line
+--guardelse auto
+
+# Import lines aren't sorted alphabetically anywhere in the current codebase
+# (see e.g. GzipEncoder.swift: `import Foundation` then `import Compression`,
+# grouped by first-use order, not alphabetically) -- don't fight that.
+--importgrouping testable-bottom
+
+--exclude Ambrosia.xcodeproj
+--exclude docs

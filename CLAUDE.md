@@ -25,6 +25,7 @@ doc(s) relevant to your task**, not this whole index cover-to-cover.
 - **`NSHostingView` inside AppKit, or an `async` closure that won't compile where you expect** → `docs/swiftui-appkit-bridging.md`
 - **Any Swift 6 actor/`Task`/`async let` compile error, or "why is this cached value stale"** → `docs/concurrency-invariants.md`
 - **"Does feature X exist yet?"** → `docs/not-yet-built.md`
+- **Adding a test file, or "why didn't my new test run"** → `docs/testing.md`
 
 If nothing above fits, grep the codebase before assuming it's
 undocumented — this split is complete as of the date below, but the
@@ -99,6 +100,7 @@ it's trusted by default. Specifically:
 | Any new actor, `Task.detached`/`async let` usage, or a build-breaking refactor across multiple files | `docs/concurrency-invariants.md` |
 | Shipping something previously listed as not-yet-built | `docs/not-yet-built.md` (remove the line) and whichever system doc now owns it |
 | `.swiftlint.yml` rules (adding/disabling a rule, changing thresholds), or a new accepted force-unwrap exception | `docs/overview.md`'s "Repo-wide engineering rules" (Invariant 12) |
+| Adding an `AmbrosiaTests/` file, or changing what CI verifies about test-file wiring | `docs/testing.md` |
 
 If a change doesn't fit any row above — new system, new cross-cutting
 concern, or something genuinely new — **add a new doc** rather than
