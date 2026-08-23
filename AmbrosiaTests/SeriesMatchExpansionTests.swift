@@ -1,10 +1,6 @@
 import XCTest
 @testable import Ambrosia
 
-// NOTE: this file needs a Unit Testing Bundle target added in Xcode
-// (see the matching note in LibraryVisibilityPolicyTests.swift) before
-// `xcodebuild test` will pick it up.
-//
 // Covers only `SeriesMatchExpansion.ratingConstraint(in:)`: a pure function
 // over `FilterExpression` with no actor or SQLite dependency, so it's
 // testable without the CalibreLibraryFixtureTests-style `.sql`-backed

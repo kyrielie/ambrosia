@@ -1,13 +1,6 @@
 import XCTest
 @testable import Ambrosia
 
-// NOTE: this file needs a Unit Testing Bundle target added in Xcode
-// (File > New > Target > Unit Testing Bundle, name it AmbrosiaTests,
-// add this file to it) before `xcodebuild test` will pick it up. Adding
-// that target isn't something I can do safely by hand-editing
-// project.pbxproj outside Xcode, so this is written and ready but not
-// yet wired in.
-
 final class LibraryVisibilityPolicyTests: XCTestCase {
 
     // MARK: - isVisible(_ id:)
