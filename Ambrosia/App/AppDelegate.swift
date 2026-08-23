@@ -12,6 +12,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var keyBindingsSubscription: AnyCancellable?
 
+    /// True when the process is an XCTest host, i.e. `xcodebuild test` (or
+    /// Xcode's Test navigator) launched Ambrosia.app to inject AmbrosiaTests
+    /// into it -- AmbrosiaTests is app-hosted (TEST_HOST points at the real
+    /// Ambrosia.app binary), so `applicationDidFinishLaunching` still runs
+    /// on every test invocation. Without this guard, every test run would
+    /// silently reopen and display whatever real Calibre library the
+    /// machine last had open (via `LibraryRegistry.shared.activePath` in
+    /// `UserDefaults`), which is both slow and not what any unit test here
+    /// exercises -- every test that needs a library builds its own isolated
+    /// temp fixture (see `CalibreTestFixture`) instead.
+    private static var isRunningTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
 
@@ -29,6 +43,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // doesn't make sense for this app; NSWindow.allowsAutomaticWindowTabbing
         // defaults to true, so it must be explicitly turned off.
         NSWindow.allowsAutomaticWindowTabbing = false
+
+        guard !Self.isRunningTests else { return }
 
         // Reopen last used library silently on launch
         Task { await session.reopenIfNeeded() }
@@ -98,6 +114,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        guard !Self.isRunningTests else { return }
+
         // Persist search history before quitting. LibrarySession.close() also
         // does this, but close() additionally tears down extractionTask, stops
         // the feed server, and clears membership caches — none of which is

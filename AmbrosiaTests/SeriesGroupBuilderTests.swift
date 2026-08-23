@@ -14,7 +14,7 @@ final class SeriesGroupBuilderTests: XCTestCase {
 
     // MARK: - Normal 3-work series
 
-    func testNormalThreeWorkSeriesProducesOneGroupWithUnionedMetadata() {
+    func testNormalThreeWorkSeriesProducesOneGroupWithUnionedMetadata() throws {
         let works = [
             makeBook(id: 1, tags: ["Fantasy", "Explicit"]),
             makeBook(id: 2, tags: ["Fantasy", "Angst"]),
@@ -35,7 +35,7 @@ final class SeriesGroupBuilderTests: XCTestCase {
         let groups = buildSeriesGroups(allEntries: entries, byID: byID, seriesMetadata: metadata)
 
         XCTAssertEqual(groups.count, 1)
-        let group = try! XCTUnwrap(groups.values.first)
+        let group = try XCTUnwrap(groups.values.first)
         XCTAssertEqual(group.works.count, 3)
         XCTAssertEqual(Set(group.allFandoms), Set(["Fandom A", "Fandom B"]))
         XCTAssertEqual(Set(group.allRelationships), Set(["Ship A/B"]))
@@ -55,7 +55,7 @@ final class SeriesGroupBuilderTests: XCTestCase {
 
     // MARK: - Anthology-flagged work excluded, doesn't disqualify the rest
 
-    func testAnthologyFlaggedWorkExcludedButDoesNotDisqualifyRestOfSeries() {
+    func testAnthologyFlaggedWorkExcludedButDoesNotDisqualifyRestOfSeries() throws {
         let anthologyComment = "Anthology containing:\nWork One\nWork Two"
         let works = [
             makeBook(id: 1, tags: []),
@@ -72,7 +72,7 @@ final class SeriesGroupBuilderTests: XCTestCase {
         let groups = buildSeriesGroups(allEntries: entries, byID: byID, seriesMetadata: [:])
 
         XCTAssertEqual(groups.count, 1)
-        let group = try! XCTUnwrap(groups.values.first)
+        let group = try XCTUnwrap(groups.values.first)
         // The series still forms (2 non-anthology works > 1), and the
         // anthology work itself is excluded from `works`.
         XCTAssertEqual(group.works.map(\.id).sorted(), [1, 2])
@@ -80,7 +80,7 @@ final class SeriesGroupBuilderTests: XCTestCase {
 
     // MARK: - duplicateLoserIDs entry excluded at the entriesBySeries grouping step
 
-    func testDuplicateLoserExcludedAtGroupingStep() {
+    func testDuplicateLoserExcludedAtGroupingStep() throws {
         let works = [
             makeBook(id: 1, tags: []),
             makeBook(id: 2, tags: []),
@@ -101,13 +101,13 @@ final class SeriesGroupBuilderTests: XCTestCase {
         )
 
         XCTAssertEqual(groups.count, 1)
-        let group = try! XCTUnwrap(groups.values.first)
+        let group = try XCTUnwrap(groups.values.first)
         XCTAssertEqual(group.works.map(\.id).sorted(), [1, 2])
     }
 
     // MARK: - missingIndices / workIndices propagation for a gap
 
-    func testMissingIndicesPropagatesForSeriesWithGap() {
+    func testMissingIndicesPropagatesForSeriesWithGap() throws {
         let works = [
             makeBook(id: 1, tags: []),
             makeBook(id: 2, tags: []),
@@ -123,14 +123,14 @@ final class SeriesGroupBuilderTests: XCTestCase {
 
         let groups = buildSeriesGroups(allEntries: entries, byID: byID, seriesMetadata: [:])
 
-        let group = try! XCTUnwrap(groups.values.first)
+        let group = try XCTUnwrap(groups.values.first)
         XCTAssertEqual(group.workIndices.sorted(), [1, 2, 4])
         XCTAssertEqual(group.missingIndices, [3])
     }
 
     // MARK: - chapterTotalTotal / hasUnknownChapterTotal
 
-    func testChapterTotalsPopulatedWhenEveryWorkHasKnownChapterTotal() {
+    func testChapterTotalsPopulatedWhenEveryWorkHasKnownChapterTotal() throws {
         let works = [makeBook(id: 1, tags: []), makeBook(id: 2, tags: [])]
         let entries = [makeEntry(calibreID: 1, seriesIndex: 1), makeEntry(calibreID: 2, seriesIndex: 2)]
         let byID = Dictionary(uniqueKeysWithValues: works.map { ($0.id, $0) })
@@ -141,12 +141,12 @@ final class SeriesGroupBuilderTests: XCTestCase {
 
         let groups = buildSeriesGroups(allEntries: entries, byID: byID, seriesMetadata: metadata)
 
-        let group = try! XCTUnwrap(groups.values.first)
+        let group = try XCTUnwrap(groups.values.first)
         XCTAssertEqual(group.chapterTotalTotal, 15)
         XCTAssertFalse(group.hasUnknownChapterTotal)
     }
 
-    func testChapterTotalsUnknownWhenAtLeastOneWorkLacksChapterTotal() {
+    func testChapterTotalsUnknownWhenAtLeastOneWorkLacksChapterTotal() throws {
         let works = [makeBook(id: 1, tags: []), makeBook(id: 2, tags: [])]
         let entries = [makeEntry(calibreID: 1, seriesIndex: 1), makeEntry(calibreID: 2, seriesIndex: 2)]
         let byID = Dictionary(uniqueKeysWithValues: works.map { ($0.id, $0) })
@@ -157,7 +157,7 @@ final class SeriesGroupBuilderTests: XCTestCase {
 
         let groups = buildSeriesGroups(allEntries: entries, byID: byID, seriesMetadata: metadata)
 
-        let group = try! XCTUnwrap(groups.values.first)
+        let group = try XCTUnwrap(groups.values.first)
         XCTAssertNil(group.chapterTotalTotal)
         XCTAssertTrue(group.hasUnknownChapterTotal)
     }

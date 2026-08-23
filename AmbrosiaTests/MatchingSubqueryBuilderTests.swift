@@ -12,37 +12,37 @@ final class MatchingSubqueryBuilderTests: XCTestCase {
 
     // MARK: - authorFragment
 
-    func testAuthorFragmentContains() {
-        let (sql, args) = MatchingSubqueryBuilder.authorFragment(op: .contains, value: "Smith")!
+    func testAuthorFragmentContains() throws {
+        let (sql, args) = try XCTUnwrap(MatchingSubqueryBuilder.authorFragment(op: .contains, value: "Smith"))
         XCTAssertTrue(sql.hasPrefix("EXISTS ("))
         XCTAssertFalse(sql.contains("NOT EXISTS"))
         XCTAssertTrue(sql.contains("LOWER(a2.name) LIKE ?"))
         XCTAssertEqual(args as? [String], ["%smith%"])
     }
 
-    func testAuthorFragmentNotContains() {
-        let (sql, args) = MatchingSubqueryBuilder.authorFragment(op: .notContains, value: "Smith")!
+    func testAuthorFragmentNotContains() throws {
+        let (sql, args) = try XCTUnwrap(MatchingSubqueryBuilder.authorFragment(op: .notContains, value: "Smith"))
         XCTAssertTrue(sql.hasPrefix("NOT EXISTS ("))
         XCTAssertTrue(sql.contains("LOWER(a2.name) LIKE ?"))
         XCTAssertEqual(args as? [String], ["%smith%"])
     }
 
-    func testAuthorFragmentEquals() {
-        let (sql, args) = MatchingSubqueryBuilder.authorFragment(op: .equals, value: "Smith")!
+    func testAuthorFragmentEquals() throws {
+        let (sql, args) = try XCTUnwrap(MatchingSubqueryBuilder.authorFragment(op: .equals, value: "Smith"))
         XCTAssertTrue(sql.hasPrefix("EXISTS ("))
         XCTAssertTrue(sql.contains("LOWER(a2.name) = ?"))
         XCTAssertEqual(args as? [String], ["smith"])
     }
 
-    func testAuthorFragmentNotEquals() {
-        let (sql, args) = MatchingSubqueryBuilder.authorFragment(op: .notEquals, value: "Smith")!
+    func testAuthorFragmentNotEquals() throws {
+        let (sql, args) = try XCTUnwrap(MatchingSubqueryBuilder.authorFragment(op: .notEquals, value: "Smith"))
         XCTAssertTrue(sql.hasPrefix("NOT EXISTS ("))
         XCTAssertTrue(sql.contains("LOWER(a2.name) = ?"))
         XCTAssertEqual(args as? [String], ["smith"])
     }
 
-    func testAuthorFragmentStartsWith() {
-        let (sql, args) = MatchingSubqueryBuilder.authorFragment(op: .startsWith, value: "Smith")!
+    func testAuthorFragmentStartsWith() throws {
+        let (sql, args) = try XCTUnwrap(MatchingSubqueryBuilder.authorFragment(op: .startsWith, value: "Smith"))
         XCTAssertTrue(sql.hasPrefix("EXISTS ("))
         XCTAssertTrue(sql.contains("LOWER(a2.name) LIKE ?"))
         XCTAssertEqual(args as? [String], ["smith%"])
@@ -53,43 +53,43 @@ final class MatchingSubqueryBuilderTests: XCTestCase {
         XCTAssertNil(MatchingSubqueryBuilder.authorFragment(op: .ratingAtLeast, value: "Explicit"))
     }
 
-    func testAuthorFragmentCorrelationShape() {
-        let (sql, _) = MatchingSubqueryBuilder.authorFragment(op: .contains, value: "Smith")!
+    func testAuthorFragmentCorrelationShape() throws {
+        let (sql, _) = try XCTUnwrap(MatchingSubqueryBuilder.authorFragment(op: .contains, value: "Smith"))
         XCTAssertTrue(sql.contains("bal2.book = b.id"))
     }
 
     // MARK: - seriesFragment
 
-    func testSeriesFragmentContains() {
-        let (sql, args) = MatchingSubqueryBuilder.seriesFragment(op: .contains, value: "Chronicles")!
+    func testSeriesFragmentContains() throws {
+        let (sql, args) = try XCTUnwrap(MatchingSubqueryBuilder.seriesFragment(op: .contains, value: "Chronicles"))
         XCTAssertTrue(sql.hasPrefix("EXISTS ("))
         XCTAssertTrue(sql.contains("LOWER(s2.name) LIKE ?"))
         XCTAssertEqual(args as? [String], ["%chronicles%"])
     }
 
-    func testSeriesFragmentNotContains() {
-        let (sql, args) = MatchingSubqueryBuilder.seriesFragment(op: .notContains, value: "Chronicles")!
+    func testSeriesFragmentNotContains() throws {
+        let (sql, args) = try XCTUnwrap(MatchingSubqueryBuilder.seriesFragment(op: .notContains, value: "Chronicles"))
         XCTAssertTrue(sql.hasPrefix("NOT EXISTS ("))
         XCTAssertTrue(sql.contains("LOWER(s2.name) LIKE ?"))
         XCTAssertEqual(args as? [String], ["%chronicles%"])
     }
 
-    func testSeriesFragmentEquals() {
-        let (sql, args) = MatchingSubqueryBuilder.seriesFragment(op: .equals, value: "Chronicles")!
+    func testSeriesFragmentEquals() throws {
+        let (sql, args) = try XCTUnwrap(MatchingSubqueryBuilder.seriesFragment(op: .equals, value: "Chronicles"))
         XCTAssertTrue(sql.hasPrefix("EXISTS ("))
         XCTAssertTrue(sql.contains("LOWER(s2.name) = ?"))
         XCTAssertEqual(args as? [String], ["chronicles"])
     }
 
-    func testSeriesFragmentNotEquals() {
-        let (sql, args) = MatchingSubqueryBuilder.seriesFragment(op: .notEquals, value: "Chronicles")!
+    func testSeriesFragmentNotEquals() throws {
+        let (sql, args) = try XCTUnwrap(MatchingSubqueryBuilder.seriesFragment(op: .notEquals, value: "Chronicles"))
         XCTAssertTrue(sql.hasPrefix("NOT EXISTS ("))
         XCTAssertTrue(sql.contains("LOWER(s2.name) = ?"))
         XCTAssertEqual(args as? [String], ["chronicles"])
     }
 
-    func testSeriesFragmentStartsWith() {
-        let (sql, args) = MatchingSubqueryBuilder.seriesFragment(op: .startsWith, value: "Chronicles")!
+    func testSeriesFragmentStartsWith() throws {
+        let (sql, args) = try XCTUnwrap(MatchingSubqueryBuilder.seriesFragment(op: .startsWith, value: "Chronicles"))
         XCTAssertTrue(sql.hasPrefix("EXISTS ("))
         XCTAssertTrue(sql.contains("LOWER(s2.name) LIKE ?"))
         XCTAssertEqual(args as? [String], ["chronicles%"])
@@ -100,20 +100,20 @@ final class MatchingSubqueryBuilderTests: XCTestCase {
         XCTAssertNil(MatchingSubqueryBuilder.seriesFragment(op: .ratingAtLeast, value: "Explicit"))
     }
 
-    func testSeriesFragmentCorrelationShape() {
-        let (sql, _) = MatchingSubqueryBuilder.seriesFragment(op: .contains, value: "Chronicles")!
+    func testSeriesFragmentCorrelationShape() throws {
+        let (sql, _) = try XCTUnwrap(MatchingSubqueryBuilder.seriesFragment(op: .contains, value: "Chronicles"))
         XCTAssertTrue(sql.contains("bsl2.book = b.id"))
     }
 
     // MARK: - tagFragment
 
-    func testTagFragmentNegatedProducesNotExists() {
-        let (sql, _) = MatchingSubqueryBuilder.tagFragment(matcher: "t2.name = ?", args: ["Fantasy" as Binding?], negated: true)!
+    func testTagFragmentNegatedProducesNotExists() throws {
+        let (sql, _) = try XCTUnwrap(MatchingSubqueryBuilder.tagFragment(matcher: "t2.name = ?", args: ["Fantasy" as Binding?], negated: true))
         XCTAssertTrue(sql.hasPrefix("NOT EXISTS ("))
     }
 
-    func testTagFragmentNotNegatedProducesExists() {
-        let (sql, _) = MatchingSubqueryBuilder.tagFragment(matcher: "t2.name = ?", args: ["Fantasy" as Binding?], negated: false)!
+    func testTagFragmentNotNegatedProducesExists() throws {
+        let (sql, _) = try XCTUnwrap(MatchingSubqueryBuilder.tagFragment(matcher: "t2.name = ?", args: ["Fantasy" as Binding?], negated: false))
         XCTAssertTrue(sql.hasPrefix("EXISTS ("))
         XCTAssertFalse(sql.contains("NOT EXISTS"))
     }
@@ -122,19 +122,19 @@ final class MatchingSubqueryBuilderTests: XCTestCase {
         XCTAssertNil(MatchingSubqueryBuilder.tagFragment(matcher: "", args: [], negated: false))
     }
 
-    func testTagFragmentPassesMatcherThroughVerbatim() {
+    func testTagFragmentPassesMatcherThroughVerbatim() throws {
         let matcher = "t2.name LIKE ? OR t2.name LIKE ?"
-        let (sql, args) = MatchingSubqueryBuilder.tagFragment(
+        let (sql, args) = try XCTUnwrap(MatchingSubqueryBuilder.tagFragment(
             matcher: matcher,
             args: ["%a%" as Binding?, "%b%" as Binding?],
             negated: false
-        )!
+        ))
         XCTAssertTrue(sql.contains(matcher))
         XCTAssertEqual(args as? [String], ["%a%", "%b%"])
     }
 
-    func testTagFragmentCorrelationShape() {
-        let (sql, _) = MatchingSubqueryBuilder.tagFragment(matcher: "t2.name = ?", args: ["Fantasy" as Binding?], negated: false)!
+    func testTagFragmentCorrelationShape() throws {
+        let (sql, _) = try XCTUnwrap(MatchingSubqueryBuilder.tagFragment(matcher: "t2.name = ?", args: ["Fantasy" as Binding?], negated: false))
         XCTAssertTrue(sql.contains("btl2.book = b.id"))
     }
 }

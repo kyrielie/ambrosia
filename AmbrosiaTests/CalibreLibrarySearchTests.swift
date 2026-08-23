@@ -18,21 +18,39 @@ import SQLite
 /// already routes through `MatchingSubqueryBuilder`'s `EXISTS`/`NOT EXISTS`
 /// shape. `testBookCountTagAndAuthorCombinedWithAND` pins that current,
 /// correct behavior.
+///
+/// The fixture (118 CREATE TABLE/INDEX statements, 3153 INSERTs) is built
+/// once for the whole class via class-level setUp/tearDown rather than per
+/// test -- rebuilding it per test (the previous approach) took ~1.7-2.3s
+/// per test, ~29s for this suite alone, all of it fixture-load time rather
+/// than time in the code under test. Every test here is read-only against
+/// `library` (bookCount/*Suggestions never mutate rows), so sharing one
+/// instance across the class is safe. `CalibreLibrary` is an `actor`, so
+/// even if the suite were ever made parallelizable, access would still be
+/// serialized.
 final class CalibreLibrarySearchTests: XCTestCase {
 
-    private var library: CalibreLibrary!
-    private var libraryRoot: URL!
+    private static var library: CalibreLibrary!
+    private static var libraryRoot: URL!
 
-    override func setUpWithError() throws {
-        libraryRoot = try CalibreTestFixture.makeTempLibraryRoot()
-        library = try CalibreLibrary(root: libraryRoot)
+    override class func setUp() {
+        do {
+            libraryRoot = try CalibreTestFixture.makeTempLibraryRoot()
+            library = try CalibreLibrary(root: libraryRoot)
+        } catch {
+            XCTFail("Failed to build shared fixture: \(error)")
+        }
     }
 
-    override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: libraryRoot)
+    override class func tearDown() {
+        if let libraryRoot {
+            try? FileManager.default.removeItem(at: libraryRoot)
+        }
         library = nil
         libraryRoot = nil
     }
+
+    private var library: CalibreLibrary { Self.library }
 
     private func emptyQuery(
         tagTerms: [String] = [],

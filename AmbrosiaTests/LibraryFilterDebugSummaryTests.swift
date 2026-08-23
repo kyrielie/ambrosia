@@ -63,7 +63,10 @@ final class LibraryFilterDebugSummaryTests: XCTestCase {
         let plainOnly = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [], plainTerms: ["hello", "world"])
         XCTAssertEqual(LibraryFilterDebug.summary(query: plainOnly), "plain:hello|world")
 
-        let fulltextOnly = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [], statusTerms: [], fulltextPhrase: "a phrase", plainTerms: [])
+        let fulltextOnly = SearchQuery(
+            tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [],
+            statusTerms: [], fulltextPhrase: "a phrase", plainTerms: []
+        )
         XCTAssertEqual(LibraryFilterDebug.summary(query: fulltextOnly), "fulltext:a phrase")
 
         var ftsOnly = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [], plainTerms: [])

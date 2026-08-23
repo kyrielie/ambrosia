@@ -111,7 +111,7 @@ struct ActivityFeedView: View {
                     ActivityFilterChip(
                         label: tab.rawValue,
                         symbol: tab.sfSymbol,
-                        count: count(for: tab),
+                        badgeCount: count(for: tab),
                         selected: filter == tab
                     ) {
                         if reduceMotion {
@@ -267,7 +267,7 @@ struct ActivityFeedView: View {
 private struct ActivityFilterChip: View {
     let label: String
     let symbol: String
-    let count: Int
+    let badgeCount: Int
     let selected: Bool
     let action: () -> Void
 
@@ -278,8 +278,8 @@ private struct ActivityFilterChip: View {
                     .font(.caption.weight(.medium))
                 Text(label)
                     .font(.caption.weight(selected ? .semibold : .regular))
-                if count > 0 {
-                    Text("\(count)")
+                if badgeCount != 0 {
+                    Text("\(badgeCount)")
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(selected ? .white : .secondary)
                         .padding(.horizontal, 5)
