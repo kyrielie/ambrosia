@@ -92,30 +92,30 @@ struct ExportManager {
 
         var csvRows: [[String]] = [header]
 
-        for r in rows {
-            let tags = filteredTagsForExport(book: r.book, ao3: r.ao3, options: tagOptions)
+        for row in rows {
+            let tags = filteredTagsForExport(book: row.book, ao3: row.ao3, options: tagOptions)
             csvRows.append([
-                r.book.title,
-                r.book.authors.joined(separator: "; "),
-                r.book.displaySeries ?? "",
+                row.book.title,
+                row.book.authors.joined(separator: "; "),
+                row.book.displaySeries ?? "",
                 tags.joined(separator: "; "),
                 // §2a: ao3 word count is primary; Calibre custom column is fallback.
-                (r.ao3?.wordCount ?? r.book.wordCount).map(String.init) ?? "",
-                r.book.kudos.map(String.init) ?? "",
-                r.ao3?.publishedDate ?? r.book.publishedDate.map { isoDate($0) } ?? "",
-                r.ao3?.updatedDate ?? "",
-                completionLabel(r.ao3),                              // §5 naming
-                (r.ao3?.fandoms ?? []).joined(separator: "; "),
-                (r.ao3?.relationships ?? []).joined(separator: "; "),
-                (r.ao3?.characters ?? []).joined(separator: "; "),
-                (r.ao3?.additionalTags ?? []).joined(separator: "; "),
-                (r.ao3?.categories ?? []).joined(separator: "; "),
-                (r.ao3?.ao3Collections ?? []).joined(separator: "; "),
-                (r.ao3?.series ?? []).map(\.name).joined(separator: "; "),
-                r.ao3?.storyURL ?? "",
-                r.ao3?.workID ?? "",
-                r.collectionNames.joined(separator: "; "),
-                r.epubAbsolutePath ?? ""
+                (row.ao3?.wordCount ?? row.book.wordCount).map(String.init) ?? "",
+                row.book.kudos.map(String.init) ?? "",
+                row.ao3?.publishedDate ?? row.book.publishedDate.map { isoDate($0) } ?? "",
+                row.ao3?.updatedDate ?? "",
+                completionLabel(row.ao3),                              // §5 naming
+                (row.ao3?.fandoms ?? []).joined(separator: "; "),
+                (row.ao3?.relationships ?? []).joined(separator: "; "),
+                (row.ao3?.characters ?? []).joined(separator: "; "),
+                (row.ao3?.additionalTags ?? []).joined(separator: "; "),
+                (row.ao3?.categories ?? []).joined(separator: "; "),
+                (row.ao3?.ao3Collections ?? []).joined(separator: "; "),
+                (row.ao3?.series ?? []).map(\.name).joined(separator: "; "),
+                row.ao3?.storyURL ?? "",
+                row.ao3?.workID ?? "",
+                row.collectionNames.joined(separator: "; "),
+                row.epubAbsolutePath ?? ""
             ])
         }
 
@@ -262,17 +262,30 @@ struct ExportManager {
     /// successfully copied at least once, not the total number of file-copy
     /// operations — a multi-series book copied into three series folders still
     /// counts as one toward `copied`.
+    /// Options for `exportEPUBs`, grouped to keep the function's parameter
+    /// count within lint limits. `destination`/`ao3Map`/`groupBySeries` are
+    /// required per call; `seriesEntries`/`filenameIDSource` default like
+    /// their prior standalone-parameter defaults did.
+    struct ExportEPUBsOptions {
+        var destination: URL
+        var ao3Map: [Int: AO3MetadataRecord]
+        var groupBySeries: Bool
+        var seriesEntries: [Int: [SeriesCacheEntry]] = [:]
+        var filenameIDSource: ExportFilenameIDSource = .ao3ThenCalibre
+    }
+
     static func exportEPUBs(
         books: [CalibreBook],
         libraryRoot: URL,
-        destination: URL,
-        ao3Map: [Int: AO3MetadataRecord],
-        groupBySeries: Bool,
-        seriesEntries: [Int: [SeriesCacheEntry]] = [:],
-        filenameIDSource: ExportFilenameIDSource = .ao3ThenCalibre,
+        options: ExportEPUBsOptions,
         progress: @Sendable @escaping (Int) -> Void
     ) async -> (copied: Int, skipped: [String]) {
-        await Task.detached(priority: .userInitiated) {
+        let destination = options.destination
+        let ao3Map = options.ao3Map
+        let groupBySeries = options.groupBySeries
+        let seriesEntries = options.seriesEntries
+        let filenameIDSource = options.filenameIDSource
+        return await Task.detached(priority: .userInitiated) {
             var copied = 0
             var skipped: [String] = []
 
@@ -378,11 +391,13 @@ struct ExportManager {
                 let (copied, skipped) = await exportEPUBs(
                     books: books,
                     libraryRoot: libraryRoot,
-                    destination: destination,
-                    ao3Map: ao3Map,
-                    groupBySeries: groupBySeries,
-                    seriesEntries: seriesEntries,
-                    filenameIDSource: filenameIDSource,
+                    options: ExportEPUBsOptions(
+                        destination: destination,
+                        ao3Map: ao3Map,
+                        groupBySeries: groupBySeries,
+                        seriesEntries: seriesEntries,
+                        filenameIDSource: filenameIDSource
+                    ),
                     progress: { _ in }
                 )
                 presentEPUBExportSummary(copied: copied, skipped: skipped)
@@ -395,11 +410,11 @@ struct ExportManager {
         let ext  = (filename as NSString).pathExtension
         let stem = (filename as NSString).deletingPathExtension
         var candidate = directory.appendingPathComponent(filename)
-        var n = 2
+        var suffix = 2
         while FileManager.default.fileExists(atPath: candidate.path) {
-            let newName = ext.isEmpty ? "\(stem)-\(n)" : "\(stem)-\(n).\(ext)"
+            let newName = ext.isEmpty ? "\(stem)-\(suffix)" : "\(stem)-\(suffix).\(ext)"
             candidate = directory.appendingPathComponent(newName)
-            n += 1
+            suffix += 1
         }
         return candidate
     }
@@ -426,10 +441,10 @@ struct ExportManager {
     /// ISO date string for a Date value (yyyy-MM-dd).
     /// Internal (not private): reused by AnnotationExportManager.
     static func isoDate(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        return f.string(from: date)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter.string(from: date)
     }
 
     /// §5: Map AO3 completion state to a human-readable string using the new case names.

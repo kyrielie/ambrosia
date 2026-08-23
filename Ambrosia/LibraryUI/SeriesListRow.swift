@@ -113,14 +113,16 @@ struct SeriesListRow: View, Equatable {
     @ViewBuilder
     private var tagsRow: some View {
         let pills = TagPillDisplay.makeForSeries(
-            fandoms: series.allFandoms,
-            relationships: series.allRelationships,
-            characters: series.allCharacters,
-            categories: series.allCategories,
-            warnings: series.allWarnings,
-            ratings: series.allRatings,
-            additionalTags: series.allAdditionalTags,
-            tags: series.allTags,
+            TagPillDisplay.SeriesTagFacets(
+                fandoms: series.allFandoms,
+                relationships: series.allRelationships,
+                characters: series.allCharacters,
+                categories: series.allCategories,
+                warnings: series.allWarnings,
+                ratings: series.allRatings,
+                additionalTags: series.allAdditionalTags,
+                tags: series.allTags
+            ),
             hideFanworks: hideFanworksTagPill
         )
         if !pills.isEmpty {

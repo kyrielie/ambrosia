@@ -12,9 +12,9 @@ struct FlowLayout: Layout {
     }
 
     func makeCache(subviews: Subviews) -> Cache {
-        var c = Cache()
-        c.subviewSizes = subviews.map { $0.sizeThatFits(.unspecified) }
-        return c
+        var cache = Cache()
+        cache.subviewSizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        return cache
     }
 
     func updateCache(_ cache: inout Cache, subviews: Subviews) {
@@ -33,9 +33,9 @@ struct FlowLayout: Layout {
         var rowIdx = 0
         var x = bounds.minX
 
-        for (i, sub) in subviews.enumerated() {
-            let size = cache.subviewSizes[i]
-            if rowIdx + 1 < cache.rows.count && i >= cache.rows[rowIdx + 1].startIndex {
+        for (index, sub) in subviews.enumerated() {
+            let size = cache.subviewSizes[index]
+            if rowIdx + 1 < cache.rows.count && index >= cache.rows[rowIdx + 1].startIndex {
                 rowIdx += 1
                 x = bounds.minX
             }
@@ -63,11 +63,11 @@ struct FlowLayout: Layout {
         var rowH: CGFloat = 0
         var rowStart = 0
 
-        for (i, size) in cache.subviewSizes.enumerated() {
+        for (index, size) in cache.subviewSizes.enumerated() {
             if x + size.width > maxWidth && x > 0 {
                 rows.append((startIndex: rowStart, y: y, height: rowH))
                 y += rowH + spacing
-                x = 0; rowH = 0; rowStart = i
+                x = 0; rowH = 0; rowStart = index
             }
             rowH = max(rowH, size.height)
             x += size.width + spacing
@@ -207,7 +207,10 @@ func logMissingVisibleWorkMetadata(
         if let diagnostic {
             reasons.append("no AO3 metadata row; extractionStatus=\(diagnostic.status); extractionReason=\(diagnostic.reason)")
         } else {
-            reasons.append("no AO3 metadata row; extraction has not recorded a status yet (pending, not attempted under diagnostics schema, or pre-diagnostics DB)")
+            reasons.append(
+                "no AO3 metadata row; extraction has not recorded a status yet " +
+                "(pending, not attempted under diagnostics schema, or pre-diagnostics DB)"
+            )
         }
     } else {
         if ao3Metadata?.wordCount == nil {
@@ -221,6 +224,21 @@ func logMissingVisibleWorkMetadata(
         reasons.append("Calibre fallback missing")
     }
 
-    print("[LibraryMetadata] visible work missing displayed metadata reason=\(reasons.joined(separator: "; ")) calibreID=\(book.id) title=\"\(book.displayTitle)\" hasAO3Metadata=\(ao3Metadata != nil) ao3WorkID=\(ao3Metadata?.workID ?? "nil") ao3Words=\(ao3Metadata?.wordCount.map(String.init) ?? "nil") ao3ChapterCurrent=\(ao3Metadata?.chapterCurrent.map(String.init) ?? "nil") ao3ChapterTotal=\(ao3Metadata?.chapterTotal.map(String.init) ?? "nil") calibreWords=\(book.wordCount.map(String.init) ?? "nil") extractedAt=\(ao3Metadata?.extractedAt ?? "nil") extractionStatus=\(diagnostic?.status ?? "nil") extractionReason=\"\(diagnostic?.reason ?? "nil")\" attemptedAt=\(diagnostic?.attemptedAt ?? "nil") epubFilename=\"\(diagnostic?.epubFilename ?? "nil")\" epubPath=\"\(diagnostic?.epubPath ?? "nil")\" spineItemsChecked=\(diagnostic?.spineItemsChecked.map(String.init) ?? "nil")")
+    let ao3Words = ao3Metadata?.wordCount.map(String.init) ?? "nil"
+    let ao3ChapterCurrent = ao3Metadata?.chapterCurrent.map(String.init) ?? "nil"
+    let ao3ChapterTotal = ao3Metadata?.chapterTotal.map(String.init) ?? "nil"
+    let calibreWords = book.wordCount.map(String.init) ?? "nil"
+    let spineItemsChecked = diagnostic?.spineItemsChecked.map(String.init) ?? "nil"
+    let diagnosticSummary = "reason=\(reasons.joined(separator: "; ")) calibreID=\(book.id) " +
+        "title=\"\(book.displayTitle)\" hasAO3Metadata=\(ao3Metadata != nil) " +
+        "ao3WorkID=\(ao3Metadata?.workID ?? "nil") ao3Words=\(ao3Words) " +
+        "ao3ChapterCurrent=\(ao3ChapterCurrent) ao3ChapterTotal=\(ao3ChapterTotal) " +
+        "calibreWords=\(calibreWords) extractedAt=\(ao3Metadata?.extractedAt ?? "nil") " +
+        "extractionStatus=\(diagnostic?.status ?? "nil") " +
+        "extractionReason=\"\(diagnostic?.reason ?? "nil")\" " +
+        "attemptedAt=\(diagnostic?.attemptedAt ?? "nil") " +
+        "epubFilename=\"\(diagnostic?.epubFilename ?? "nil")\" " +
+        "epubPath=\"\(diagnostic?.epubPath ?? "nil")\" spineItemsChecked=\(spineItemsChecked)"
+    print("[LibraryMetadata] visible work missing displayed metadata \(diagnosticSummary)")
     #endif
 }

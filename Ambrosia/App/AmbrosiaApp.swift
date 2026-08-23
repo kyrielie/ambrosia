@@ -28,7 +28,9 @@ struct AmbrosiaApp: App {
             #endif
             let alert = NSAlert()
             alert.messageText = "Could Not Open Reading State"
-            alert.informativeText = "Ambrosia could not open its reading-state database. No files were deleted. The app will run with temporary reading state until this is resolved.\n\n\(error.localizedDescription)"
+            alert.informativeText = "Ambrosia could not open its reading-state database. " +
+                "No files were deleted. The app will run with temporary reading state " +
+                "until this is resolved.\n\n\(error.localizedDescription)"
             alert.alertStyle = .critical
             alert.runModal()
 
@@ -122,8 +124,11 @@ struct AmbrosiaApp: App {
                     guard let anchorWindow = libraryWindowController.window else { return }
                     AO3FilterPopupWindowController.open(
                         anchorWindow: anchorWindow,
-                        toolbarState: toolbarState, metaDB: metaDB, library: library,
-                        ftsLibrary: session.ftsLibrary, collectionStore: session.collectionStore,
+                        toolbarState: toolbarState,
+                        dependencies: AO3FilterPopupWindowController.LibraryDependencies(
+                            metaDB: metaDB, library: library,
+                            ftsLibrary: session.ftsLibrary, collectionStore: session.collectionStore
+                        ),
                         membershipVersion: session.membershipVersion
                     )
                 }

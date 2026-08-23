@@ -188,11 +188,11 @@ private struct BookDetailContent: View {
     @ViewBuilder
     private var statsRow: some View {
         let wc = book.displayWordCount
-        let k  = book.displayKudos
-        if !wc.isEmpty || !k.isEmpty {
+        let kudos = book.displayKudos
+        if !wc.isEmpty || !kudos.isEmpty {
             HStack(spacing: 16) {
                 if !wc.isEmpty { Label(wc, systemImage: "text.word.spacing").font(.caption).foregroundStyle(.secondary) }
-                if !k.isEmpty { Label(k, systemImage: "heart").font(.caption).foregroundStyle(.secondary) }
+                if !kudos.isEmpty { Label(kudos, systemImage: "heart").font(.caption).foregroundStyle(.secondary) }
                 Spacer()
             }
         }

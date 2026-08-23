@@ -404,17 +404,18 @@ struct LibraryRootView: View {
                         )
                         let count = rows.count
                         guard count > 0 else {
-                            let a = NSAlert()
-                            a.messageText = "Nothing to Export"
-                            a.informativeText = "No matching EPUBs found with the current filter."
-                            a.runModal()
+                            let alert = NSAlert()
+                            alert.messageText = "Nothing to Export"
+                            alert.informativeText = "No matching EPUBs found with the current filter."
+                            alert.runModal()
                             return
                         }
 
                         // 2. Confirm with count warning.
                         let confirm = NSAlert()
                         confirm.messageText = "Export \(count) EPUB\(count == 1 ? "" : "s")?"
-                        confirm.informativeText = "This will copy \(count) EPUB file\(count == 1 ? "" : "s") to a folder you choose. Large libraries may take a minute."
+                        confirm.informativeText = "This will copy \(count) EPUB file\(count == 1 ? "" : "s") " +
+                            "to a folder you choose. Large libraries may take a minute."
                         confirm.addButton(withTitle: "Export")
                         confirm.addButton(withTitle: "Cancel")
                         guard confirm.runModal() == .alertFirstButtonReturn else { return }
@@ -465,10 +466,12 @@ struct LibraryRootView: View {
                         let (copied, skipped) = await ExportManager.exportEPUBs(
                             books: rows.map(\.book),
                             libraryRoot: libraryRoot,
-                            destination: destination,
-                            ao3Map: ao3Map,
-                            groupBySeries: toolbarState.groupBySeries,
-                            seriesEntries: seriesEntriesByBook,
+                            options: ExportManager.ExportEPUBsOptions(
+                                destination: destination,
+                                ao3Map: ao3Map,
+                                groupBySeries: toolbarState.groupBySeries,
+                                seriesEntries: seriesEntriesByBook
+                            ),
                             progress: { done in
                                 Task { @MainActor in
                                     progressBar.doubleValue = Double(done)
@@ -588,10 +591,12 @@ struct LibraryRootView: View {
             // cases uncovered (see git history / prior session notes).
             let (page, hasMore) = await library.randomSortedPage(
                 offset: offsetState.currentPage * pageSize, limit: pageSize,
-                query: query, filter: filterForSQL, restrictIDs: restrictIDs,
-                visibility: currentVisibilityPolicy,
-                filterTagExpansions: cachedFilterTagExpansions,
-                visibilityVersion: session.membershipVersion
+                CalibreLibrary.PageQuery(
+                    query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                    visibility: currentVisibilityPolicy,
+                    filterTagExpansions: cachedFilterTagExpansions,
+                    visibilityVersion: session.membershipVersion
+                )
             )
             guard !toolbarState.isListSurfaceTornDown else { return }
             guard !Task.isCancelled else { return }
@@ -627,10 +632,12 @@ struct LibraryRootView: View {
             ])
             let (page, hasMore) = await library.wordCountSortedPage(
                 offset: offsetState.currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
-                query: query, filter: filterForSQL, restrictIDs: restrictIDs,
-                visibility: currentVisibilityPolicy,
-                filterTagExpansions: cachedFilterTagExpansions,
-                visibilityVersion: session.membershipVersion
+                CalibreLibrary.PageQuery(
+                    query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                    visibility: currentVisibilityPolicy,
+                    filterTagExpansions: cachedFilterTagExpansions,
+                    visibilityVersion: session.membershipVersion
+                )
             )
             guard !toolbarState.isListSurfaceTornDown else { return }
             guard !Task.isCancelled else { return }
@@ -666,10 +673,12 @@ struct LibraryRootView: View {
             ])
             let (kudosPage, kudosHasMore) = await library.kudosSortedPage(
                 offset: offsetState.currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
-                query: query, filter: filterForSQL, restrictIDs: restrictIDs,
-                visibility: currentVisibilityPolicy,
-                filterTagExpansions: cachedFilterTagExpansions,
-                visibilityVersion: session.membershipVersion
+                CalibreLibrary.PageQuery(
+                    query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                    visibility: currentVisibilityPolicy,
+                    filterTagExpansions: cachedFilterTagExpansions,
+                    visibilityVersion: session.membershipVersion
+                )
             )
             guard !toolbarState.isListSurfaceTornDown else { return }
             guard !Task.isCancelled else { return }
@@ -705,11 +714,13 @@ struct LibraryRootView: View {
             ])
             let (page, hasMore) = await library.groupAwareTitleSortedPage(
                 offset: offsetState.currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
-                query: query, filter: filterForSQL, restrictIDs: restrictIDs,
-                visibility: currentVisibilityPolicy,
-                filterTagExpansions: cachedFilterTagExpansions,
-                visibilityVersion: session.membershipVersion,
-                metaDB: session.metaDB
+                CalibreLibrary.PageQuery(
+                    query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                    visibility: currentVisibilityPolicy,
+                    filterTagExpansions: cachedFilterTagExpansions,
+                    visibilityVersion: session.membershipVersion,
+                    metaDB: session.metaDB
+                )
             )
             guard !toolbarState.isListSurfaceTornDown else { return }
             guard !Task.isCancelled else { return }
@@ -741,7 +752,8 @@ struct LibraryRootView: View {
                 #if DEBUG
                 assert(
                     offsetState.currentPage <= offsetState.rawSQLOffsetByPage.count,
-                    "currentPage (\(offsetState.currentPage)) skipped ahead of recorded pages (\(offsetState.rawSQLOffsetByPage.count)) -- Next/Previous should only move one page at a time"
+                    "currentPage (\(offsetState.currentPage)) skipped ahead of recorded pages " +
+                        "(\(offsetState.rawSQLOffsetByPage.count)) -- Next/Previous should only move one page at a time"
                 )
                 #endif
                 let isNewPage = offsetState.currentPage == offsetState.rawSQLOffsetByPage.count
@@ -880,7 +892,8 @@ struct LibraryRootView: View {
                 #if DEBUG
                 assert(
                     offsetState.currentPage <= offsetState.rawSQLOffsetByPage.count,
-                    "currentPage (\(offsetState.currentPage)) skipped ahead of recorded pages (\(offsetState.rawSQLOffsetByPage.count)) -- Next/Previous should only move one page at a time"
+                    "currentPage (\(offsetState.currentPage)) skipped ahead of recorded pages " +
+                        "(\(offsetState.rawSQLOffsetByPage.count)) -- Next/Previous should only move one page at a time"
                 )
                 #endif
                 let isNewPage = offsetState.currentPage == offsetState.rawSQLOffsetByPage.count
@@ -1224,7 +1237,7 @@ struct LibraryRootView: View {
     /// (skip/series-grouping/AO3-publisher/anthology bools + cached ID sets)
     /// becomes one value. See LibraryVisibilityPolicy.swift.
     private var currentVisibilityPolicy: LibraryVisibilityPolicy {
-        queryController.visibilityPolicy(
+        LibraryVisibilityPolicy(
             showSkippedCollection: prefs.showSkippedCollection,
             shouldGroupSeriesRows: shouldGroupSeriesRows,
             hideNonAO3PublisherBooks: prefs.hideNonAO3PublisherBooks,
@@ -1341,11 +1354,11 @@ struct LibraryRootView: View {
         let filterSignature = filterForSQL.map { LibraryFilterDebug.summary(expression: $0) } ?? ""
 
         groupAwareCountTask = Task {
-            let count = await library.visibleBookCount(
+            let count = await library.visibleBookCount(CalibreLibrary.PageQuery(
                 query: query, filter: filterForSQL, restrictIDs: restrictIDs,
                 visibility: visibility, filterTagExpansions: tagExpansions,
                 visibilityVersion: membershipVersion
-            )
+            ))
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 let currentFilterForSQL: FilterExpression? = {
@@ -1407,13 +1420,14 @@ struct LibraryRootView: View {
                                                 filterTagExpansions: cachedFilterTagExpansions)
             await session.refreshLastSearchError()
             await MainActor.run {
+                let currentQuery = toolbarState.searchText.isEmpty
+                    ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+                    : SearchQueryParser.parse(toolbarState.searchText)
                 guard !Task.isCancelled,
                       toolbarState.activeFilterResult?.isSQLBacked == true,
                       toolbarState.activeFilterResult?.totalCount == nil,
                       LibraryFilterDebug.summary(expression: toolbarState.filterExpression) == filterSignature,
-                      LibraryFilterDebug.summary(query: queryWithCachedFullText(toolbarState.searchText.isEmpty
-                                                                                    ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
-                                                                                    : SearchQueryParser.parse(toolbarState.searchText))) == querySignature else {
+                      LibraryFilterDebug.summary(query: queryWithCachedFullText(currentQuery)) == querySignature else {
                     LibraryFilterDebug.log("deferredCount.discard", [
                         "surface": "list",
                         "mode": "sqlPagedDeferredCount"

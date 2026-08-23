@@ -32,7 +32,11 @@ enum DuplicateBookDetector {
     ) -> Set<Int> {
         guard !workIDs.isEmpty else { return [] }
 
-        let groups = Dictionary(grouping: workIDs.keys, by: { workIDs[$0]! })
+        // Every key in this grouping closure comes from workIDs.keys itself,
+        // so the lookup can never actually miss -- the fallback value here
+        // exists only so this doesn't need a force-unwrap, per this repo's
+        // no-force-unwrap rule; it can never be observed in practice.
+        let groups = Dictionary(grouping: workIDs.keys, by: { workIDs[$0] ?? "" })
         var losers = Set<Int>()
 
         for (_, calibreIDs) in groups where calibreIDs.count > 1 {

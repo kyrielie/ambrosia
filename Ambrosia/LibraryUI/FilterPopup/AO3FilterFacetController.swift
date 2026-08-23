@@ -208,8 +208,8 @@ final class AO3FilterFacetController {
         var excludeGroup = FilterGroup(conjunction: .and)
 
         func addTagRules(_ include: Set<String>, _ exclude: Set<String>, _ filterField: FilterField) {
-            for v in include { includeGroup.rules.append(FilterRule(field: filterField, op: .equals, value: v)) }
-            for v in exclude { excludeGroup.rules.append(FilterRule(field: filterField, op: .notEquals, value: v)) }
+            for value in include { includeGroup.rules.append(FilterRule(field: filterField, op: .equals, value: value)) }
+            for value in exclude { excludeGroup.rules.append(FilterRule(field: filterField, op: .notEquals, value: value)) }
         }
 
         if field != .fandom { addTagRules(state.includedFandoms, state.excludedFandoms, .tag) }
@@ -218,12 +218,12 @@ final class AO3FilterFacetController {
         if field != .freeform { addTagRules(state.includedFreeforms, state.excludedFreeforms, .tag) }
         if field != .author { addTagRules(state.includedAuthors, state.excludedAuthors, .authorName) }
         if field != .warning {
-            for w in state.includedWarnings { includeGroup.rules.append(FilterRule(field: .warning, op: .equals, value: w.rawValue)) }
-            for w in state.excludedWarnings { excludeGroup.rules.append(FilterRule(field: .warning, op: .notEquals, value: w.rawValue)) }
+            for warning in state.includedWarnings { includeGroup.rules.append(FilterRule(field: .warning, op: .equals, value: warning.rawValue)) }
+            for warning in state.excludedWarnings { excludeGroup.rules.append(FilterRule(field: .warning, op: .notEquals, value: warning.rawValue)) }
         }
         if field != .category {
-            for c in state.includedCategories { includeGroup.rules.append(FilterRule(field: .category, op: .equals, value: c.rawValue)) }
-            for c in state.excludedCategories { excludeGroup.rules.append(FilterRule(field: .category, op: .notEquals, value: c.rawValue)) }
+            for category in state.includedCategories { includeGroup.rules.append(FilterRule(field: .category, op: .equals, value: category.rawValue)) }
+            for category in state.excludedCategories { excludeGroup.rules.append(FilterRule(field: .category, op: .notEquals, value: category.rawValue)) }
         }
 
         // Rating, crossover, and completion status always narrow every tag
@@ -232,8 +232,8 @@ final class AO3FilterFacetController {
         if let includedRating = state.includedRating {
             includeGroup.rules.append(FilterRule(field: .rating, op: .equals, value: includedRating.rawValue))
         }
-        for r in state.excludedRatings {
-            excludeGroup.rules.append(FilterRule(field: .rating, op: .notEquals, value: r.rawValue))
+        for rating in state.excludedRatings {
+            excludeGroup.rules.append(FilterRule(field: .rating, op: .notEquals, value: rating.rawValue))
         }
         switch state.crossoverState {
         case .any: break

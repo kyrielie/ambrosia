@@ -184,10 +184,10 @@ actor CalibreLibrary {
             // the book still appears via any other valid membership or as a
             // standalone item. See Bug 3 decision log.
             let rawIndex: Double
-            if let d = row[3] as? Double {
-                rawIndex = d
-            } else if let i = row[3] as? Int64 {
-                rawIndex = Double(i)
+            if let doubleValue = row[3] as? Double {
+                rawIndex = doubleValue
+            } else if let int64Value = row[3] as? Int64 {
+                rawIndex = Double(int64Value)
             } else {
                 rawIndex = 1
             }
@@ -278,9 +278,9 @@ actor CalibreLibrary {
     func sortedRandomly(_ ids: [Int]) -> [Int] {
         var rng = SeededRNG(seed: randomSeed)
         var arr = ids
-        for i in stride(from: arr.count - 1, through: 1, by: -1) {
-            let j = Int(rng.next() % UInt64(i + 1))
-            arr.swapAt(i, j)
+        for currentIndex in stride(from: arr.count - 1, through: 1, by: -1) {
+            let swapIndex = Int(rng.next() % UInt64(currentIndex + 1))
+            arr.swapAt(currentIndex, swapIndex)
         }
         return arr
     }
@@ -289,7 +289,7 @@ actor CalibreLibrary {
     // ao3Published / ao3Updated: sort is resolved in-memory post-fetch via sortedByAO3Date.
     // SQL only needs a stable title-order baseline here; the cross-database JOIN that was
     // previously attempted here against ao3_metadata was always invalid (ao3_metadata lives
-    // in ambrosia_meta.db, not metadata.db) and caused _fetchBooks to throw, returning [].
+    // in ambrosia_meta.db, not metadata.db) and caused fetchBooksInternal to throw, returning [].
     //
     // Every case ends with `, b.id ASC` (book id is unique and already indexed) so ties on
     // the primary sort key -- e.g. two books sharing a title, the same kudos count, or the
@@ -375,11 +375,11 @@ actor CalibreLibrary {
         ascending: Bool
     ) -> [CalibreBook] {
         let dates = ao3Dates(ids: books.map(\.id))
-        return books.sorted { a, b in
-            let av = dates[a.id].flatMap { $0[keyPath: keyPath] }
-            let bv = dates[b.id].flatMap { $0[keyPath: keyPath] }
+        return books.sorted { bookA, bookB in
+            let av = dates[bookA.id].flatMap { $0[keyPath: keyPath] }
+            let bv = dates[bookB.id].flatMap { $0[keyPath: keyPath] }
             switch (av, bv) {
-            case (nil, nil): return a.title < b.title
+            case (nil, nil): return bookA.title < bookB.title
             case (nil, _):   return false
             case (_, nil):   return true
             case let (x?, y?): return ascending ? x < y : x > y
@@ -421,8 +421,8 @@ actor CalibreLibrary {
         } else {
             valuesByID = ao3WordCounts
         }
-        return books.sorted { a, b in
-            compareNilsLast(valuesByID[a.id], valuesByID[b.id], ascending: ascending)
+        return books.sorted { bookA, bookB in
+            compareNilsLast(valuesByID[bookA.id], valuesByID[bookB.id], ascending: ascending)
         }
     }
 
@@ -440,9 +440,25 @@ actor CalibreLibrary {
         } else {
             valuesByID = ao3Kudos
         }
-        return books.sorted { a, b in
-            compareNilsLast(valuesByID[a.id], valuesByID[b.id], ascending: ascending)
+        return books.sorted { bookA, bookB in
+            compareNilsLast(valuesByID[bookA.id], valuesByID[bookB.id], ascending: ascending)
         }
+    }
+
+    /// The filter/visibility inputs shared by every `*SortedPage` function
+    /// below (word count, kudos, group-aware title, random). Grouped into
+    /// one struct since all four take exactly this same set of 7 params in
+    /// addition to their own offset/limit/ascending, and every call site
+    /// builds them together from the same `LibraryToolbarState`/`session`.
+    /// Defaults mirror each function's own previous per-parameter defaults.
+    struct PageQuery {
+        var query: SearchQuery
+        var filter: FilterExpression?
+        var restrictIDs: [Int]?
+        var visibility: LibraryVisibilityPolicy = .allowAll
+        var filterTagExpansions: [String: [String]] = [:]
+        var visibilityVersion: Int = 0
+        var metaDB: AmbrosiaMetaDB?
     }
 
     /// Fetches the full matching set (capped at exportCap, same cap as export),
@@ -450,12 +466,14 @@ actor CalibreLibrary {
     /// whether more pages remain. Used in place of the normal offset/limit SQL
     /// path whenever sort == .wordCount.
     func wordCountSortedPage(offset: Int, limit: Int, ascending: Bool,
-                             query: SearchQuery, filter: FilterExpression?,
-                             restrictIDs: [Int]?,
-                             visibility: LibraryVisibilityPolicy = .allowAll,
-                             filterTagExpansions: [String: [String]] = [:],
-                             visibilityVersion: Int = 0,
-                             metaDB: AmbrosiaMetaDB? = nil) async -> (page: [CalibreBook], hasMore: Bool) {
+                             _ pageQuery: PageQuery) async -> (page: [CalibreBook], hasMore: Bool) {
+        let query = pageQuery.query
+        let filter = pageQuery.filter
+        let restrictIDs = pageQuery.restrictIDs
+        let visibility = pageQuery.visibility
+        let filterTagExpansions = pageQuery.filterTagExpansions
+        let visibilityVersion = pageQuery.visibilityVersion
+        let metaDB = pageQuery.metaDB
         let cacheKey = PageCacheKey(
             querySignature: LibraryFilterDebug.summary(query: query),
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
@@ -497,8 +515,8 @@ actor CalibreLibrary {
         }
 
         // 3. Sort IDs by word count in Swift. Unknown word count sorts last.
-        let sortedIDs = allIDs.sorted { a, b in
-            compareNilsLast(wordCounts[a], wordCounts[b], ascending: ascending)
+        let sortedIDs = allIDs.sorted { idA, idB in
+            compareNilsLast(wordCounts[idA], wordCounts[idB], ascending: ascending)
         }
 
         // 4. Slice the requested page.
@@ -523,12 +541,14 @@ actor CalibreLibrary {
     /// offset/limit SQL path whenever sort == .kudos. Mirrors
     /// wordCountSortedPage exactly.
     func kudosSortedPage(offset: Int, limit: Int, ascending: Bool,
-                         query: SearchQuery, filter: FilterExpression?,
-                         restrictIDs: [Int]?,
-                         visibility: LibraryVisibilityPolicy = .allowAll,
-                         filterTagExpansions: [String: [String]] = [:],
-                         visibilityVersion: Int = 0,
-                         metaDB: AmbrosiaMetaDB? = nil) async -> (page: [CalibreBook], hasMore: Bool) {
+                         _ pageQuery: PageQuery) async -> (page: [CalibreBook], hasMore: Bool) {
+        let query = pageQuery.query
+        let filter = pageQuery.filter
+        let restrictIDs = pageQuery.restrictIDs
+        let visibility = pageQuery.visibility
+        let filterTagExpansions = pageQuery.filterTagExpansions
+        let visibilityVersion = pageQuery.visibilityVersion
+        let metaDB = pageQuery.metaDB
         let cacheKey = PageCacheKey(
             querySignature: LibraryFilterDebug.summary(query: query),
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
@@ -570,8 +590,8 @@ actor CalibreLibrary {
         }
 
         // 3. Sort IDs by kudos in Swift. Unknown kudos sorts last.
-        let sortedIDs = allIDs.sorted { a, b in
-            compareNilsLast(kudos[a], kudos[b], ascending: ascending)
+        let sortedIDs = allIDs.sorted { idA, idB in
+            compareNilsLast(kudos[idA], kudos[idB], ascending: ascending)
         }
 
         // 4. Slice the requested page.
@@ -613,7 +633,7 @@ actor CalibreLibrary {
     /// for a full `booksForIDs` hydration (authors/tags/comments) just to
     /// read one tag. A book normally has zero or one rating tag; the array
     /// shape is defensive, not an expectation of multiples. Chunked at the
-    /// same 900-id boundary as `_tags(for:)`, since this is the same
+    /// same 900-id boundary as `tagsInternal(for:)`, since this is the same
     /// `books_tags_link`/`tags` join with an additional bound rating-name
     /// list on top, and unchunked would risk exceeding SQLite's bound
     /// parameter limit for large expanded-series ID sets.
@@ -661,12 +681,14 @@ actor CalibreLibrary {
     /// using `books()`; this is only correct to call when
     /// `visibility.shouldGroupSeriesRows` is true.
     func groupAwareTitleSortedPage(offset: Int, limit: Int, ascending: Bool,
-                                   query: SearchQuery, filter: FilterExpression?,
-                                   restrictIDs: [Int]?,
-                                   visibility: LibraryVisibilityPolicy,
-                                   filterTagExpansions: [String: [String]] = [:],
-                                   visibilityVersion: Int = 0,
-                                   metaDB: AmbrosiaMetaDB?) async -> (page: [CalibreBook], hasMore: Bool) {
+                                   _ pageQuery: PageQuery) async -> (page: [CalibreBook], hasMore: Bool) {
+        let query = pageQuery.query
+        let filter = pageQuery.filter
+        let restrictIDs = pageQuery.restrictIDs
+        let visibility = pageQuery.visibility
+        let filterTagExpansions = pageQuery.filterTagExpansions
+        let visibilityVersion = pageQuery.visibilityVersion
+        let metaDB = pageQuery.metaDB
         let cacheKey = PageCacheKey(
             querySignature: LibraryFilterDebug.summary(query: query),
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
@@ -701,9 +723,9 @@ actor CalibreLibrary {
         func sortKey(_ id: Int) -> String {
             seriesNames[id] ?? titles[id] ?? ""
         }
-        let sortedIDs = allIDs.sorted { a, b in
-            let ka = sortKey(a), kb = sortKey(b)
-            if ka == kb { return ascending ? a < b : a > b }
+        let sortedIDs = allIDs.sorted { idA, idB in
+            let ka = sortKey(idA), kb = sortKey(idB)
+            if ka == kb { return ascending ? idA < idB : idA > idB }
             return ascending ? ka < kb : ka > kb
         }
 
@@ -732,15 +754,14 @@ actor CalibreLibrary {
     /// `anthologyIDs` sets the caller passes in (see LibraryVisibilityPolicy),
     /// so no `CalibreBook` hydration is required — matching IDs in, visible
     /// IDs out.
-    func visibleBookCount(
-        query: SearchQuery,
-        filter: FilterExpression?,
-        restrictIDs: [Int]?,
-        visibility: LibraryVisibilityPolicy,
-        filterTagExpansions: [String: [String]] = [:],
-        visibilityVersion: Int = 0,
-        metaDB: AmbrosiaMetaDB? = nil
-    ) async -> Int {
+    func visibleBookCount(_ pageQuery: PageQuery) async -> Int {
+        let query = pageQuery.query
+        let filter = pageQuery.filter
+        let restrictIDs = pageQuery.restrictIDs
+        let visibility = pageQuery.visibility
+        let filterTagExpansions = pageQuery.filterTagExpansions
+        let visibilityVersion = pageQuery.visibilityVersion
+        let metaDB = pageQuery.metaDB
         let cacheKey = GroupAwareCountCacheKey(
             querySignature: LibraryFilterDebug.summary(query: query),
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
@@ -769,12 +790,14 @@ actor CalibreLibrary {
     /// Random-sorted page, analogous to wordCountSortedPage.
     /// Fetches all matching IDs, shuffles with the current seed, slices the page.
     func randomSortedPage(offset: Int, limit: Int,
-                          query: SearchQuery, filter: FilterExpression?,
-                          restrictIDs: [Int]?,
-                          visibility: LibraryVisibilityPolicy = .allowAll,
-                          filterTagExpansions: [String: [String]] = [:],
-                          visibilityVersion: Int = 0,
-                          metaDB: AmbrosiaMetaDB? = nil) async -> (page: [CalibreBook], hasMore: Bool) {
+                          _ pageQuery: PageQuery) async -> (page: [CalibreBook], hasMore: Bool) {
+        let query = pageQuery.query
+        let filter = pageQuery.filter
+        let restrictIDs = pageQuery.restrictIDs
+        let visibility = pageQuery.visibility
+        let filterTagExpansions = pageQuery.filterTagExpansions
+        let visibilityVersion = pageQuery.visibilityVersion
+        let metaDB = pageQuery.metaDB
         let cacheKey = PageCacheKey(
             querySignature: LibraryFilterDebug.summary(query: query),
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
@@ -816,7 +839,7 @@ actor CalibreLibrary {
     // Used by wordCountSortedPage to get the full matching set without the cost of
     // hydrating authors, tags, and comments for every book. The authors LEFT JOIN is
     // kept because whereClause may emit author conditions; tags and comments joins
-    // are omitted (never referenced in WHERE by _fetchBooks).
+    // are omitted (never referenced in WHERE by fetchBooksInternal).
 
     func fetchAllMatchingIDs(
         query: SearchQuery,
@@ -841,7 +864,7 @@ actor CalibreLibrary {
             conditions.append(fClause)
             args.append(contentsOf: fArgs)
         }
-        let where_ = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
+        let whereSQL = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
         // §perf: Only join `comments` when a filter rule references the comment field.
         let needsCommentJoin = filter?.groups.flatMap(\.completeRules)
             .contains { $0.field == .comment } == true
@@ -853,7 +876,7 @@ actor CalibreLibrary {
             LEFT JOIN books_series_link bsl ON bsl.book = b.id
             LEFT JOIN series s ON s.id = bsl.series
             \(commentJoin)
-            \(where_)
+            \(whereSQL)
             GROUP BY b.id
             ORDER BY b.title ASC
             """
@@ -886,22 +909,22 @@ actor CalibreLibrary {
                                ascending: Bool) -> [CalibreBook] {
         do {
             let cap = Self.exportCap
-            let rows = try _fetchBooks(
+            let rows = try fetchBooksInternal(
                 offset: 0, limit: cap + 1,
                 sort: sort, ascending: ascending,
                 query: query, filter: filter,
                 restrictIDs: ids
             )
             let fetchedIDs = rows.map(\.id)
-            let authorsMap  = try _authors(for: fetchedIDs)
-            let tagsMap     = try _tags(for: fetchedIDs)
-            let commentsMap = try _comments(for: fetchedIDs)
+            let authorsMap  = try authorsInternal(for: fetchedIDs)
+            let tagsMap     = try tagsInternal(for: fetchedIDs)
+            let commentsMap = try commentsInternal(for: fetchedIDs)
             return rows.prefix(cap).map { book in
-                var b = book
-                b.authors = authorsMap[book.id] ?? []
-                b.tags    = tagsMap[book.id] ?? []
-                b.comment = commentsMap[book.id]
-                return b
+                var enrichedBook = book
+                enrichedBook.authors = authorsMap[book.id] ?? []
+                enrichedBook.tags    = tagsMap[book.id] ?? []
+                enrichedBook.comment = commentsMap[book.id]
+                return enrichedBook
             }
         } catch {
             #if DEBUG
@@ -945,7 +968,7 @@ actor CalibreLibrary {
         }
         let start = LibraryFilterDebug.now()
         do {
-            let rows = try _fetchBooks(
+            let rows = try fetchBooksInternal(
                 offset: offset, limit: limit,
                 sort: sort, ascending: ascending,
                 query: query, filter: filter,
@@ -953,19 +976,19 @@ actor CalibreLibrary {
                 filterTagExpansions: filterTagExpansions
             )
             let fetchedIDs = rows.map(\.id)
-            let authorsMap  = try _authors(for: fetchedIDs)
-            let tagsMap     = try _tags(for: fetchedIDs)
-            let commentsMap = try _comments(for: fetchedIDs)
+            let authorsMap  = try authorsInternal(for: fetchedIDs)
+            let tagsMap     = try tagsInternal(for: fetchedIDs)
+            let commentsMap = try commentsInternal(for: fetchedIDs)
             LibraryFilterDebug.log("books.end", [
                 "rows": rows.count,
                 "elapsedMS": LibraryFilterDebug.elapsedMS(since: start)
             ])
             var result = rows.map { book in
-                var b = book
-                b.authors = authorsMap[book.id] ?? []
-                b.tags    = tagsMap[book.id] ?? []
-                b.comment = commentsMap[book.id]
-                return b
+                var enrichedBook = book
+                enrichedBook.authors = authorsMap[book.id] ?? []
+                enrichedBook.tags    = tagsMap[book.id] ?? []
+                enrichedBook.comment = commentsMap[book.id]
+                return enrichedBook
             }
             switch sort {
             case .ao3Published:
@@ -990,13 +1013,13 @@ actor CalibreLibrary {
 
     // MARK: - Internal fetch implementation
 
-    func _fetchBooks(
+    func fetchBooksInternal(
         offset: Int,
         limit: Int,
         sort: SortField,
         ascending: Bool,
         query: SearchQuery,
-        filter: FilterExpression?,
+        filter: FilterExpression? = nil,
         restrictIDs: [Int]? = nil,
         filterTagExpansions: [String: [String]] = [:]
     ) throws -> [CalibreBook] {
@@ -1015,7 +1038,7 @@ actor CalibreLibrary {
         // §perf: Only join `comments` when a filter rule references the comment field.
         // `comments` stores large HTML blobs; joining it unconditionally forces SQLite to
         // walk the table for every query even though the comment text is never read from
-        // the main row (it is bulk-fetched separately by _comments(for:)).
+        // the main row (it is bulk-fetched separately by commentsInternal(for:)).
         let needsCommentJoin = filter?.groups.flatMap(\.completeRules)
             .contains { $0.field == .comment } == true
         let commentJoin = needsCommentJoin ? "LEFT JOIN comments c ON c.book = b.id" : ""
@@ -1040,7 +1063,7 @@ actor CalibreLibrary {
             args.append(contentsOf: fArgs)
         }
 
-        let where_ = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
+        let whereSQL = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
 
         // §perf: DROP `SELECT DISTINCT` — `GROUP BY b.id` already deduplicates. DISTINCT
         // on top of GROUP BY adds a redundant sort+hash step that costs ~30 % of query time
@@ -1056,7 +1079,7 @@ actor CalibreLibrary {
             LEFT JOIN publishers p ON p.id = bpl.publisher
             \(commentJoin)
             \(kJoin)
-            \(where_)
+            \(whereSQL)
             GROUP BY b.id
             ORDER BY \(orderBy)
             LIMIT ? OFFSET ?
@@ -1104,19 +1127,19 @@ actor CalibreLibrary {
     ) -> [CalibreBook] {
         let start = LibraryFilterDebug.now()
         do {
-            let rows = try _fetchBooksQueryIDs(
+            let rows = try fetchBooksQueryIDsInternal(
                 ids: ids, offset: offset, limit: limit,
                 sort: sort, ascending: ascending, query: query)
             let fetchedIDs = rows.map(\.id)
-            let authorsMap  = try _authors(for: fetchedIDs)
-            let tagsMap     = try _tags(for: fetchedIDs)
-            let commentsMap = try _comments(for: fetchedIDs)
+            let authorsMap  = try authorsInternal(for: fetchedIDs)
+            let tagsMap     = try tagsInternal(for: fetchedIDs)
+            let commentsMap = try commentsInternal(for: fetchedIDs)
             var books = rows.map { book in
-                var b = book
-                b.authors = authorsMap[book.id] ?? []
-                b.tags    = tagsMap[book.id] ?? []
-                b.comment = commentsMap[book.id]
-                return b
+                var enrichedBook = book
+                enrichedBook.authors = authorsMap[book.id] ?? []
+                enrichedBook.tags    = tagsMap[book.id] ?? []
+                enrichedBook.comment = commentsMap[book.id]
+                return enrichedBook
             }
             switch sort {
             case .ao3Published:
@@ -1148,7 +1171,7 @@ actor CalibreLibrary {
     func booksForIDs(_ ids: [Int]) -> [CalibreBook] {
         guard !ids.isEmpty else { return [] }
         do {
-            let rows = try _fetchBooksQueryIDs(
+            let rows = try fetchBooksQueryIDsInternal(
                 ids: ids,
                 offset: 0,
                 limit: max(ids.count, 1),
@@ -1157,15 +1180,15 @@ actor CalibreLibrary {
                 query: SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
             )
             let fetchedIDs = rows.map(\.id)
-            let authorsMap = try _authors(for: fetchedIDs)
-            let tagsMap = try _tags(for: fetchedIDs)
-            let commentsMap = try _comments(for: fetchedIDs)
+            let authorsMap = try authorsInternal(for: fetchedIDs)
+            let tagsMap = try tagsInternal(for: fetchedIDs)
+            let commentsMap = try commentsInternal(for: fetchedIDs)
             return rows.map { book in
-                var b = book
-                b.authors = authorsMap[book.id] ?? []
-                b.tags = tagsMap[book.id] ?? []
-                b.comment = commentsMap[book.id]
-                return b
+                var enrichedBook = book
+                enrichedBook.authors = authorsMap[book.id] ?? []
+                enrichedBook.tags = tagsMap[book.id] ?? []
+                enrichedBook.comment = commentsMap[book.id]
+                return enrichedBook
             }
         } catch {
             #if DEBUG
@@ -1175,15 +1198,15 @@ actor CalibreLibrary {
         }
     }
 
-    private func _fetchBooksQueryIDs(
-        ids: [Int]?,
+    private func fetchBooksQueryIDsInternal(
+        ids: [Int]? = nil,
         offset: Int,
         limit: Int,
         sort: SortField,
         ascending: Bool,
         query: SearchQuery
     ) throws -> [CalibreBook] {
-        try _fetchBooks(
+        try fetchBooksInternal(
             offset: offset, limit: limit,
             sort: sort, ascending: ascending,
             query: query, filter: nil,
@@ -1193,7 +1216,7 @@ actor CalibreLibrary {
 
     // MARK: - Bulk metadata helpers
 
-    internal func _authors(for ids: [Int]) throws -> [Int: [String]] {
+    internal func authorsInternal(for ids: [Int]) throws -> [Int: [String]] {
         guard !ids.isEmpty else { return [:] }
         var result: [Int: [String]] = [:]
         // SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 999. Exceeding it while
@@ -1220,7 +1243,7 @@ actor CalibreLibrary {
         return result
     }
 
-    internal func _tags(for ids: [Int]) throws -> [Int: [String]] {
+    internal func tagsInternal(for ids: [Int]) throws -> [Int: [String]] {
         guard !ids.isEmpty else { return [:] }
         var result: [Int: [String]] = [:]
         let chunkSize = 900
@@ -1244,7 +1267,7 @@ actor CalibreLibrary {
         return result
     }
 
-    internal func _comments(for ids: [Int]) throws -> [Int: String] {
+    internal func commentsInternal(for ids: [Int]) throws -> [Int: String] {
         guard !ids.isEmpty else { return [:] }
         var result: [Int: String] = [:]
         let chunkSize = 900
@@ -1265,25 +1288,25 @@ actor CalibreLibrary {
     // MARK: - Date parsing
 
     private static let isoWithFractional: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
     }()
     private static let isoWithoutFractional: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
     }()
     private static let ymdFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.locale = Locale(identifier: "en_US_POSIX")
-        return f
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter
     }()
 
     internal func parseDate(_ string: String) -> Date? {
-        if let d = Self.isoWithFractional.date(from: string) { return d }
-        if let d = Self.isoWithoutFractional.date(from: string) { return d }
+        if let parsedDate = Self.isoWithFractional.date(from: string) { return parsedDate }
+        if let parsedDate = Self.isoWithoutFractional.date(from: string) { return parsedDate }
         return Self.ymdFormatter.date(from: string)
     }
 
@@ -1382,7 +1405,7 @@ extension CalibreLibrary {
                 let exactClause = "LOWER(b.title) LIKE ?"
                 clauses.append("(\(exactClause) OR \(trigramClauses))")
                 args.append("%\(word)%" as Binding?)
-                for t in trigrams { args.append("%\(t)%" as Binding?) }
+                for trigram in trigrams { args.append("%\(trigram)%" as Binding?) }
             } else {
                 clauses.append("LOWER(b.title) LIKE ?")
                 args.append("%\(word)%" as Binding?)
@@ -1402,8 +1425,8 @@ extension CalibreLibrary {
         let stride = Double(allTrigrams.count) / Double(maxTrigramsPerWord)
         var sampled: [String] = []
         var seenIndices = Set<Int>()
-        for i in 0..<maxTrigramsPerWord {
-            let index = min(Int(Double(i) * stride), allTrigrams.count - 1)
+        for sampleIndex in 0..<maxTrigramsPerWord {
+            let index = min(Int(Double(sampleIndex) * stride), allTrigrams.count - 1)
             if seenIndices.insert(index).inserted { sampled.append(allTrigrams[index]) }
         }
         return sampled
@@ -1435,8 +1458,8 @@ extension CalibreLibrary {
         let sql = "SELECT value FROM \(tbl) WHERE book = ?"
         guard let rows = try? db.prepare(sql, [calibreID as Binding?]).map({ $0 }),
               let first = rows.first,
-              let v = first[0] as? Int64 else { return nil }
-        return Int(v)
+              let int64Value = first[0] as? Int64 else { return nil }
+        return Int(int64Value)
     }
 
     /// §2a: Bulk-fetch integer custom column values for a set of book IDs.

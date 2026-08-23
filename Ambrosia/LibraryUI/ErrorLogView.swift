@@ -16,10 +16,10 @@ struct ErrorLogView: View {
     @State private var errorMessage: String?
 
     private static let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .short
-        return f
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
     }()
 
     var body: some View {

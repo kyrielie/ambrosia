@@ -1104,7 +1104,13 @@ actor AmbrosiaMetaDB {
             else { return nil }
 
             let isSystem: Bool
-            if let v64 = row[safe: 3] as? Int64 { isSystem = v64 != 0 } else if let v = row[safe: 3] as? Int { isSystem = v != 0 } else { isSystem = false }
+            if let systemFlag64 = row[safe: 3] as? Int64 {
+                isSystem = systemFlag64 != 0
+            } else if let systemFlag = row[safe: 3] as? Int {
+                isSystem = systemFlag != 0
+            } else {
+                isSystem = false
+            }
 
             return CollectionActivityEntry(
                 id: "\(collectionID)-\(calibreID)",
@@ -2273,7 +2279,7 @@ actor AmbrosiaMetaDB {
         """
         let rows = (try? readDB.prepare(sql).map { $0 }) ?? []
         return Set(rows.compactMap { row in
-            if let v = row[0] as? Int64 { return Int(v) }
+            if let calibreID64 = row[0] as? Int64 { return Int(calibreID64) }
             return row[0] as? Int
         })
     }
@@ -2411,8 +2417,8 @@ actor AmbrosiaMetaDB {
                 if let name = canonicalNameByRootID[rootID], seen.insert(name.lowercased()).inserted {
                     terms.append(name)
                 }
-                for synonym in synonymsByRootID[rootID] ?? [] {
-                    if seen.insert(synonym.lowercased()).inserted { terms.append(synonym) }
+                for synonym in synonymsByRootID[rootID] ?? [] where seen.insert(synonym.lowercased()).inserted {
+                    terms.append(synonym)
                 }
             }
             result[tag] = terms.isEmpty ? [tag] : terms

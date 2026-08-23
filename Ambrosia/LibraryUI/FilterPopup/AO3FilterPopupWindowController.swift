@@ -23,13 +23,25 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
     private static let defaultWidth: CGFloat = 420
     private static let minWidth: CGFloat = 360
 
+    /// The data-access dependencies `open()` needs only to hand straight
+    /// through to `AO3FilterFacetController.make`, grouped together since
+    /// they're always sourced from the same `LibrarySession` and passed as
+    /// one unit at both call sites.
+    struct LibraryDependencies {
+        var metaDB: AmbrosiaMetaDB
+        var library: CalibreLibrary
+        var ftsLibrary: CalibreFTSLibrary?
+        var collectionStore: CollectionStore?
+    }
+
     static func open(anchorWindow: NSWindow,
                      toolbarState: LibraryToolbarState,
-                     metaDB: AmbrosiaMetaDB,
-                     library: CalibreLibrary,
-                     ftsLibrary: CalibreFTSLibrary?,
-                     collectionStore: CollectionStore?,
+                     dependencies: LibraryDependencies,
                      membershipVersion: Int) {
+        let metaDB = dependencies.metaDB
+        let library = dependencies.library
+        let ftsLibrary = dependencies.ftsLibrary
+        let collectionStore = dependencies.collectionStore
         if let existing = shared {
             existing.anchorWindow = anchorWindow
             existing.installAnchorObservers()
@@ -100,7 +112,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     private func installContent(state: AO3FilterPopupState, toolbarState: LibraryToolbarState,
                                 facetController: AO3FilterFacetController, membershipVersion: Int) {
@@ -122,11 +134,15 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
         removeAnchorObservers()
         guard let anchorWindow else { return }
         let nc = NotificationCenter.default
-        let move = nc.addObserver(forName: NSWindow.didMoveNotification, object: anchorWindow, queue: .main) {
-            [weak self] _ in self?.syncPanelPosition()
+        let move = nc.addObserver(forName: NSWindow.didMoveNotification, object: anchorWindow, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                self?.syncPanelPosition()
+            }
         }
-        let resize = nc.addObserver(forName: NSWindow.didResizeNotification, object: anchorWindow, queue: .main) {
-            [weak self] _ in self?.syncPanelPosition()
+        let resize = nc.addObserver(forName: NSWindow.didResizeNotification, object: anchorWindow, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                self?.syncPanelPosition()
+            }
         }
         anchorObservers = [move, resize]
     }

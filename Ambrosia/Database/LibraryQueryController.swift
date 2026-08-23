@@ -123,39 +123,6 @@ final class LibraryQueryController {
         self.surfaceLabel = surfaceLabel
     }
 
-    /// Builds the visibility policy from the current toggle state and the
-    /// four ID sets that drive it. Callers pass their own (session-mirrored,
-    /// see LibrarySession.refreshCollectionSnapshots) `@State`/instance
-    /// copies of `skippedIDs`/`seriesOrMergedIDs`/`ao3PublisherIDs`/
-    /// `anthologyIDs` — this method does not read `LibrarySession` directly,
-    /// so it stays usable from a plain view-model context without needing a
-    /// `LibrarySession` reference.
-    func visibilityPolicy(
-        showSkippedCollection: Bool,
-        shouldGroupSeriesRows: Bool,
-        hideNonAO3PublisherBooks: Bool,
-        hideAnthologyBooks: Bool,
-        hideDuplicateBooks: Bool,
-        skippedIDs: Set<Int>,
-        seriesOrMergedIDs: Set<Int>,
-        ao3PublisherIDs: Set<Int>,
-        anthologyIDs: Set<Int>,
-        duplicateLoserIDs: Set<Int>
-    ) -> LibraryVisibilityPolicy {
-        LibraryVisibilityPolicy(
-            showSkippedCollection: showSkippedCollection,
-            shouldGroupSeriesRows: shouldGroupSeriesRows,
-            hideNonAO3PublisherBooks: hideNonAO3PublisherBooks,
-            hideAnthologyBooks: hideAnthologyBooks,
-            hideDuplicateBooks: hideDuplicateBooks,
-            skippedIDs: skippedIDs,
-            seriesOrMergedIDs: seriesOrMergedIDs,
-            ao3PublisherIDs: ao3PublisherIDs,
-            anthologyIDs: anthologyIDs,
-            duplicateLoserIDs: duplicateLoserIDs
-        )
-    }
-
     func visibleIDs(_ ids: [Int], policy: LibraryVisibilityPolicy) -> [Int] {
         policy.filter(ids)
     }

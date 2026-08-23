@@ -320,15 +320,15 @@ struct FilterDirectionSection: View {
     private var warningBinding: Set<AO3Warning> {
         direction == .include ? state.includedWarnings : state.excludedWarnings
     }
-    private func warningCount(_ w: AO3Warning) -> Int {
-        (facets[.warning] ?? []).first { $0.name == w.rawValue }?.count ?? 0
+    private func warningCount(_ warning: AO3Warning) -> Int {
+        (facets[.warning] ?? []).first { $0.name == warning.rawValue }?.count ?? 0
     }
-    private func warningSelect(_ w: AO3Warning, _ isOn: Bool) {
+    private func warningSelect(_ warning: AO3Warning, _ isOn: Bool) {
         switch direction {
         case .include:
-            if isOn { state.includedWarnings.insert(w); state.excludedWarnings.remove(w) } else { state.includedWarnings.remove(w) }
+            if isOn { state.includedWarnings.insert(warning); state.excludedWarnings.remove(warning) } else { state.includedWarnings.remove(warning) }
         case .exclude:
-            if isOn { state.excludedWarnings.insert(w); state.includedWarnings.remove(w) } else { state.excludedWarnings.remove(w) }
+            if isOn { state.excludedWarnings.insert(warning); state.includedWarnings.remove(warning) } else { state.excludedWarnings.remove(warning) }
         }
         onToggle()
     }
@@ -336,15 +336,15 @@ struct FilterDirectionSection: View {
     private var categoryBinding: Set<AO3Category> {
         direction == .include ? state.includedCategories : state.excludedCategories
     }
-    private func categoryCount(_ c: AO3Category) -> Int {
-        (facets[.category] ?? []).first { $0.name == c.rawValue }?.count ?? 0
+    private func categoryCount(_ category: AO3Category) -> Int {
+        (facets[.category] ?? []).first { $0.name == category.rawValue }?.count ?? 0
     }
-    private func categorySelect(_ c: AO3Category, _ isOn: Bool) {
+    private func categorySelect(_ category: AO3Category, _ isOn: Bool) {
         switch direction {
         case .include:
-            if isOn { state.includedCategories.insert(c); state.excludedCategories.remove(c) } else { state.includedCategories.remove(c) }
+            if isOn { state.includedCategories.insert(category); state.excludedCategories.remove(category) } else { state.includedCategories.remove(category) }
         case .exclude:
-            if isOn { state.excludedCategories.insert(c); state.includedCategories.remove(c) } else { state.excludedCategories.remove(c) }
+            if isOn { state.excludedCategories.insert(category); state.includedCategories.remove(category) } else { state.excludedCategories.remove(category) }
         }
         onToggle()
     }

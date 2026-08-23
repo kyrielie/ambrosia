@@ -132,9 +132,9 @@ private struct SuggestionAnchorView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSView {
-        let v = NSView()
-        v.translatesAutoresizingMaskIntoConstraints = false
-        return v
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        return container
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
@@ -347,7 +347,7 @@ private struct SuggestionAnchorView: NSViewRepresentable {
         }
 
         func removeMouseMonitor() {
-            if let m = mouseMonitor { NSEvent.removeMonitor(m); mouseMonitor = nil }
+            if let monitor = mouseMonitor { NSEvent.removeMonitor(monitor); mouseMonitor = nil }
         }
     }
 }

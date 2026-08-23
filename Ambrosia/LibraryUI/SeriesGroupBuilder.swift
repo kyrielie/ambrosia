@@ -67,7 +67,8 @@ func buildSeriesGroups(
         let missing = missingIndices(in: indices)
         let ratings = Array(Set(works.flatMap(\.tags).filter { if case .rating = AO3TagKind.classify($0) { return true }; return false })).sorted()
         let warnings = Array(Set(works.flatMap(\.tags).filter { if case .warning = AO3TagKind.classify($0) { return true }; return false })).sorted()
-        let categories = Array(Set(metadata.flatMap(\.categories) + works.flatMap(\.tags).filter { if case .category = AO3TagKind.classify($0) { return true }; return false })).sorted()
+        let categoryTags = works.flatMap(\.tags).filter { if case .category = AO3TagKind.classify($0) { return true }; return false }
+        let categories = Array(Set(metadata.flatMap(\.categories) + categoryTags)).sorted()
         let fandoms = Array(Set(metadata.flatMap(\.fandoms))).sorted()
         let relationships = Array(Set(metadata.flatMap(\.relationships))).sorted()
         let characters = Array(Set(metadata.flatMap(\.characters))).sorted()

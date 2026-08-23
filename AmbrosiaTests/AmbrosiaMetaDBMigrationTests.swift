@@ -55,14 +55,16 @@ final class AmbrosiaMetaDBMigrationTests: XCTestCase {
     func testSchemaMigrationsBridgeIsIdempotent() throws {
         // A fresh database migrates straight to the current schema_migrations
         // rows without ever having gone through the legacy PRAGMA user_version
-        // gate, so both named migrations must be recorded as applied exactly
-        // once even though createSchemaMigrations/bridgeLegacyUserVersionMigrations
-        // and the migrations themselves all run in the same first pass.
+        // gate, so all three named migrations (the two legacy-bridged ones plus
+        // 2025_drop_ao3_author_username, which was gated on schema_migrations
+        // from the start) must be recorded as applied exactly once even though
+        // createSchemaMigrations/bridgeLegacyUserVersionMigrations and the
+        // migrations themselves all run in the same first pass.
         let db = try Connection(.inMemory)
         try AmbrosiaMetaDB.runMigrations(db: db)
         try AmbrosiaMetaDB.runMigrations(db: db)
 
         let count = (try? db.scalar("SELECT COUNT(*) FROM schema_migrations")) as? Int64 ?? -1
-        XCTAssertEqual(count, 2, "Expected exactly the two known migrations recorded, with no duplicates")
+        XCTAssertEqual(count, 3, "Expected exactly the three known migrations recorded, with no duplicates")
     }
 }

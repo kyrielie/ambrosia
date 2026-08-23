@@ -22,16 +22,21 @@ final class PreferencesWindowController: NSWindowController {
         window.toolbarStyle = .preference
         window.animationBehavior = .documentWindow
         super.init(window: window)
-        // Safe to force-unwrap: `shared` is a lazily-initialized `static let`,
-        // only ever reached via `show()`, which is always called well after
-        // `AppDelegate.shared.session` is set in `AmbrosiaApp.init()`.
+        // `AppDelegate.shared` is set in `AppDelegate.applicationDidFinishLaunching`,
+        // which always runs well before `show()` (the only caller of this
+        // initializer) can be reached -- so this guard should never trip in
+        // practice, but a guard+fatalError documents that invariant and gives
+        // a real crash message instead of a silent force-unwrap.
+        guard let session = AppDelegate.shared?.session else {
+            fatalError("PreferencesWindowController initialized before AppDelegate.shared.session was set")
+        }
         window.contentView = NSHostingView(
-            rootView: PreferencesRootView().environment(AppDelegate.shared!.session)
+            rootView: PreferencesRootView().environment(session)
         )
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     @MainActor
     static func show() {
@@ -112,12 +117,12 @@ private struct ReaderTab: View {
             // ── Reader colours ────────────────────────────────────────────
             Section {
                 ColorPicker("Background", selection: $readerBgColor, supportsOpacity: false)
-                    .onChange(of: readerBgColor) { _, c in
-                        if let hex = c.hexString { prefs.readerBackgroundColor = hex }
+                    .onChange(of: readerBgColor) { _, newColor in
+                        if let hex = newColor.hexString { prefs.readerBackgroundColor = hex }
                     }
                 ColorPicker("Text", selection: $readerTextColor, supportsOpacity: false)
-                    .onChange(of: readerTextColor) { _, c in
-                        if let hex = c.hexString { prefs.readerTextColor = hex }
+                    .onChange(of: readerTextColor) { _, newColor in
+                        if let hex = newColor.hexString { prefs.readerTextColor = hex }
                     }
                 themePresetRow(
                     onPick: { bg, fg in
@@ -163,7 +168,11 @@ private struct ReaderTab: View {
             } header: {
                 Label("Find", systemImage: "magnifyingglass").font(.headline)
             } footer: {
-                Text("When on, opening a book from a full-text search (or editing that search while the book is open) shows the Find bar and jumps to your search phrase. Turn off to open books without the Find bar appearing automatically.")
+                Text(
+                    "When on, opening a book from a full-text search (or editing that search " +
+                    "while the book is open) shows the Find bar and jumps to your search phrase. " +
+                    "Turn off to open books without the Find bar appearing automatically."
+                )
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -445,15 +454,23 @@ private struct LibraryTab: View {
             } header: {
                 Label("Library Rows", systemImage: "list.bullet.rectangle").font(.headline)
             } footer: {
-                Text("AO3-only mode keeps books whose publisher is exactly Archive of Our Own. \"Hide anthology/merged books\" hides books whose description was written by Calibre's EPUB-merge plugin (starts with \"Anthology containing:\"). \"Deduplicate books\" hides stale copies: when a Calibre duplicate of the same AO3 work exists, keeps only the more recently updated copy (or an arbitrary one if update dates match) and hides the rest from the library, search, series grouping, and feeds. Collection pills apply to email view rows.")
+                Text(
+                    "AO3-only mode keeps books whose publisher is exactly Archive of Our Own. " +
+                    "\"Hide anthology/merged books\" hides books whose description was written by " +
+                    "Calibre's EPUB-merge plugin (starts with \"Anthology containing:\"). " +
+                    "\"Deduplicate books\" hides stale copies: when a Calibre duplicate of the same " +
+                    "AO3 work exists, keeps only the more recently updated copy (or an arbitrary " +
+                    "one if update dates match) and hides the rest from the library, search, " +
+                    "series grouping, and feeds. Collection pills apply to email view rows."
+                )
                     .font(.caption).foregroundStyle(.secondary)
             }
 
             // ── Appearance (light / dark / system) ───────────────────────
             Section {
                 Picker("Color scheme", selection: $prefs.libraryAppearanceMode) {
-                    ForEach(LibraryAppearanceMode.allCases) { m in
-                        Text(m.label).tag(m)
+                    ForEach(LibraryAppearanceMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
                     }
                 }
             } header: {
@@ -466,8 +483,8 @@ private struct LibraryTab: View {
             // ── Background colour ─────────────────────────────────────────
             Section {
                 Picker("Mode", selection: $prefs.libraryColorMode) {
-                    ForEach(LibraryColorMode.allCases) { m in
-                        Text(m.label).tag(m)
+                    ForEach(LibraryColorMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
                     }
                 }
 
@@ -581,8 +598,8 @@ private struct LibraryTab: View {
                 ColorPicker("", selection: bg, supportsOpacity: false).labelsHidden()
                     .accessibilityLabel("\(label) mode background color")
                     .accessibilityLabeledPair(role: .content, id: "\(label)-bg", in: a11y)
-                    .onChange(of: bg.wrappedValue) { _, c in
-                        if let hex = c.hexString { onBGChange(hex) }
+                    .onChange(of: bg.wrappedValue) { _, newColor in
+                        if let hex = newColor.hexString { onBGChange(hex) }
                     }
             }
             VStack(alignment: .leading, spacing: 2) {
@@ -591,8 +608,8 @@ private struct LibraryTab: View {
                 ColorPicker("", selection: text, supportsOpacity: false).labelsHidden()
                     .accessibilityLabel("\(label) mode text color")
                     .accessibilityLabeledPair(role: .content, id: "\(label)-text", in: a11y)
-                    .onChange(of: text.wrappedValue) { _, c in
-                        if let hex = c.hexString { onTextChange(hex) }
+                    .onChange(of: text.wrappedValue) { _, newColor in
+                        if let hex = newColor.hexString { onTextChange(hex) }
                     }
             }
 
@@ -650,7 +667,7 @@ private struct LibraryPreviewRows: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ForEach(0..<3, id: \.self) { i in
+            ForEach(0..<3, id: \.self) { rowIndex in
                 HStack(spacing: 10) {
                     // Cover stub
                     RoundedRectangle(cornerRadius: 3)
@@ -659,10 +676,10 @@ private struct LibraryPreviewRows: View {
                     VStack(alignment: .leading, spacing: 4) {
                         // Title stub
                         Capsule().fill(textColor.opacity(0.75))
-                            .frame(width: sampleWidths[i], height: 10)
+                            .frame(width: sampleWidths[rowIndex], height: 10)
                         // Author stub
                         Capsule().fill(textColor.opacity(0.4))
-                            .frame(width: sampleWidths[i] * 0.6, height: 8)
+                            .frame(width: sampleWidths[rowIndex] * 0.6, height: 8)
                     }
                     Spacer()
                 }
@@ -673,7 +690,7 @@ private struct LibraryPreviewRows: View {
                         ? Color(nsColor: .controlAccentColor).opacity(0.08)
                         : bgColor
                 )
-                if i < 2 { Divider().padding(.leading, 54) }
+                if rowIndex < 2 { Divider().padding(.leading, 54) }
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -795,14 +812,14 @@ private struct DataTab: View {
                     Picker("Word count column", selection: $wordCountLabel) {
                         ForEach(opts, id: \.self) { Text($0).tag($0) }
                     }
-                    .onChange(of: wordCountLabel) { _, v in
-                        CustomColumnConfig.shared.wordCountLabel = v == "(none)" ? nil : v
+                    .onChange(of: wordCountLabel) { _, newLabel in
+                        CustomColumnConfig.shared.wordCountLabel = newLabel == "(none)" ? nil : newLabel
                     }
                     Picker("Kudos column", selection: $kudosLabel) {
                         ForEach(opts, id: \.self) { Text($0).tag($0) }
                     }
-                    .onChange(of: kudosLabel) { _, v in
-                        CustomColumnConfig.shared.kudosLabel = v == "(none)" ? nil : v
+                    .onChange(of: kudosLabel) { _, newLabel in
+                        CustomColumnConfig.shared.kudosLabel = newLabel == "(none)" ? nil : newLabel
                     }
                 }
             } header: {
@@ -817,7 +834,11 @@ private struct DataTab: View {
             } header: {
                 Label("Calibre Display Cleanup", systemImage: "wand.and.stars").font(.headline)
             } footer: {
-                Text("Calibre sometimes stores &amp; instead of & in titles and descriptions; turn this on to display it correctly. Applies to displayed titles and descriptions only — stored Calibre metadata is not changed.")
+                Text(
+                    "Calibre sometimes stores &amp; instead of & in titles and descriptions; " +
+                    "turn this on to display it correctly. Applies to displayed titles and " +
+                    "descriptions only — stored Calibre metadata is not changed."
+                )
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -1221,7 +1242,7 @@ struct ShortcutRecorderView: NSViewRepresentable {
         }
 
         @available(*, unavailable)
-        required init?(coder: NSCoder) { fatalError() }
+        required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
         deinit {
             if let monitor { NSEvent.removeMonitor(monitor) }
@@ -1266,10 +1287,10 @@ struct ShortcutRecorderView: NSViewRepresentable {
 
 extension Color {
     init?(hex: String) {
-        var h = hex.trimmingCharacters(in: .whitespaces)
-        if h.hasPrefix("#") { h = String(h.dropFirst()) }
-        if h.count == 3 { h = h.map { "\($0)\($0)" }.joined() }
-        guard h.count == 6, let value = UInt64(h, radix: 16) else { return nil }
+        var normalized = hex.trimmingCharacters(in: .whitespaces)
+        if normalized.hasPrefix("#") { normalized = String(normalized.dropFirst()) }
+        if normalized.count == 3 { normalized = normalized.map { "\($0)\($0)" }.joined() }
+        guard normalized.count == 6, let value = UInt64(normalized, radix: 16) else { return nil }
         self.init(
             red: Double((value >> 16) & 0xFF) / 255,
             green: Double((value >>  8) & 0xFF) / 255,
@@ -1282,7 +1303,7 @@ extension Color {
               let cg = NSColor(self).cgColor.converted(
                 to: sRGB,
                 intent: .defaultIntent, options: nil),
-              let c = cg.components, c.count >= 3 else { return nil }
-        return String(format: "#%02X%02X%02X", Int(c[0]*255), Int(c[1]*255), Int(c[2]*255))
+              let components = cg.components, components.count >= 3 else { return nil }
+        return String(format: "#%02X%02X%02X", Int(components[0]*255), Int(components[1]*255), Int(components[2]*255))
     }
 }

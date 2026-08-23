@@ -101,10 +101,10 @@ enum ActivityFeedEntry: Identifiable {
 
     var id: String {
         switch self {
-        case .session(let e, _):           return "s-\(e.id)"
-        case .annotation(let a, _, _):     return "a-\(a.id.uuidString)"
-        case .collectionChange(let c, _):  return "c-\(c.id)"
-        case .search(let s):               return "q-\(s.id.uuidString)"
+        case .session(let entry, _):       return "s-\(entry.id)"
+        case .annotation(let annotation, _, _): return "a-\(annotation.id.uuidString)"
+        case .collectionChange(let change, _): return "c-\(change.id)"
+        case .search(let searchEntry):     return "q-\(searchEntry.id.uuidString)"
         }
     }
 
@@ -112,19 +112,19 @@ enum ActivityFeedEntry: Identifiable {
 
     var date: Date {
         switch self {
-        case .session(let e, _):           return e.sessionStart
-        case .annotation(let a, _, _):     return a.createdDate
-        case .collectionChange(let c, _):  return c.addedAt
-        case .search(let s):               return s.date
+        case .session(let entry, _):       return entry.sessionStart
+        case .annotation(let annotation, _, _): return annotation.createdDate
+        case .collectionChange(let change, _): return change.addedAt
+        case .search(let searchEntry):     return searchEntry.date
         }
     }
 
     /// Non-nil only for book-linked entries.
     var book: CalibreBook? {
         switch self {
-        case .session(_, let b):           return b
-        case .annotation(_, _, let b):     return b
-        case .collectionChange(_, let b):  return b
+        case .session(_, let book):        return book
+        case .annotation(_, _, let book):  return book
+        case .collectionChange(_, let book): return book
         case .search:                      return nil
         }
     }

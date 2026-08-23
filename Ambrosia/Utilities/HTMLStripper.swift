@@ -21,9 +21,9 @@ enum HTMLStripper {
     /// memory pressure, so this is safe to hit from both the main-actor UI
     /// path and CalibreLibrary's background query path.
     private static let cache: NSCache<NSString, NSString> = {
-        let c = NSCache<NSString, NSString>()
-        c.countLimit = 2_000 // generous relative to a typical library page/session
-        return c
+        let cache = NSCache<NSString, NSString>()
+        cache.countLimit = 2_000 // generous relative to a typical library page/session
+        return cache
     }()
 
     /// Returns plain text with HTML tags removed and entities decoded.

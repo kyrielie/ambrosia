@@ -22,11 +22,11 @@ struct ReadingGoalView: View {
     // New goal input state
     @State private var targetInput = 12
     @State private var periodStart = Calendar.current.date(
-        from: Calendar.current.dateComponents([.year, .month], from: Date()))!
+        from: Calendar.current.dateComponents([.year, .month], from: Date())) ?? Date()
     @State private var periodEnd: Date = {
         let cal = Calendar.current
-        let start = cal.date(from: cal.dateComponents([.year, .month], from: Date()))!
-        return cal.date(byAdding: DateComponents(month: 1, day: -1), to: start)!
+        let start = cal.date(from: cal.dateComponents([.year, .month], from: Date())) ?? Date()
+        return cal.date(byAdding: DateComponents(month: 1, day: -1), to: start) ?? start
     }()
     @State private var isEditing = false
     @State private var historyReadCount: Int?

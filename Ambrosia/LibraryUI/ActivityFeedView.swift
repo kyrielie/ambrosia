@@ -174,10 +174,10 @@ struct ActivityFeedView: View {
              .collectionChange(_, let book):
             ReaderWindowController.open(book: book, modelContainer: modelContainer)
 
-        case .search(let s):
+        case .search(let searchEntry):
             // Re-apply the search and filter, then switch to list view.
-            toolbarState.searchText        = s.searchText
-            toolbarState.filterExpression  = s.filterExpression ?? FilterExpression()
+            toolbarState.searchText        = searchEntry.searchText
+            toolbarState.filterExpression  = searchEntry.filterExpression ?? FilterExpression()
             toolbarState.viewMode          = .list
         }
     }
@@ -247,8 +247,8 @@ struct ActivityFeedView: View {
                     merged.append(.collectionChange(event, book: book))
                 }
             }
-            for s in SearchActivityLog.shared.entries {
-                merged.append(.search(s))
+            for searchEntry in SearchActivityLog.shared.entries {
+                merged.append(.search(searchEntry))
             }
 
             allEntries = merged.sorted { $0.date > $1.date }
@@ -278,7 +278,7 @@ private struct ActivityFilterChip: View {
                     .font(.caption.weight(.medium))
                 Text(label)
                     .font(.caption.weight(selected ? .semibold : .regular))
-                if !isEmpty {
+                if count > 0 {
                     Text("\(count)")
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(selected ? .white : .secondary)
@@ -350,8 +350,8 @@ struct ActivityFeedRow: View {
                 Text(book.displayTitle)
                     .font(.headline)
                     .lineLimit(1)
-            } else if case .search(let s) = entry {
-                Text(s.displaySummary.isEmpty ? "Search" : s.displaySummary)
+            } else if case .search(let searchEntry) = entry {
+                Text(searchEntry.displaySummary.isEmpty ? "Search" : searchEntry.displaySummary)
                     .font(.headline)
                     .lineLimit(1)
             }
@@ -388,8 +388,8 @@ struct ActivityFeedRow: View {
     private var detailBlock: some View {
         switch entry {
 
-        case .session(let e, _):
-            let pct = min(max(e.percentEnd ?? 0, 0), 1)
+        case .session(let session, _):
+            let pct = min(max(session.percentEnd ?? 0, 0), 1)
             VStack(alignment: .leading, spacing: 4) {
                 ProgressView(value: pct)
                     .tint(pct >= 1 ? .green : .accentColor)
@@ -397,75 +397,75 @@ struct ActivityFeedRow: View {
                     Text("\(Int((pct * 100).rounded()))%")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    if let w = e.wordsRead, w > 0 {
+                    if let wordsRead = session.wordsRead, wordsRead > 0 {
                         Text("·").foregroundStyle(.tertiary).font(.caption)
-                        Text("\(w.formatted()) words read")
+                        Text("\(wordsRead.formatted()) words read")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    let duration = e.sessionEnd.timeIntervalSince(e.sessionStart)
+                    let duration = session.sessionEnd.timeIntervalSince(session.sessionStart)
                     if duration > 60 {
                         Text(formattedDuration(duration))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                if !e.fandoms.isEmpty || !e.categories.isEmpty {
+                if !session.fandoms.isEmpty || !session.categories.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 5) {
-                            ForEach(e.fandoms.prefix(3), id: \.self) { PillLabel(text: $0, symbol: "sparkles") }
-                            ForEach(e.categories.prefix(2), id: \.self) { PillLabel(text: $0, symbol: "person.2") }
+                            ForEach(session.fandoms.prefix(3), id: \.self) { PillLabel(text: $0, symbol: "sparkles") }
+                            ForEach(session.categories.prefix(2), id: \.self) { PillLabel(text: $0, symbol: "person.2") }
                         }
                     }
                 }
             }
 
-        case .annotation(let a, _, _):
+        case .annotation(let annotation, _, _):
             VStack(alignment: .leading, spacing: 4) {
-                if !a.isPointAnnotation, !a.selectedText.isEmpty {
+                if !annotation.isPointAnnotation, !annotation.selectedText.isEmpty {
                     HStack(alignment: .top, spacing: 8) {
                         Rectangle()
-                            .fill(Color(hex: a.colorHex) ?? .yellow)
+                            .fill(Color(hex: annotation.colorHex) ?? .yellow)
                             .frame(width: 3)
                             .clipShape(Capsule())
-                        Text("\u{201C}\(a.selectedText.prefix(200))\u{201D}")
+                        Text("\u{201C}\(annotation.selectedText.prefix(200))\u{201D}")
                             .font(.callout).italic()
                             .lineLimit(3)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
-                    Label("Bookmark — spine \(a.spineIndex)", systemImage: "bookmark.fill")
+                    Label("Bookmark — spine \(annotation.spineIndex)", systemImage: "bookmark.fill")
                         .font(.callout).foregroundStyle(.secondary)
                 }
-                if let note = a.note, !note.isEmpty {
+                if let note = annotation.note, !note.isEmpty {
                     Text(note.prefix(120))
                         .font(.caption).foregroundStyle(.secondary)
                         .lineLimit(2).padding(.top, 1)
                 }
             }
 
-        case .collectionChange(let c, _):
+        case .collectionChange(let change, _):
             HStack(spacing: 6) {
-                Image(systemName: c.isSystem ? "star.circle.fill" : "folder.fill")
+                Image(systemName: change.isSystem ? "star.circle.fill" : "folder.fill")
                     .font(.caption).foregroundStyle(.secondary)
-                Text(c.collectionName)
+                Text(change.collectionName)
                     .font(.callout).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 8).padding(.vertical, 4)
             .background(Color.accentColor.opacity(0.08))
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
-        case .search(let s):
+        case .search(let searchEntry):
             VStack(alignment: .leading, spacing: 6) {
                 // Search text pill
-                if !s.searchText.isEmpty {
-                    Label("\"\(s.searchText)\"", systemImage: "magnifyingglass")
+                if !searchEntry.searchText.isEmpty {
+                    Label("\"\(searchEntry.searchText)\"", systemImage: "magnifyingglass")
                         .font(.callout)
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(Color.blue.opacity(0.08))
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 // Filter rule pills
-                if let expr = s.filterExpression {
+                if let expr = searchEntry.filterExpression {
                     let rules = expr.groups.flatMap(\.completeRules)
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 5) {
@@ -484,7 +484,7 @@ struct ActivityFeedRow: View {
                 }
                 // Result count + re-apply hint
                 HStack(spacing: 4) {
-                    Text("\(s.resultCount) result\(s.resultCount == 1 ? "" : "s")")
+                    Text("\(searchEntry.resultCount) result\(searchEntry.resultCount == 1 ? "" : "s")")
                         .font(.caption).foregroundStyle(.secondary)
                     Text("·")
                         .font(.caption).foregroundStyle(.tertiary)
@@ -500,28 +500,28 @@ struct ActivityFeedRow: View {
     private var rowSymbol: String {
         switch entry {
         case .session:                       return "book.fill"
-        case .annotation(let a, _, _):       return a.isPointAnnotation ? "bookmark.fill" : "highlighter"
+        case .annotation(let annotation, _, _): return annotation.isPointAnnotation ? "bookmark.fill" : "highlighter"
         case .collectionChange:              return "folder.badge.plus"
-        case .search(let s):                 return s.hasFilterRules ? "line.3.horizontal.decrease.circle.fill" : "magnifyingglass"
+        case .search(let searchEntry):        return searchEntry.hasFilterRules ? "line.3.horizontal.decrease.circle.fill" : "magnifyingglass"
         }
     }
 
     private var rowTint: Color {
         switch entry {
         case .session:                       return .purple
-        case .annotation(let a, _, _):
-            return a.isPointAnnotation ? .blue : (Color(hex: a.colorHex) ?? .yellow)
+        case .annotation(let annotation, _, _):
+            return annotation.isPointAnnotation ? .blue : (Color(hex: annotation.colorHex) ?? .yellow)
         case .collectionChange:              return .green
-        case .search(let s):                 return s.hasFilterRules ? .orange : .blue
+        case .search(let searchEntry):        return searchEntry.hasFilterRules ? .orange : .blue
         }
     }
 
     private var eventLabel: String {
         switch entry {
         case .session:                       return "Reading session"
-        case .annotation(let a, _, _):       return a.isPointAnnotation ? "Bookmark" : "Highlight"
-        case .collectionChange(let c, _):    return "Added to \u{201C}\(c.collectionName)\u{201D}"
-        case .search(let s):                 return s.hasFilterRules ? "Filter" : "Search"
+        case .annotation(let annotation, _, _): return annotation.isPointAnnotation ? "Bookmark" : "Highlight"
+        case .collectionChange(let change, _):  return "Added to \u{201C}\(change.collectionName)\u{201D}"
+        case .search(let searchEntry):        return searchEntry.hasFilterRules ? "Filter" : "Search"
         }
     }
 
@@ -529,9 +529,9 @@ struct ActivityFeedRow: View {
 
     private func formattedDuration(_ seconds: TimeInterval) -> String {
         let total = Int(seconds)
-        let h = total / 3600
-        let m = (total % 3600) / 60
-        return h > 0 ? "\(h)h \(m)m" : "\(m)m"
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        return hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
     }
 }
 
