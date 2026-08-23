@@ -45,10 +45,12 @@ final class SeriesHelpersTests: XCTestCase {
 
     // MARK: - parseISODate(_:)
 
-    func testParseISODateValidISO8601String() {
+    func testParseISODateValidISO8601String() throws {
         let result = parseISODate("2024-03-15T10:30:00Z")
         XCTAssertNotNil(result)
-        let components = Calendar(identifier: .gregorian).dateComponents(in: TimeZone(identifier: "UTC")!, from: result!)
+        let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let unwrappedResult = try XCTUnwrap(result)
+        let components = Calendar(identifier: .gregorian).dateComponents(in: utc, from: unwrappedResult)
         XCTAssertEqual(components.year, 2024)
         XCTAssertEqual(components.month, 3)
         XCTAssertEqual(components.day, 15)
@@ -62,10 +64,11 @@ final class SeriesHelpersTests: XCTestCase {
         XCTAssertNil(parseISODate(""))
     }
 
-    func testParseISODateFallsBackToYYYYMMDD() {
+    func testParseISODateFallsBackToYYYYMMDD() throws {
         let result = parseISODate("2024-03-15")
         XCTAssertNotNil(result)
-        let components = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day], from: result!)
+        let unwrappedResult = try XCTUnwrap(result)
+        let components = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day], from: unwrappedResult)
         XCTAssertEqual(components.year, 2024)
         XCTAssertEqual(components.month, 3)
         XCTAssertEqual(components.day, 15)

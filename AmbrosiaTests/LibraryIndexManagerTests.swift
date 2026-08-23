@@ -149,7 +149,7 @@ final class LibraryIndexManagerTests: XCTestCase {
 
         // relink moves <base>/<oldHash> -> <base>/<newHash> on disk, so that
         // directory must exist under the override directory first.
-        let base = tempDir!
+        let base = try XCTUnwrap(tempDir)
         let oldDir = base.appendingPathComponent(oldHash)
         try FileManager.default.createDirectory(at: oldDir, withIntermediateDirectories: true)
         let marker = oldDir.appendingPathComponent("marker.txt")
@@ -174,7 +174,7 @@ final class LibraryIndexManagerTests: XCTestCase {
         let oldHash = libraryHash(for: oldURL)
         let newHash = libraryHash(for: newURL)
 
-        let base = tempDir!
+        let base = try XCTUnwrap(tempDir)
         let oldDir = base.appendingPathComponent(oldHash)
         let newDir = base.appendingPathComponent(newHash)
         try FileManager.default.createDirectory(at: oldDir, withIntermediateDirectories: true)

@@ -65,14 +65,15 @@ final class SeriesSpineMapTests: XCTestCase {
 
     // MARK: - globalIndex(workIndex:localIndex:)
 
-    func testGlobalIndexRoundTripsWithRefForEveryValidPair() {
+    func testGlobalIndexRoundTripsWithRefForEveryValidPair() throws {
         let map = makeMap()
         let spineCounts = [2, 5, 1]
         for workIndex in 0..<3 {
             for localIndex in 0..<spineCounts[workIndex] {
                 let global = map.globalIndex(workIndex: workIndex, localIndex: localIndex)
                 XCTAssertNotNil(global, "workIndex \(workIndex) localIndex \(localIndex)")
-                let ref = map.ref(atGlobalIndex: global!)
+                let unwrappedGlobal = try XCTUnwrap(global)
+                let ref = map.ref(atGlobalIndex: unwrappedGlobal)
                 XCTAssertEqual(ref?.workIndex, workIndex)
                 XCTAssertEqual(ref?.localIndex, localIndex)
             }

@@ -128,7 +128,8 @@ final class AO3MetadataExtractorTests: XCTestCase {
         let html = makePreface(
             dtddPairs: """
             <dt class="calibre3">Series:</dt>
-            <dd class="calibre4">Part 7 of <a href="/series/344591">jack/parse tumblr prompts</a>, Part 1 of <a href="/series/523378">rentboy jack and stuff</a></dd>
+            <dd class="calibre4">Part 7 of <a href="/series/344591">jack/parse tumblr prompts</a>,
+            Part 1 of <a href="/series/523378">rentboy jack and stuff</a></dd>
             \(minimalStatsPair())
             """,
             workID: "300",

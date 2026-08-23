@@ -651,7 +651,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             guard let firstParser = workParsers.first else { return "" }
             return try firstParser.mergedHTML(
                 userCSS: ReaderPreferences.shared.css,
-                ao3Record: workAO3Records.first ?? nil,
+                ao3Record: workAO3Records.first.flatMap { $0 },
                 removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents
             )
         }
