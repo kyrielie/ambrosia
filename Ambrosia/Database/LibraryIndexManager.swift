@@ -14,7 +14,33 @@ final class LibraryIndexManager {
     private let iso = ISO8601DateFormatter()
     private let fm = FileManager.default
 
-    private init() {}
+    /// Overrides `AmbrosiaMetaDB.librariesBaseDirectory()` for tests, so the
+    /// real `index.json` under Application Support (and real library
+    /// directories `relink` would otherwise move) are never touched by a
+    /// test run. `nil` (the default, used by `.shared`) means "use the real
+    /// directory" as before.
+    private let directoryOverride: URL?
+
+    private init(directoryOverride: URL? = nil) {
+        self.directoryOverride = directoryOverride
+    }
+
+    /// Test-only entry point: an instance scoped to `directory` instead of
+    /// the real Application Support path. Every read/write below routes
+    /// through `librariesBaseDirectory()`, which honors this override, so a
+    /// test instance never touches a developer's real index.json or moves a
+    /// real library directory.
+    static func makeForTesting(directory: URL) -> LibraryIndexManager {
+        LibraryIndexManager(directoryOverride: directory)
+    }
+
+    private func librariesBaseDirectory() throws -> URL {
+        if let directoryOverride {
+            try fm.createDirectory(at: directoryOverride, withIntermediateDirectories: true)
+            return directoryOverride
+        }
+        return try AmbrosiaMetaDB.librariesBaseDirectory()
+    }
 
     func entries() -> [LibraryIndexEntry] {
         guard let data = try? Data(contentsOf: indexURL()) else { return [] }
@@ -55,7 +81,7 @@ final class LibraryIndexManager {
 
     func relink(oldHash: String, newLibraryURL: URL) throws {
         let newHash = libraryHash(for: newLibraryURL)
-        let base = try AmbrosiaMetaDB.librariesBaseDirectory()
+        let base = try librariesBaseDirectory()
         let oldDir = base.appendingPathComponent(oldHash)
         let newDir = base.appendingPathComponent(newHash)
         if fm.fileExists(atPath: newDir.path) {
@@ -67,7 +93,7 @@ final class LibraryIndexManager {
 
     private func indexURL() -> URL {
         do {
-            return try AmbrosiaMetaDB.librariesBaseDirectory().appendingPathComponent("index.json")
+            return try librariesBaseDirectory().appendingPathComponent("index.json")
         } catch {
             let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? fm.temporaryDirectory
             return support.appendingPathComponent("Ambrosia").appendingPathComponent("libraries").appendingPathComponent("index.json")
