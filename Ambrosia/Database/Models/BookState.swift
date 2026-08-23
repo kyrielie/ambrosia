@@ -63,8 +63,8 @@ struct Annotation: Codable, Identifiable {
 // MARK: - ReadingMode (used by ReaderPreferences — kept here for compatibility)
 
 enum ReadingMode: String, Codable, CaseIterable, Identifiable {
-    case scroll    = "scroll"
-    case paginated = "paginated"
+    case scroll
+    case paginated
     var id: String { rawValue }
     var label: String {
         switch self {

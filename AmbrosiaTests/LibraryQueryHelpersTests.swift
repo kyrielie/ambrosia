@@ -96,7 +96,11 @@ final class LibraryQueryHelpersTests: XCTestCase {
     // MARK: - visibleBooks (via LibraryVisibilityPolicy.filter(_: [CalibreBook]))
 
     func testVisibleBooksExcludesAnthologyDescriptionsRegardlessOfOtherFlags() {
-        let anthology = makeBook(id: 1, comment: "Anthology of short works.")
+        // AnthologyDetector.isAnthology matches only the exact, anchored
+        // "Anthology containing:" prefix Calibre's EPUB-merge plugin writes
+        // (see HTMLStripper.swift) -- not any comment that merely mentions the
+        // word "anthology" -- so the fixture must use that literal prefix.
+        let anthology = makeBook(id: 1, comment: "Anthology containing: Short Works One, Short Works Two.")
         let normal = makeBook(id: 2, comment: "A perfectly normal fic.")
         let policy = makePolicy(showSkippedCollection: true, hideAnthologyBooks: true)
         let result = policy.filter([anthology, normal])

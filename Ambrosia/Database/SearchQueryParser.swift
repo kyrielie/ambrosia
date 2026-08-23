@@ -65,17 +65,17 @@ struct SearchQuery {
         // Exactly one scoped term and no plain text
         if tagTerms.count == 1 && authorTerms.isEmpty && titleTerms.isEmpty
             && seriesTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty {
-            let v = resolvedTagTerm ?? tagTerms[0]
+            let resolvedTag = resolvedTagTerm ?? tagTerms[0]
             // AO3 rating/warning/category tags get their proper field and operator.
             // Rating tags default to .ratingAtMost — almost always the right intent.
-            let kind = AO3TagKind.classify(v)
+            let kind = AO3TagKind.classify(resolvedTag)
             let field = kind.filterField
             let op: FilterOperator
             switch kind {
             case .rating: op = .ratingAtMost
             default:      op = .equals
             }
-            return FilterRule(field: field, op: op, value: v)
+            return FilterRule(field: field, op: op, value: resolvedTag)
         }
         if authorTerms.count == 1 && tagTerms.isEmpty && titleTerms.isEmpty
             && seriesTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty {
@@ -160,26 +160,29 @@ struct SearchQueryParser {
         // Check for a leading prefix that consumes the rest of the string.
         // Order matters: check longest prefixes first.
         let prefixes: [(String, (String) -> SearchQuery)] = [
-            ("author:", { v in SearchQuery(tagTerms: [], authorTerms: [v], titleTerms: [], seriesTerms: [], plainTerms: []) }),
-            ("series:", { v in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [v], plainTerms: []) }),
-            ("status:", { v in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [], statusTerms: [v], plainTerms: []) }),
-            ("fulltext:", { v in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [], statusTerms: [], fulltextPhrase: v, plainTerms: []) }),
-            ("title:", { v in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [v], seriesTerms: [], plainTerms: []) }),
-            ("tag:", { v in SearchQuery(tagTerms: [v], authorTerms: [], titleTerms: [], seriesTerms: [], plainTerms: []) })
+            ("author:", { value in SearchQuery(tagTerms: [], authorTerms: [value], titleTerms: [], seriesTerms: [], plainTerms: []) }),
+            ("series:", { value in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [value], plainTerms: []) }),
+            ("status:", { value in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [], statusTerms: [value], plainTerms: []) }),
+            ("fulltext:", { value in
+                SearchQuery(
+                    tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [],
+                    statusTerms: [], fulltextPhrase: value, plainTerms: []
+                )
+            }),
+            ("title:", { value in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [value], seriesTerms: [], plainTerms: []) }),
+            ("tag:", { value in SearchQuery(tagTerms: [value], authorTerms: [], titleTerms: [], seriesTerms: [], plainTerms: []) })
         ]
 
-        for (prefix, builder) in prefixes {
-            if trimmed.lowercased().hasPrefix(prefix) {
-                let value = String(trimmed.dropFirst(prefix.count))
-                    .trimmingCharacters(in: .whitespaces)
-                if !value.isEmpty {
-                    var query = builder(value)
-                    let lowerValue = value.lowercased()
-                    query.hasTrailingPrefixWarning = prefixes.contains { otherPrefix, _ in
-                        otherPrefix != prefix && lowerValue.contains(otherPrefix)
-                    }
-                    return query
+        for (prefix, builder) in prefixes where trimmed.lowercased().hasPrefix(prefix) {
+            let value = String(trimmed.dropFirst(prefix.count))
+                .trimmingCharacters(in: .whitespaces)
+            if !value.isEmpty {
+                var query = builder(value)
+                let lowerValue = value.lowercased()
+                query.hasTrailingPrefixWarning = prefixes.contains { otherPrefix, _ in
+                    otherPrefix != prefix && lowerValue.contains(otherPrefix)
                 }
+                return query
             }
         }
 

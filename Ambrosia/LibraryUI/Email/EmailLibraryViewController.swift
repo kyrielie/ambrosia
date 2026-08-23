@@ -164,7 +164,7 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     // MARK: - Lifecycle
 
@@ -1024,14 +1024,16 @@ final class EmailLibraryViewController: NSViewController {
                                                 filterTagExpansions: tagExpansions)
             await self?.session.refreshLastSearchError()
             await MainActor.run {
-                guard let self,
-                      !Task.isCancelled,
+                guard let self else { return }
+                let currentQuery = self.toolbarState.searchText.isEmpty
+                    ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+                    : SearchQueryParser.parse(self.toolbarState.searchText)
+                guard !Task.isCancelled,
                       self.toolbarState.activeFilterResult?.isSQLBacked == true,
                       self.toolbarState.activeFilterResult?.totalCount == nil,
                       LibraryFilterDebug.summary(expression: self.toolbarState.filterExpression) == filterSignature,
-                      LibraryFilterDebug.summary(query: self.queryWithCachedFullText(self.toolbarState.searchText.isEmpty
-                                                                                        ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
-                                                                                        : SearchQueryParser.parse(self.toolbarState.searchText))) == querySignature else {
+                      LibraryFilterDebug.summary(query: self.queryWithCachedFullText(currentQuery)) == querySignature
+                else {
                     LibraryFilterDebug.log("deferredCount.discard", [
                         "surface": "email",
                         "mode": "sqlPagedDeferredCount"
@@ -1161,10 +1163,12 @@ final class EmailLibraryViewController: NSViewController {
             // replaced.
             let (page, hasMore) = await library.randomSortedPage(
                 offset: offsetState.currentPage * pageSize, limit: pageSize,
-                query: query, filter: filterForSQL, restrictIDs: restrictIDs,
-                visibility: currentVisibilityPolicy,
-                filterTagExpansions: cachedFilterTagExpansions,
-                visibilityVersion: session.membershipVersion
+                CalibreLibrary.PageQuery(
+                    query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                    visibility: currentVisibilityPolicy,
+                    filterTagExpansions: cachedFilterTagExpansions,
+                    visibilityVersion: session.membershipVersion
+                )
             )
             guard !isTornDown, !Task.isCancelled else { return }
             if reset { books = page } else { books.append(contentsOf: page) }
@@ -1207,10 +1211,12 @@ final class EmailLibraryViewController: NSViewController {
             } else {
                 let (page, hasMore) = await library.wordCountSortedPage(
                     offset: offsetState.currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
-                    query: query, filter: filterForSQL, restrictIDs: restrictIDs,
-                    visibility: currentVisibilityPolicy,
-                    filterTagExpansions: cachedFilterTagExpansions,
-                    visibilityVersion: session.membershipVersion
+                    CalibreLibrary.PageQuery(
+                        query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                        visibility: currentVisibilityPolicy,
+                        filterTagExpansions: cachedFilterTagExpansions,
+                        visibilityVersion: session.membershipVersion
+                    )
                 )
                 guard !isTornDown, !Task.isCancelled else { return }
                 wordCountPage = page
@@ -1251,10 +1257,12 @@ final class EmailLibraryViewController: NSViewController {
             } else {
                 let (page, hasMore) = await library.kudosSortedPage(
                     offset: offsetState.currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
-                    query: query, filter: filterForSQL, restrictIDs: restrictIDs,
-                    visibility: currentVisibilityPolicy,
-                    filterTagExpansions: cachedFilterTagExpansions,
-                    visibilityVersion: session.membershipVersion
+                    CalibreLibrary.PageQuery(
+                        query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                        visibility: currentVisibilityPolicy,
+                        filterTagExpansions: cachedFilterTagExpansions,
+                        visibilityVersion: session.membershipVersion
+                    )
                 )
                 guard !isTornDown, !Task.isCancelled else { return }
                 wordCountPage = page
@@ -1298,11 +1306,13 @@ final class EmailLibraryViewController: NSViewController {
             } else {
                 let (page, hasMore) = await library.groupAwareTitleSortedPage(
                     offset: offsetState.currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
-                    query: query, filter: filterForSQL, restrictIDs: restrictIDs,
-                    visibility: currentVisibilityPolicy,
-                    filterTagExpansions: cachedFilterTagExpansions,
-                    visibilityVersion: session.membershipVersion,
-                    metaDB: session.metaDB
+                    CalibreLibrary.PageQuery(
+                        query: query, filter: filterForSQL, restrictIDs: restrictIDs,
+                        visibility: currentVisibilityPolicy,
+                        filterTagExpansions: cachedFilterTagExpansions,
+                        visibilityVersion: session.membershipVersion,
+                        metaDB: session.metaDB
+                    )
                 )
                 guard !isTornDown, !Task.isCancelled else { return }
                 wordCountPage = page
@@ -1595,7 +1605,10 @@ final class EmailLibraryViewController: NSViewController {
                 #endif
                 degraded = true
             }
-            let groupedEntries = Dictionary(grouping: entries.filter { !anthologyIDs.contains($0.calibreID) && !duplicateLoserIDs.contains($0.calibreID) }, by: \.seriesKey)
+            let visibleEntries = entries.filter {
+                !anthologyIDs.contains($0.calibreID) && !duplicateLoserIDs.contains($0.calibreID)
+            }
+            let groupedEntries = Dictionary(grouping: visibleEntries, by: \.seriesKey)
             let seriesKeys = groupedEntries.keys.sorted()
 
             // allEntries and placeholders both only depend on seriesKeys.
@@ -1737,7 +1750,7 @@ final class EmailLibraryViewController: NSViewController {
 
     /// Mirrors LibraryRootView.currentVisibilityPolicy — see LibraryVisibilityPolicy.swift.
     private var currentVisibilityPolicy: LibraryVisibilityPolicy {
-        queryController.visibilityPolicy(
+        LibraryVisibilityPolicy(
             showSkippedCollection: ReaderPreferences.shared.showSkippedCollection,
             shouldGroupSeriesRows: shouldGroupSidebarRows,
             hideNonAO3PublisherBooks: ReaderPreferences.shared.hideNonAO3PublisherBooks,

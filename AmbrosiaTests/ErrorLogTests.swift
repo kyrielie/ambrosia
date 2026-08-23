@@ -69,8 +69,8 @@ final class ErrorLogTests: XCTestCase {
     }
 
     func testRecentErrorsRespectsLimit() async throws {
-        for i in 0..<5 {
-            try await metaDB.logError(subsystem: "A", operation: "op", message: "error \(i)")
+        for index in 0..<5 {
+            try await metaDB.logError(subsystem: "A", operation: "op", message: "error \(index)")
         }
 
         let entries = try await metaDB.recentErrors(limit: 3)
@@ -78,8 +78,8 @@ final class ErrorLogTests: XCTestCase {
     }
 
     func testPruneErrorLogKeepsOnlyNewest() async throws {
-        for i in 0..<10 {
-            try await metaDB.logError(subsystem: "A", operation: "op", message: "error \(i)")
+        for index in 0..<10 {
+            try await metaDB.logError(subsystem: "A", operation: "op", message: "error \(index)")
         }
 
         try await metaDB.pruneErrorLog(keeping: 4)

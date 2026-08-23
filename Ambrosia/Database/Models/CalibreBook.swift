@@ -31,13 +31,13 @@ struct CalibreBook: Identifiable, Hashable {
     }
 
     var displaySeries: String? {
-        guard let s = series, !s.isEmpty else { return nil }
+        guard let seriesName = series, !seriesName.isEmpty else { return nil }
         if let idx = seriesIndex {
             let idxStr = idx.truncatingRemainder(dividingBy: 1) == 0
                 ? String(Int(idx)) : String(idx)
-            return "\(s) #\(idxStr)"
+            return "\(seriesName) #\(idxStr)"
         }
-        return s
+        return seriesName
     }
 
     var displayWordCount: String {
@@ -50,8 +50,8 @@ struct CalibreBook: Identifiable, Hashable {
     }
 
     var displayKudos: String {
-        guard let k = kudos, k > 0 else { return "" }
-        return k >= 1_000 ? String(format: "%.1fk kudos", Double(k) / 1_000) : "\(k) kudos"
+        guard let kudosCount = kudos, kudosCount > 0 else { return "" }
+        return kudosCount >= 1_000 ? String(format: "%.1fk kudos", Double(kudosCount) / 1_000) : "\(kudosCount) kudos"
     }
 
     var displayComment: String? {

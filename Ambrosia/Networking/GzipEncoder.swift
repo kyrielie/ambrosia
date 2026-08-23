@@ -68,12 +68,12 @@ enum GzipEncoder {
     // MARK: - CRC-32 (standard gzip polynomial 0xEDB88320)
 
     private static let crcTable: [UInt32] = {
-        (0...255).map { i -> UInt32 in
-            var c = UInt32(i)
+        (0...255).map { byteValue -> UInt32 in
+            var crc = UInt32(byteValue)
             for _ in 0..<8 {
-                c = (c & 1 != 0) ? (0xEDB88320 ^ (c >> 1)) : (c >> 1)
+                crc = (crc & 1 != 0) ? (0xEDB88320 ^ (crc >> 1)) : (crc >> 1)
             }
-            return c
+            return crc
         }
     }()
 

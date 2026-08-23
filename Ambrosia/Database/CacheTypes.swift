@@ -15,12 +15,12 @@ extension FilterResultCacheKey {
         // Encode group index, within-group conjunction, and sorted rules per group.
         // Two expressions with the same rules but different grouping must not share
         // a cache entry — (A OR B) AND C ≠ A OR (B AND C).
-        let digest = expression.groups.enumerated().map { i, group in
+        let digest = expression.groups.enumerated().map { groupIndex, group in
             let rules = group.completeRules
                 .map { "\($0.field.rawValue).\($0.op.rawValue).\($0.value)" }
                 .sorted()
                 .joined(separator: ",")
-            return "g\(i)[\(group.conjunction.rawValue):\(rules)]"
+            return "g\(groupIndex)[\(group.conjunction.rawValue):\(rules)]"
         }.joined(separator: "|") + "|gc:\(expression.groupConjunction.rawValue)"
         self.expressionDigest = digest
         self.membershipVersion = membershipVersion
@@ -91,7 +91,7 @@ struct LRUCache<Key: Hashable, Value> {
     }
 
     subscript(key: Key) -> Value? {
-        get { store[key] }
+        store[key]
     }
 
     mutating func set(_ value: Value, for key: Key) {

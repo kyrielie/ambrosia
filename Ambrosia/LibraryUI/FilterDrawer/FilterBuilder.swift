@@ -812,12 +812,12 @@ extension CalibreLibrary {
         } else {
             let joinClause = joins.joined(separator: "\n")
             let op         = conjunction == .and ? " AND " : " OR "
-            let where_     = "WHERE " + clauses.joined(separator: op)
+            let whereClause = "WHERE " + clauses.joined(separator: op)
 
             let sql = """
                 SELECT DISTINCT b.id FROM books b
                 \(joinClause)
-                \(where_)
+                \(whereClause)
                 ORDER BY b.id
                 """
 
@@ -1035,7 +1035,7 @@ extension CalibreLibrary {
             args.append(contentsOf: fArgs)
         }
 
-        let where_ = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
+        let whereSQL = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
         // §perf: Only join `comments` when the filter references it.
         let needsCommentJoin = filter?.groups.flatMap(\.completeRules)
             .contains { $0.field == .comment } == true
@@ -1044,7 +1044,7 @@ extension CalibreLibrary {
             SELECT COUNT(DISTINCT b.id)
             FROM books b
             \(commentJoin)
-            \(where_)
+            \(whereSQL)
             """
         let rows = try db.prepare(sql, args).map { $0 }
         return (rows.first?.first as? Int64).map(Int.init) ?? 0
@@ -1055,12 +1055,12 @@ extension CalibreLibrary {
     // swiftlint:disable cyclomatic_complexity
     private func sqlFragment(for rule: FilterRule,
                              tagExpansions: [String: [String]] = [:]) -> (String, [Binding?])? {
-        let v = rule.value.trimmingCharacters(in: .whitespaces)
+        let trimmedValue = rule.value.trimmingCharacters(in: .whitespaces)
 
         switch rule.field {
 
         case .title:
-            return textFragment(column: "b.title", op: rule.op, value: v)
+            return textFragment(column: "b.title", op: rule.op, value: trimmedValue)
 
         case .series:
             // Phase 5: evaluated in-memory against series_cache (via seriesNamesMap)
@@ -1071,7 +1071,7 @@ extension CalibreLibrary {
             return nil
 
         case .comment:
-            return textFragment(column: "c.text", op: rule.op, value: v,
+            return textFragment(column: "c.text", op: rule.op, value: trimmedValue,
                                 nullClause: "c.text IS NULL")
 
         case .authorName:
@@ -1097,26 +1097,26 @@ extension CalibreLibrary {
             return nil
 
         case .wordCountGT:
-            guard let n = rule.numericValue else { return nil }
+            guard let numericValue = rule.numericValue else { return nil }
             // §2a: Returns nil when no custom column is configured — caller handles fallback.
             guard let sql = wordCountSQL(sqlOp: ">") else { return nil }
-            return (sql, [n as Binding?])
+            return (sql, [numericValue as Binding?])
 
         case .wordCountLT:
-            guard let n = rule.numericValue else { return nil }
+            guard let numericValue = rule.numericValue else { return nil }
             guard let sql = wordCountSQL(sqlOp: "<") else { return nil }
-            return (sql, [n as Binding?])
+            return (sql, [numericValue as Binding?])
 
         case .kudosGT:
-            guard let n = rule.numericValue else { return nil }
+            guard let numericValue = rule.numericValue else { return nil }
             // §2b: Returns nil when no custom column is configured — caller handles fallback.
             guard let sql = kudosSQL(sqlOp: ">") else { return nil }
-            return (sql, [n as Binding?])
+            return (sql, [numericValue as Binding?])
 
         case .kudosLT:
-            guard let n = rule.numericValue else { return nil }
+            guard let numericValue = rule.numericValue else { return nil }
             guard let sql = kudosSQL(sqlOp: "<") else { return nil }
-            return (sql, [n as Binding?])
+            return (sql, [numericValue as Binding?])
 
         case .crossover:
             // Evaluated in-memory; never produce a SQL fragment.
@@ -1126,6 +1126,7 @@ extension CalibreLibrary {
             return nil
         }
     }
+    // swiftlint:enable cyclomatic_complexity
 
     // MARK: - Fragment helpers
 

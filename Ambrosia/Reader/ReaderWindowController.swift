@@ -104,7 +104,7 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     override func windowDidLoad() {
         super.windowDidLoad()

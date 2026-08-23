@@ -875,7 +875,10 @@ final class LibrarySession {
                 guard AO3TagSeedDatabaseConfig.shared.isEnabled else { return }
                 let counts = try await metaDB.ao3TagSeedCounts()
                 #if DEBUG
-                print("[LibrarySession] AO3 tag seeds ready: \(counts.canonicalTags) canonical tags, \(counts.synonyms) synonyms, \(counts.hierarchyEdges) hierarchy edges")
+                print("""
+                [LibrarySession] AO3 tag seeds ready: \(counts.canonicalTags) canonical tags, \
+                \(counts.synonyms) synonyms, \(counts.hierarchyEdges) hierarchy edges
+                """)
                 #endif
             } catch {
                 #if DEBUG

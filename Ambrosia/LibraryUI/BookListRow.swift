@@ -51,7 +51,15 @@ struct BookListRow: View, Equatable {
             && lhs.activeCollectionID          == rhs.activeCollectionID
     }
 
-    init(book: CalibreBook, bookState: BookState?, ao3Metadata: AO3MetadataRecord?, ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?, singletonSeriesWarnings: [SingletonSeriesWarning], isLiked: Bool, hideFanworksTagPill: Bool, correctCalibreAmpEntities: Bool, modelContext: ModelContext,
+    init(book: CalibreBook,
+         bookState: BookState?,
+         ao3Metadata: AO3MetadataRecord?,
+         ao3ExtractionDiagnostic: AO3ExtractionDiagnostic?,
+         singletonSeriesWarnings: [SingletonSeriesWarning],
+         isLiked: Bool,
+         hideFanworksTagPill: Bool,
+         correctCalibreAmpEntities: Bool,
+         modelContext: ModelContext,
          onTagTap: @escaping (String, FilterField) -> Void,
          onAuthorTap: @escaping (String) -> Void,
          onOpen: @escaping () -> Void,
@@ -208,15 +216,15 @@ struct BookListRow: View, Equatable {
 
     @ViewBuilder
     private var statsRow: some View {
-        let k  = book.displayKudos
+        let kudosText  = book.displayKudos
         let ao3Kudos = book.kudos == nil ? ao3Metadata?.kudosCount : nil
         let pct = bookState.map { $0.totalReadPercent }
-        if !k.isEmpty || ao3Kudos != nil || (pct ?? 0) > 0 {
+        if !kudosText.isEmpty || ao3Kudos != nil || (pct ?? 0) > 0 {
             HStack(spacing: 14) {
-                if !k.isEmpty { statChip(k, icon: "heart") }
+                if !kudosText.isEmpty { statChip(kudosText, icon: "heart") }
                 if let ao3Kudos { statChip(Self.formatKudos(ao3Kudos), icon: "heart") }
-                if let p = pct, p > 0 {
-                    statChip(String(format: "%.0f%% read", min(p, 1.0) * 100), icon: "book.pages")
+                if let readPercent = pct, readPercent > 0 {
+                    statChip(String(format: "%.0f%% read", min(readPercent, 1.0) * 100), icon: "book.pages")
                 }
                 Spacer()
             }
@@ -414,17 +422,32 @@ struct TagPillDisplay: Identifiable, Equatable {
         return pills
     }
 
+    /// The AO3 tag-facet arrays needed by `makeForSeries`, grouped together
+    /// since they're always looked up and passed together at the one call
+    /// site (all sourced from the same `SeriesGroup`'s `all*` accessors).
+    struct SeriesTagFacets {
+        var fandoms: [String]
+        var relationships: [String]
+        var characters: [String]
+        var categories: [String]
+        var warnings: [String]
+        var ratings: [String]
+        var additionalTags: [String]
+        var tags: [String]
+    }
+
     static func makeForSeries(
-        fandoms: [String],
-        relationships: [String],
-        characters: [String],
-        categories: [String],
-        warnings: [String],
-        ratings: [String],
-        additionalTags: [String],
-        tags: [String],
+        _ facets: SeriesTagFacets,
         hideFanworks: Bool
     ) -> [TagPillDisplay] {
+        let fandoms = facets.fandoms
+        let relationships = facets.relationships
+        let characters = facets.characters
+        let categories = facets.categories
+        let warnings = facets.warnings
+        let ratings = facets.ratings
+        let additionalTags = facets.additionalTags
+        let tags = facets.tags
         let buckets = AO3TagBuckets.from(tags: tags)
         let regularTags = buckets.regular.filter { tag in
             !additionalTags.contains(tag) &&

@@ -249,7 +249,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     // MARK: - View lifecycle
 
@@ -343,8 +343,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     }
 
     deinit {
-        if let m = scrollWheelMonitor { NSEvent.removeMonitor(m) }
-        if let m = keyDownMonitor { NSEvent.removeMonitor(m) }
+        if let monitor = scrollWheelMonitor { NSEvent.removeMonitor(monitor) }
+        if let monitor = keyDownMonitor { NSEvent.removeMonitor(monitor) }
     }
 
     // Intercepting at the window-event-monitor level — rather than overriding
@@ -383,7 +383,11 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 self.swipeAccumulatedDeltaX = 0
                 // Threshold: 30pt total swipe, not per-event sample.
                 if abs(dx) > 30 {
-                    dx < 0 ? self.goToNextPage() : self.goToPreviousPage()
+                    if dx < 0 {
+                        self.goToNextPage()
+                    } else {
+                        self.goToPreviousPage()
+                    }
                 }
                 return nil
             default:
@@ -394,8 +398,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     }
 
     private func removeScrollWheelMonitor() {
-        if let m = scrollWheelMonitor {
-            NSEvent.removeMonitor(m)
+        if let monitor = scrollWheelMonitor {
+            NSEvent.removeMonitor(monitor)
             scrollWheelMonitor = nil
         }
     }
@@ -446,8 +450,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     }
 
     private func removeKeyDownMonitor() {
-        if let m = keyDownMonitor {
-            NSEvent.removeMonitor(m)
+        if let monitor = keyDownMonitor {
+            NSEvent.removeMonitor(monitor)
             keyDownMonitor = nil
         }
     }
@@ -583,11 +587,11 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                   FileManager.default.fileExists(atPath: epubURL.path) else {
                 throw NSError(domain: "Ambrosia.Reader", code: 1, userInfo: [NSLocalizedDescriptionKey: "EPUB file not found: \(book.displayTitle)"])
             }
-            var p = EPUBParser(epubURL: epubURL)
-            try p.parse()
-            p.ao3Record = primaryAO3Record
+            var parser = EPUBParser(epubURL: epubURL)
+            try parser.parse()
+            parser.ao3Record = primaryAO3Record
             let imgBase = try EPUBParser.extractImages(from: epubURL, calibreID: book.id)
-            return LoadedWorks(parsers: [p], imageBaseURLs: [imgBase], ao3Records: [primaryAO3Record], workIDs: [book.id])
+            return LoadedWorks(parsers: [parser], imageBaseURLs: [imgBase], ao3Records: [primaryAO3Record], workIDs: [book.id])
 
         case .series(let series):
             // Batch-fetch ao3 records for all works so each gets its own endmatter.
@@ -603,12 +607,12 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                       FileManager.default.fileExists(atPath: epubURL.path) else {
                     throw NSError(domain: "Ambrosia.Reader", code: 2, userInfo: [NSLocalizedDescriptionKey: "EPUB file not found: \(work.displayTitle)"])
                 }
-                var p = EPUBParser(epubURL: epubURL)
-                try p.parse()
+                var parser = EPUBParser(epubURL: epubURL)
+                try parser.parse()
                 let record = recordMap[work.id]
-                p.ao3Record = record
+                parser.ao3Record = record
                 let imageBase = try EPUBParser.extractImages(from: epubURL, calibreID: work.id)
-                parsers.append(p)
+                parsers.append(parser)
                 imageBases.append(imageBase)
                 records.append(record)
             }
@@ -644,13 +648,17 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     /// (see HighlightBridge's ambrosiaWorkRootFor fallback).
     private func buildScrollHTML() throws -> String {
         guard case .series(let series) = target else {
-            guard let p = workParsers.first else { return "" }
-            return try p.mergedHTML(userCSS: ReaderPreferences.shared.css, ao3Record: workAO3Records.first, removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents)
+            guard let firstParser = workParsers.first else { return "" }
+            return try firstParser.mergedHTML(
+                userCSS: ReaderPreferences.shared.css,
+                ao3Record: workAO3Records.first ?? nil,
+                removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents
+            )
         }
 
         var parts: [String] = []
         var spineIndexOffset = 0
-        for (offset, p) in workParsers.enumerated() {
+        for (offset, workParser) in workParsers.enumerated() {
             guard series.works.indices.contains(offset) else { continue }
             let work = series.works[offset]
             let record = workAO3Records.indices.contains(offset) ? workAO3Records[offset] : nil
@@ -666,14 +674,20 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             // relative baseURL on the whole merged document can only ever
             // resolve one work's images — see EPUBParser.rewriteImageReferences.
             let workImageBase = workImageBaseURLs.indices.contains(offset) ? workImageBaseURLs[offset] : nil
-            let workHTML = try p.mergedHTML(userCSS: ReaderPreferences.shared.css, ao3Record: record, spineIndexOffset: spineIndexOffset, imageBaseOverride: workImageBase, removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents)
+            let workHTML = try workParser.mergedHTML(
+                userCSS: ReaderPreferences.shared.css,
+                ao3Record: record,
+                spineIndexOffset: spineIndexOffset,
+                imageBaseOverride: workImageBase,
+                removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents
+            )
             let wrappedWorkHTML = """
             <div class="ambrosia-work" data-work-calibre-id="\(work.id)">
             \(workHTML)
             </div>
             """
             parts.append(breakHTML + wrappedWorkHTML)
-            spineIndexOffset += p.spine.count
+            spineIndexOffset += workParser.spine.count
         }
         return parts.joined(separator: "\n")
     }
@@ -715,11 +729,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private func resumeSpinePosition() -> (globalIndex: Int, fraction: Double) {
         guard !spineMap.workIDs.isEmpty else { return (0, 0) }
         var candidateWorkIndex = spineMap.workIDs.count - 1
-        for (workIndex, calibreID) in spineMap.workIDs.enumerated() {
-            if bookState(for: calibreID).totalReadPercent < 1.0 {
-                candidateWorkIndex = workIndex
-                break
-            }
+        for (workIndex, calibreID) in spineMap.workIDs.enumerated() where bookState(for: calibreID).totalReadPercent < 1.0 {
+            candidateWorkIndex = workIndex
+            break
         }
         let calibreID = spineMap.workIDs[candidateWorkIndex]
         let state = bookState(for: calibreID)
@@ -769,12 +781,22 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 viewportHeight: bounds.height
             )
             #if DEBUG
-            print("[Pagination] loadSpineItem globalIndex=\(index) work=\(ref.workIndex) local=\(ref.localIndex) bounds=\(bounds) backingScale=\(view.window?.backingScaleFactor ?? -1) restorePosition=\(restorePosition)")
+            let backingScale = view.window?.backingScaleFactor ?? -1
+            print("""
+            [Pagination] loadSpineItem globalIndex=\(index) work=\(ref.workIndex) \
+            local=\(ref.localIndex) bounds=\(bounds) backingScale=\(backingScale) \
+            restorePosition=\(restorePosition)
+            """)
             #endif
             let baseCSS = ReaderPreferences.shared.css(paginated: true)
             let combinedCSS = baseCSS + "\n" + colCSS
 
-            let html = try workParser.html(for: item, userCSS: combinedCSS, globalSpineIndex: index, removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents)
+            let html = try workParser.html(
+                for: item,
+                userCSS: combinedCSS,
+                globalSpineIndex: index,
+                removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents
+            )
             isReaderContentReady = false
             paginationEngine?.setColsPerScreen(ReaderPreferences.shared.colsPerScreen)
             pendingRestorePosition = restorePosition
@@ -1021,8 +1043,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
     }
 
-    private static func jsStringLiteral(_ s: String) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: [s]),
+    private static func jsStringLiteral(_ value: String) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: [value]),
               let json = String(data: data, encoding: .utf8)
         else { return "\"\"" }
         // json is a single-element JSON array like ["the string"] — slicing
@@ -2143,14 +2165,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         // Split-view-internal resizes are handled in viewDidLayout via syncSidebarPanel.
         removeReaderWindowObservers()
         let nc = NotificationCenter.default
-        let move = nc.addObserver(forName: NSWindow.didMoveNotification, object: readerWindow, queue: .main) {
-            [weak self, weak panel] _ in self?.syncSidebarPanel(panel)
+        let move = nc.addObserver(forName: NSWindow.didMoveNotification, object: readerWindow, queue: .main) { [weak self, weak panel] _ in
+            self?.syncSidebarPanel(panel)
         }
-        let resize = nc.addObserver(forName: NSWindow.didResizeNotification, object: readerWindow, queue: .main) {
-            [weak self, weak panel] _ in self?.syncSidebarPanel(panel)
+        let resize = nc.addObserver(forName: NSWindow.didResizeNotification, object: readerWindow, queue: .main) { [weak self, weak panel] _ in
+            self?.syncSidebarPanel(panel)
         }
-        let close = nc.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) {
-            [weak self] _ in self?.removeReaderWindowObservers()
+        let close = nc.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { [weak self] _ in
+            self?.removeReaderWindowObservers()
         }
         sidebarPanelObservers = [move, resize, close]
     }
@@ -2262,14 +2284,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         tocPanel = panel
 
         let nc = NotificationCenter.default
-        let move = nc.addObserver(forName: NSWindow.didMoveNotification, object: readerWindow, queue: .main) {
-            [weak self, weak panel] _ in self?.syncTOCPanel(panel)
+        let move = nc.addObserver(forName: NSWindow.didMoveNotification, object: readerWindow, queue: .main) { [weak self, weak panel] _ in
+            self?.syncTOCPanel(panel)
         }
-        let resize = nc.addObserver(forName: NSWindow.didResizeNotification, object: readerWindow, queue: .main) {
-            [weak self, weak panel] _ in self?.syncTOCPanel(panel)
+        let resize = nc.addObserver(forName: NSWindow.didResizeNotification, object: readerWindow, queue: .main) { [weak self, weak panel] _ in
+            self?.syncTOCPanel(panel)
         }
-        let close = nc.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) {
-            [weak self] _ in self?.removeTOCWindowObservers()
+        let close = nc.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { [weak self] _ in
+            self?.removeTOCWindowObservers()
         }
         tocPanelObservers = [move, resize, close]
     }
@@ -2367,17 +2389,17 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     // MARK: - Helpers
 
     private static func cgFloat(from value: Any?) -> CGFloat {
-        if let v = value as? CGFloat { return v }
-        if let v = value as? Double { return CGFloat(v) }
-        if let v = value as? Int { return CGFloat(v) }
-        if let v = value as? NSNumber { return CGFloat(truncating: v) }
+        if let numericValue = value as? CGFloat { return numericValue }
+        if let numericValue = value as? Double { return CGFloat(numericValue) }
+        if let numericValue = value as? Int { return CGFloat(numericValue) }
+        if let numericValue = value as? NSNumber { return CGFloat(truncating: numericValue) }
         return 0
     }
 
     private static func double(from value: Any?) -> Double? {
-        if let v = value as? Double { return v }
-        if let v = value as? Int { return Double(v) }
-        if let v = value as? NSNumber { return v.doubleValue }
+        if let numericValue = value as? Double { return numericValue }
+        if let numericValue = value as? Int { return Double(numericValue) }
+        if let numericValue = value as? NSNumber { return numericValue.doubleValue }
         return nil
     }
 
@@ -2410,7 +2432,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     @objc func searchInBrowser() {
         webView.evaluateJavaScript("window.getSelection().toString()") { result, _ in
             guard let text = result as? String, !text.isEmpty else { return }
-            var comps = URLComponents(string: "https://www.google.com/search")!
+            guard var comps = URLComponents(string: "https://www.google.com/search") else { return }
             comps.queryItems = [URLQueryItem(name: "q", value: text)]
             if let url = comps.url { NSWorkspace.shared.open(url) }
         }
@@ -2502,9 +2524,9 @@ private struct NotePopoverView: View {
 private extension String {
     func inserting(dashes: Bool) -> String {
         guard dashes, count == 32 else { return self }
-        var s = self
-        for i in [20, 16, 12, 8] { s.insert("-", at: s.index(s.startIndex, offsetBy: i)) }
-        return s
+        var uuid = self
+        for dashOffset in [20, 16, 12, 8] { uuid.insert("-", at: uuid.index(uuid.startIndex, offsetBy: dashOffset)) }
+        return uuid
     }
 }
 

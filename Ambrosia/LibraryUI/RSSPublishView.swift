@@ -67,7 +67,7 @@ struct ManageFeedsView: View {
         var displayName: String {
             switch self {
             case .currentSearch:         return "Current Search (snapshot)"
-            case .collection(_, let n):  return n
+            case .collection(_, let name): return name
             case .dailyStory:            return "Daily Story"
             }
         }

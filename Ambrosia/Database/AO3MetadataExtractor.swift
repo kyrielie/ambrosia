@@ -327,7 +327,16 @@ enum AO3MetadataExtractor {
         if record.wordCount == nil { missing.append("words") }
         if record.chapterCurrent == nil { missing.append("chapter current") }
         guard !missing.isEmpty else { return }
-        print("[AO3MetadataExtractor] Parsed AO3 metadata with nil fields missing=\(missing.joined(separator: ", ")) workID=\(record.workID ?? "nil") storyURL=\(record.storyURL ?? "nil") words=\(record.wordCount.map(String.init) ?? "nil") chapterCurrent=\(record.chapterCurrent.map(String.init) ?? "nil") chapterTotal=\(record.chapterTotal.map(String.init) ?? "nil") published=\(record.publishedDate ?? "nil") updated=\(record.updatedDate ?? "nil") extractedAt=\(record.extractedAt)")
+        let words = record.wordCount.map(String.init) ?? "nil"
+        let chapterCurrent = record.chapterCurrent.map(String.init) ?? "nil"
+        let chapterTotal = record.chapterTotal.map(String.init) ?? "nil"
+        print("""
+        [AO3MetadataExtractor] Parsed AO3 metadata with nil fields \
+        missing=\(missing.joined(separator: ", ")) workID=\(record.workID ?? "nil") \
+        storyURL=\(record.storyURL ?? "nil") words=\(words) chapterCurrent=\(chapterCurrent) \
+        chapterTotal=\(chapterTotal) published=\(record.publishedDate ?? "nil") \
+        updated=\(record.updatedDate ?? "nil") extractedAt=\(record.extractedAt)
+        """)
         #endif
     }
 }

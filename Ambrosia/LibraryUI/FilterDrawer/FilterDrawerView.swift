@@ -249,7 +249,7 @@ struct FilterRuleRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Picker("", selection: $rule.field) {
-                ForEach(visibleFields) { f in Text(f.label).tag(f) }
+                ForEach(visibleFields) { field in Text(field.label).tag(field) }
             }
             .labelsHidden().frame(width: 120)
             .onChange(of: rule.field) {
@@ -313,27 +313,27 @@ struct FilterRuleRow: View {
                 let orderedRatings: [AO3Rating] = [
                     .generalAudiences, .teenAndUp, .mature, .explicit, .notRated
                 ]
-                ForEach(orderedRatings, id: \.rawValue) { r in
+                ForEach(orderedRatings, id: \.rawValue) { rating in
                     HStack {
-                        Text(r.rawValue)
-                        if let level = r.level {
+                        Text(rating.rawValue)
+                        if let level = rating.level {
                             Text("(\(["", "low", "", "", "high"][min(level, 4)]))")
                                 .foregroundStyle(.secondary)
                                 .font(.caption)
                         }
                     }
-                    .tag(r.rawValue)
+                    .tag(rating.rawValue)
                 }
             }.labelsHidden().frame(maxWidth: .infinity)
         case .warning:
             Picker("", selection: $rule.value) {
                 Text("— pick —").tag("")
-                ForEach(AO3Warning.allCases, id: \.rawValue) { w in Text(w.rawValue).tag(w.rawValue) }
+                ForEach(AO3Warning.allCases, id: \.rawValue) { warning in Text(warning.rawValue).tag(warning.rawValue) }
             }.labelsHidden().frame(maxWidth: .infinity)
         case .category:
             Picker("", selection: $rule.value) {
                 Text("— pick —").tag("")
-                ForEach(AO3Category.allCases, id: \.rawValue) { c in Text(c.rawValue).tag(c.rawValue) }
+                ForEach(AO3Category.allCases, id: \.rawValue) { category in Text(category.rawValue).tag(category.rawValue) }
             }.labelsHidden().frame(maxWidth: .infinity)
         case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT:
             TextField("Number", text: $rule.value)
@@ -510,9 +510,9 @@ private struct WindowAccessorView: NSViewRepresentable {
     let onWindow: (NSWindow?) -> Void
 
     func makeNSView(context: Context) -> NSView {
-        let v = NSView()
-        v.translatesAutoresizingMaskIntoConstraints = false
-        return v
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        return container
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {

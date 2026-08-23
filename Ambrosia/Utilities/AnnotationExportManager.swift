@@ -35,16 +35,16 @@ struct AnnotationExportManager {
 
         var csvRows: [[String]] = [header]
 
-        for r in rows {
+        for row in rows {
             csvRows.append([
-                r.book.displayTitle,
-                r.book.authors.joined(separator: "; "),
-                r.annotation.isPointAnnotation ? "Bookmark" : "Highlight",
-                r.annotation.selectedText,
-                r.annotation.note ?? "",
-                r.annotation.colorHex,
-                String(r.annotation.spineIndex),
-                ExportManager.isoDate(r.annotation.createdDate)
+                row.book.displayTitle,
+                row.book.authors.joined(separator: "; "),
+                row.annotation.isPointAnnotation ? "Bookmark" : "Highlight",
+                row.annotation.selectedText,
+                row.annotation.note ?? "",
+                row.annotation.colorHex,
+                String(row.annotation.spineIndex),
+                ExportManager.isoDate(row.annotation.createdDate)
             ])
         }
 

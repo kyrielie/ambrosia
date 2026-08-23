@@ -1,6 +1,11 @@
 excluded:
   - Ambrosia.xcodeproj
   - docs
+  # Local, gitignored scratch/reference tree (see .gitignore's "AI tool
+  # output / scratch dumps" section) -- not part of Ambrosia, never present
+  # in a CI checkout, but present on disk for local `swiftlint lint`/
+  # `./test.sh` runs unless excluded here too.
+  - finished
 
 # force_unwrapping, force_try, force_cast are the rules that directly
 # enforce Invariant 12 (overview.md, "Repo-wide engineering rules") —

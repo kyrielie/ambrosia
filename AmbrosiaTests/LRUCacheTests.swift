@@ -93,15 +93,15 @@ final class LRUCacheTests: XCTestCase {
 final class CacheKeyTests: XCTestCase {
 
     func test_tagExpansionsDigest_isOrderIndependentOnKeysAndValues() {
-        let a: [String: [String]] = ["fluff": ["comfort", "cozy"], "angst": ["hurt"]]
-        let b: [String: [String]] = ["angst": ["hurt"], "fluff": ["cozy", "comfort"]]
-        XCTAssertEqual(tagExpansionsDigest(a), tagExpansionsDigest(b))
+        let dictA: [String: [String]] = ["fluff": ["comfort", "cozy"], "angst": ["hurt"]]
+        let dictB: [String: [String]] = ["angst": ["hurt"], "fluff": ["cozy", "comfort"]]
+        XCTAssertEqual(tagExpansionsDigest(dictA), tagExpansionsDigest(dictB))
     }
 
     func test_tagExpansionsDigest_differsWhenValuesActuallyDiffer() {
-        let a: [String: [String]] = ["fluff": ["comfort"]]
-        let b: [String: [String]] = ["fluff": ["comfort", "cozy"]]
-        XCTAssertNotEqual(tagExpansionsDigest(a), tagExpansionsDigest(b))
+        let dictA: [String: [String]] = ["fluff": ["comfort"]]
+        let dictB: [String: [String]] = ["fluff": ["comfort", "cozy"]]
+        XCTAssertNotEqual(tagExpansionsDigest(dictA), tagExpansionsDigest(dictB))
     }
 
     func test_filterResultCacheKey_sameRulesDifferentMembershipVersion_areNotEqual() {

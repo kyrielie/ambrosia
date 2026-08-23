@@ -98,9 +98,9 @@ actor CalibreFTSLibrary {
         do {
             return try db.prepare(sql, [sanitised as Binding?, limit as Binding?])
                 .compactMap { row -> Int? in
-                    guard let v = row[0] else { return nil }
-                    if let i = v as? Int64 { return Int(i) }
-                    if let i = v as? Int { return i }
+                    guard let rawValue = row[0] else { return nil }
+                    if let int64Value = rawValue as? Int64 { return Int(int64Value) }
+                    if let intValue = rawValue as? Int { return intValue }
                     return nil
                 }
         } catch {
@@ -128,9 +128,9 @@ actor CalibreFTSLibrary {
         do {
             return try db.prepare(sql, bindings)
                 .compactMap { row -> Int? in
-                    guard let v = row[0] else { return nil }
-                    if let i = v as? Int64 { return Int(i) }
-                    if let i = v as? Int { return i }
+                    guard let rawValue = row[0] else { return nil }
+                    if let int64Value = rawValue as? Int64 { return Int(int64Value) }
+                    if let intValue = rawValue as? Int { return intValue }
                     return nil
                 }
         } catch {

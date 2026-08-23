@@ -107,7 +107,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     deinit {
         removeSuggestionMouseMonitor()
@@ -348,15 +348,23 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         return true
     }
 
+    /// SF Symbol images never legitimately fail to resolve for the fixed,
+    /// known-good names used in this app, but `NSImage(systemSymbolName:)`
+    /// and `withSymbolConfiguration` are still Optional APIs (symbol
+    /// availability does vary across macOS versions). Falls back to a blank
+    /// image rather than force-unwrapping, matching this file's other
+    /// toolbar-image call sites (see `makeButtonItem`).
+    private func toolbarSegmentImage(systemSymbolName: String, accessibilityDescription: String) -> NSImage {
+        NSImage(systemSymbolName: systemSymbolName, accessibilityDescription: accessibilityDescription)?
+            .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage()
+    }
+
     private func makeViewModeItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
         let seg = NSSegmentedControl(
             images: [
-                NSImage(systemSymbolName: "list.bullet", accessibilityDescription: "List")!
-                    .withSymbolConfiguration(Self.toolbarSymbolConfig)!,
-                NSImage(systemSymbolName: "envelope", accessibilityDescription: "Email")!
-                    .withSymbolConfiguration(Self.toolbarSymbolConfig)!,
-                NSImage(systemSymbolName: "list.number", accessibilityDescription: "Ranking")!
-                    .withSymbolConfiguration(Self.toolbarSymbolConfig)!
+                toolbarSegmentImage(systemSymbolName: "list.bullet", accessibilityDescription: "List"),
+                toolbarSegmentImage(systemSymbolName: "envelope", accessibilityDescription: "Email"),
+                toolbarSegmentImage(systemSymbolName: "list.number", accessibilityDescription: "Ranking")
             ],
             trackingMode: .selectOne,
             target: self,
@@ -814,8 +822,11 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
                   let metaDB = session.metaDB, let library = session.library else { return }
             AO3FilterPopupWindowController.open(
                 anchorWindow: window,
-                toolbarState: toolbarState, metaDB: metaDB, library: library,
-                ftsLibrary: session.ftsLibrary, collectionStore: session.collectionStore,
+                toolbarState: toolbarState,
+                dependencies: AO3FilterPopupWindowController.LibraryDependencies(
+                    metaDB: metaDB, library: library,
+                    ftsLibrary: session.ftsLibrary, collectionStore: session.collectionStore
+                ),
                 membershipVersion: session.membershipVersion
             )
         }
@@ -937,15 +948,15 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         if let result = toolbarState?.activeFilterResult, !result.calibreIDs.isEmpty {
             ids = result.calibreIDs
         } else if let result = toolbarState?.activeFilterResult, result.isSQLBacked {
-            let q = toolbarState?.searchText.isEmpty == false
+            let searchQuery = toolbarState?.searchText.isEmpty == false
                 ? SearchQueryParser.parse(toolbarState?.searchText ?? "")
                 : SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
-            ids = await session.library?.fetchAllMatchingIDs(query: q, filter: toolbarState?.filterExpression, restrictIDs: nil) ?? []
+            ids = await session.library?.fetchAllMatchingIDs(query: searchQuery, filter: toolbarState?.filterExpression, restrictIDs: nil) ?? []
         } else {
-            let q = toolbarState?.searchText.isEmpty == false
+            let searchQuery = toolbarState?.searchText.isEmpty == false
                 ? SearchQueryParser.parse(toolbarState?.searchText ?? "")
                 : SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
-            ids = await session.library?.fetchAllMatchingIDs(query: q, filter: nil, restrictIDs: nil) ?? []
+            ids = await session.library?.fetchAllMatchingIDs(query: searchQuery, filter: nil, restrictIDs: nil) ?? []
         }
         let libHash = session.activePath.map { libraryHash(for: URL(fileURLWithPath: $0)) } ?? ""
         // §SeriesGrouping Phase 3: this is the same fetchAllMatchingIDs raw

@@ -109,9 +109,19 @@ final class AO3FilterPopupState {
         case .fandom:
             if includedFandoms.contains(value) { includedFandoms.remove(value) } else { includedFandoms.insert(value); excludedFandoms.remove(value) }
         case .relationship:
-            if includedRelationships.contains(value) { includedRelationships.remove(value) } else { includedRelationships.insert(value); excludedRelationships.remove(value) }
+            if includedRelationships.contains(value) {
+                includedRelationships.remove(value)
+            } else {
+                includedRelationships.insert(value)
+                excludedRelationships.remove(value)
+            }
         case .character:
-            if includedCharacters.contains(value) { includedCharacters.remove(value) } else { includedCharacters.insert(value); excludedCharacters.remove(value) }
+            if includedCharacters.contains(value) {
+                includedCharacters.remove(value)
+            } else {
+                includedCharacters.insert(value)
+                excludedCharacters.remove(value)
+            }
         case .freeform:
             if includedFreeforms.contains(value) { includedFreeforms.remove(value) } else { includedFreeforms.insert(value); excludedFreeforms.remove(value) }
         case .author:
@@ -124,9 +134,19 @@ final class AO3FilterPopupState {
         case .fandom:
             if excludedFandoms.contains(value) { excludedFandoms.remove(value) } else { excludedFandoms.insert(value); includedFandoms.remove(value) }
         case .relationship:
-            if excludedRelationships.contains(value) { excludedRelationships.remove(value) } else { excludedRelationships.insert(value); includedRelationships.remove(value) }
+            if excludedRelationships.contains(value) {
+                excludedRelationships.remove(value)
+            } else {
+                excludedRelationships.insert(value)
+                includedRelationships.remove(value)
+            }
         case .character:
-            if excludedCharacters.contains(value) { excludedCharacters.remove(value) } else { excludedCharacters.insert(value); includedCharacters.remove(value) }
+            if excludedCharacters.contains(value) {
+                excludedCharacters.remove(value)
+            } else {
+                excludedCharacters.insert(value)
+                includedCharacters.remove(value)
+            }
         case .freeform:
             if excludedFreeforms.contains(value) { excludedFreeforms.remove(value) } else { excludedFreeforms.insert(value); includedFreeforms.remove(value) }
         case .author:
@@ -163,8 +183,8 @@ extension AO3FilterPopupState {
         var excludeGroup = FilterGroup(conjunction: .and) // AND-of-NOTs == AO3's must_not-any semantics
 
         func addTagRules(include: Set<String>, exclude: Set<String>, field: FilterField = .tag) {
-            for v in include { includeGroup.rules.append(FilterRule(field: field, op: .equals, value: v)) }
-            for v in exclude { excludeGroup.rules.append(FilterRule(field: field, op: .notEquals, value: v)) }
+            for value in include { includeGroup.rules.append(FilterRule(field: field, op: .equals, value: value)) }
+            for value in exclude { excludeGroup.rules.append(FilterRule(field: field, op: .notEquals, value: value)) }
         }
 
         addTagRules(include: includedFandoms, exclude: excludedFandoms)
@@ -173,16 +193,16 @@ extension AO3FilterPopupState {
         addTagRules(include: includedFreeforms, exclude: excludedFreeforms)
         addTagRules(include: includedAuthors, exclude: excludedAuthors, field: .authorName)
 
-        for w in includedWarnings { includeGroup.rules.append(FilterRule(field: .warning, op: .equals, value: w.rawValue)) }
-        for w in excludedWarnings { excludeGroup.rules.append(FilterRule(field: .warning, op: .notEquals, value: w.rawValue)) }
-        for c in includedCategories { includeGroup.rules.append(FilterRule(field: .category, op: .equals, value: c.rawValue)) }
-        for c in excludedCategories { excludeGroup.rules.append(FilterRule(field: .category, op: .notEquals, value: c.rawValue)) }
+        for warning in includedWarnings { includeGroup.rules.append(FilterRule(field: .warning, op: .equals, value: warning.rawValue)) }
+        for warning in excludedWarnings { excludeGroup.rules.append(FilterRule(field: .warning, op: .notEquals, value: warning.rawValue)) }
+        for category in includedCategories { includeGroup.rules.append(FilterRule(field: .category, op: .equals, value: category.rawValue)) }
+        for category in excludedCategories { excludeGroup.rules.append(FilterRule(field: .category, op: .notEquals, value: category.rawValue)) }
 
         if let includedRating {
             includeGroup.rules.append(FilterRule(field: .rating, op: .equals, value: includedRating.rawValue))
         }
-        for r in excludedRatings {
-            excludeGroup.rules.append(FilterRule(field: .rating, op: .notEquals, value: r.rawValue))
+        for rating in excludedRatings {
+            excludeGroup.rules.append(FilterRule(field: .rating, op: .notEquals, value: rating.rawValue))
         }
 
         switch crossoverState {

@@ -7,9 +7,9 @@ import SwiftUI
 
 /// Controls how the library background and text colours are determined.
 enum LibraryColorMode: String, CaseIterable, Identifiable {
-    case systemDefault = "systemDefault"  // NSColor.windowBackgroundColor (default)
-    case accentColor   = "accentColor"    // subtle system accent colour tint
-    case custom        = "custom"         // user picks separate light/dark colour pairs
+    case systemDefault  // NSColor.windowBackgroundColor (default)
+    case accentColor    // subtle system accent colour tint
+    case custom          // user picks separate light/dark colour pairs
 
     var id: String { rawValue }
     var label: String {
@@ -25,9 +25,9 @@ enum LibraryColorMode: String, CaseIterable, Identifiable {
 
 /// Whether the library follows the system appearance or is locked to light/dark.
 enum LibraryAppearanceMode: String, CaseIterable, Identifiable {
-    case system = "system"
-    case light  = "light"
-    case dark   = "dark"
+    case system
+    case light
+    case dark
 
     var id: String { rawValue }
     var label: String {
@@ -758,7 +758,14 @@ final class ReaderPreferences: ObservableObject {
             : "max-width: none !important; margin: 0 !important;"
 
         #if DEBUG
-        print("[Pagination] requested: vw=\(vw) vh=\(vh) marginH=\(marginHInt) availableWidth=\(availableWidth) colsPerScreen=\(colsPerScreen) colWidth=\(colWidth) colGap=\(colGap) colTotal=\(colWidth * colsPerScreen + colGap * (colsPerScreen - 1)) pitch=\(colWidth + colGap) capSingleColumn=\(capSingleColumn) maxWidth=\(maxWidth)")
+        let colTotal = colWidth * colsPerScreen + colGap * (colsPerScreen - 1)
+        let pitch = colWidth + colGap
+        print("""
+        [Pagination] requested: vw=\(vw) vh=\(vh) marginH=\(marginHInt) \
+        availableWidth=\(availableWidth) colsPerScreen=\(colsPerScreen) \
+        colWidth=\(colWidth) colGap=\(colGap) colTotal=\(colTotal) pitch=\(pitch) \
+        capSingleColumn=\(capSingleColumn) maxWidth=\(maxWidth)
+        """)
         #endif
 
         return """

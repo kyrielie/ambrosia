@@ -81,11 +81,11 @@ extension CalibreLibrary {
 
     private func _bookCount(query: SearchQuery) throws -> Int {
         let (qClause, qArgs) = whereClause(for: query)
-        let where_ = qClause.isEmpty ? "" : "WHERE \(qClause)"
+        let whereSQL = qClause.isEmpty ? "" : "WHERE \(qClause)"
         let sql = """
             SELECT COUNT(DISTINCT b.id)
             FROM books b
-            \(where_)
+            \(whereSQL)
             """
         let rows = try db.prepare(sql, qArgs).map { $0 }
         return (rows.first?.first as? Int64).map(Int.init) ?? 0

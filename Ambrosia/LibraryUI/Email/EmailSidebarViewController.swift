@@ -196,13 +196,15 @@ final class EmailSidebarViewController: NSViewController,
             cell.identifier = id
         }
         cell.configure(
-            item: items[row],
-            readPercent: bookStates[items[row].primaryBook.id]?.totalReadPercent ?? 0,
-            ao3Metadata: ao3Metadata[items[row].primaryBook.id],
-            isLiked: likedIDs.contains(items[row].primaryBook.id),
-            isInReadLater: readLaterIDs.contains(items[row].primaryBook.id),
-            collectionPills: manualCollectionPills(for: items[row]),
-            showCollectionPills: ReaderPreferences.shared.emailPillsShowCollections,
+            content: EmailBookCellView.RowContent(
+                item: items[row],
+                readPercent: bookStates[items[row].primaryBook.id]?.totalReadPercent ?? 0,
+                ao3Metadata: ao3Metadata[items[row].primaryBook.id],
+                isLiked: likedIDs.contains(items[row].primaryBook.id),
+                isInReadLater: readLaterIDs.contains(items[row].primaryBook.id),
+                collectionPills: manualCollectionPills(for: items[row]),
+                showCollectionPills: ReaderPreferences.shared.emailPillsShowCollections
+            ),
             onToggleLiked: { [weak self] books in
                 self?.onToggleLiked?(books)
             },
@@ -499,7 +501,7 @@ final class EmailBookCellView: NSTableCellView {
         setupSubviews()
     }
 
-    required init?(coder: NSCoder) { fatalError() }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     private func setupSubviews() {
         titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
@@ -621,39 +623,68 @@ final class EmailBookCellView: NSTableCellView {
 
     private var progressWidthConstraint: NSLayoutConstraint?
 
+    /// Row content for `configure(content:onToggleLiked:onToggleReadLater:)`.
+    /// Groups what would otherwise be 7 leading parameters into one value,
+    /// leaving the two callbacks as trailing-closure-style parameters.
+    struct RowContent {
+        var item: LibraryItem
+        var readPercent: Double
+        var ao3Metadata: AO3MetadataRecord?
+        var isLiked: Bool
+        var isInReadLater: Bool
+        var collectionPills: [String]
+        var showCollectionPills: Bool
+    }
+
     func configure(
-        item: LibraryItem,
-        readPercent: Double,
-        ao3Metadata: AO3MetadataRecord?,
-        isLiked: Bool,
-        isInReadLater: Bool,
-        collectionPills: [String],
-        showCollectionPills: Bool,
+        content: RowContent,
         onToggleLiked: @escaping ([CalibreBook]) -> Void,
         onToggleReadLater: @escaping ([CalibreBook]) -> Void
     ) {
+        let item = content.item
+        let readPercent = content.readPercent
+        let ao3Metadata = content.ao3Metadata
+        let isLiked = content.isLiked
+        let isInReadLater = content.isInReadLater
+        let collectionPills = content.collectionPills
+        let showCollectionPills = content.showCollectionPills
         representedContextBooks = item.contextBooks
         self.onToggleLiked = onToggleLiked
         self.onToggleReadLater = onToggleReadLater
         likeButton.image = NSImage(systemSymbolName: isLiked ? "star.fill" : "star", accessibilityDescription: isLiked ? "Unlike" : "Like")?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 16, weight: .regular))
         likeButton.contentTintColor = isLiked ? .systemYellow : .secondaryLabelColor
-        readLaterButton.image = NSImage(systemSymbolName: isInReadLater ? "bookmark.fill" : "bookmark", accessibilityDescription: isInReadLater ? "Remove from Read Later" : "Add to Read Later")?
+        readLaterButton.image = NSImage(
+            systemSymbolName: isInReadLater ? "bookmark.fill" : "bookmark",
+            accessibilityDescription: isInReadLater ? "Remove from Read Later" : "Add to Read Later"
+        )?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 16, weight: .regular))
         readLaterButton.contentTintColor = isInReadLater ? .controlAccentColor : .secondaryLabelColor
         switch item {
         case .book(let book):
             titleLabel.stringValue = book.displayTitle
             authorLabel.attributedStringValue = Self.authorLine(for: book, ao3Metadata: ao3Metadata)
-            showCollectionPills ? configureCollectionPills(collectionPills) : configureMetadataPills(ao3Metadata)
+            if showCollectionPills {
+                configureCollectionPills(collectionPills)
+            } else {
+                configureMetadataPills(ao3Metadata)
+            }
         case .series(let series):
             titleLabel.stringValue = series.seriesName
             authorLabel.attributedStringValue = Self.seriesLine(for: series)
-            showCollectionPills ? configureCollectionPills(collectionPills) : configureSeriesPills(series)
+            if showCollectionPills {
+                configureCollectionPills(collectionPills)
+            } else {
+                configureSeriesPills(series)
+            }
         case .orphanedSeriesEntry(let book, let warning):
             titleLabel.stringValue = "\(book.displayTitle) (\(warning.seriesName) #\(warning.seriesIndex))"
             authorLabel.attributedStringValue = Self.authorLine(for: book, ao3Metadata: ao3Metadata)
-            showCollectionPills ? configureCollectionPills(collectionPills) : configureMetadataPills(ao3Metadata)
+            if showCollectionPills {
+                configureCollectionPills(collectionPills)
+            } else {
+                configureMetadataPills(ao3Metadata)
+            }
         }
 
         if readPercent > 0.01 {

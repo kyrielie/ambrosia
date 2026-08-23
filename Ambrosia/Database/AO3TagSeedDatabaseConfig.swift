@@ -159,9 +159,15 @@ final class AO3TagSeedDatabaseConfig: ObservableObject {
     }
 
     static func identity(for url: URL) throws -> String {
-        let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-        let size = values.fileSize ?? 0
-        let modified = Int((values.contentModificationDate ?? .distantPast).timeIntervalSince1970)
+        // `URL.resourceValues(forKeys:)` caches values on the URL value itself,
+        // so a second call against the same URL instance (or a copy sharing its
+        // cache) can return stale size/mtime after the file underneath has
+        // changed. FileManager's attributesOfItem(atPath:) always stats the
+        // file fresh, so use that instead.
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let size = (attributes[.size] as? Int) ?? 0
+        let modifiedDate = (attributes[.modificationDate] as? Date) ?? .distantPast
+        let modified = Int(modifiedDate.timeIntervalSince1970)
         return "\(url.standardizedFileURL.path)|\(size)|\(modified)"
     }
 
