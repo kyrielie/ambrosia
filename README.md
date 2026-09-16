@@ -59,7 +59,7 @@ sudo xattr -rd com.apple.quarantine /path/to/Ambrosia.app
 Open `Ambrosia.xcodeproj` in Xcode and build the `Ambrosia` scheme, or run:
 
 ```bash
-rtk xcodebuild -scheme Ambrosia -destination 'platform=macOS' build
+xcodebuild -scheme Ambrosia -destination 'platform=macOS' build
 ```
 
 The repository uses Xcode/SPM package management. Do not hand-edit `Package.resolved`; add or update packages through Xcode.
