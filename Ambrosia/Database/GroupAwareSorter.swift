@@ -19,9 +19,9 @@ enum GroupAwareSorter {
     static func sort(ids: [Int], seriesNames: [Int: String], titles: [Int: String],
                      ascending: Bool) -> [Int] {
         var pairs = ids.map { (key: sortKey(for: $0, seriesNames: seriesNames, titles: titles), id: $0) }
-        pairs.sort { a, b in
-            if a.key == b.key { return ascending ? a.id < b.id : a.id > b.id }
-            return ascending ? a.key < b.key : a.key > b.key
+        pairs.sort { left, right in
+            if left.key == right.key { return ascending ? left.id < right.id : left.id > right.id }
+            return ascending ? left.key < right.key : left.key > right.key
         }
         return pairs.map(\.id)
     }

@@ -29,7 +29,7 @@ struct LibraryFingerprint: Codable, Equatable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(self) else { return "" }
-        return String(decoding: data, as: UTF8.self)
+        return String(bytes: data, encoding: .utf8) ?? ""
     }
 
     /// Nil for a missing value, undecodable text, or a different `version`.

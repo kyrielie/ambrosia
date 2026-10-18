@@ -4,47 +4,47 @@ import XCTest
 final class SeriesSyncCoordinatorTests: XCTestCase {
 
     func testSingleExpectedCompletionFires() {
-        var c = SeriesSyncCoordinator()
-        let gen = c.begin(awaiting: 1)
-        XCTAssertTrue(c.complete(generation: gen))
+        var coordinator = SeriesSyncCoordinator()
+        let generation = coordinator.begin(awaiting: 1)
+        XCTAssertTrue(coordinator.complete(generation: generation))
     }
 
     func testOnlyTheLastOfTwoCompletionsFires() {
-        var c = SeriesSyncCoordinator()
-        let gen = c.begin(awaiting: 2)
-        XCTAssertFalse(c.complete(generation: gen))
-        XCTAssertTrue(c.complete(generation: gen))
+        var coordinator = SeriesSyncCoordinator()
+        let generation = coordinator.begin(awaiting: 2)
+        XCTAssertFalse(coordinator.complete(generation: generation))
+        XCTAssertTrue(coordinator.complete(generation: generation))
     }
 
     func testExtraCompletionAfterZeroDoesNotFireAgain() {
         // The open sequence awaits only the series seed; an extra completion
         // (for example a late extraction callback) must never trigger a second sync.
-        var c = SeriesSyncCoordinator()
-        let gen = c.begin(awaiting: 1)
-        XCTAssertTrue(c.complete(generation: gen))
-        XCTAssertFalse(c.complete(generation: gen))
+        var coordinator = SeriesSyncCoordinator()
+        let generation = coordinator.begin(awaiting: 1)
+        XCTAssertTrue(coordinator.complete(generation: generation))
+        XCTAssertFalse(coordinator.complete(generation: generation))
     }
 
     func testSupersededGenerationNeverFiresAndDoesNotCount() {
-        var c = SeriesSyncCoordinator()
-        let old = c.begin(awaiting: 1)
-        let new = c.begin(awaiting: 1)
-        XCTAssertNotEqual(old, new)
-        XCTAssertFalse(c.isCurrent(old))
-        XCTAssertTrue(c.isCurrent(new))
-        XCTAssertFalse(c.complete(generation: old))
+        var coordinator = SeriesSyncCoordinator()
+        let oldGeneration = coordinator.begin(awaiting: 1)
+        let newGeneration = coordinator.begin(awaiting: 1)
+        XCTAssertNotEqual(oldGeneration, newGeneration)
+        XCTAssertFalse(coordinator.isCurrent(oldGeneration))
+        XCTAssertTrue(coordinator.isCurrent(newGeneration))
+        XCTAssertFalse(coordinator.complete(generation: oldGeneration))
         // The stale completion must not have consumed the new batch's count.
-        XCTAssertTrue(c.complete(generation: new))
+        XCTAssertTrue(coordinator.complete(generation: newGeneration))
     }
 
     func testCompletionWithoutABatchDoesNothing() {
-        var c = SeriesSyncCoordinator()
-        XCTAssertFalse(c.complete(generation: 0))
+        var coordinator = SeriesSyncCoordinator()
+        XCTAssertFalse(coordinator.complete(generation: 0))
     }
 
     func testZeroCountBatchNeverFires() {
-        var c = SeriesSyncCoordinator()
-        let gen = c.begin(awaiting: 0)
-        XCTAssertFalse(c.complete(generation: gen))
+        var coordinator = SeriesSyncCoordinator()
+        let generation = coordinator.begin(awaiting: 0)
+        XCTAssertFalse(coordinator.complete(generation: generation))
     }
 }
