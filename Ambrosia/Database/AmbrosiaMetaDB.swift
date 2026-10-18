@@ -112,6 +112,7 @@ actor AmbrosiaMetaDB {
         try createBookTags(db: db)
         try createErrorLog(db: db)
         try createSchemaMigrations(db: db)
+        try createLibraryState(db: db)
         try bridgeLegacyUserVersionMigrations(db: db)
         try migrateSeriesPlaceholdersToKeyedIfNeeded(db: db)
         try dedupeSeriesCacheIfNeeded(db: db)
@@ -138,6 +139,19 @@ actor AmbrosiaMetaDB {
         CREATE TABLE IF NOT EXISTS schema_migrations (
             name        TEXT PRIMARY KEY,
             applied_at  TEXT NOT NULL
+        );
+        """)
+    }
+
+    /// Small key/value table for derived "what have we already scanned" markers
+    /// (see `LibraryFingerprint`). Additive and idempotent, so it uses
+    /// `CREATE TABLE IF NOT EXISTS` rather than a `schema_migrations` entry.
+    /// Safe to delete: a missing marker only means the next launch rescans.
+    private static func createLibraryState(db: Connection) throws {
+        try db.execute("""
+        CREATE TABLE IF NOT EXISTS library_state (
+            key    TEXT PRIMARY KEY,
+            value  TEXT NOT NULL
         );
         """)
     }
@@ -704,6 +718,52 @@ actor AmbrosiaMetaDB {
 
     func scalar(_ sql: String, _ bindings: [Binding?] = []) throws -> Binding? {
         try readDB.scalar(sql, bindings)
+    }
+
+    // MARK: - library_state
+
+    func libraryState(_ key: String) -> String? {
+        guard let rows = try? readDB.prepare("SELECT value FROM library_state WHERE key = ?", [key]).map({ $0 }),
+              let first = rows.first else { return nil }
+        return first.first as? String
+    }
+
+    func setLibraryState(_ key: String, _ value: String) throws {
+        try db.run(
+            """
+            INSERT INTO library_state (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            [key, value]
+        )
+    }
+
+    func removeLibraryState(_ key: String) throws {
+        try db.run("DELETE FROM library_state WHERE key = ?", [key])
+    }
+
+    /// Bumped every time a write rewrites a book's `series_cache` rows. A series
+    /// seed that began at count N may only record itself as complete if the count
+    /// is still N when it finishes (see `markSeriesSeeded`).
+    private(set) var seriesRewriteCount = 0
+
+    /// Called by every write that replaces a book's `series_cache` rows. Drops
+    /// the seed marker so the next launch re-seeds the Calibre fallback rows
+    /// that rewrite removed.
+    func invalidateSeriesSeedMarker() throws {
+        seriesRewriteCount &+= 1
+        try db.run("DELETE FROM library_state WHERE key = ?", [LibraryStateKey.seriesSeedFingerprint])
+    }
+
+    /// Records that the Calibre series seed completed for `fingerprint`, unless a
+    /// series-rewriting write landed since the seed started. Runs on the actor
+    /// with no suspension, so the check and the write are atomic. Returns whether
+    /// it was recorded.
+    @discardableResult
+    func markSeriesSeeded(_ fingerprint: LibraryFingerprint, ifRewriteCountIs expected: Int) throws -> Bool {
+        guard seriesRewriteCount == expected else { return false }
+        try setLibraryState(LibraryStateKey.seriesSeedFingerprint, fingerprint.encoded())
+        return true
     }
 
     func transaction(_ block: () throws -> Void) throws {
@@ -1478,6 +1538,7 @@ actor AmbrosiaMetaDB {
         )
 
         try run("DELETE FROM series_cache WHERE calibre_id = ?", [calibreID])
+        try invalidateSeriesSeedMarker()
         for entry in metadata.series where !entry.name.isEmpty {
             try run(
                 """
@@ -1647,6 +1708,8 @@ actor AmbrosiaMetaDB {
             try run("DELETE FROM ao3_extraction_diagnostics")
             try run("DELETE FROM series_cache")
             try run("DELETE FROM book_authors")
+            try invalidateSeriesSeedMarker()
+            try removeLibraryState(LibraryStateKey.extractionScanFingerprint)
         }
         ao3MetadataCache.removeAll()
         ao3DiagnosticsCache.removeAll()

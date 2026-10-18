@@ -31,6 +31,7 @@ final class EmailLibraryViewController: NSViewController {
     private var collectionPickerPopover: NSPopover?
     private var skippedCollectionCancellable: AnyCancellable?
     private var seriesOrMergedCancellable: AnyCancellable?
+    private var snapshotsReadyCancellable: AnyCancellable?
     private var appearanceCancellable: AnyCancellable?
     private var preferenceCancellables: Set<AnyCancellable> = []
 
@@ -214,6 +215,26 @@ final class EmailLibraryViewController: NSViewController {
         toolbarState.isEmailReaderSidebarVisible = false
     }
 
+    /// The session finished hydrating membership and AO3 caches after this
+    /// surface was created (first launch or library switch). `loadPage` was
+    /// holding back until now, so seed the local sets exactly as `viewDidLoad`
+    /// does and run the first real load.
+    private func sessionSnapshotsDidBecomeReady() {
+        seriesOrMergedIDs = session.cachedSeriesOrMergedIDs
+        skippedIDs        = session.cachedSkippedIDs
+        likedIDs          = session.cachedLikedIDs
+        ao3PublisherIDs   = session.cachedAO3PublisherIDs
+        anthologyIDs      = session.cachedAnthologyIDs
+        duplicateLoserIDs = session.cachedDuplicateLoserIDs
+        readLaterIDs      = session.cachedReadLaterIDs
+        refreshCollections()
+        if toolbarState.filterExpression.hasCompleteRules {
+            applyFilterRules()
+        } else {
+            scheduleLoadPage(reset: true)
+        }
+    }
+
     private func startObservingPreferences() {
         skippedCollectionCancellable = ReaderPreferences.shared.$showSkippedCollection
             .dropFirst()
@@ -237,6 +258,11 @@ final class EmailLibraryViewController: NSViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.refreshCollections()
+            }
+        snapshotsReadyCancellable = NotificationCenter.default.publisher(for: .librarySnapshotsDidBecomeReady)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.sessionSnapshotsDidBecomeReady()
             }
         ReaderPreferences.shared.$hideNonAO3PublisherBooks
             .dropFirst()
@@ -1061,6 +1087,9 @@ final class EmailLibraryViewController: NSViewController {
             return
         }
         guard !isTornDown, !Task.isCancelled else { return }
+        // Hold the first load until the session has hydrated membership and the AO3
+        // caches; `sessionSnapshotsDidBecomeReady` runs the real one.
+        guard session.snapshotsReady else { return }
         // Parse search text into a structured query — same path as list view
         let rawQuery = toolbarState.searchText.isEmpty
             ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])

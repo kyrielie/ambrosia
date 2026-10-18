@@ -39,10 +39,10 @@ extension FilterResultCacheKey {
 
 // MARK: - §Phase3: Page/count cache keys
 
-/// Cache key for a page of hydrated CalibreBook results. Two calls that only
-/// differ in one of these fields (offset, filter, query, sort, tag-expansion
-/// resolution, or visibility/membership state) must NOT share a cache entry.
-struct PageCacheKey: Hashable {
+/// Everything that determines the full sorted id list for a view, i.e. a
+/// `PageCacheKey` minus its paging window. Used by the in-memory sorted-id
+/// cache so every page of one view reuses a single materialize-and-sort.
+struct SortedIDsCacheKey: Hashable {
     let querySignature: String
     let filterSignature: String
     let tagExpansionsDigest: String
@@ -53,8 +53,42 @@ struct PageCacheKey: Hashable {
     let sortField: SortField
     let ascending: Bool
     let randomSeed: UInt64
+}
+
+/// Cache key for a page of hydrated CalibreBook results. Two calls that only
+/// differ in one of these fields (offset, filter, query, sort, tag-expansion
+/// resolution, or visibility/membership state) must NOT share a cache entry.
+/// It contains a `SortedIDsCacheKey` rather than repeating its fields, so the
+/// page key and the sorted-id key cannot drift apart.
+struct PageCacheKey: Hashable {
+    let sortedKey: SortedIDsCacheKey
     let offset: Int
     let limit: Int
+
+    init(sortedKey: SortedIDsCacheKey, offset: Int, limit: Int) {
+        self.sortedKey = sortedKey
+        self.offset = offset
+        self.limit = limit
+    }
+
+    init(querySignature: String, filterSignature: String, tagExpansionsDigest: String,
+         visibilityVersion: Int, visibilitySignature: String, sortField: SortField,
+         ascending: Bool, randomSeed: UInt64, offset: Int, limit: Int) {
+        self.init(
+            sortedKey: SortedIDsCacheKey(
+                querySignature: querySignature,
+                filterSignature: filterSignature,
+                tagExpansionsDigest: tagExpansionsDigest,
+                visibilityVersion: visibilityVersion,
+                visibilitySignature: visibilitySignature,
+                sortField: sortField,
+                ascending: ascending,
+                randomSeed: randomSeed
+            ),
+            offset: offset,
+            limit: limit
+        )
+    }
 }
 
 /// Cache key for a bare count (no pagination, no hydration).
@@ -108,6 +142,18 @@ struct LRUCache<Key: Hashable, Value> {
 
     subscript(key: Key) -> Value? {
         store[key]
+    }
+
+    /// Read that also refreshes recency, so eviction is least-recently-used
+    /// rather than insertion-order. The plain subscript deliberately does not
+    /// do this (see `LRUCacheTests`); use `get` for caches that want true LRU.
+    mutating func get(_ key: Key) -> Value? {
+        guard let value = store[key] else { return nil }
+        if order.last != key {
+            order.removeAll { $0 == key }
+            order.append(key)
+        }
+        return value
     }
 
     mutating func set(_ value: Value, for key: Key) {

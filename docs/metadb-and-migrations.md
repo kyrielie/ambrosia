@@ -47,3 +47,13 @@ Annotation inserts/deletes maintain `Has Annotations` membership. Series/antholo
 `AmbrosiaMetaDB.bookTagsRevision` increments in `writeBookTags`, called only from
 `insertBatch`. It keys the filter-result and rule-match caches so cached tag results
 do not outlive an extraction pass. See `caching.md`.
+
+
+### `library_state` (derived scan markers)
+
+`library_state(key TEXT PRIMARY KEY, value TEXT NOT NULL)` is created by `createLibraryState` in `runMigrations` with `CREATE TABLE IF NOT EXISTS` (additive and idempotent, so no `schema_migrations` entry). It holds markers of the form "this scan already completed for library fingerprint X" (`LibraryFingerprint`, JSON). Keys are in `LibraryStateKey`:
+
+- `series_seed_fingerprint`: the Calibre series cache seed completed for that fingerprint. Dropped by `invalidateSeriesSeedMarker()`, which `writeAO3Metadata` and `clearAO3Metadata` call, because replacing a book's `series_cache` rows deletes its Calibre fallback row and only a re-seed restores it. `markSeriesSeeded(_:ifRewriteCountIs:)` refuses to record when a rewrite landed after the seed started (`seriesRewriteCount`).
+- `extraction_scan_fingerprint`: an extraction run finished with nothing left to extract for that fingerprint. Not stored for a cancelled or partially flushed run. Dropped by `clearAO3Metadata`.
+
+Safe to delete: a missing marker only means the next launch rescans. Failed extractions are not retried (they are in `ao3_extraction_diagnostics`, which the scan excludes), so skipping the scan does not change retry behavior.

@@ -17,8 +17,8 @@ final class LibraryToolbarState {
     // MARK: - Toolbar-driven fields
 
     var searchText: String          = ""
-    var sortField: SortField       = .title
-    var ascending: Bool            = true
+    var sortField: SortField       = .title { didSet { lastViewDidChange() } }
+    var ascending: Bool            = true { didSet { lastViewDidChange() } }
     var viewMode: LibraryViewMode = .list
     var groupBySeries: Bool {
         didSet { UserDefaults.standard.set(groupBySeries, forKey: "groupBySeries") }
@@ -40,7 +40,7 @@ final class LibraryToolbarState {
 
     // MARK: - Filter state
 
-    var filterExpression: FilterExpression = FilterExpression()
+    var filterExpression: FilterExpression = FilterExpression() { didSet { lastViewDidChange() } }
     var activeFilterResult: FilterResult?
     var pendingFullTextSearch: PendingFullTextSearch?
     var isApplyingLibraryFilter: Bool = false
@@ -69,6 +69,49 @@ final class LibraryToolbarState {
 
     init() {
         groupBySeries = UserDefaults.standard.bool(forKey: "groupBySeries")
+    }
+
+    // MARK: - Last view (sort, direction, filter)
+    //
+    // Lives here, not in LibraryRootView, because this state is shared with the
+    // Email surface: a filter changed there must be remembered too.
+
+    @ObservationIgnored private var lastViewLibraryHash: String?
+    @ObservationIgnored private let lastViewDebounce = DebounceTimer(delay: 0.4)
+
+    var currentLastViewState: LastViewState {
+        LastViewState(sortField: sortField, ascending: ascending, filterExpression: filterExpression)
+    }
+
+    /// True while nothing has moved off the default view, so a restored view
+    /// is never applied over something the user already chose.
+    var isAtDefaultView: Bool {
+        sortField == .title && ascending && !filterExpression.hasCompleteRules && activeFilterResult == nil
+    }
+
+    /// Starts remembering view changes for `libraryHash`. Pending writes for a
+    /// previous library are cancelled first so they can never land on the wrong key.
+    func beginRecordingLastView(libraryHash: String?) {
+        // Re-pointing at the same library (a surface switch) must not drop a
+        // write that is still waiting out its debounce.
+        if lastViewLibraryHash != libraryHash { lastViewDebounce.cancel() }
+        lastViewLibraryHash = libraryHash
+    }
+
+    var recordingLastViewHash: String? { lastViewLibraryHash }
+
+    func stopRecordingLastView() {
+        beginRecordingLastView(libraryHash: nil)
+    }
+
+    private func lastViewDidChange() {
+        guard let hash = lastViewLibraryHash else { return }
+        // Sanitize before writing so incomplete rows and fulltext rules never
+        // reach disk (restore would drop them anyway).
+        let state = LastViewValidator.validate(currentLastViewState, collectionNames: nil).state
+        lastViewDebounce.schedule {
+            LastViewStore().save(state, libraryHash: hash)
+        }
     }
 
     func registerFilterCommitHandler(_ handler: @escaping (FilterRule) -> Void) {

@@ -73,7 +73,15 @@ re-verified per source type).
 | --- | --- |
 | `SearchQueryParser` | `SearchQueryParserTests` |
 | `AO3MetadataExtractor`, `+Authors` | `AO3MetadataExtractorTests`, `AO3MetadataExtractorAuthorsTests`, `AO3RatingHighestTests` |
-| `LRUCache` (`CacheTypes.swift`) | `LRUCacheTests` |
+| `LRUCache` (`CacheTypes.swift`) | `LRUCacheTests`, `SortedIDsCacheKeyTests` (`get` recency) |
+| `SortedIDsCacheKey` and its relation to `PageCacheKey` | `SortedIDsCacheKeyTests` |
+| `GroupAwareSorter` ordering | `GroupAwareSortOrderTests` |
+| `LibraryFingerprint` comparison and encoding | `LibraryFingerprintTests` |
+| `LastViewState`, `LastViewValidator`, `LastViewStore` | `LastViewStateTests` |
+| `library_state` table, series-seed marker rules | `LibraryStateTests` |
+| Windowed series scan equals whole-library scan, fingerprint of a real library | `CalibreSeriesChunkTests` |
+| `LibraryChange.classify` (none, file-only, content) | `LibraryFingerprintTests` |
+| `reopenIfFileReplaced`, in-place write seen without reopen | `CalibreLibraryReopenTests` (in `CalibreSeriesChunkTests.swift`) |
 | Cache key shaping (`tagExpansionsDigest`, `FilterResultCacheKey`) and visibility-pref sensitivity of `PageCacheKey`/`FilterResultCacheKey` | `CacheTypesKeyShapeTests` (in `LRUCacheTests.swift`), `CacheKeyTests` |
 | `TagExpansionResolver` | `TagExpansionResolverTests` |
 | `MatchingSubqueryBuilder` (`FilterBuilder.swift`) | `MatchingSubqueryBuilderTests` |
@@ -91,6 +99,8 @@ re-verified per source type).
 | `LibraryQueryHelpers`, `LibraryVisibilityPolicy`, `DuplicateBookDetector` | `LibraryQueryHelpersTests`, `LibraryVisibilityPolicyTests`, `DuplicateBookDetectorTests` |
 | `KeyBinding.validate` | `KeyBindingValidationTests` |
 | `CollectionStore`, `ErrorLogEntry` storage | `CollectionStoreTests`, `ErrorLogTests` |
+| `MembershipDelta`, `CollectionStore.applyMemberDelta` | `MembershipDeltaTests`, `CollectionStoreDeltaTests` |
+| `SeriesSyncCoordinator` | `SeriesSyncCoordinatorTests` |
 | `AnnotationExportManager` | `AnnotationExportManagerTests` |
 | `CalibreLibrary` search | `CalibreLibrarySearchTests` |
 | EPUB image reference rewriting | `EPUBImageReferenceRewriteTests` |
@@ -116,7 +126,7 @@ re-verified per source type).
 
 Note on `LRUCache`: eviction is insertion-order, not access-order. Reading a
 key via the `subscript` getter does not move it to the back of `order`; only
-`set(_:for:)` does. `LRUCacheTests` is the place that behavior is pinned.
+`set(_:for:)` does. `LRUCacheTests` is the place that behavior is pinned. `get(_:)` does refresh recency and is what `sortedIDsCache` uses; `SortedIDsCacheKeyTests` pins it.
 
 ### Thin relative to size (logic worth testing)
 
