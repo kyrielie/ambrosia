@@ -549,12 +549,13 @@ struct LibraryRootView: View {
                 emptyLibraryState
             } else if books.isEmpty && toolbarState.searchText.isEmpty && !toolbarState.hasActiveFilter {
                 if didFinishFirstLoad { emptyBooksState } else { loadingState }
-            } else if shouldGroupSeriesRows && items.isEmpty && !books.isEmpty {
-                // books has loaded but rebuildItems' async grouping Task hasn't
-                // produced a result yet, and there's no previous list to keep
-                // showing (e.g. the very first grouped load). Show loading
-                // rather than an empty-looking list — never render List(items)
-                // while items is artificially/incidentally empty here.
+            } else if items.isEmpty && !books.isEmpty {
+                // books has loaded but rebuildItems' async Task (grouping, or the
+                // ungrouped metadata fetch) hasn't produced a result yet, and
+                // there's no previous list to keep showing (e.g. the very first
+                // load). Show loading rather than an empty-looking list; never
+                // render the list while items is artificially/incidentally
+                // empty here.
                 loadingState
             } else if books.isEmpty && (toolbarState.hasActiveFilter || !toolbarState.searchText.isEmpty) {
                 noResultsState
@@ -1081,8 +1082,10 @@ struct LibraryRootView: View {
             }
         }
         refreshBookStatesForCurrentPage()
+        // rebuildItems() owns the page metadata fetch for non-empty pages (both
+        // the grouped and ungrouped Tasks assign ao3Metadata together with
+        // items), so no separate loadAO3MetadataForCurrentPage() call here.
         rebuildItems()
-        loadAO3MetadataForCurrentPage()
         refreshVisibleCount(query: query)
         LibraryFilterDebug.log("loadPage.end", [
             "surface": "list",
@@ -1115,17 +1118,27 @@ struct LibraryRootView: View {
         guard !toolbarState.isListSurfaceTornDown else { return }
         // Every non-stale loadPage completion, including empty results, reaches here.
         didFinishFirstLoad = true
+        // Ungrouped, non-empty page with a metaDB: assign items and ao3Metadata
+        // together so rows never render bare and then grow (see "Row height
+        // bounds" in docs/library-ui.md).
+        if !shouldGroupSeriesRows, !books.isEmpty, let metaDB = session.metaDB {
+            rebuildUngroupedItems(pageBooks: books, metaDB: metaDB)
+            return
+        }
         guard shouldGroupSeriesRows, let metaDB = session.metaDB, let library = session.library else {
             LibraryFilterDebug.log("rebuildItems.sync", [
                 "surface": "list",
                 "books": books.count,
                 "shouldGroup": shouldGroupSeriesRows,
-                "reason": shouldGroupSeriesRows ? "noMetaDB" : "groupingOff"
+                "reason": books.isEmpty ? "emptyPage" : "noMetaDBOrLibrary"
             ])
             // A grouped rebuild still in flight must not overwrite this result.
             rebuildTask?.cancel()
             items = books.map { .book($0) }
             rebuildDegraded = false
+            // Nothing else fetches page metadata on this path. Empty pages are
+            // cleared by the loadPage empty branches, which call the loader.
+            if !books.isEmpty { loadAO3MetadataForCurrentPage() }
             return
         }
         // §grouping-flash fix: do NOT pre-assign items = books.map(.book) here. That
@@ -1150,6 +1163,7 @@ struct LibraryRootView: View {
         // cancellation, a slow stale task could still finish after a newer one and
         // overwrite `items` with out-of-date results.
         rebuildTask?.cancel()
+        let rebuildStart = LibraryFilterDebug.now()
         rebuildTask = Task {
             var degraded = false
             let pageIDs = pageBooks.map(\.id)
@@ -1257,6 +1271,10 @@ struct LibraryRootView: View {
                 print("[LibraryRootView] rebuildItems: ao3ExtractionDiagnostics(series) failed: \(error)")
                 #endif
             }
+            LibraryFilterDebug.log("rebuildItems.groupedFetched", [
+                "surface": "list",
+                "fetchMS": LibraryFilterDebug.elapsedMS(since: rebuildStart)
+            ])
             let warnings = enrichWarnings(singletonWarnings, books: pageBooks)
             let byID = LibraryQueryHelpers.indexed(allBooks.map { ($0.id, $0) })
             let seriesByKey = buildSeriesGroups(
@@ -1304,6 +1322,7 @@ struct LibraryRootView: View {
                 rebuildDegraded = degraded
                 LibraryFilterDebug.log("rebuildItems.end", [
                     "surface": "list",
+                    "elapsedMS": LibraryFilterDebug.elapsedMS(since: rebuildStart),
                     "pageBooks": pageBooks.count,
                     "seriesKeys": seriesByKey.count,
                     "collapsedIDs": collapsedIDs.count,
@@ -1312,6 +1331,78 @@ struct LibraryRootView: View {
                     "orphanedSeries": nextItems.filter { if case .orphanedSeriesEntry = $0 { return true }; return false }.count,
                     "singletons": nextItems.filter { if case .book = $0 { return true }; return false }.count
                 ])
+            }
+        }
+    }
+
+    /// Ungrouped counterpart of the grouped `rebuildTask`: fetch page metadata
+    /// first, then assign `items`, `ao3Metadata`, `ao3ExtractionDiagnostics` and
+    /// `singletonSeriesWarnings` in one MainActor hop. Does not clear `items`
+    /// beforehand, so the previous page stays visible until the swap.
+    private func rebuildUngroupedItems(pageBooks: [CalibreBook], metaDB: AmbrosiaMetaDB) {
+        LibraryFilterDebug.log("rebuildItems.ungroupedStart", [
+            "surface": "list",
+            "pageBooks": pageBooks.count
+        ])
+        rebuildTask?.cancel()
+        let fetchStart = LibraryFilterDebug.now()
+        rebuildTask = Task {
+            var degraded = false
+            let ids = pageBooks.map(\.id)
+
+            async let metadataTask = metaDB.ao3Metadata(for: ids)
+            async let diagnosticsTask = metaDB.ao3ExtractionDiagnostics(for: ids)
+            async let warningsTask = metaDB.singletonNonLeadingSeriesEntries(for: ids)
+
+            let metadata: [Int: AO3MetadataRecord]
+            let diagnostics: [Int: AO3ExtractionDiagnostic]
+            let rawWarnings: [Int: [SingletonSeriesWarning]]
+            guard !Task.isCancelled else { return }
+            do { metadata = try await metadataTask } catch {
+                metadata = [:]
+                degraded = true
+                #if DEBUG
+                print("[LibraryRootView] rebuildUngroupedItems: ao3Metadata failed: \(error)")
+                #endif
+            }
+            guard !Task.isCancelled else { return }
+            do { diagnostics = try await diagnosticsTask } catch {
+                diagnostics = [:]
+                degraded = true
+                #if DEBUG
+                print("[LibraryRootView] rebuildUngroupedItems: ao3ExtractionDiagnostics failed: \(error)")
+                #endif
+            }
+            guard !Task.isCancelled else { return }
+            do { rawWarnings = try await warningsTask } catch {
+                rawWarnings = [:]
+                degraded = true
+                #if DEBUG
+                print("[LibraryRootView] rebuildUngroupedItems: singletonNonLeadingSeriesEntries failed: \(error)")
+                #endif
+            }
+            let warnings = enrichWarnings(rawWarnings, books: pageBooks)
+            let nextItems: [LibraryItem] = pageBooks.map { .book($0) }
+            LibraryFilterDebug.log("rebuildItems.ungroupedFetched", [
+                "surface": "list",
+                "fetchMS": LibraryFilterDebug.elapsedMS(since: fetchStart)
+            ])
+            await MainActor.run {
+                guard !self.toolbarState.isListSurfaceTornDown else { return }
+                // Same staleness guard as the grouped path.
+                guard self.books.map(\.id) == ids else {
+                    LibraryFilterDebug.log("rebuildItems.stale", [
+                        "surface": "list",
+                        "pageBooks": ids.count,
+                        "currentBooks": self.books.count
+                    ])
+                    return
+                }
+                items = nextItems
+                ao3Metadata = metadata
+                ao3ExtractionDiagnostics = diagnostics
+                singletonSeriesWarnings = warnings
+                rebuildDegraded = degraded
             }
         }
     }
@@ -1976,28 +2067,36 @@ struct LibraryRootView: View {
     }
 
     private var itemList: some View {
-        // No `selection:` binding on this List — row view intentionally has
-        // no click-to-select, no Cmd/Shift-click range selection, and no
-        // Cmd+A. Opening is double-click (BookListRow/SeriesListRow's own
-        // `.simultaneousGesture(TapGesture(count: 2)...)`, calling `onOpen`)
-        // or right-click → context menu, both of which act on the row they
-        // land on. This also removes the per-row "what's currently
-        // selected" bookkeeping that used to run on every row on every
-        // scroll/render pass (the old `selectedBooks(fallback:)` /
-        // `selectedBookIDs(fallback:)` calls in `bookRow`), which was the
-        // main source of row-view scroll lag.
+        // Plain ScrollView + VStack (not List, not LazyVStack): a page is at most
+        // pageSize (25) rows, so every row is built once and kept. A List is an
+        // NSTableView that destroys and recreates self-sizing rows as they scroll
+        // out, which caused visible re-layout and jumps on scroll-up. See
+        // "Row height bounds" in docs/library-ui.md.
         //
-        // A window-level NSEvent monitor / NSTableView doubleAction
-        // approach (LibraryListDoubleClickMonitor) was tried to avoid a
-        // per-row gesture recognizer competing with List's own mouseDown
-        // handling, but never reliably fired double-clicks landing on
-        // rows. Reverted to the row-level TapGesture, which is known to
-        // work now that there's no `selection:` binding on this List for
-        // it to compete with.
-        List(items) { item in
-            itemRow(item)
+        // No selection: opening is double-click (row-level TapGesture calling
+        // `onOpen`) or right-click -> context menu, both acting on the row they
+        // land on.
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(items) { item in
+                        itemRow(item)
+                        Divider()
+                    }
+                }
+            }
+            // List drew its own content surface behind the rows; a bare
+            // ScrollView shows the window background instead, which changes how
+            // the uncolored tag pills (controlBackgroundColor fill) read.
+            .background(Color(NSColor.controlBackgroundColor))
+            // A new page (or new filter result) starts at the top. With List this
+            // was whatever the table did; ScrollView keeps the old offset.
+            .onChange(of: items.first?.id) {
+                if let first = items.first?.id {
+                    proxy.scrollTo(first, anchor: .top)
+                }
+            }
         }
-        .listStyle(.plain)
     }
 
     /// The single collection this list is currently filtered to, or nil if
@@ -2059,8 +2158,8 @@ struct LibraryRootView: View {
             }
         )
         .equatable()
-        .listRowSeparator(.visible)
-        .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 
     private func seriesRow(_ series: SeriesGroup, id: String) -> some View {
@@ -2093,8 +2192,8 @@ struct LibraryRootView: View {
             isSelected: false
         )
         .equatable()
-        .listRowSeparator(.visible)
-        .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 
     /// The active `.collection` filter rule's value is the collection's

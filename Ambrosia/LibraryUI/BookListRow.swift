@@ -106,6 +106,9 @@ struct BookListRow: View, Equatable {
             statsRow
             descriptionRow
         }
+        // Outside a List the row no longer stretches to the row width, so
+        // extend the frame to keep the double-click hit area full width.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .simultaneousGesture(
             TapGesture(count: 2).onEnded(onOpen)
@@ -200,8 +203,9 @@ struct BookListRow: View, Equatable {
     private var tagsRow: some View {
         let pills = visibleTagPills
         if !pills.isEmpty {
+            let capped = TagPillDisplay.capped(pills)
             FlowLayout(spacing: 4) {
-                ForEach(pills) { pill in
+                ForEach(capped.shown) { pill in
                     Button {
                         onTagTap(pill.label, pill.field)
                     } label: {
@@ -209,6 +213,10 @@ struct BookListRow: View, Equatable {
                     }
                     .buttonStyle(.plain)
                     .help("Filter by \(pill.label)")
+                }
+                if capped.hiddenCount > 0 {
+                    tagPill("+\(capped.hiddenCount)", color: nil, isSelected: false)
+                        .help(pills.dropFirst(capped.shown.count).map(\.label).joined(separator: ", "))
                 }
             }
         }
@@ -234,9 +242,10 @@ struct BookListRow: View, Equatable {
     @ViewBuilder
     private var descriptionRow: some View {
         if let comment = book.displayComment, !comment.isEmpty {
-            Text(comment)
+            Text(RowDescriptionLimit.capped(comment))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(RowDescriptionLimit.lines)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -478,5 +487,40 @@ struct TagPillDisplay: Identifiable, Equatable {
 
     private static func shouldShow(_ tag: String, hideFanworks: Bool) -> Bool {
         !(hideFanworks && tag == "Fanworks")
+    }
+}
+
+/// Row description bounds. See docs/library-ui.md "Row height bounds".
+enum RowDescriptionLimit {
+    static let characters = 1_500
+    static let lines = 10
+
+    /// O(limit), not O(n): never counts the whole string.
+    static func capped(_ text: String, limit: Int = characters) -> String {
+        let head = text.prefix(limit + 1)
+        guard head.count > limit else { return text }
+        return String(head.prefix(limit))
+            .trimmingCharacters(in: .whitespacesAndNewlines) + "\u{2026}"
+    }
+}
+
+extension TagPillDisplay {
+    /// Pills rendered per book row before collapsing the rest into a "+N" pill.
+    /// AO3 allows 75 fandom/character/relationship/additional tags per work
+    /// (mean 17, mode 11, under 0.5% above 75), plus rating/category/warning
+    /// pills, so 30 trims only the long tail. Set to `Int.max` to disable.
+    static let maxVisible = 30
+
+    /// Same, for series rows. A series row shows the union of tags across all
+    /// its works, so it reaches far higher pill counts than a single book and
+    /// is the main layout cost. Tune separately from `maxVisible`.
+    static let maxVisibleSeries = 30
+
+    /// Returns the pills to render and how many were dropped. Order is
+    /// preserved, so the first `max` (rating, fandom, relationship, ...) win.
+    static func capped(_ pills: [TagPillDisplay], max: Int = maxVisible)
+        -> (shown: [TagPillDisplay], hiddenCount: Int) {
+        guard pills.count > max else { return (pills, 0) }
+        return (Array(pills.prefix(max)), pills.count - max)
     }
 }

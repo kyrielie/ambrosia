@@ -83,6 +83,9 @@ struct SeriesListRow: View, Equatable {
                     .lineLimit(4)
             }
         }
+        // Outside a List the row no longer stretches to the row width, so
+        // extend the frame to keep the double-click hit area full width.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .simultaneousGesture(TapGesture(count: 2).onEnded(onOpen))
         .contextMenu {
@@ -126,8 +129,9 @@ struct SeriesListRow: View, Equatable {
             hideFanworks: hideFanworksTagPill
         )
         if !pills.isEmpty {
+            let capped = TagPillDisplay.capped(pills, max: TagPillDisplay.maxVisibleSeries)
             FlowLayout(spacing: 4) {
-                ForEach(pills) { pill in
+                ForEach(capped.shown) { pill in
                     Button {
                         onTagTap(pill.label, pill.field)
                     } label: {
@@ -135,6 +139,10 @@ struct SeriesListRow: View, Equatable {
                     }
                     .buttonStyle(.plain)
                     .help("Filter by \(pill.label)")
+                }
+                if capped.hiddenCount > 0 {
+                    tagPill("+\(capped.hiddenCount)", color: nil, isSelected: isSelected)
+                        .help(pills.dropFirst(capped.shown.count).map(\.label).joined(separator: ", "))
                 }
             }
         }

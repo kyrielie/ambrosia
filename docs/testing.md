@@ -79,6 +79,8 @@ re-verified per source type).
 | `MatchingSubqueryBuilder` (`FilterBuilder.swift`) | `MatchingSubqueryBuilderTests` |
 | `GzipEncoder` | `GzipEncoderTests` |
 | `HTMLStripper` | `HTMLStripperTests` |
+| `RowDescriptionLimit` (`BookListRow.swift`) | `RowDescriptionLimitTests` |
+| `TagPillDisplay.capped` (`BookListRow.swift`) | `TagPillCapTests` |
 | `SeriesSpineMap` | `SeriesSpineMapTests` |
 | `SeriesMatchExpansion`, `SeriesGroupBuilder` | `SeriesMatchExpansionTests`, `SeriesGroupBuilderTests` (plus `SeriesHelpersTests`) |
 | `DebounceTimer` | `DebounceTimerTests` |
