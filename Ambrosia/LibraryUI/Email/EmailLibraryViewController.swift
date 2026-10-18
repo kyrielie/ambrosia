@@ -126,11 +126,17 @@ final class EmailLibraryViewController: NSViewController {
     /// toolbarState changes (instead of being held indefinitely).
     func stopObserving() {
         isTornDown = true
+        filterComputeTask?.cancel()
+        filterComputeTask = nil
     }
 
     private let debouncer = DebounceTimer(delay: 0.4)
     private var fullTextTask: Task<Void, Never>?
     private var filterCountTask: Task<Void, Never>?
+    /// The filter compute (full or narrowed). A newer `applyFilterRules` cancels it;
+    /// the evaluator stops at its next phase boundary and the token guard at commit
+    /// stays the final authority.
+    private var filterComputeTask: Task<Void, Never>?
     private var rebuildSidebarTask: Task<Void, Never>?
     /// Cancel-and-replace handle for `loadPage(reset:)`. Several independent
     /// triggers (applyFilterRules' own completion, the withObservationTracking
@@ -627,6 +633,10 @@ final class EmailLibraryViewController: NSViewController {
                     "surface": "email",
                     "searchText": self.toolbarState.searchText
                 ])
+                if let phrase = self.activeFullTextPhrase()?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !phrase.isEmpty {
+                    self.session.retryFulltext(for: phrase)
+                }
                 if self.toolbarState.activeFilterResult?.isSQLBacked == true,
                    self.toolbarState.activeFilterResult?.totalCount != nil {
                     self.suppressNextReloadToken = true
@@ -686,11 +696,25 @@ final class EmailLibraryViewController: NSViewController {
 
     // MARK: - Filter application
 
+    /// The four visibility preferences baked into cached filter-result ID lists
+    /// (part of `FilterResultCacheKey`).
+    private var filterVisibilitySignature: String {
+        let prefs = ReaderPreferences.shared
+        return LibraryVisibilityPolicy.signature(
+            showSkippedCollection: prefs.showSkippedCollection,
+            hideNonAO3PublisherBooks: prefs.hideNonAO3PublisherBooks,
+            hideAnthologyBooks: prefs.hideAnthologyBooks,
+            hideDuplicateBooks: prefs.hideDuplicateBooks
+        ) + FilterEvaluator.environmentSignature
+    }
+
     func applyFilterRules() {
         let applyStart = LibraryFilterDebug.now()
         fullTextTask?.cancel()
         fullTextTask = nil
         filterCountTask?.cancel()
+        filterComputeTask?.cancel()
+        filterComputeTask = nil
         guard let library = session.library else {
             toolbarState.cancelLibraryFilterApplication()
             return
@@ -743,7 +767,7 @@ final class EmailLibraryViewController: NSViewController {
             return
         }
         // §7: Check the LRU cache before kicking off the expensive Task pipeline.
-        if let cached = session.cachedFilterResult(for: expression) {
+        if let cached = session.cachedFilterResult(for: expression, visibilitySignature: filterVisibilitySignature) {
             toolbarState.activeFilterResult = cached
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
@@ -761,136 +785,78 @@ final class EmailLibraryViewController: NSViewController {
         let token = toolbarState.beginLibraryFilterApplication()
         let fulltextRules = expression.groups.flatMap(\.rules)
             .filter { $0.field == .fulltext && $0.isComplete }
-        if let firstPendingRule = fulltextRules.first(where: { session.cachedFulltextIDs(for: $0.value) == nil }) {
+        if let firstPendingRule = fulltextRules.first(where: { session.fulltextState(for: $0.value) == .unknown }) {
             startPendingFilterFullText(rule: firstPendingRule, token: token)
             return
         }
 
-        Task {
-            let currentLikedIDs = session.cachedLikedIDs
-            let needsCollection = expression.groups
-                .flatMap(\.rules).contains { $0.field == .collection }
-            var collectionMap = needsCollection ? ((try? await session.collectionStore?.membershipMap()) ?? [:]) : [:]
-            let statusValues = Set(expression.groups
-                                    .flatMap(\.rules)
-                                    .filter { $0.field == .status }
-                                    .compactMap { AO3CompletionStatus(userValue: $0.value) })
-            var statusMap: [AO3CompletionStatus: Set<Int>] = [:]
-            if let metaDB = session.metaDB {
-                for status in statusValues {
-                    statusMap[status] = (try? await metaDB.ao3CompletionStatusIDs(status)) ?? []
-                }
-                if needsCollection && expression.referencesSeriesOrMergedCollection {
-                    collectionMap[SystemCollectionID.seriesOrMergedName] = (try? await metaDB.leadsAtLeastOneSeriesIDs()) ?? []
-                }
+        // Captured before any await: results computed from this evaluation are
+        // filed under this revision, even if an extraction flush lands meanwhile.
+        let bookTagsRevisionAtStart = session.bookTagsRevision
+        let evaluator = FilterEvaluator(library: library, ftsLibrary: session.ftsLibrary,
+                                        metaDB: session.metaDB, collectionStore: session.collectionStore,
+                                        ruleMatchCache: session.ruleMatchCache,
+                                        bookTagsRevision: bookTagsRevisionAtStart)
+
+        // Plan PR I: evaluate only the newly added AND rule against a cached base.
+        // The base shares this key's membership version and visibility signature,
+        // so it and its subset are already visibility-filtered.
+        if IncrementalFilterFlag.isEnabled,
+           let narrowing = session.narrowingBase(for: expression, visibilitySignature: filterVisibilitySignature) {
+            filterComputeTask = Task {
+                let delta = narrowing.delta
+                let fulltextMap = LibraryQueryHelpers.fulltextMap(
+                    values: delta.field == .fulltext ? [delta.value] : []
+                ) { session.cachedFulltextIDs(for: $0) }
+                let baseIDs = narrowing.base.calibreIDs
+                guard let evaluated = await evaluator.evaluate(
+                    expression: IncrementalFilterPlanner.deltaExpression(for: delta),
+                    fulltextMap: fulltextMap,
+                    candidates: Set(baseIDs)
+                ) else { return }
+                let deltaSet = Set(evaluated.result.calibreIDs)
+                let narrowedIDs = baseIDs.filter { deltaSet.contains($0) }
+                guard !isTornDown, !Task.isCancelled,
+                      toolbarState.libraryFilterApplicationToken == token else { return }
+                defer { toolbarState.finishLibraryFilterApplication(token: token) }
+                let narrowed = FilterResult(calibreIDs: narrowedIDs, totalCount: narrowedIDs.count)
+                session.rememberFilterResult(narrowed, for: expression,
+                                             visibilitySignature: filterVisibilitySignature,
+                                             bookTagsRevision: bookTagsRevisionAtStart)
+                toolbarState.clearPendingFullTextSearch()
+                cachedFilterTagExpansions = cachedFilterTagExpansions.merging(evaluated.tagExpansions) { _, new in new }
+                // Written last: it is the property the observation sink watches (Invariant 25).
+                toolbarState.activeFilterResult = narrowed
+                commitSearchActivityLogEntry(resultCount: narrowedIDs.count)
+                suppressNextReloadToken = true
+                await scheduleLoadPage(reset: true).value
+                LibraryFilterDebug.log("applyFilter.end", [
+                    "surface": "email",
+                    "mode": "narrowed",
+                    "ids": narrowedIDs.count,
+                    "baseIDs": baseIDs.count,
+                    "elapsedMS": LibraryFilterDebug.elapsedMS(since: applyStart)
+                ])
             }
+            return
+        }
+
+        filterComputeTask = Task {
+            let currentLikedIDs = session.cachedLikedIDs
             let fulltextMap = LibraryQueryHelpers.fulltextMap(values: fulltextRules.map(\.value)) {
                 session.cachedFulltextIDs(for: $0)
             }
-
-            // §6: Crossover map
-            var crossoverMap: Set<Int> = []
-            let needsCrossover = expression.groups.flatMap(\.rules).contains { $0.field == .crossover }
-            if needsCrossover {
-                crossoverMap = await library.crossoverBookIDs()
+            guard let evaluated = await evaluator.evaluate(expression: expression, fulltextMap: fulltextMap) else {
+                return
             }
-            // Phase 5: series map — calibre_id -> that book's series_cache
-            // series_name values (genuine AO3 rows and Calibre-fallback rows
-            // alike; every book has some row, so this is a complete partition
-            // and needs no separate Calibre-side query).
-            var seriesNamesMap: [Int: [String]] = [:]
-            let needsSeries = expression.groups.flatMap(\.rules).contains { $0.field == .series }
-            if needsSeries, let metaDB = session.metaDB {
-                let allIDs = await library.allCalibreIDs()
-                let entries = (try? await metaDB.seriesEntries(for: allIDs)) ?? []
-                seriesNamesMap = Dictionary(grouping: entries, by: \.calibreID)
-                    .mapValues { $0.map(\.seriesName) }
-            }
-            // §perf Fix 6: Two-pass word-count filter (mirrors BookGridItem).
-            let needsWordCount = expression.groups.flatMap(\.rules).contains {
-                $0.field == .wordCountGT || $0.field == .wordCountLT
-            }
-            let needsWordCountFallback = needsWordCount && CustomColumnConfig.shared.wordCountLabel == nil
-
-            // §2.2c: Two-pass kudos filter, mirroring the word-count pattern exactly.
-            let needsKudos = expression.groups.flatMap(\.rules).contains {
-                $0.field == .kudosGT || $0.field == .kudosLT
-            }
-            let needsKudosFallback = needsKudos && CustomColumnConfig.shared.kudosLabel == nil
-
-            let expressionWithoutWordCount: FilterExpression = (needsWordCountFallback || needsKudosFallback) ? {
-                var stripped = expression
-                stripped.groups = expression.groups.compactMap { group in
-                    let rules = group.rules.filter {
-                        (!needsWordCountFallback || ($0.field != .wordCountGT && $0.field != .wordCountLT)) &&
-                            (!needsKudosFallback || ($0.field != .kudosGT && $0.field != .kudosLT))
-                    }
-                    guard !rules.isEmpty else { return nil }
-                    return FilterGroup(rules: rules, conjunction: group.conjunction)
-                }
-                return stripped
-            }() : expression
-
-            let filterTagExpansions = await TagExpansionResolver.filterTagExpansions(
-                for: expression, metaDB: session.metaDB
-            )
-            let builder = FilterBuilder(library: library, ftsLibrary: session.ftsLibrary,
-                                        metaDB: session.metaDB,
-                                        tagExpansions: filterTagExpansions)
-
-            let pass1Result = await builder.matchingIDs(
-                expression: expressionWithoutWordCount,
-                collectionMap: collectionMap,
-                statusMap: statusMap,
-                fulltextMap: fulltextMap,
-                crossoverMap: crossoverMap,
-                wordCountFallbackMap: nil,
-                kudosFallbackMap: nil,
-                seriesNamesMap: seriesNamesMap
-            )
-
-            var result: FilterResult
-            if needsWordCountFallback || needsKudosFallback {
-                let candidateIDs = pass1Result.calibreIDs
-                let wordCountFallback = needsWordCountFallback
-                    ? await library.ao3WordCounts(ids: candidateIDs) : nil
-                let kudosFallback = needsKudosFallback
-                    ? await library.ao3Kudos(ids: candidateIDs) : nil
-                var fallbackOnlyExpression = FilterExpression()
-                fallbackOnlyExpression.groups = expression.groups.compactMap { group in
-                    let rules = group.rules.filter {
-                        (needsWordCountFallback && ($0.field == .wordCountGT || $0.field == .wordCountLT) && $0.isComplete) ||
-                            (needsKudosFallback && ($0.field == .kudosGT || $0.field == .kudosLT) && $0.isComplete)
-                    }
-                    guard !rules.isEmpty else { return nil }
-                    return FilterGroup(rules: rules, conjunction: group.conjunction)
-                }
-                fallbackOnlyExpression.groupConjunction = expression.groupConjunction
-                if fallbackOnlyExpression.hasCompleteRules {
-                    let pass2Result = await builder.matchingIDs(
-                        expression: fallbackOnlyExpression,
-                        collectionMap: [:],
-                        statusMap: [:],
-                        fulltextMap: [:],
-                        crossoverMap: [],
-                        wordCountFallbackMap: wordCountFallback,
-                        kudosFallbackMap: kudosFallback,
-                        seriesNamesMap: [:]
-                    )
-                    let pass2Set = Set(pass2Result.calibreIDs)
-                    let combined = candidateIDs.filter { pass2Set.contains($0) }
-                    result = FilterResult(calibreIDs: combined, totalCount: combined.count)
-                } else {
-                    result = pass1Result
-                }
-            } else {
-                result = pass1Result
-            }
+            let result = evaluated.result
+            let filterTagExpansions = evaluated.tagExpansions
             let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
             let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
             let currentAO3PublisherIDs = await library.ao3PublisherBookIDs()
             let currentAnthologyIDs = await library.anthologyBookIDs()
             let currentDuplicateLoserIDs = await library.duplicateLoserBookIDs()
+            let visibilitySignature = filterVisibilitySignature
             let filteredIDs = ReaderPreferences.shared.showSkippedCollection
                 ? result.calibreIDs
                 : result.calibreIDs.filter { !currentSkipped.contains($0) }
@@ -905,7 +871,8 @@ final class EmailLibraryViewController: NSViewController {
                 calibreIDs: visibleFilteredIDs,
                 totalCount: visibleFilteredIDs.count
             )
-            session.rememberFilterResult(cacheableResult, for: expression)  // §7
+            session.rememberFilterResult(cacheableResult, for: expression, visibilitySignature: visibilitySignature,
+                                         bookTagsRevision: bookTagsRevisionAtStart)  // §7
             toolbarState.clearPendingFullTextSearch()
             cachedFilterTagExpansions = filterTagExpansions
             likedIDs = currentLikedIDs
@@ -940,9 +907,16 @@ final class EmailLibraryViewController: NSViewController {
             toolbarState.clearPendingFullTextSearch()
             return false
         }
-        if let cached = session.cachedFulltextIDs(for: phrase) {
+        switch session.fulltextState(for: phrase) {
+        case .resolved(let cached):
             applyResolvedSearchTextFullText(phrase: phrase, ids: cached)
             return false
+        case .failed:
+            // Not searched again until the search text is edited (retryFulltext).
+            applyResolvedSearchTextFullText(phrase: phrase, ids: [])
+            return false
+        case .unknown:
+            break
         }
         let token = UUID()
         let applicationToken = toolbarState.beginLibraryFilterApplication()
@@ -1659,7 +1633,7 @@ final class EmailLibraryViewController: NSViewController {
                 #endif
                 degraded = true
             }
-            let byID = Dictionary(uniqueKeysWithValues: allBooks.map { ($0.id, $0) })
+            let byID = LibraryQueryHelpers.indexed(allBooks.map { ($0.id, $0) })
             // Shared with LibraryRootView.rebuildItems via buildSeriesGroups
             // (SeriesGroupBuilder.swift) — this used to be a near-duplicate loop
             // with slightly different plumbing (no anthology filtering carried
@@ -2278,7 +2252,7 @@ struct FilterSheetCarrier: View {
                                 filterResult: capturedToolbarState?.activeFilterResult,
                                 toolbarState: capturedToolbarState
                             )
-                            let ao3Map = Dictionary(uniqueKeysWithValues: rows.compactMap { row in
+                            let ao3Map = LibraryQueryHelpers.indexed(rows.compactMap { row in
                                 row.ao3.map { (row.book.id, $0) }
                             })
                             var seriesEntriesByBook: [Int: [SeriesCacheEntry]] = [:]

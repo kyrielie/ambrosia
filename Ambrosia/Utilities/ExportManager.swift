@@ -171,6 +171,26 @@ struct ExportManager {
 
     // MARK: - §1: Build ExportRows (bulk fetch, no N+1)
 
+    /// Which books an export should cover, derived from the active filter result.
+    enum ExportScope: Equatable {
+        /// No filter result: every book matching the search text.
+        case unrestricted
+        /// Explicit ID list from a resolved (non-SQL) filter.
+        case ids([Int])
+        /// SQL-backed filter; the filter expression itself restricts the fetch.
+        case sqlFilter
+        /// A resolved filter that matched nothing. Nothing to export.
+        case empty
+    }
+
+    /// For a non-SQL result, an empty `calibreIDs` means zero matches, not
+    /// "no restriction" (matches `LibraryRootView.loadPage`).
+    static func exportScope(for result: FilterResult?) -> ExportScope {
+        guard let result else { return .unrestricted }
+        if result.isSQLBacked { return .sqlFilter }
+        return result.calibreIDs.isEmpty ? .empty : .ids(result.calibreIDs)
+    }
+
     @MainActor
     static func buildExportRows(currentPageBooks: [CalibreBook],
                                 session: LibrarySession?,
@@ -192,9 +212,16 @@ struct ExportManager {
         }
         // SQL-backed filters (e.g. NOT-tag rules) resolve via the FilterExpression itself,
         // not a pre-resolved ID list — calibreIDs is expected to be empty in that case.
-        // Only collapse to "no ID restriction" when there's genuinely no active filter.
-        let restrictIDs: [Int]? = filterResult.flatMap { result in
-            result.isSQLBacked ? nil : (result.calibreIDs.isEmpty ? nil : result.calibreIDs)
+        // An empty explicit-ID result is handled above (`.empty`), not collapsed.
+        let scope = exportScope(for: filterResult)
+        let restrictIDs: [Int]?
+        switch scope {
+        case .empty:
+            return []
+        case .ids(let ids):
+            restrictIDs = ids
+        case .unrestricted, .sqlFilter:
+            restrictIDs = nil
         }
         let activeFilter: FilterExpression? = {
             guard let result = filterResult, result.isSQLBacked else { return nil }
@@ -228,7 +255,7 @@ struct ExportManager {
             membershipByCollectionID = [:]
             allCollections = []
         }
-        let nameByID = Dictionary(uniqueKeysWithValues: allCollections.map { ($0.id, $0.name) })
+        let nameByID = LibraryQueryHelpers.indexed(allCollections.map { ($0.id, $0.name) })
 
         // Invert: collectionID → Set<calibreID>  ⟹  calibreID → [collectionName]
         // Includes ALL collections (system + user-created) per plan decision.

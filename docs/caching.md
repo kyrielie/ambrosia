@@ -12,7 +12,7 @@ Three LRU caches (`LRUCache<Key, Value>`, a bounded dictionary + insertion-order
 
 | Cache | Owner | Key | Limit | Cleared by |
 |---|---|---|---|---|
-| `filterResultCache` | `LibrarySession` | `FilterResultCacheKey` (expression digest + `membershipVersion`) | 8 | library open/close; implicitly stale once `membershipVersion` moves on |
+| `filterResultCache` | `LibrarySession` | `FilterResultCacheKey` (expression digest + `membershipVersion` + visibility signature + `bookTagsRevision`) | 8 | library open/close; implicitly stale once `membershipVersion` moves on |
 | `pageCache` | `CalibreLibrary` | `PageCacheKey` (query+filter+tagExpansion digests, `visibilityVersion`, sort, ascending, `randomSeed`, offset, limit) | 48 | `updateAO3MetaCaches` (after every AO3 extraction batch); implicitly stale once `visibilityVersion`/`randomSeed` move on |
 | `countCache` / `groupAwareCountCache` | `CalibreLibrary` | analogous to `PageCacheKey`, minus offset/limit/sort | 48 each | same as `pageCache` |
 
@@ -56,3 +56,23 @@ Collections:
 23. Async work that writes to shared or cached state on behalf of a UI surface must gate *every* one of its writes behind the same staleness check (task-cancellation or a generation/token guard) as its other results — not just the ones that are obviously part of the "final" result. A guard that protects some writes but not others is worse than no guard: code that reads the guarded writes assumes the whole function is safe, so the unguarded write's staleness is invisible on read. Full rule in `concurrency-invariants.md`. Found in `applyFilterRules()`: `cachedFilterTagExpansions` was written several `await` points before the existing `libraryFilterApplicationToken` guard, so a superseded filter-application task could overwrite a newer task's tag-synonym expansions after the fact, even though the token guard correctly protected `activeFilterResult` and the other post-guard writes. Fixed by moving the write to after the guard, alongside the other post-guard writes, in both `LibraryRootView` and `EmailLibraryViewController`.
 
 27. Any UI surface that (a) can itself trigger `toolbarState.activeFilterResult` to change, and (b) also observes that same property to reload when something *else* changes it, must guard against double-triggering its own reload with a one-shot suppression flag (e.g. `suppressNextReloadToken`), set immediately before the surface's own reload call and consumed by the observer before it reloads. `LibraryRootView` has always done this via SwiftUI's `.onChange` plus a `@State` flag (`suppressNextReloadToken`, set in all three branches of `applyFilterRules()`, consumed in `.onChange(of: toolbarState.activeFilterResult?.reloadToken)`). `EmailLibraryViewController`'s hand-rolled `withObservationTracking` observer (`scheduleObservation()`, `toolbarStateDidChange()`) did not have the equivalent guard until fixed: every `applyFilterRules()` completion fired `scheduleLoadPage` twice — once explicitly, once via the observer — and the two calls raced through `scheduleLoadPage`'s `loadPageTask?.cancel()`-then-reassign, since they could originate from different execution contexts (the full-compute branch's `Task` is not `@MainActor`-isolated). Symptom: switching to email view, or applying a filter while already on it, showed stale/unfiltered sidebar results until a second manual reload. Fixed by adding `suppressNextReloadToken` to `EmailLibraryViewController`, mirroring `LibraryRootView`'s placement, and by writing `activeFilterResult` last (after `skippedIDs`/`seriesOrMergedIDs`/`ao3PublisherIDs`/`anthologyIDs`/`duplicateLoserIDs`/`cachedFilterTagExpansions`) in the full-compute branch, per Invariant 23. When adding a new UI surface that reads or writes `activeFilterResult` (or any other property multiple surfaces both mutate and observe), port this suppression pattern from the start — do not assume `withObservationTracking`/`.onChange` on a shared, multiply-written property is safe without it.
+
+## Visibility signatures in cache keys
+
+- `PageCacheKey.visibilitySignature` is `LibraryVisibilityPolicy.cacheSignature` (the four hide/show prefs plus `shouldGroupSeriesRows`) for `wordCountSortedPage`, `kudosSortedPage`, `groupAwareTitleSortedPage` and `randomSortedPage`, which apply the policy inside `CalibreLibrary`. The raw `books(...)` overload passes an empty signature because the view filters its page.
+- `FilterResultCacheKey.visibilitySignature` is `LibraryVisibilityPolicy.signature(...)` for the four preferences baked into cached filter-result ID lists. `LibrarySession.cachedFilterResult` and `rememberFilterResult` require it; callers capture it next to the preference reads that filter the IDs.
+- `CountCacheKey` is unchanged: its counts do not depend on visibility. `GroupAwareCountCacheKey` already carried the prefs.
+
+## Incremental filter evaluation (subset lookup and rule cache)
+
+- `LibrarySession.narrowingBase(for:visibilitySignature:)` splits a new expression
+  into (base, one added rule) pairs via `IncrementalFilterPlanner` and looks each
+  base up in `filterResultCache`, keeping the smallest hit. Only complete
+  explicit-ID results are ever stored there, so a hit is always a valid base.
+- `ruleMatchCache` (`RuleMatchCache`, 24 entries) holds GLOBAL per-rule tag match
+  sets keyed by `RuleMatchKey` + `bookTagsRevision`. A candidate-restricted set is
+  a subset and is never stored: `store(..., isGlobal: false)` returns false.
+- `bookTagsRevision` is incremented by `AmbrosiaMetaDB.writeBookTags` (the only
+  `book_tags` writer) and mirrored on the session after each successful extraction
+  flush. Evaluations capture it before starting and file results under that value.
+- Both caches are cleared on library open and close.

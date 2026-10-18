@@ -236,7 +236,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
                 if self.searchToolbarItem?.searchField.stringValue != toolbarState.searchText {
                     self.searchToolbarItem?.searchField.stringValue = toolbarState.searchText
                 }
-                toolbarState.syncFullTextFieldFromSearchText()
                 self.scheduleSearchTextObservation()
             }
         }
@@ -474,7 +473,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         // Update searchText immediately for display, but page load is debounced
         // inside BookGridItem / EmailLibraryViewController (0.4 s).
         toolbarState?.searchText = text
-        toolbarState?.syncFullTextFieldFromSearchText()
 
         if text.isEmpty {
             closeSuggestionPanel()
@@ -585,7 +583,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private func clearSearchField() {
         searchToolbarItem?.searchField.stringValue = ""
         toolbarState?.searchText = ""
-        toolbarState?.syncFullTextFieldFromSearchText()
     }
 
     // MARK: - Suggestion panel
@@ -805,7 +802,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     // MARK: - Other toolbar actions
 
     @objc private func toggleFilter() {
-        toolbarState?.syncFullTextFieldFromSearchText()
         toolbarState?.showFilterDrawer = true
     }
     /// In email mode this collapses/expands the split-view sidebar via

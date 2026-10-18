@@ -113,7 +113,7 @@ final class LibrarySession {
         cachedAnthologyIDs = currentAnthologyIDs
         cachedDuplicateLoserIDs = currentDuplicateLoserIDs
 
-        collectionMembershipByName = Dictionary(uniqueKeysWithValues: collections.map { collection in
+        collectionMembershipByName = LibraryQueryHelpers.indexed(collections.map { collection in
             (collection.name, membershipByID[collection.id] ?? [])
         })
 
@@ -133,14 +133,16 @@ final class LibrarySession {
     /// necessity: `CalibreLibrary` is a separate actor and cannot mutate this
     /// `@MainActor` property directly, so the caller (a search/count call site)
     /// awaits this after the count call rather than `CalibreLibrary` reaching
-    /// out on its own. Minimum-viable per Phase 6.2 of the gap closure plan:
-    /// this can overwrite an unrelated `lastError` (e.g. from library open) if
-    /// both happen to be set; a full solution would give search errors their
-    /// own observable property instead of sharing this one.
+    /// out on its own. Search errors live in `lastSearchError`, separate from
+    /// the library-open `lastError`, so neither overwrites the other.
     func refreshLastSearchError() async {
-        guard let library, let message = await library.lastSearchError else { return }
-        lastError = message
+        guard let library else { return }
+        lastSearchError = await library.lastSearchError
     }
+
+    /// Latest search/count failure reported by `CalibreLibrary`, nil after a
+    /// successful query. Kept apart from `lastError` (library open).
+    private(set) var lastSearchError: String?
 
     private var extractionTask: Task<Void, Never>?
     private var resolvedFulltextCache: [String: [Int]] = [:]
@@ -149,6 +151,13 @@ final class LibrarySession {
     /// Message from the most recent failed `fulltext:` search, nil after a success, a
     /// cancellation, or a library open/close. Failures are never cached (D13).
     private(set) var lastFulltextError: String?
+
+    /// Phrase cache key to failure message. A failed phrase is not searched again
+    /// until `retryFulltext(for:)`, an open/close, or an index-stamp change, so the
+    /// UI cannot loop on a failing search. Never cleared by a page load.
+    private(set) var failedFulltextKeys: [String: String] = [:]
+
+    static let noFulltextIndexMessage = "This library has no full-text index."
 
     /// Index state (file identity plus `PRAGMA data_version`) the cached results were read
     /// from. A different stamp on a later search clears the cache (D13, D19).
@@ -160,6 +169,15 @@ final class LibrarySession {
 
     // §7: True LRU cache for FilterResult (limit 8).
     var filterResultCache = LRUCache<FilterResultCacheKey, FilterResult>(limit: 8)
+    /// Global per-rule tag match sets shared across `matchingIDs` calls (plan PR J).
+    /// Cleared together with `filterResultCache`. Only unrestricted sets are stored.
+    let ruleMatchCache = RuleMatchCache()
+    /// Mirrors `AmbrosiaMetaDB.bookTagsRevision`, bumped after every successful
+    /// AO3 extraction flush (the only writer of `book_tags`). Part of the filter
+    /// result key. Evaluations capture it before they start and store under that
+    /// captured value, so a result computed from pre-flush data can never be
+    /// filed under the post-flush revision.
+    private(set) var bookTagsRevision: Int = 0
 
     // §7: Membership version — bump after any liked/skipped/status change to
     // invalidate stale filter-result cache entries keyed on an older version.
@@ -218,7 +236,11 @@ final class LibrarySession {
             resolvedFulltextCacheOrder.removeAll()           // §7
             fulltextIndexStamp = nil
             lastFulltextError = nil
+            failedFulltextKeys.removeAll()
+            lastSearchError = nil
             filterResultCache.removeAll()                    // §7
+            ruleMatchCache.removeAll()
+            bookTagsRevision = 0
             membershipVersion = 0                            // §7
             cachedLikedIDs = []
             cachedSkippedIDs = []
@@ -320,7 +342,11 @@ final class LibrarySession {
         resolvedFulltextCacheOrder.removeAll()           // §7
         fulltextIndexStamp = nil
         lastFulltextError = nil
+        failedFulltextKeys.removeAll()
+        lastSearchError = nil
         filterResultCache.removeAll()                    // §7
+        ruleMatchCache.removeAll()
+        bookTagsRevision = 0
         membershipVersion = 0                            // §7
         cachedLikedIDs = []
         cachedSkippedIDs = []
@@ -361,6 +387,21 @@ final class LibrarySession {
         return resolvedFulltextCache[key]
     }
 
+    /// Three-state view of a phrase. A phrase `FTSQuery` cannot build is reported as
+    /// resolved-empty: it can never match, and `.unknown` would make callers search forever.
+    func fulltextState(for phrase: String) -> FulltextState {
+        guard let key = FTSQuery.make(phrase)?.cacheKey else { return .resolved([]) }
+        if let ids = resolvedFulltextCache[key] { return .resolved(ids) }
+        if let message = failedFulltextKeys[key] { return .failed(message) }
+        return .unknown
+    }
+
+    /// Forgets a recorded failure so the next `fulltextState` is `.unknown`.
+    func retryFulltext(for phrase: String) {
+        guard let key = FTSQuery.make(phrase)?.cacheKey else { return }
+        failedFulltextKeys.removeValue(forKey: key)
+    }
+
     /// Resolves a `fulltext:` phrase to Calibre book ids.
     ///
     /// Only a successful search is cached, including a successful empty one. A failure
@@ -369,10 +410,13 @@ final class LibrarySession {
     func resolveFulltextIDs(for phrase: String) async -> [Int] {
         guard let query = FTSQuery.make(phrase) else { return [] }
         if let hit = resolvedFulltextCache[query.cacheKey] { return hit }
+        if failedFulltextKeys[query.cacheKey] != nil { return [] }
         guard let fts = fulltextSearcher else {
             #if DEBUG
             print("[LibrarySession] fulltext search unavailable for phrase=\"\(query.normalized)\"")
             #endif
+            failedFulltextKeys[query.cacheKey] = Self.noFulltextIndexMessage
+            lastFulltextError = Self.noFulltextIndexMessage
             return []
         }
         let token = fts.beginSearch()
@@ -387,6 +431,7 @@ final class LibrarySession {
             if let previous = fulltextIndexStamp, previous != set.stamp {
                 resolvedFulltextCache.removeAll()
                 resolvedFulltextCacheOrder.removeAll()
+                failedFulltextKeys.removeAll()
             }
             fulltextIndexStamp = set.stamp
             lastFulltextError = nil
@@ -397,6 +442,7 @@ final class LibrarySession {
         } catch {
             if Task.isCancelled { return [] }
             lastFulltextError = String(describing: error)
+            failedFulltextKeys[query.cacheKey] = String(describing: error)
             #if DEBUG
             print("[LibrarySession] fulltext search failed (not cached) for phrase=\"\(query.normalized)\": \(error)")
             #endif
@@ -443,22 +489,61 @@ final class LibrarySession {
     // MARK: - §7: Filter result cache
 
     /// Look up a cached FilterResult. Returns nil on cache miss.
-    func cachedFilterResult(for expression: FilterExpression) -> FilterResult? {
+    /// `visibilitySignature` is `LibraryVisibilityPolicy.signature(...)` for the four
+    /// preferences that were applied to the cached ID list.
+    func cachedFilterResult(for expression: FilterExpression, visibilitySignature: String) -> FilterResult? {
         let key = FilterResultCacheKey(expression: expression,
-                                       membershipVersion: membershipVersion)
+                                       membershipVersion: membershipVersion,
+                                       visibilitySignature: visibilitySignature,
+                                       bookTagsRevision: bookTagsRevision)
         return filterResultCache[key]
     }
 
     /// Store a FilterResult in the LRU cache.
-    func rememberFilterResult(_ result: FilterResult, for expression: FilterExpression) {
+    /// `bookTagsRevision` is the value captured when the evaluation started; nil
+    /// means the current one (for callers that did not span an await).
+    func rememberFilterResult(_ result: FilterResult, for expression: FilterExpression,
+                              visibilitySignature: String, bookTagsRevision: Int? = nil) {
         let key = FilterResultCacheKey(expression: expression,
-                                       membershipVersion: membershipVersion)
+                                       membershipVersion: membershipVersion,
+                                       visibilitySignature: visibilitySignature,
+                                       bookTagsRevision: bookTagsRevision ?? self.bookTagsRevision)
         filterResultCache.set(result, for: key)
+    }
+
+    /// Finds a cached result that `expression` can be narrowed from (plan PR I).
+    ///
+    /// Tries every eligible split from `IncrementalFilterPlanner`, looks each base
+    /// up under the same membership version and visibility signature, and returns
+    /// the hit with the fewest IDs (the cheapest candidate set). Only complete
+    /// explicit-ID results are ever stored in `filterResultCache`; the
+    /// `isSQLBacked` check is a guard, not an expected case.
+    func narrowingBase(for expression: FilterExpression,
+                       visibilitySignature: String) -> (base: FilterResult, delta: FilterRule)? {
+        var best: (base: FilterResult, delta: FilterRule)?
+        for split in IncrementalFilterPlanner.splits(of: expression) {
+            let key = FilterResultCacheKey(expression: split.base,
+                                           membershipVersion: membershipVersion,
+                                           visibilitySignature: visibilitySignature,
+                                           bookTagsRevision: bookTagsRevision)
+            guard let hit = filterResultCache[key], !hit.isSQLBacked else { continue }
+            if let current = best, current.base.calibreIDs.count <= hit.calibreIDs.count { continue }
+            best = (hit, split.delta)
+        }
+        return best
+    }
+
+    /// Records the `book_tags` revision reported by `AmbrosiaMetaDB` after an extraction
+    /// flush. Called from the background extraction task, hence a main-actor method
+    /// rather than a direct write to the `private(set)` property.
+    func adoptBookTagsRevision(_ revision: Int) {
+        bookTagsRevision = revision
     }
 
     /// Increment the membership version, invalidating all cached filter results
     /// that depend on collection / liked / status membership data.
-    /// Call after: liked/skipped toggle, AO3 extraction batch flush, series sync.
+    /// Call after: liked/skipped toggle, series sync. An AO3 extraction flush does
+    /// not bump this; it advances `bookTagsRevision` instead.
     func bumpMembershipVersion() {
         membershipVersion &+= 1   // wrapping add — no overflow crash
     }
@@ -647,7 +732,13 @@ final class LibrarySession {
                 // log line — those books would then look "never attempted" and
                 // get needlessly reprocessed on every subsequent launch.
                 do {
+                    let wroteBookTags = !pendingSuccess.isEmpty
                     try await metaDB.insertBatch(pendingSuccess, diagnostics: pendingFailure, indexed: pendingIndexed)
+                    if wroteBookTags {
+                        // `book_tags` changed: cached tag results are stale (plan PR J).
+                        let revision = await metaDB.bookTagsRevision
+                        await self?.adoptBookTagsRevision(revision)
+                    }
                     pendingSuccess.removeAll()
                     pendingFailure.removeAll()
                     pendingIndexed.removeAll()
@@ -957,4 +1048,11 @@ private func buildBookIndexRecord(from parser: EPUBParser) -> BookIndexRecord {
         subject: subject,
         indexedAt: ISO8601DateFormatter().string(from: Date())
     )
+}
+
+/// Resolution state of a `fulltext:` phrase in `LibrarySession`.
+enum FulltextState: Equatable {
+    case unknown
+    case resolved([Int])
+    case failed(String)
 }

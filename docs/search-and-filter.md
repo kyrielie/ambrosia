@@ -58,3 +58,34 @@ Seeded random sort with Xorshift64 (`SeededRNG`), stable within a session. Used 
 24. Negated many-to-many filter conditions (tag/rating/warning/category/author/series `notEquals`/`notContains`) must be built as a correlated `NOT EXISTS (... WHERE btl2.book = b.id AND ...)` subquery, never as `b.id NOT IN (SELECT book FROM ... WHERE ...)`. The `NOT IN` shape forces SQLite to materialise the entire matching-book set and anti-join it against all of `books`, and a leading-wildcard `LIKE` inside that subquery can't use any index — a full scan of `tags` per evaluation. `NOT EXISTS` correlates on the outer book id, letting SQLite seek the `books_tags_link(book)` index per book instead. Relatedly: never add an outer `LEFT JOIN books_tags_link/tags` (or the authors/series equivalents) "to support" these fields — every one of them is already a self-contained correlated subquery aliased `btl2/t2` (or `bal2/a2`, `bsl2/s2`); an outer join with unused outer aliases only fans every book out to one row per tag before `SELECT DISTINCT` collapses it back down, multiplying the cost of every `NOT EXISTS` re-evaluation for no benefit. `FilterBuilder.swift` had this outer join removed already (see §9 in that file's comments); `CalibreLibrarySearch._bookCount(query:)` still has the equivalent dead join as of this writing — fix it the same way rather than treating the two files' SQL as independent.
 
 25. In-memory-only filter fields (`isLiked`, `collection`, `status`, `crossover`, and `wordCount`/`kudos` without a configured custom column) are applied in `FilterBuilder.matchingIDsForGroup` as a post-filter over the SQL-backed rules' result *within the same group*, not recomputed from the full library. This is correct only because the code always computes SQL-backed-rule matches first (or falls back to `allCalibreIDs()` when a group has no SQL-backed rules) before intersecting/subtracting the in-memory rule's membership set. If you add a new in-memory-only `FilterField`, follow this same order — SQL rules (or the full-library set) first, in-memory rules second, applied per the group's own conjunction — rather than assuming in-memory rules can be evaluated independently and combined afterward; the existing OR-group union logic in particular depends on each in-memory branch reusing the same pre-narrowed `idSet`, not the raw membership map.
+
+## Full-text failure state
+
+Filter `fulltext` rules and the search-bar `fulltext:` phrase both consult `LibrarySession.fulltextState(for:)`. A rule whose phrase is `.failed` contributes an empty set rather than triggering another search. See "UI behavior on failure" in `calibre-fts.md`.
+
+## Incremental evaluation (narrowing)
+
+Adding one complete rule to an already-evaluated expression evaluates only that
+rule against the cached result (`FilterEvaluator` with `candidates`). Eligible only
+when the rule is in an AND group, the top level is a single complete group or AND,
+the group keeps at least one other complete rule, and the base was cached under the
+same membership version, visibility signature (which includes whether word-count
+and kudos are custom columns) and `bookTagsRevision`. Removal, replacement and any
+OR are full computes. Narrowed results skip the visibility refetch because the base
+is already visibility-filtered. Gated by `IncrementalFilterFlag` (UserDefaults key
+`incrementalFilterEvaluation`; default on in debug, off in release until gate G3 of
+the plan is run by hand).
+
+Tag rules: `.equals` and rating operators are never candidate-restricted;
+`.contains`/`.startsWith` are restricted only when candidates are at most 10 percent
+of the books with `book_tags` rows (`TagRuleStrategy`). AND-group tag rules run in
+cost order (`AndGroupOrdering`); order never changes the result.
+
+Per `matchingIDs` call, `book_tags` coverage is read once into a `TagCoverage`
+(`covered`, `uncovered`, `totalCount`) and shared by every tag-family rule, instead
+of once per rule. The Calibre-side fallback `SELECT` for books without `book_tags`
+rows answers only for `uncovered`: it is skipped when `uncovered` is empty, limited
+to the `uncovered` ids when they are at most half the library
+(`TagCoverage.shouldRestrictFallback`), and otherwise runs unrestricted and subtracts
+`covered`. A candidate-restricted match set is a subset of the global one and is
+never stored in `ruleMatchCache`, which holds global sets only.

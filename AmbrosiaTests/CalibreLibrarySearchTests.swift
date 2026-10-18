@@ -33,6 +33,7 @@ final class CalibreLibrarySearchTests: XCTestCase {
     private static var library: CalibreLibrary!
     private static var libraryRoot: URL!
 
+    // swiftlint:disable:next static_over_final_class
     override class func setUp() {
         do {
             libraryRoot = try CalibreTestFixture.makeTempLibraryRoot()
@@ -42,6 +43,7 @@ final class CalibreLibrarySearchTests: XCTestCase {
         }
     }
 
+    // swiftlint:disable:next static_over_final_class
     override class func tearDown() {
         if let libraryRoot {
             try? FileManager.default.removeItem(at: libraryRoot)

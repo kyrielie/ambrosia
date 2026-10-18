@@ -163,8 +163,8 @@ func assignSeriesItems(
         let bookEntries = entries
             .filter { $0.calibreID == book.id && !anthologyIDs.contains($0.calibreID) }
             .sorted { $0.seriesKey < $1.seriesKey }
-        let warningsBySeriesKey = Dictionary(
-            uniqueKeysWithValues: (singletonWarningsByCalibreID[book.id] ?? []).map { ($0.seriesKey, $0) }
+        let warningsBySeriesKey = LibraryQueryHelpers.indexed(
+            (singletonWarningsByCalibreID[book.id] ?? []).map { ($0.seriesKey, $0) }
         )
         var emittedAny = false
         for entry in bookEntries {

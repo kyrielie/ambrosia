@@ -17,7 +17,7 @@ AmbrosiaApp
 │       └── LibraryViewController
 │           ├── LibraryRootView              [list mode]
 │           ├── EmailLibraryViewController   [split email mode]
-│           └── placeholder                  [ranking mode]
+│           └── ActivityFeedView             [ranking mode]
 └── ReaderWindowController
     └── ReaderViewController -> WKWebView
 ```
@@ -30,7 +30,7 @@ AmbrosiaApp
 
 - List: SwiftUI AO3-style rows with title, series, authors, tags, stats, description, and pagination. `LibraryRootView.swift` holds paging/filtering/series-grouping orchestration; row rendering has been split out into `BookListRow.swift` and `SeriesListRow.swift`; shared layout and series-grouping helpers (`FlowLayout`, `isAnthology`, `missingIndices`, `parseISODate`, `logMissingVisibleWorkMetadata`) live in `FlowLayout.swift`. These helpers and the row-support types (`LibraryStats`, `LibraryStatsRow`, `TagPillDisplay`) are intentionally `internal`, not `private`, because more than one row file depends on them — see Invariant 16.
 - Email: AppKit split view with table sidebar and SwiftUI detail pane.
-- Ranking: placeholder text only; `BookState` already has ELO fields.
+- Ranking: `ActivityFeedView` (reading activity feed). `BookState` already has ELO fields for a future ranking surface.
 
 ## Collections
 
@@ -41,6 +41,13 @@ AmbrosiaApp
 ## Export
 
 CSV export of library books through `ExportManager`.
+
+`ExportManager.exportScope(for:)` turns the active `FilterResult` into an
+`ExportScope`: `.unrestricted` (no result), `.sqlFilter` (SQL-backed), `.ids` (explicit
+IDs) or `.empty`. An explicit result with no IDs means zero matches, so
+`buildExportRows` returns no rows for `.empty` and the EPUB flow shows "Nothing to
+Export" instead of exporting the whole library. Export does not apply
+`LibraryVisibilityPolicy`; whether it should is an open product question.
 
 ## Error Log
 
@@ -61,3 +68,20 @@ sessions/annotations/collection changes are.
 
 The split of `LibraryRootView`'s row rendering into `BookListRow.swift`, `SeriesListRow.swift`, and `FlowLayout.swift`, plus the addition of tag-synonym expansion (`tagExpansions`) to the filter pipeline, shipped with ten-plus build errors across five files. None were logic bugs; all were consistency failures between files — a type renamed in one place and not another, a function declaration deleted while its body survived, helpers left `private` after being split out from their original file, an async closure called without `await`, a parameter threaded through eight method signatures instead of stored once. None of these would have survived a single green `xcodebuild build` run before merge. Invariants 16-21 below exist to keep the next multi-file refactor from repeating this; Invariant 21 (a build gate before merge) is the cheapest one and should be treated as non-negotiable. See `concurrency-invariants.md` for Invariants 17-20; Invariant 21 (the build gate) is repo-wide and lives in `concurrency-invariants.md` as well.
 
+
+## Load serialization
+
+The list surface starts every page load through `scheduleLoadPage()` (see Invariant 25). Book states for the visible page are refreshed at the end of each `loadPage`, so paging keeps read progress. `refreshMembershipSnapshots(reload:)` mirrors session snapshots without forcing a load; `refreshVisibilitySnapshots(resetPage:)` keeps the current page only when the surface is ungrouped and not in random order, because recorded grouped offsets and random seeds are invalid after a membership change.
+
+## Surface ownership
+
+The list `NSHostingView` stays alive while hidden, so its handlers must not act when it is not the live surface.
+
+- The three export triggers (`triggerExport`, `triggerEPUBExport`, `triggerAnnotationExport`) are ignored by the list while `isListSurfaceTornDown` is true. Email and ranking each own their own copies and clear the flag they handle. `ActivityFeedView` clears all three because it has nothing to export.
+- `LibraryViewController` clears `filterCommitHandler` when it hides the list, and the list re-registers it from `.onChange(of: isListSurfaceTornDown)` as well as `.onAppear`, because SwiftUI may not call `.onAppear` when a hidden hosting view is shown again. Whether it does is gate L1 (not yet run).
+- `applyViewMode` ignores a repeated mode so a same-value observation callback does not rebuild a surface.
+
+## Empty and count states
+
+- Before the first load of an open library finishes, the list shows "Loading". After it, an empty unfiltered list shows either "This library has no books" or "All books are hidden by your settings" (with a Preferences button).
+- The footer total is `visibleTotalCount` (visibility-aware) in every mode, computed by `CalibreLibrary.visibleBookCount`. `GroupAwareCountCacheKey` includes `shouldGroupSeriesRows` because that count now runs in ungrouped mode too.

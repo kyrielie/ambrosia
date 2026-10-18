@@ -69,8 +69,8 @@ struct AnnotationExportManager {
         guard !annotations.isEmpty else { return [] }
 
         let ids = Array(Set(annotations.map(\.calibreID)))
-        let bookMap: [Int: CalibreBook] = Dictionary(
-            uniqueKeysWithValues: await library.booksForIDs(ids).map { ($0.id, $0) }
+        let bookMap: [Int: CalibreBook] = LibraryQueryHelpers.indexed(
+            await library.booksForIDs(ids).map { ($0.id, $0) }
         )
 
         return annotations.compactMap { annotation, calibreID in

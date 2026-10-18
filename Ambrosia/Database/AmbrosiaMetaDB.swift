@@ -54,6 +54,12 @@ actor AmbrosiaMetaDB {
     // ao3_extraction_diagnostics, series_cache, or series_placeholders must
     // evict the corresponding entries below.
     private var ao3MetadataCache: [Int: AO3MetadataRecord] = [:]
+
+    /// Incremented every time `book_tags` is rewritten for a book. `writeBookTags`
+    /// is the only writer of that table. Part of the filter-result and rule-match
+    /// cache keys, so cached tag results do not survive an extraction pass that
+    /// changed the tags they were computed from.
+    private(set) var bookTagsRevision: Int = 0
     private var ao3DiagnosticsCache: [Int: AO3ExtractionDiagnostic] = [:]
     private var seriesEntriesCache: [Int: [SeriesCacheEntry]] = [:]
     private var seriesEntriesByKeyCache: [String: [SeriesCacheEntry]] = [:]
@@ -1206,7 +1212,20 @@ actor AmbrosiaMetaDB {
     /// single-element list. `tagType` restricts to one column ("rating"/
     /// "warning"/"category"), or nil to match any type (`.tag`'s "any of
     /// this book's tags" scope).
-    func bookTagMatchIDs(op: FilterOperator, terms: [String], tagType: String?) throws -> Set<Int> {
+    /// `coverage`, when non-nil, is a caller-supplied
+    /// `calibreIDsWithBookTags()` result. The rating range ops need it, and
+    /// without this parameter each such rule re-ran the full
+    /// `SELECT DISTINCT calibre_id FROM book_tags` scan.
+    /// `restrictedTo`, when non-nil, limits the plain string-match query to
+    /// those calibre_ids (one `json_each` binding, see `SQLIDList`). It is a
+    /// hint for the contains/startsWith scans only: on synthetic data a
+    /// restricted `LIKE '%x%'` over a small id list was far faster than the
+    /// unrestricted scan, while a restricted `=` was slower than its index
+    /// seek (the caller, `TagRuleStrategy`, never asks for that). The rating
+    /// range ops ignore it, so callers must still intersect the result.
+    func bookTagMatchIDs(op: FilterOperator, terms: [String], tagType: String?,
+                         coverage: Set<Int>? = nil,
+                         restrictedTo: [Int]? = nil) throws -> Set<Int> {
         guard !terms.isEmpty else { return [] }
 
         // ratingAtMost/ratingAtLeast compare against AO3Rating's ordinal
@@ -1219,9 +1238,9 @@ actor AmbrosiaMetaDB {
             }
             if op == .ratingAtMost {
                 let higher = rating.higherRatings
-                if higher.isEmpty { return try calibreIDsWithBookTags() }
+                if higher.isEmpty { return try coverage ?? calibreIDsWithBookTags() }
                 let higherMatches = try bookTagMatchIDs(op: .equals, terms: higher.map(\.rawValue), tagType: tagType)
-                return try calibreIDsWithBookTags().subtracting(higherMatches)
+                return try (coverage ?? calibreIDsWithBookTags()).subtracting(higherMatches)
             } else {
                 guard let myLevel = rating.level else {
                     return try bookTagMatchIDs(op: .equals, terms: terms, tagType: tagType)
@@ -1253,6 +1272,11 @@ actor AmbrosiaMetaDB {
         if let tagType {
             sql += " AND tag_type = ?"
             allArgs.append(tagType)
+        }
+        if let restrictedTo {
+            if restrictedTo.isEmpty { return [] }
+            sql += " AND " + SQLIDList.clause(column: "calibre_id")
+            allArgs.append(SQLIDList.binding(restrictedTo))
         }
         let rows = try prepare(sql, allArgs)
         return Set(rows.compactMap { $0.int(at: 0) })
@@ -1511,6 +1535,7 @@ actor AmbrosiaMetaDB {
         if let rating = metadata.rating, !rating.isEmpty {
             try insertAll([rating], type: "rating")
         }
+        bookTagsRevision &+= 1
     }
 
     private func invalidateAO3MetadataCaches(for calibreID: Int) {
@@ -2350,7 +2375,7 @@ actor AmbrosiaMetaDB {
         guard !tags.isEmpty else { return [:] }
         guard AO3TagSeedDatabaseConfig.shared.isEnabled,
               AO3TagSeedDatabaseConfig.shared.validDatabaseURLIfEnabled() != nil else {
-            return Dictionary(uniqueKeysWithValues: tags.map { ($0, [$0]) })
+            return LibraryQueryHelpers.indexed(tags.map { ($0, [$0]) })
         }
 
         let placeholders = tags.map { _ in "?" }.joined(separator: ", ")
@@ -2369,7 +2394,7 @@ actor AmbrosiaMetaDB {
             WHERE LOWER(s.synonym) IN (\(placeholders))
             """
         guard let rootRows = try? readDB.prepare(rootSQL, lowerBindings + lowerBindings).map({ $0 }) else {
-            return Dictionary(uniqueKeysWithValues: tags.map { ($0, [$0]) })
+            return LibraryQueryHelpers.indexed(tags.map { ($0, [$0]) })
         }
 
         // matched_term (lowercased input) -> set of root canonical ids

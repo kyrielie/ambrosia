@@ -479,6 +479,7 @@ actor CalibreLibrary {
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
             tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
             visibilityVersion: visibilityVersion,
+            visibilitySignature: visibility.cacheSignature,
             sortField: .wordCount,
             ascending: ascending,
             randomSeed: randomSeed,
@@ -554,6 +555,7 @@ actor CalibreLibrary {
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
             tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
             visibilityVersion: visibilityVersion,
+            visibilitySignature: visibility.cacheSignature,
             sortField: .kudos,
             ascending: ascending,
             randomSeed: randomSeed,
@@ -693,6 +695,7 @@ actor CalibreLibrary {
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
             tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
             visibilityVersion: visibilityVersion,
+            visibilitySignature: visibility.cacheSignature,
             sortField: .title,
             ascending: ascending,
             randomSeed: randomSeed,
@@ -769,7 +772,8 @@ actor CalibreLibrary {
             showSkippedCollection: visibility.showSkippedCollection,
             hideNonAO3PublisherBooks: visibility.hideNonAO3PublisherBooks,
             hideAnthologyBooks: visibility.hideAnthologyBooks,
-            hideDuplicateBooks: visibility.hideDuplicateBooks
+            hideDuplicateBooks: visibility.hideDuplicateBooks,
+            shouldGroupSeriesRows: visibility.shouldGroupSeriesRows
         )
         if let cached = groupAwareCountCache[cacheKey] { return cached }
         let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
@@ -802,6 +806,7 @@ actor CalibreLibrary {
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
             tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
             visibilityVersion: visibilityVersion,
+            visibilitySignature: visibility.cacheSignature,
             sortField: .random,
             ascending: true,
             randomSeed: randomSeed,
@@ -954,6 +959,7 @@ actor CalibreLibrary {
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
             tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
             visibilityVersion: visibilityVersion,
+            visibilitySignature: "",   // caller (the view) applies visibility to the raw page
             sortField: sort,
             ascending: ascending,
             randomSeed: randomSeed,

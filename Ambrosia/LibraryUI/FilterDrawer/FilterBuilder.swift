@@ -243,6 +243,132 @@ extension FilterExpression {
     }
 }
 
+// MARK: - Per-call tag evaluation state
+
+extension FilterOperator {
+    /// The positive form of a negated operator; every other operator maps to
+    /// itself. Mirrors the inline switch at the top of
+    /// `CalibreLibrary.tagFamilyMatchIDs`, so a negated and a positive rule
+    /// over the same value share one match set.
+    var positiveForm: FilterOperator {
+        switch self {
+        case .notContains: return .contains
+        case .notEquals:   return .equals
+        default:           return self
+        }
+    }
+}
+
+/// The `book_tags` coverage partition, fetched once per `matchingIDs` call
+/// instead of once per tag rule. `covered` is every calibre_id with at least
+/// one `book_tags` row; `uncovered` is every other book, which is exactly the
+/// set the Calibre-side fallback query has to answer for.
+struct TagCoverage: Sendable {
+    let covered: Set<Int>
+    let uncovered: Set<Int>
+    let totalCount: Int
+
+    /// True when the fallback `SELECT` should be limited to `uncovered` ids.
+    /// Past half the library the `json_each` list costs more than it saves,
+    /// so the unrestricted query plus `subtracting(covered)` is kept.
+    var shouldRestrictFallback: Bool { uncovered.count * 2 <= totalCount }
+}
+
+/// Identity of one tag-family rule's positive match set within a single
+/// `matchingIDs` call. Uses the positive operator so `contains X` and
+/// `not contains X` share an entry. Stored as raw strings so it does not
+/// depend on the field and operator enums' conformances.
+struct RuleMatchKey: Hashable {
+    let field: String
+    let positiveOp: String
+    let value: String
+    let termsDigest: String
+
+    init(rule: FilterRule, tagExpansions: [String: [String]]) {
+        field = rule.field.rawValue
+        positiveOp = rule.op.positiveForm.rawValue
+        value = rule.value
+        // Only `.tag` rules use synonym expansion (see tagFamilyMatchIDs).
+        termsDigest = rule.field == .tag
+            ? tagExpansionsDigest([rule.value: tagExpansions[rule.value] ?? [rule.value]])
+            : ""
+    }
+}
+
+/// How one tag-family rule should be evaluated given the running candidate set.
+///
+/// Derived from a synthetic experiment (50,000 books, 2,000,000 `book_tags`
+/// rows, SQLite 3.45): a restricted `LIKE '%x%'` took 12 ms at 4 percent of
+/// the library against 179 ms unrestricted, but 122 ms at 40 percent; a
+/// restricted `=` was slower than the unrestricted index seek at every size
+/// tried (3.8 ms and 42 ms against 0.3 ms). So only the scanning operators are
+/// ever restricted, and only while the candidate set is small. The threshold
+/// is re-tuned on the real database via gate G2 in the plan.
+enum TagRuleStrategy: Equatable {
+    case unrestricted
+    case restricted(Set<Int>)
+
+    /// Restrict only when the candidates are at most this fraction (1 in N)
+    /// of the books that have `book_tags` rows.
+    static let restrictionDivisor = 10
+
+    static func choose(op: FilterOperator, candidates: Set<Int>?, coveredCount: Int) -> TagRuleStrategy {
+        guard let candidates else { return .unrestricted }
+        switch op {
+        case .contains, .startsWith, .notContains:
+            // `notContains` is evaluated as `contains` then subtracted.
+            guard coveredCount > 0,
+                  candidates.count * restrictionDivisor <= coveredCount else { return .unrestricted }
+            return .restricted(candidates)
+        case .equals, .notEquals, .ratingAtMost, .ratingAtLeast:
+            return .unrestricted
+        }
+    }
+}
+
+/// Evaluation order for the tag-family rules of an AND group. Rules commute
+/// in an AND group, so this changes cost only, never the result: cheap,
+/// selective rules run first so the expensive scanning rules see a small
+/// candidate set (and qualify for `TagRuleStrategy.restricted`).
+enum AndGroupOrdering {
+    /// 0 known set (already evaluated this call), 1 equals, 2 rating range,
+    /// 3 contains/startsWith, 4 negated.
+    static func costClass(_ op: FilterOperator, knownSize: Int?) -> Int {
+        if knownSize != nil { return 0 }
+        switch op {
+        case .equals:                       return 1
+        case .ratingAtMost, .ratingAtLeast: return 2
+        case .contains, .startsWith:        return 3
+        case .notContains, .notEquals:      return 4
+        }
+    }
+
+    /// Stable within a class. Known sets sort by ascending size.
+    static func order(_ rules: [FilterRule], knownSize: (FilterRule) -> Int?) -> [FilterRule] {
+        rules.enumerated()
+            .map { index, rule -> (index: Int, rule: FilterRule, size: Int?, cost: Int) in
+                let size = knownSize(rule)
+                return (index, rule, size, costClass(rule.op, knownSize: size))
+            }
+            .sorted { lhs, rhs in
+                if lhs.cost != rhs.cost { return lhs.cost < rhs.cost }
+                if lhs.cost == 0, let lsize = lhs.size, let rsize = rhs.size, lsize != rsize { return lsize < rsize }
+                return lhs.index < rhs.index
+            }
+            .map(\.rule)
+    }
+}
+
+/// Per-call memo of tag-family match sets. A value type owned by
+/// `matchingIDsSync` and passed `inout` between `FilterBuilder`'s own private
+/// functions only. It never crosses into a `CalibreLibrary` method, which is
+/// an actor boundary. Holds GLOBAL match sets only: a candidate-restricted set
+/// is a subset and would corrupt a later lookup under a different candidate
+/// set, so `tagRuleMembers` never stores one.
+struct RuleMatchMemo {
+    var sets: [RuleMatchKey: Set<Int>] = [:]
+}
+
 // MARK: - FilterBuilder
 
 struct FilterBuilder {
@@ -263,13 +389,23 @@ struct FilterBuilder {
     /// before the `Task.detached` is launched (Invariant 10).
     let tagExpansions: [String: [String]]
 
+    /// Session-level cache of global per-rule match sets (plan PR J), and the
+    /// `book_tags` revision the entries are valid for. Both optional: without a
+    /// cache the builder uses only its per-call memo.
+    let ruleMatchCache: RuleMatchCache?
+    let bookTagsRevision: Int
+
     init(library: CalibreLibrary, ftsLibrary: CalibreFTSLibrary? = nil,
          metaDB: AmbrosiaMetaDB? = nil,
-         tagExpansions: [String: [String]] = [:]) {
+         tagExpansions: [String: [String]] = [:],
+         ruleMatchCache: RuleMatchCache? = nil,
+         bookTagsRevision: Int = 0) {
         self.library = library
         self.ftsLibrary = ftsLibrary
         self.metaDB = metaDB
         self.tagExpansions = tagExpansions
+        self.ruleMatchCache = ruleMatchCache
+        self.bookTagsRevision = bookTagsRevision
     }
 
     /// Actor isolation on `CalibreLibrary`/`CalibreFTSLibrary` provides serialization
@@ -283,7 +419,8 @@ struct FilterBuilder {
         crossoverMap: Set<Int> = [],
         wordCountFallbackMap: [Int: Int]? = nil,
         kudosFallbackMap: [Int: Int]? = nil,
-        seriesNamesMap: [Int: [String]] = [:]
+        seriesNamesMap: [Int: [String]] = [:],
+        candidateIDs: Set<Int>? = nil
     ) async -> FilterResult {
         await matchingIDsSync(
             expression: expression,
@@ -293,7 +430,8 @@ struct FilterBuilder {
             crossoverMap: crossoverMap,
             wordCountFallbackMap: wordCountFallbackMap,
             kudosFallbackMap: kudosFallbackMap,
-            seriesNamesMap: seriesNamesMap
+            seriesNamesMap: seriesNamesMap,
+            candidateIDs: candidateIDs
         )
     }
 
@@ -305,7 +443,8 @@ struct FilterBuilder {
                                  crossoverMap: Set<Int> = [],
                                  wordCountFallbackMap: [Int: Int]? = nil,
                                  kudosFallbackMap: [Int: Int]? = nil,
-                                 seriesNamesMap: [Int: [String]] = [:]) async -> FilterResult {
+                                 seriesNamesMap: [Int: [String]] = [:],
+                                 candidateIDs: Set<Int>? = nil) async -> FilterResult {
         let start = LibraryFilterDebug.now()
         LibraryFilterDebug.log("matchingIDs.start", [
             "mode": "explicitIDs",
@@ -334,6 +473,21 @@ struct FilterBuilder {
             return FilterGroup(rules: rules, conjunction: group.conjunction)
         }
 
+        // Per-call invariants, fetched once instead of once per group or rule.
+        let needsTagCoverage = metaDB != nil && nonFulltextGroups.contains { group in
+            group.completeRules.contains(where: Self.isTagFamilyRule)
+        }
+        // With `candidateIDs` the starting set of every group is the candidates, so
+        // the whole-library id list is only needed to derive the tag coverage
+        // partition.
+        let needsAllIDs = (nonFulltextGroups.isEmpty && candidateIDs == nil) || needsTagCoverage
+            || (candidateIDs == nil && nonFulltextGroups.contains { group in
+                !group.completeRules.contains(where: Self.isSQLRule)
+            })
+        let allIDs: [Int]? = needsAllIDs ? await library.allCalibreIDs() : nil
+        let tagCoverage: TagCoverage? = needsTagCoverage ? await loadTagCoverage(allIDs: allIDs ?? []) : nil
+        var memo = RuleMatchMemo()
+
         var groupResults: [Set<Int>] = []
         for group in nonFulltextGroups {
             let ids = await matchingIDsForGroup(group,
@@ -342,13 +496,24 @@ struct FilterBuilder {
                                                 crossoverMap: crossoverMap,
                                                 wordCountFallbackMap: wordCountFallbackMap,
                                                 kudosFallbackMap: kudosFallbackMap,
-                                                seriesNamesMap: seriesNamesMap)
-            groupResults.append(Set(ids))
+                                                seriesNamesMap: seriesNamesMap,
+                                                allIDs: allIDs,
+                                                tagCoverage: tagCoverage,
+                                                candidateIDs: candidateIDs,
+                                                memo: &memo)
+            // Every phase only filters, so the group result is already a subset
+            // of the candidates; the intersection is a cheap guard for the SQL
+            // and empty-group paths.
+            if let candidateIDs {
+                groupResults.append(Set(ids).intersection(candidateIDs))
+            } else {
+                groupResults.append(Set(ids))
+            }
         }
 
         var finalIDSet: Set<Int>
         if groupResults.isEmpty {
-            finalIDSet = Set(await library.allCalibreIDs())
+            finalIDSet = candidateIDs ?? Set(allIDs ?? [])
         } else {
             switch expression.groupConjunction {
             case .or:
@@ -385,9 +550,16 @@ struct FilterBuilder {
                                      crossoverMap: Set<Int> = [],
                                      wordCountFallbackMap: [Int: Int]? = nil,
                                      kudosFallbackMap: [Int: Int]? = nil,
-                                     seriesNamesMap: [Int: [String]] = [:]) async -> [Int] {
+                                     seriesNamesMap: [Int: [String]] = [:],
+                                     allIDs: [Int]? = nil,
+                                     tagCoverage: TagCoverage? = nil,
+                                     candidateIDs: Set<Int>? = nil,
+                                     memo: inout RuleMatchMemo) async -> [Int] {
         let complete = group.completeRules
-        guard !complete.isEmpty else { return await library.allCalibreIDs() }
+        guard !complete.isEmpty else {
+            if let candidateIDs { return Array(candidateIDs) }
+            return await resolvedAllIDs(allIDs)
+        }
 
         // Partition into SQL-evaluated vs in-memory-evaluated rules.
         // §6: .crossover is in-memory (backed by ao3_metadata fandoms).
@@ -405,33 +577,30 @@ struct FilterBuilder {
         //      for non-AO3 books via CalibreLibrary.tagFamilyMatchIDs) — see
         //      §5 of the dependency-reduction plan. Same dual-source-by-
         //      exclusion shape as .authorName above.
-        let sqlRules        = complete.filter {
-            $0.field != .collection &&
-                $0.field != .status && $0.field != .fulltext && $0.field != .crossover &&
-                $0.field != .series &&
-                $0.field != .authorName &&
-                $0.field != .tag && $0.field != .rating && $0.field != .warning && $0.field != .category
-        }
+        let sqlRules        = complete.filter(Self.isSQLRule)
         let collectionRules = complete.filter { $0.field == .collection }
         let statusRules     = complete.filter { $0.field == .status }
         let crossoverRules  = complete.filter { $0.field == .crossover }  // §6
         let seriesRules     = complete.filter { $0.field == .series }     // Phase 5
         let authorRules     = complete.filter { $0.field == .authorName }  // §4.3 (Phase 3)
-        let tagFamilyRules  = complete.filter {
-            $0.field == .tag || $0.field == .rating || $0.field == .warning || $0.field == .category
-        }  // Phase 4
+        let tagFamilyRules  = complete.filter(Self.isTagFamilyRule)  // Phase 4
 
         // SQL rules: pass word-count rules through SQL if custom column is available;
         // signal nil back (by returning nil from sqlFragment) when not — handle below.
         var ids: [Int]
         if sqlRules.isEmpty {
-            ids = await library.allCalibreIDs()
+            if let candidateIDs {
+                ids = Array(candidateIDs)
+            } else {
+                ids = await resolvedAllIDs(allIDs)
+            }
         } else {
             ids = await library.calibreIDs(matchingRules: sqlRules,
                                            conjunction: group.conjunction,
                                            wordCountFallbackMap: wordCountFallbackMap,
                                            kudosFallbackMap: kudosFallbackMap,
                                            tagExpansions: tagExpansions)
+            if let candidateIDs { ids = ids.filter { candidateIDs.contains($0) } }
         }
 
         // Apply collection rules in-memory
@@ -458,7 +627,7 @@ struct FilterBuilder {
                 }
                 idSet = unionIDs
             }
-            ids = Array(idSet).sorted()
+            ids = Array(idSet)
         }
 
         // Apply status rules in-memory (§5: uses renamed AO3CompletionStatus cases)
@@ -487,7 +656,7 @@ struct FilterBuilder {
                 }
                 idSet = unionIDs
             }
-            ids = Array(idSet).sorted()
+            ids = Array(idSet)
         }
 
         // §6: Apply crossover rules in-memory (crossoverMap = Set<Int> of IDs with fandoms.count > 1)
@@ -500,7 +669,7 @@ struct FilterBuilder {
                 default:         break
                 }
             }
-            ids = Array(idSet).sorted()
+            ids = Array(idSet)
         }
 
         // Phase 5: apply series rules in-memory against series_cache (via
@@ -526,7 +695,7 @@ struct FilterBuilder {
                 }
                 idSet = unionIDs
             }
-            ids = Array(idSet).sorted()
+            ids = Array(idSet)
         }
 
         // §4.3 (Phase 3): apply authorName rules in-memory. book_authors lives in
@@ -568,7 +737,7 @@ struct FilterBuilder {
                 }
                 idSet = unionIDs
             }
-            ids = Array(idSet).sorted()
+            ids = Array(idSet)
         }
 
         // Phase 4 (§5.4): apply tag/rating/warning/category rules in-memory.
@@ -581,11 +750,14 @@ struct FilterBuilder {
         if !tagFamilyRules.isEmpty {
             var idSet = Set(ids)
             if group.conjunction == .and {
-                for rule in tagFamilyRules {
-                    let memberIDs = await library.tagFamilyMatchIDs(
-                        field: rule.field, op: rule.op, value: rule.value,
-                        tagExpansions: tagExpansions, metaDB: metaDB
-                    )
+                let orderedRules = AndGroupOrdering.order(tagFamilyRules) { rule in
+                    memo.sets[RuleMatchKey(rule: rule, tagExpansions: tagExpansions)]?.count
+                }
+                for rule in orderedRules {
+                    // An empty running set cannot grow again in an AND group.
+                    if idSet.isEmpty { break }
+                    let memberIDs = await tagRuleMembers(rule, candidates: idSet,
+                                                         coverage: tagCoverage, memo: &memo)
                     switch rule.op {
                     case .contains, .equals, .startsWith, .ratingAtMost, .ratingAtLeast:
                         idSet = idSet.intersection(memberIDs)
@@ -596,10 +768,8 @@ struct FilterBuilder {
             } else {
                 var unionIDs = Set<Int>()
                 for rule in tagFamilyRules {
-                    let memberIDs = await library.tagFamilyMatchIDs(
-                        field: rule.field, op: rule.op, value: rule.value,
-                        tagExpansions: tagExpansions, metaDB: metaDB
-                    )
+                    let memberIDs = await tagRuleMembers(rule, candidates: idSet,
+                                                         coverage: tagCoverage, memo: &memo)
                     switch rule.op {
                     case .contains, .equals, .startsWith, .ratingAtMost, .ratingAtLeast:
                         unionIDs.formUnion(idSet.intersection(memberIDs))
@@ -609,10 +779,106 @@ struct FilterBuilder {
                 }
                 idSet = unionIDs
             }
-            ids = Array(idSet).sorted()
+            ids = Array(idSet)
         }
 
         return ids
+    }
+
+    /// `??` cannot take an `await` on its right-hand side, so the "use the
+    /// pre-fetched list or fetch it" choice is spelled out here.
+    private func resolvedAllIDs(_ allIDs: [Int]?) async -> [Int] {
+        if let allIDs { return allIDs }
+        return await library.allCalibreIDs()
+    }
+
+    /// Rules evaluated by Calibre SQL. Every other field is evaluated in
+    /// memory by one of the phases in `matchingIDsForGroup`.
+    private static func isSQLRule(_ rule: FilterRule) -> Bool {
+        switch rule.field {
+        case .collection, .status, .fulltext, .crossover, .series, .authorName,
+             .tag, .rating, .warning, .category:
+            return false
+        default:
+            return true
+        }
+    }
+
+    private static func isTagFamilyRule(_ rule: FilterRule) -> Bool {
+        rule.field == .tag || rule.field == .rating || rule.field == .warning || rule.field == .category
+    }
+
+    /// Fetches the `book_tags` coverage partition once for a whole call.
+    /// Returns nil (callers then fall back to the per-rule fetch inside
+    /// `tagFamilyMatchIDs`) when there is no meta DB or the fetch fails.
+    private func loadTagCoverage(allIDs: [Int]) async -> TagCoverage? {
+        guard let metaDB else { return nil }
+        let start = LibraryFilterDebug.now()
+        guard let covered = try? await metaDB.calibreIDsWithBookTags() else { return nil }
+        let coverage = TagCoverage(
+            covered: covered,
+            uncovered: Set(allIDs).subtracting(covered),
+            totalCount: allIDs.count
+        )
+        LibraryFilterDebug.log("tagCoverage.load", [
+            "covered": coverage.covered.count,
+            "uncovered": coverage.uncovered.count,
+            "restrictFallback": coverage.shouldRestrictFallback,
+            "elapsedMS": LibraryFilterDebug.elapsedMS(since: start)
+        ])
+        return coverage
+    }
+
+    /// Positive match set for one tag-family rule. A global set already in
+    /// `memo` is reused. Otherwise `TagRuleStrategy` decides whether the
+    /// queries are limited to `candidates`. A restricted result is only
+    /// correct for ids inside `candidates`, which is all the callers use (they
+    /// intersect or subtract it against `candidates`), and is never memoized.
+    private func tagRuleMembers(_ rule: FilterRule,
+                                candidates: Set<Int>,
+                                coverage: TagCoverage?,
+                                memo: inout RuleMatchMemo) async -> Set<Int> {
+        let key = RuleMatchKey(rule: rule, tagExpansions: tagExpansions)
+        if let hit = memo.sets[key] {
+            LibraryFilterDebug.log("tagRule.eval", [
+                "field": rule.field.rawValue, "op": rule.op.rawValue, "memoHit": true, "result": hit.count
+            ])
+            return hit
+        }
+        if let cache = ruleMatchCache, let hit = cache.members(for: key, revision: bookTagsRevision) {
+            memo.sets[key] = hit
+            LibraryFilterDebug.log("tagRule.eval", [
+                "field": rule.field.rawValue, "op": rule.op.rawValue, "memoHit": false,
+                "ruleCacheHit": true, "result": hit.count
+            ])
+            return hit
+        }
+        // Without coverage there is no way to bound the Calibre fallback, so
+        // the rule stays unrestricted.
+        let strategy: TagRuleStrategy = coverage.map {
+            TagRuleStrategy.choose(op: rule.op, candidates: candidates, coveredCount: $0.covered.count)
+        } ?? .unrestricted
+        var restrictTo: Set<Int>?
+        if case .restricted(let ids) = strategy { restrictTo = ids }
+
+        let start = LibraryFilterDebug.now()
+        let members = await library.tagFamilyMatchIDs(
+            field: rule.field, op: rule.op, value: rule.value,
+            tagExpansions: tagExpansions, metaDB: metaDB, coverage: coverage,
+            candidates: restrictTo
+        )
+        if restrictTo == nil {
+            memo.sets[key] = members
+        }
+        // Only a global set may enter the shared cache; a restricted one is a subset.
+        ruleMatchCache?.store(members, for: key, revision: bookTagsRevision, isGlobal: restrictTo == nil)
+        LibraryFilterDebug.log("tagRule.eval", [
+            "field": rule.field.rawValue, "op": rule.op.rawValue, "memoHit": false,
+            "strategy": restrictTo == nil ? "unrestricted" : "restricted",
+            "candidates": candidates.count, "result": members.count,
+            "elapsedMS": LibraryFilterDebug.elapsedMS(since: start)
+        ])
+        return members
     }
 
     /// Phase 5: mirrors `MatchingSubqueryBuilder.seriesFragment`'s op/matcher
@@ -923,8 +1189,21 @@ extension CalibreLibrary {
     /// applies negation via `.subtracting` against the full library, correct
     /// only because `book_tags` and the Calibre-side fallback partition the
     /// full calibre_id space cleanly (see `AmbrosiaMetaDB.calibreIDsWithBookTags`).
+    /// `coverage`, when supplied, replaces the per-rule
+    /// `calibreIDsWithBookTags()` fetch, and lets the Calibre-side fallback be
+    /// skipped (no uncovered books) or limited to the uncovered ids. Both are
+    /// equivalent to the subtract-coverage form because `book_tags` and the
+    /// fallback partition the calibre_id space (see above).
+    ///
+    /// `candidates` is a restriction hint and requires `coverage` (it is ignored
+    /// without it). When set, both the `book_tags` query and the Calibre
+    /// fallback are limited to those ids, so the result is only guaranteed
+    /// correct for ids inside `candidates` and is NOT a global match set: do
+    /// not cache it. Callers intersect or subtract it against `candidates`.
     func tagFamilyMatchIDs(field: FilterField, op: FilterOperator, value: String,
-                           tagExpansions: [String: [String]], metaDB: AmbrosiaMetaDB?) async -> Set<Int> {
+                           tagExpansions: [String: [String]], metaDB: AmbrosiaMetaDB?,
+                           coverage: TagCoverage? = nil,
+                           candidates: Set<Int>? = nil) async -> Set<Int> {
         let positiveOp: FilterOperator
         switch op {
         case .notContains: positiveOp = .contains
@@ -940,11 +1219,20 @@ extension CalibreLibrary {
         }
         let terms = field == .tag ? (tagExpansions[value] ?? [value]) : [value]
 
-        func calibreMatches(excluding coverage: Set<Int>) -> Set<Int> {
+        func calibreMatches(excluding coverage: Set<Int>, restrictedTo uncovered: Set<Int>? = nil) -> Set<Int> {
             let fragmentResult: (String, [Binding?])? = field == .tag
                 ? expandedTagFragment(op: positiveOp, value: value, tagExpansions: tagExpansions)
                 : ao3TagFragment(op: positiveOp, value: value)
             guard let (fragment, args) = fragmentResult else { return [] }
+            if let uncovered {
+                // Every book is covered: nothing for the fallback to answer.
+                if uncovered.isEmpty { return [] }
+                let restrictedSQL = "SELECT b.id FROM books b WHERE (\(fragment)) AND "
+                    + SQLIDList.clause(column: "b.id")
+                let restrictedArgs: [Binding?] = args + [SQLIDList.binding(Array(uncovered))]
+                guard let rows = try? db_prepare(restrictedSQL, restrictedArgs) else { return [] }
+                return Set(rows.compactMap { row in (row[0] as? Int64).map(Int.init) })
+            }
             let sql = "SELECT b.id FROM books b WHERE \(fragment)"
             guard let rows = try? db_prepare(sql, args) else { return [] }
             let matches = Set(rows.compactMap { row in (row[0] as? Int64).map(Int.init) })
@@ -956,9 +1244,24 @@ extension CalibreLibrary {
             // pre-Phase-4 Calibre-only behavior rather than matching nothing.
             return calibreMatches(excluding: [])
         }
-        let bookTagsMatches = (try? await metaDB.bookTagMatchIDs(op: positiveOp, terms: terms, tagType: tagType)) ?? []
-        let coverage = (try? await metaDB.calibreIDsWithBookTags()) ?? []
-        return bookTagsMatches.union(calibreMatches(excluding: coverage))
+        let restrictedIDs: [Int]? = coverage == nil ? nil : candidates.map { Array($0) }
+        let bookTagsMatches = (try? await metaDB.bookTagMatchIDs(
+            op: positiveOp, terms: terms, tagType: tagType,
+            coverage: coverage?.covered, restrictedTo: restrictedIDs
+        )) ?? []
+        if let coverage {
+            let fallbackScope: Set<Int>?
+            if let candidates {
+                fallbackScope = coverage.uncovered.intersection(candidates)
+            } else {
+                fallbackScope = coverage.shouldRestrictFallback ? coverage.uncovered : nil
+            }
+            return bookTagsMatches.union(calibreMatches(
+                excluding: coverage.covered, restrictedTo: fallbackScope
+            ))
+        }
+        let covered = (try? await metaDB.calibreIDsWithBookTags()) ?? []
+        return bookTagsMatches.union(calibreMatches(excluding: covered))
     }
 
     func sqlFilterClause(for expression: FilterExpression,
