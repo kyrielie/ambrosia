@@ -35,7 +35,28 @@ Ambrosia is a native macOS EPUB library reader for AO3-heavy Calibre libraries. 
 
 ## Installation
 
-Download Ambrosia.dmg.
+### Homebrew
+
+Install Ambrosia from the personal Yggdrasil tap:
+
+```bash
+brew tap kyrielie/yggdrasil
+brew install --cask ambrosia
+```
+
+To update it after a tap update has been merged:
+
+```bash
+brew upgrade --cask ambrosia
+```
+
+The current builds are ad-hoc signed and not notarized. macOS may ask you to
+approve opening Ambrosia the first time. See the [Yggdrasil tap](https://github.com/kyrielie/homebrew-yggdrasil)
+for the cask and release details.
+
+### Manual download
+
+Download `Ambrosia.dmg` from the [latest release](https://github.com/kyrielie/ambrosia/releases/latest).
 
 Either use command to bypass Gatekeeper or right-click, open, allow.
 ```zsh
