@@ -46,7 +46,12 @@ enum SortField: String, CaseIterable, Identifiable {
 actor CalibreLibrary {
 
     let root: URL                   // absolute path to the Calibre library folder
-    internal let db: Connection
+    /// Replaced by `reopenIfFileReplaced()` when Calibre swaps the file; the
+    /// setter stays private so only this file can do that.
+    internal private(set) var db: Connection
+    /// `(st_dev, st_ino)` of `metadata.db` when `db` was opened. Read before
+    /// opening so a replacement racing the open is caught on the next check.
+    private var dbIdentity: CalibreFileIdentity?
 
     // MARK: - AO3 metadata caches
     //
@@ -76,11 +81,43 @@ actor CalibreLibrary {
     init(root: URL) throws {
         self.root = root
         let dbPath = root.appendingPathComponent("metadata.db").path
-        db = try Connection(dbPath, readonly: true)
+        dbIdentity = CalibreFileIdentity.of(path: dbPath)
+        db = try Self.openConnection(path: dbPath)
+    }
+
+    private static func openConnection(path: String) throws -> Connection {
+        let connection = try Connection(path, readonly: true)
         // Increase the page cache to 32 MB and keep temp tables in memory.
-        // These are session-scoped PRAGMAs — safe on a read-only connection.
-        try? db.execute("PRAGMA cache_size = -32768")   // negative = kibibytes
-        try? db.execute("PRAGMA temp_store = MEMORY")
+        // These are session-scoped PRAGMAs, safe on a read-only connection.
+        try? connection.execute("PRAGMA cache_size = -32768")   // negative = kibibytes
+        try? connection.execute("PRAGMA temp_store = MEMORY")
+        return connection
+    }
+
+    /// Reopens the read-only connection when `metadata.db` was deleted and
+    /// recreated (restore, copy over), the same file-identity check
+    /// `CalibreFTSLibrary` makes. An open connection would keep reading the
+    /// unlinked old file. Returns true only when a reopen happened; a failed
+    /// reopen keeps the old connection and returns false, so the next call
+    /// tries again. In-place writes by Calibre need no reopen: a new read
+    /// transaction sees them.
+    func reopenIfFileReplaced() -> Bool {
+        let path = root.appendingPathComponent("metadata.db").path
+        guard let current = CalibreFileIdentity.of(path: path), current != dbIdentity else { return false }
+        guard let fresh = try? Self.openConnection(path: path) else { return false }
+        db = fresh
+        dbIdentity = current
+        clearQueryCaches()
+        return true
+    }
+
+    /// Drops every cache derived from `metadata.db` contents. The AO3-derived
+    /// maps are untouched; they come from `AmbrosiaMetaDB`.
+    func clearQueryCaches() {
+        pageCache.removeAll()
+        countCache.removeAll()
+        groupAwareCountCache.removeAll()
+        invalidateSortedIDs()
     }
 
     /// Called by `LibrarySession` whenever the AO3 metadata caches should be
@@ -102,9 +139,7 @@ actor CalibreLibrary {
         // §Phase3: word-count-sorted pages and any page/count keyed on this
         // library's AO3 fields are now stale. Same actor reaching into its own
         // state, no version plumbing needed (see LRUCache note above pageCache).
-        pageCache.removeAll()
-        countCache.removeAll()
-        groupAwareCountCache.removeAll()
+        clearQueryCaches()
     }
 
     /// §6.2: last error from a search/count query, if any. Set by `bookCount(query:)`
@@ -146,12 +181,54 @@ actor CalibreLibrary {
     var countCache: LRUCache<CountCacheKey, Int> = LRUCache(limit: 48)
     var groupAwareCountCache: LRUCache<GroupAwareCountCacheKey, Int> = LRUCache(limit: 48)
 
+    /// Full sorted id list per view (everything in `PageCacheKey` except the
+    /// paging window), so paging within one view costs a slice plus
+    /// `booksForIDs`, not a fresh materialize-and-sort. Each entry can hold
+    /// tens of thousands of ints, so the capacity is deliberately small.
+    /// Read through `get` so eviction is true LRU.
+    var sortedIDsCache: LRUCache<SortedIDsCacheKey, [Int]> = LRUCache(limit: 4)
+    /// Sorts currently being computed. A second same-key caller (for example a
+    /// prefetch racing a page change) awaits the running task instead of
+    /// starting another full sort. `groupAwareTitleSortedPage` suspends mid
+    /// computation, so without this two callers can both run the whole sort.
+    private var sortedIDsInFlight: [SortedIDsCacheKey: Task<[Int], Never>] = [:]
+    /// Bumped on invalidation. A sort that started before the bump must not
+    /// store its (stale) result into the cache.
+    private var sortedIDsGeneration = 0
+
+    /// Drops every cached sorted list and forgets in-flight sorts. Callers
+    /// already awaiting an in-flight task still receive its result for that
+    /// one call, but it is not stored.
+    func invalidateSortedIDs() {
+        sortedIDsGeneration += 1
+        sortedIDsCache.removeAll()
+        sortedIDsInFlight.removeAll()
+    }
+
     // MARK: - Count
 
     /// Total books. Called once on open and refreshed after debounced search.
     func bookCount() -> Int {
         let rows = (try? db.prepare("SELECT COUNT(*) FROM books").map { $0 }) ?? []
         return (rows.first?.first as? Int64).map(Int.init) ?? 0
+    }
+
+    /// Cheap change marker for `metadata.db` (see `LibraryFingerprint`). Nil when
+    /// the aggregate query fails, which callers treat as "unknown, do not skip".
+    /// `MAX(last_modified)` is probably unindexed in Calibre's schema, so this is
+    /// one pass over `books`; it is signposted so Phase 0 can time it.
+    func libraryFingerprint() -> LibraryFingerprint? {
+        let signpost = LaunchSignposts.begin("fingerprint.compute")
+        defer { LaunchSignposts.end("fingerprint.compute", signpost) }
+        let path = root.appendingPathComponent("metadata.db").path
+        let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+        let modified = (attributes?[.modificationDate] as? Date).map { Int($0.timeIntervalSince1970) } ?? 0
+        let size = (attributes?[.size] as? NSNumber)?.intValue ?? 0
+        let sql = "SELECT COUNT(*), COALESCE(MAX(id), 0), COALESCE(MAX(last_modified), '') FROM books"
+        guard let rows = try? db.prepare(sql).map({ $0 }), let row = rows.first,
+              let count = row[0] as? Int64, let maxID = row[1] as? Int64 else { return nil }
+        return LibraryFingerprint(fileModified: modified, fileSize: size, bookCount: Int(count),
+                                  maxBookID: Int(maxID), maxLastModified: (row[2] as? String) ?? "")
     }
 
     func allBookIDs() -> [Int] {
@@ -163,13 +240,26 @@ actor CalibreLibrary {
     }
 
     func allCalibreSeriesEntries() -> [SeriesCacheEntry] {
+        calibreSeriesEntries(bookIDsAfter: nil, through: nil)
+    }
+
+    /// Calibre series memberships for books with `lower < id <= upper` (either
+    /// bound optional). Chunked callers walk id windows so each actor hop is
+    /// short and queued page fetches can run between them. Windowing by book id
+    /// (not row count) never splits one book's memberships across two chunks.
+    /// Ordered by book, then series name, so a book with several series keeps
+    /// the same winner under insert-if-absent as the old global `s.name` order.
+    func calibreSeriesEntries(bookIDsAfter lower: Int?, through upper: Int?) -> [SeriesCacheEntry] {
+        var bounds = ""
+        if let lower { bounds += " AND b.id > \(lower)" }
+        if let upper { bounds += " AND b.id <= \(upper)" }
         let sql = """
         SELECT b.id, s.id, s.name, b.series_index
         FROM books b
         JOIN books_series_link bsl ON bsl.book = b.id
         JOIN series s ON s.id = bsl.series
-        WHERE s.name IS NOT NULL AND TRIM(s.name) != ''
-        ORDER BY s.name, b.series_index
+        WHERE s.name IS NOT NULL AND TRIM(s.name) != ''\(bounds)
+        ORDER BY b.id, s.name, b.series_index
         """
         let rows = (try? db.prepare(sql).map { $0 }) ?? []
         return rows.compactMap { row in
@@ -685,17 +775,12 @@ actor CalibreLibrary {
                                    _ pageQuery: PageQuery) async -> (page: [CalibreBook], hasMore: Bool) {
         let query = pageQuery.query
         let filter = pageQuery.filter
-        let restrictIDs = pageQuery.restrictIDs
-        let visibility = pageQuery.visibility
-        let filterTagExpansions = pageQuery.filterTagExpansions
-        let visibilityVersion = pageQuery.visibilityVersion
-        let metaDB = pageQuery.metaDB
         let cacheKey = PageCacheKey(
             querySignature: LibraryFilterDebug.summary(query: query),
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
-            tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
-            visibilityVersion: visibilityVersion,
-            visibilitySignature: visibility.cacheSignature,
+            tagExpansionsDigest: tagExpansionsDigest(pageQuery.filterTagExpansions),
+            visibilityVersion: pageQuery.visibilityVersion,
+            visibilitySignature: pageQuery.visibility.cacheSignature,
             sortField: .title,
             ascending: ascending,
             randomSeed: randomSeed,
@@ -704,33 +789,7 @@ actor CalibreLibrary {
         )
         if let cached = pageCache[cacheKey] { return cached }
 
-        let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
-                                                filterTagExpansions: filterTagExpansions)
-        let matchedIDs = await SeriesMatchExpansion.expand(
-            matchedIDs: rawMatchedIDs,
-            shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
-            filter: filter,
-            library: self,
-            metaDB: metaDB
-        )
-        let allIDs = visibility.filter(matchedIDs)
-
-        let seriesNames: [Int: String]
-        if let metaDB {
-            seriesNames = (try? await metaDB.qualifyingSeriesNames(for: allIDs)) ?? [:]
-        } else {
-            seriesNames = [:]
-        }
-        let titles = bulkTitles(ids: allIDs)
-        func sortKey(_ id: Int) -> String {
-            seriesNames[id] ?? titles[id] ?? ""
-        }
-        let sortedIDs = allIDs.sorted { idA, idB in
-            let ka = sortKey(idA), kb = sortKey(idB)
-            if ka == kb { return ascending ? idA < idB : idA > idB }
-            return ascending ? ka < kb : ka > kb
-        }
-
+        let sortedIDs = await groupAwareTitleSortedIDs(key: cacheKey.sortedKey, ascending: ascending, pageQuery)
         let start = min(offset, sortedIDs.count)
         let end   = min(offset + limit, sortedIDs.count)
         guard start < end else {
@@ -742,6 +801,76 @@ actor CalibreLibrary {
         let result = (page, end < sortedIDs.count)
         pageCache.set(result, for: cacheKey)
         return result
+    }
+
+    /// The full group-aware title-sorted id list for `key`: cache hit, join a
+    /// running sort for the same key, or start one. Everything after the first
+    /// page of a view, and every revisit, is served from here.
+    private func groupAwareTitleSortedIDs(key: SortedIDsCacheKey, ascending: Bool,
+                                          _ pageQuery: PageQuery) async -> [Int] {
+        if let cached = sortedIDsCache.get(key) { return cached }
+        if let running = sortedIDsInFlight[key] { return await running.value }
+
+        let generation = sortedIDsGeneration
+        // Unstructured on purpose: cancelling the caller (a superseded page
+        // load) must not cancel a sort that a later caller will reuse.
+        let task = Task { await self.computeGroupAwareTitleSortedIDs(ascending: ascending, pageQuery) }
+        sortedIDsInFlight[key] = task
+        let ids = await task.value
+        if sortedIDsGeneration == generation {
+            sortedIDsInFlight[key] = nil
+            sortedIDsCache.set(ids, for: key)
+        }
+        return ids
+    }
+
+    /// Materialize every matching id, apply series expansion and visibility,
+    /// and sort. This is the expensive step the sorted-id cache exists to run
+    /// once per view.
+    private func computeGroupAwareTitleSortedIDs(ascending: Bool, _ pageQuery: PageQuery) async -> [Int] {
+        let query = pageQuery.query
+        let filter = pageQuery.filter
+        let restrictIDs = pageQuery.restrictIDs
+        let visibility = pageQuery.visibility
+        let filterTagExpansions = pageQuery.filterTagExpansions
+        let metaDB = pageQuery.metaDB
+
+        let computeSignpost = LaunchSignposts.begin("groupAwareTitleSortedPage.compute")
+        defer { LaunchSignposts.end("groupAwareTitleSortedPage.compute", computeSignpost) }
+        let t0 = LibraryFilterDebug.now()
+        let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
+                                                filterTagExpansions: filterTagExpansions)
+        let matchedIDs = await SeriesMatchExpansion.expand(
+            matchedIDs: rawMatchedIDs,
+            shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
+            filter: filter,
+            library: self,
+            metaDB: metaDB
+        )
+        let allIDs = visibility.filter(matchedIDs)
+        let tFiltered = LibraryFilterDebug.elapsedMS(since: t0)
+
+        let seriesNames: [Int: String]
+        if let metaDB {
+            seriesNames = (try? await metaDB.qualifyingSeriesNames(for: allIDs)) ?? [:]
+        } else {
+            seriesNames = [:]
+        }
+        let tSeriesNames = LibraryFilterDebug.elapsedMS(since: t0)
+        let titles = bulkTitles(ids: allIDs)
+        let tTitles = LibraryFilterDebug.elapsedMS(since: t0)
+        let sortedIDs = GroupAwareSorter.sort(ids: allIDs, seriesNames: seriesNames,
+                                              titles: titles, ascending: ascending)
+
+        LibraryFilterDebug.log("groupAwareTitleSortedPage.stages", [
+            "matched": rawMatchedIDs.count,
+            "visible": allIDs.count,
+            "filteredMS(cumulative)": tFiltered,
+            "seriesNamesMS(cumulative)": tSeriesNames,
+            "titlesMS(cumulative)": tTitles,
+            "sortedMS(cumulative)": LibraryFilterDebug.elapsedMS(since: t0)
+        ])
+        return sortedIDs
     }
 
     /// Group-aware total: the count of matching books that would actually be
@@ -1488,5 +1617,20 @@ extension CalibreLibrary {
         let sql = "SELECT COUNT(*) FROM books WHERE \(SQLIDList.clause(column: "id"))"
         let args: [Binding?] = [SQLIDList.binding(ids)]
         return (try? db.scalar(sql, args) as? Int64).map(Int.init) ?? 0
+    }
+}
+
+/// `(st_dev, st_ino)` of a file. Equal identities mean the same file, so a
+/// changed identity means it was replaced rather than written in place.
+struct CalibreFileIdentity: Equatable {
+    let device: UInt64
+    let inode: UInt64
+
+    static func of(path: String) -> CalibreFileIdentity? {
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: resolved),
+              let device = attrs[.systemNumber] as? NSNumber,
+              let inode = attrs[.systemFileNumber] as? NSNumber else { return nil }
+        return CalibreFileIdentity(device: device.uint64Value, inode: inode.uint64Value)
     }
 }

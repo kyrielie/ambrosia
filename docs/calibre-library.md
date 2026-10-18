@@ -44,3 +44,12 @@ If `books_text` lacks `id, book, format, searchable_text`, `CalibreFTSLibrary.in
 3. SQLite.swift SQL bindings always use `[Binding?]`.
 
 See `overview.md`'s Invariant 12 for the repo-wide force-unwrap ban. (`ReadingTarget.primaryBook`'s `series.works.first!` -- previously flagged here as a known crash site -- was already fixed; it now uses `precondition` plus indexed access, not a force-unwrap.)
+
+
+### Reopen on file replacement
+
+`CalibreLibrary.db` is a `var`, settable only inside `CalibreLibrary.swift`. `reopenIfFileReplaced()` compares `(st_dev, st_ino)` of `metadata.db` (read before opening, so a replacement racing the open is caught next time) with the identity recorded at open, the same approach as `CalibreFTSLibrary`. On a mismatch it opens a new read-only connection with the same session PRAGMAs, clears the query caches and returns true. If the new open fails it keeps the old connection and returns false so the next call retries. In-place writes by Calibre need no reopen, since each new read transaction sees them; that holds for a rollback journal and is not verified for WAL.
+
+### Library fingerprint and chunked series scan
+
+`CalibreLibrary.libraryFingerprint()` runs `SELECT COUNT(*), MAX(id), MAX(last_modified) FROM books` and reads `metadata.db`'s mtime and size. Whether Calibre bumps `last_modified` on every kind of edit is an assumption, not verified. `calibreSeriesEntries(bookIDsAfter:through:)` is the windowed form of `allCalibreSeriesEntries()`, ordered by book id, series name, then series index.

@@ -8,13 +8,18 @@ that populate these caches, see `search-and-filter.md`.
 
 ### Caching
 
-Three LRU caches (`LRUCache<Key, Value>`, a bounded dictionary + insertion-order eviction list, not thread-safe on its own — safe here because every instance lives on an actor or `@MainActor` type) cover the filter/search pipeline:
+Four LRU caches (`LRUCache<Key, Value>`, a bounded dictionary + insertion-order eviction list, not thread-safe on its own — safe here because every instance lives on an actor or `@MainActor` type) cover the filter/search pipeline:
 
 | Cache | Owner | Key | Limit | Cleared by |
 |---|---|---|---|---|
 | `filterResultCache` | `LibrarySession` | `FilterResultCacheKey` (expression digest + `membershipVersion` + visibility signature + `bookTagsRevision`) | 8 | library open/close; implicitly stale once `membershipVersion` moves on |
-| `pageCache` | `CalibreLibrary` | `PageCacheKey` (query+filter+tagExpansion digests, `visibilityVersion`, sort, ascending, `randomSeed`, offset, limit) | 48 | `updateAO3MetaCaches` (after every AO3 extraction batch); implicitly stale once `visibilityVersion`/`randomSeed` move on |
+| `pageCache` | `CalibreLibrary` | `PageCacheKey` (a `SortedIDsCacheKey` plus offset and limit) | 48 | `updateAO3MetaCaches` (after every AO3 extraction batch); implicitly stale once `visibilityVersion`/`randomSeed` move on |
 | `countCache` / `groupAwareCountCache` | `CalibreLibrary` | analogous to `PageCacheKey`, minus offset/limit/sort | 48 each | same as `pageCache` |
+| `sortedIDsCache` | `CalibreLibrary` | `SortedIDsCacheKey` (query+filter+tagExpansion digests, `visibilityVersion`, `visibilitySignature`, sort, ascending, `randomSeed`; i.e. `PageCacheKey` minus offset and limit) | 4 | `updateAO3MetaCaches` via `invalidateSortedIDs()`; implicitly stale once `visibilityVersion`/`visibilitySignature`/`randomSeed` move on |
+
+`sortedIDsCache` holds the full sorted id list for one grouped title-sorted view (`groupAwareTitleSortedPage`), so paging within a view costs a slice plus `booksForIDs` instead of a fresh materialize-and-sort. It is read through `LRUCache.get`, which refreshes recency (the subscript does not). A same-key sort already running is joined through `sortedIDsInFlight` rather than started twice, and `sortedIDsGeneration` stops a sort that began before `invalidateSortedIDs()` from storing a stale result. `wordCountSortedPage`, `kudosSortedPage` and `randomSortedPage` are not split yet.
+
+`CalibreLibrary.clearQueryCaches()` empties `pageCache`, `countCache`, `groupAwareCountCache` and `sortedIDsCache` together; `updateAO3MetaCaches` and the app-activation change check (`session-model.md`) both call it. The same check clears `filterResultCache` and `ruleMatchCache` on the session.
 
 Notes and known rough edges:
 

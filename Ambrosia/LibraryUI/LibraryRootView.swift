@@ -98,6 +98,10 @@ struct LibraryRootView: View {
     // False until the first load of an open library has produced a result (even an
     // empty one); gates the "Loading..." state so an empty library does not spin forever.
     @State private var didFinishFirstLoad = false
+    /// Set only when a restored filter is assigned and will therefore trigger the
+    /// `filterExpression` onChange. `applyRestoredLastViewIfNeeded` already applied
+    /// that filter, so the handler consumes this and skips its duplicate apply.
+    @State private var restoredFilterEcho: FilterExpression?
     // F.3: series-grouped, visibility-aware total, computed by
     // CalibreLibrary.visibleBookCount and used for "Page X of Y" in the
     // footer while shouldGroupSeriesRows is true. nil is the "not yet
@@ -139,6 +143,11 @@ struct LibraryRootView: View {
     // then compares against that value rather than trusting flag timing --
     // it's a value equality check, not a race.
     @State private var lastHandledReloadToken: String?
+    /// View identity (library, page, sort, direction, grouping, search, filter,
+    /// visibility) the list was last scrolled to the top for. A new `items`
+    /// array for the same identity (a silent revalidation after Calibre
+    /// changed) must not move the scroll position.
+    @State private var lastScrollResetKey: String?
 
     /// Async-resolved synonym expansions for the current search query's tag terms.
     /// Populated by `resolveTagExpansionsIfNeeded` whenever `tagTerms` changes.
@@ -190,6 +199,10 @@ struct LibraryRootView: View {
             .onChange(of: toolbarState.reshuffleToken) { scheduleLoadPage() }
             .onChange(of: toolbarState.groupBySeries) { offsetState.resetForNewFilter(); scheduleLoadPage() }
             .onChange(of: toolbarState.filterExpression) {
+                if let echo = restoredFilterEcho {
+                    restoredFilterEcho = nil
+                    if echo == toolbarState.filterExpression { return }
+                }
                 // AO3FilterPopupWindowController's popup lives in its own NSWindow
                 // and writes toolbarState.filterExpression directly (no shared view
                 // tree with LibraryRootView to route an explicit apply call through).
@@ -306,8 +319,26 @@ struct LibraryRootView: View {
             .onReceive(NotificationCenter.default.publisher(for: .seriesOrMergedCollectionDidChange)) { _ in
                 Task { await refreshVisibilitySnapshots(resetPage: false) }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .libraryContentsDidChange)) { _ in
+                revalidateAfterLibraryContentsChange()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .librarySnapshotsDidBecomeReady)) { _ in
+                // Same seeding as `.onAppear`: the session now holds the real sets.
+                likedIDs = session.cachedLikedIDs
+                readLaterIDs = session.cachedReadLaterIDs
+                skippedIDs = session.cachedSkippedIDs
+                seriesOrMergedIDs = session.cachedSeriesOrMergedIDs
+                ao3PublisherIDs = session.cachedAO3PublisherIDs
+                anthologyIDs = session.cachedAnthologyIDs
+                duplicateLoserIDs = session.cachedDuplicateLoserIDs
+                if !applyRestoredLastViewIfNeeded() { scheduleLoadPage() }
+                refreshMembershipSnapshots(reload: false)
+            }
             .onChange(of: session.isOpen) {
                 didFinishFirstLoad = false
+                // Anything written while the view is reset below would land on the
+                // previous library's key. Recording restarts once snapshots are ready.
+                toolbarState.stopRecordingLastView()
                 if session.isOpen {
                     offsetState.resetForNewFilter()
                     toolbarState.searchText = ""
@@ -336,7 +367,7 @@ struct LibraryRootView: View {
                     ao3PublisherIDs = session.cachedAO3PublisherIDs
                     anthologyIDs = session.cachedAnthologyIDs
                     duplicateLoserIDs = session.cachedDuplicateLoserIDs
-                    scheduleLoadPage()
+                    if !applyRestoredLastViewIfNeeded() { scheduleLoadPage() }
                     refreshMembershipSnapshots(reload: false)
                 }
                 // Register so LibraryWindowController can deliver committed filter rules
@@ -351,6 +382,34 @@ struct LibraryRootView: View {
                 // Deregister when this view leaves the hierarchy (view mode switch)
                 toolbarState.filterCommitHandler = nil
             }
+    }
+
+    /// Applies the last view (sort, direction, filter) read during `open`, and
+    /// starts remembering view changes for this library. Returns true when it
+    /// already scheduled the load (a restored filter goes through
+    /// `applyFilterRules()`), so the caller must not schedule another.
+    ///
+    /// Does nothing before snapshots are ready: the session reads the stored view
+    /// right before it flips `snapshotsReady`, so the first load sees the
+    /// restored state once, not the default view and then the restored one.
+    private func applyRestoredLastViewIfNeeded() -> Bool {
+        guard session.snapshotsReady else { return false }
+        let hash = session.activeLibraryHash
+        // A different library: stop first so the assignments below cannot be
+        // written under the previous library's key.
+        if toolbarState.recordingLastViewHash != hash { toolbarState.stopRecordingLastView() }
+        defer { toolbarState.beginRecordingLastView(libraryHash: hash) }
+        // Consumed even when not applied, so a later surface switch cannot apply it.
+        guard let restored = session.takeRestoredLastView(), toolbarState.isAtDefaultView else { return false }
+        offsetState.resetForNewFilter()
+        let expression = restored.filterExpression ?? FilterExpression()
+        if expression != toolbarState.filterExpression { restoredFilterEcho = expression }
+        toolbarState.sortField = restored.sortField
+        toolbarState.ascending = restored.ascending
+        toolbarState.filterExpression = expression
+        guard expression.hasCompleteRules else { return false }
+        applyFilterRules()
+        return true
     }
 
     private func registerFilterCommitHandler() {
@@ -648,8 +707,14 @@ struct LibraryRootView: View {
         // (mode switched away). See LibraryToolbarState.isListSurfaceTornDown.
         guard !toolbarState.isListSurfaceTornDown else { return }
         guard generation == loadGeneration, !Task.isCancelled else { return }
+        let loadSignpost = LaunchSignposts.begin("loadPage")
+        defer { LaunchSignposts.end("loadPage", loadSignpost) }
         let loadStart = LibraryFilterDebug.now()
         guard let library = session.library else { books = []; return }
+        // Hold the first load until persisted membership and the AO3 caches are in the
+        // session, so page 0 is built once with the right visibility sets. The
+        // `.librarySnapshotsDidBecomeReady` handler below schedules the real load.
+        guard session.snapshotsReady else { return }
         let rawQuery = toolbarState.searchText.isEmpty
             ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
             : SearchQueryParser.parse(toolbarState.searchText)
@@ -1117,6 +1182,7 @@ struct LibraryRootView: View {
         // §list-teardown fix: no-op if the List surface has been torn down.
         guard !toolbarState.isListSurfaceTornDown else { return }
         // Every non-stale loadPage completion, including empty results, reaches here.
+        if !didFinishFirstLoad { LaunchSignposts.event("firstListRebuild") }
         didFinishFirstLoad = true
         // Ungrouped, non-empty page with a metaDB: assign items and ao3Metadata
         // together so rows never render bare and then grow (see "Row height
@@ -1461,6 +1527,53 @@ struct LibraryRootView: View {
 
     private func visibleBooks(_ raw: [CalibreBook]) -> [CalibreBook] {
         queryController.visibleBooks(raw, policy: currentVisibilityPolicy)
+    }
+
+    /// Identity of what the list is showing, for the scroll-to-top gate.
+    private var scrollResetKey: String {
+        [
+            session.activePath ?? "",
+            String(offsetState.currentPage),
+            toolbarState.sortField.rawValue,
+            String(toolbarState.ascending),
+            String(toolbarState.groupBySeries),
+            toolbarState.searchText,
+            LibraryFilterDebug.summary(expression: toolbarState.filterExpression),
+            filterVisibilitySignature
+        ].joined(separator: "\u{1F}")
+    }
+
+    /// False where the recorded paging offsets (grouped SQL-drain path) or the
+    /// random seed make the current page meaningless once the book set changed.
+    /// Title, word count and kudos sorts, and every ungrouped sort, page by a
+    /// plain offset and so can stay on the current page.
+    private var keepsPageOnLibraryChange: Bool {
+        switch toolbarState.sortField {
+        case .random: return false
+        case .title, .wordCount, .kudos: return true
+        default: return !shouldGroupSeriesRows
+        }
+    }
+
+    /// Calibre added, removed or edited books while the app ran. The session has
+    /// already cleared its caches; reload the current view in place. No paging
+    /// reset (where the sort allows it), and the scroll gate above keeps the
+    /// position when the view identity is unchanged.
+    private func revalidateAfterLibraryContentsChange() {
+        guard session.snapshotsReady, !toolbarState.isListSurfaceTornDown else { return }
+        let keepPage = keepsPageOnLibraryChange
+        if !keepPage { offsetState.resetForNewFilter() }
+        if let result = toolbarState.activeFilterResult, result.isSQLBacked {
+            // Drop the known total so it is recounted against the new contents.
+            let fresh = FilterResult(calibreIDs: [], isSQLBacked: true)
+            lastHandledReloadToken = fresh.reloadToken
+            toolbarState.activeFilterResult = fresh
+            scheduleLoadPage()
+        } else if toolbarState.filterExpression.hasCompleteRules {
+            applyFilterRules(resetPage: !keepPage)
+        } else {
+            scheduleLoadPage()
+        }
     }
 
     @MainActor
@@ -2092,6 +2205,11 @@ struct LibraryRootView: View {
             // A new page (or new filter result) starts at the top. With List this
             // was whatever the table did; ScrollView keeps the old offset.
             .onChange(of: items.first?.id) {
+                // Scroll to the top only when the view itself changed (page,
+                // filter, sort, library), not when a revalidation swapped rows.
+                let key = scrollResetKey
+                guard key != lastScrollResetKey else { return }
+                lastScrollResetKey = key
                 if let first = items.first?.id {
                     proxy.scrollTo(first, anchor: .top)
                 }

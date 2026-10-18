@@ -136,6 +136,30 @@ actor CollectionStore {
         }
     }
 
+    /// Applies a membership change as removals plus additions in one
+    /// transaction, leaving every other row (and its `added_at`) untouched.
+    /// Use instead of `replaceMembers` when the caller already knows the
+    /// difference, so an unchanged 40k-row collection is not deleted and
+    /// re-inserted. A no-op delta does not open a transaction.
+    func applyMemberDelta(of collectionID: String, adding: [Int], removing: [Int]) async throws {
+        guard !adding.isEmpty || !removing.isEmpty else { return }
+        let now = ISO8601DateFormatter().string(from: Date())
+        try await db.transaction { db in
+            for id in removing {
+                try db.run(
+                    "DELETE FROM collection_members WHERE collection_id = ? AND calibre_id = ?",
+                    [collectionID, id]
+                )
+            }
+            for id in adding {
+                try db.run(
+                    "INSERT OR IGNORE INTO collection_members VALUES (?, ?, ?)",
+                    [collectionID, id, now]
+                )
+            }
+        }
+    }
+
     func syncAutomatedCollection(collectionID: String, calibreID: Int, shouldBeMember: Bool) async throws {
         if shouldBeMember {
             try await db.run(

@@ -89,3 +89,8 @@ to the `uncovered` ids when they are at most half the library
 (`TagCoverage.shouldRestrictFallback`), and otherwise runs unrestricted and subtracts
 `covered`. A candidate-restricted match set is a subset of the global one and is
 never stored in `ruleMatchCache`, which holds global sets only.
+
+
+### Persisted filter expression
+
+`FilterExpression` is `Codable` and the last-used one is persisted per library as part of `LastViewState` (see `library-ui.md`). On restore, `LastViewValidator.validate` drops rules that name a collection no longer in `collections()`, drops `fulltext` rules (so restore never starts FTS work at launch), and drops incomplete rows. Series and tag rules are not validated, so a stale one shows the existing no-results state; the existing clear-filter control resets the view and, through `LibraryToolbarState`'s recording, the persisted state.

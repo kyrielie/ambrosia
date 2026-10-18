@@ -1,9 +1,20 @@
+import AppKit
 import Foundation
 import Observation
 import SwiftData
 
 extension Notification.Name {
     static let seriesOrMergedCollectionDidChange = Notification.Name("Ambrosia.seriesOrMergedCollectionDidChange")
+    /// Posted once per `LibrarySession.open` after persisted membership and the
+    /// AO3 bulk caches have been loaded into the session (`snapshotsReady`).
+    /// List surfaces hold their first load until this arrives.
+    static let librarySnapshotsDidBecomeReady = Notification.Name("Ambrosia.librarySnapshotsDidBecomeReady")
+    /// Posted when a check on app activation finds that Calibre added, removed
+    /// or edited books (book count, max id or max `last_modified` moved) or
+    /// replaced `metadata.db`. The session has already cleared its query and
+    /// filter caches; list surfaces revalidate the current view without
+    /// resetting scroll or selection. Not posted for a file-only change.
+    static let libraryContentsDidChange = Notification.Name("Ambrosia.libraryContentsDidChange")
 }
 
 /// Holds the active CalibreLibrary connection for the current session.
@@ -86,6 +97,8 @@ final class LibrarySession {
     /// accurate "did visibility change" signal instead of calling
     /// `bumpMembershipVersion()` themselves after this returns.
     func refreshCollectionSnapshots() async {
+        let snapshotSignpost = LaunchSignposts.begin("refreshCollectionSnapshots")
+        defer { LaunchSignposts.end("refreshCollectionSnapshots", snapshotSignpost) }
         guard let collectionStore else { return }
         let collections = (try? await collectionStore.collections()) ?? []
         let membershipByID = (try? await collectionStore.membershipByCollectionID()) ?? [:]
@@ -124,6 +137,51 @@ final class LibrarySession {
 
     /// True while a library is open and ready to query.
     var isOpen: Bool { library != nil }
+
+    /// False from the start of `open` until the persisted membership sets
+    /// (Series or Merged, skipped, anthology, publisher, duplicate losers) and
+    /// the AO3 bulk caches have been loaded. A list surface that loads before
+    /// this is true would page with empty visibility sets and then have to
+    /// reload, so `LibraryRootView` and `EmailLibraryViewController` hold their
+    /// first `loadPage` until `.librarySnapshotsDidBecomeReady` is posted.
+    private(set) var snapshotsReady = false
+
+    /// Last view (sort, direction, filter) read and validated during `open`,
+    /// before `snapshotsReady` flips, so the list applies it before its first
+    /// load instead of loading the default view and then the restored one.
+    /// Consumed once by `takeRestoredLastView()`.
+    @ObservationIgnored private var restoredLastView: LastViewState?
+
+    /// Hash used to key per-library persisted view state. Same derivation as
+    /// the search history and feed prefs.
+    var activeLibraryHash: String? {
+        activePath.map { Ambrosia.libraryHash(for: URL(fileURLWithPath: $0)) }
+    }
+
+    /// Returns the pending restored view once, then clears it, so switching
+    /// list and email surfaces never re-applies it over the user's changes.
+    func takeRestoredLastView() -> LastViewState? {
+        defer { restoredLastView = nil }
+        return restoredLastView
+    }
+
+    private func loadLastView(url: URL) async -> LastViewState? {
+        guard LastViewStore.restoreLastView else { return nil }
+        let names: Set<String>?
+        if let collectionStore, let rows = try? await collectionStore.collections() {
+            names = Set(rows.map(\.name))
+        } else {
+            names = nil
+        }
+        guard let restored = LastViewStore().restore(libraryHash: Ambrosia.libraryHash(for: url),
+                                                     collectionNames: names) else { return nil }
+        #if DEBUG
+        if !restored.dropped.isEmpty {
+            print("[LibrarySession] Dropped from restored view: \(restored.dropped.joined(separator: ", "))")
+        }
+        #endif
+        return restored.state
+    }
 
     /// Error from the last open attempt, shown in the UI if non-nil.
     private(set) var lastError: String?
@@ -195,16 +253,13 @@ final class LibrarySession {
     // .seriesOrMergedCollectionDidChange — ran twice per library open. These
     // two properties coordinate so only the last of a batch of expected
     // completions actually performs the sync.
-    private var seriesSyncGeneration = 0
-    private var seriesSyncPending = 0
+    @ObservationIgnored private var seriesSyncCoordinator = SeriesSyncCoordinator()
 
     /// Call once, on MainActor, before kicking off `count` background tasks
     /// that will each eventually want `syncSeriesOrMergedCollection()` to run.
     /// Returns a generation token to pass to `completeCoordinatedSeriesSync`.
     private func beginCoordinatedSeriesSync(awaiting count: Int) -> Int {
-        seriesSyncGeneration &+= 1
-        seriesSyncPending = count
-        return seriesSyncGeneration
+        seriesSyncCoordinator.begin(awaiting: count)
     }
 
     /// Call from each of the `count` tasks on completion. Only the call that
@@ -212,17 +267,97 @@ final class LibrarySession {
     /// mismatch means a newer open()/reextractAO3Metadata() superseded this
     /// batch — in that case this completion is stale and does nothing.
     private func completeCoordinatedSeriesSync(generation: Int) async {
-        guard generation == seriesSyncGeneration else { return }
-        seriesSyncPending -= 1
-        guard seriesSyncPending <= 0 else { return }
+        guard seriesSyncCoordinator.complete(generation: generation) else { return }
         await syncSeriesOrMergedCollection()
+    }
+
+    // MARK: - External change detection
+
+    /// Fingerprint this session last saw. Set by the open-time series seed (which
+    /// computes it anyway) or, failing that, adopted silently by the first
+    /// check. Compared on app activation to pick up Calibre edits.
+    @ObservationIgnored private var knownFingerprint: LibraryFingerprint?
+    @ObservationIgnored private var isCheckingLibrary = false
+    @ObservationIgnored private var lastLibraryCheckAt: Date?
+    @ObservationIgnored private var activationObserver: NSObjectProtocol?
+    /// Rapid focus toggles inside this window do not repeat the aggregate query.
+    private static let libraryCheckMinimumInterval: TimeInterval = 2
+
+    private func installActivationObserverIfNeeded() {
+        guard activationObserver == nil else { return }
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in await self?.checkForLibraryChanges() }
+        }
+    }
+
+    /// Called by the series seed with the fingerprint it computed for this
+    /// open. Only fills an empty baseline, so it never overwrites a newer value
+    /// a check already recorded.
+    private func adoptFingerprintIfUnknown(_ fingerprint: LibraryFingerprint, library: CalibreLibrary) {
+        guard self.library === library, knownFingerprint == nil else { return }
+        knownFingerprint = fingerprint
+    }
+
+    /// Picks up works added or edited in Calibre while the app runs. Runs on
+    /// app activation. Reopens `metadata.db` if the file was replaced, then
+    /// recomputes the fingerprint. On a change it drops the query and filter
+    /// caches, refreshes the total, re-runs the fingerprint-gated series seed
+    /// and extraction scan (the stored markers differ, so both run), and, for a
+    /// content change, posts `.libraryContentsDidChange` so the surfaces
+    /// revalidate. An unchanged fingerprint does nothing and posts nothing.
+    func checkForLibraryChanges() async {
+        guard snapshotsReady, !isCheckingLibrary, let library, metaDB != nil else { return }
+        if let last = lastLibraryCheckAt, Date().timeIntervalSince(last) < Self.libraryCheckMinimumInterval { return }
+        isCheckingLibrary = true
+        defer { isCheckingLibrary = false }
+        let checkSignpost = LaunchSignposts.begin("libraryChange.check")
+        let reopened = await library.reopenIfFileReplaced()
+        let fingerprint = await library.libraryFingerprint()
+        LaunchSignposts.end("libraryChange.check", checkSignpost)
+        guard self.library === library, let current = fingerprint else { return }
+        lastLibraryCheckAt = Date()
+        var change = LibraryChange.classify(known: knownFingerprint, current: current)
+        // A replaced file has unknown contents even if the aggregates match.
+        if reopened { change = .content }
+        knownFingerprint = current
+        guard change != .none else { return }
+        LaunchSignposts.event("libraryChange.detected")
+
+        filterResultCache.removeAll()
+        ruleMatchCache.removeAll()
+        await library.clearQueryCaches()
+        let newCount = await library.bookCount()
+        guard self.library === library else { return }
+        totalCount = newCount
+
+        // Both scans compare the new fingerprint with their stored marker and so
+        // run. The seed alone gates the Series or Merged sync, as on open.
+        let seriesSyncGen = beginCoordinatedSeriesSync(awaiting: 1)
+        startAO3Extraction(seriesSyncGeneration: seriesSyncGen, followsSeedSync: true)
+        seedCalibreSeriesCache(seriesSyncGeneration: seriesSyncGen)
+
+        if change == .content {
+            NotificationCenter.default.post(name: .libraryContentsDidChange, object: nil)
+        }
     }
 
     // MARK: - Opening / closing
 
     /// Open a Calibre library at the given URL.
     func open(url: URL) async {
+        let openSignpost = LaunchSignposts.begin("LibrarySession.open")
+        defer { LaunchSignposts.end("LibrarySession.open", openSignpost) }
         lastError = nil
+        // Must flip before `library` is assigned below: `isOpen` becoming true is
+        // what makes the list schedule its first load, and that load has to see
+        // `snapshotsReady == false` and wait.
+        snapshotsReady = false
+        restoredLastView = nil
+        knownFingerprint = nil
+        lastLibraryCheckAt = nil
+        installActivationObserverIfNeeded()
         do {
             let newLibrary = try CalibreLibrary(root: url)
             let newMetaDB = try AmbrosiaMetaDB(libraryURL: url)
@@ -251,11 +386,9 @@ final class LibrarySession {
             cachedDuplicateLoserIDs = []
             LibraryRegistry.shared.register(url)
             LibraryIndexManager.shared.record(url: url)
-            importAO3TagSeeds()
-            let seriesSyncGen = beginCoordinatedSeriesSync(awaiting: 2)
-            startAO3Extraction(seriesSyncGeneration: seriesSyncGen)
-            seedCalibreSeriesCache(seriesSyncGeneration: seriesSyncGen)
-            refreshAO3MetaCaches()
+            // Background scans (tag seed import, extraction, series seed) start
+            // after hydration below so they cannot queue ahead of the work the
+            // first page is waiting for on the `AmbrosiaMetaDB` / `CalibreLibrary` actors.
             // Load persisted search history for this library.
             SearchActivityLog.shared.load(libraryHash: Ambrosia.libraryHash(for: url))
             // Re-point the per-library feed prefs (excluded collections, daily
@@ -271,10 +404,22 @@ final class LibrarySession {
                 // into auto-restart, bring it back now.
                 autoRestartFeedServerIfNeeded(path: url.path)
             }
+            await hydrateSnapshots(library: newLibrary, metaDB: newMetaDB)
+            // A newer open() or a close() superseded this one while hydrating.
+            guard library === newLibrary else { return }
+            // Read before the ready flip so the list sees it with the real sets.
+            restoredLastView = await loadLastView(url: url)
+            guard library === newLibrary else { return }
+            snapshotsReady = true
+            NotificationCenter.default.post(name: .librarySnapshotsDidBecomeReady, object: nil)
+            startBackgroundWork()
             #if DEBUG
             print("[LibrarySession] Opened \(url.lastPathComponent) — \(totalCount) books")
             #endif
         } catch {
+            // The previous library (if any) is still the live one; do not leave it
+            // permanently gated because `open` cleared the flag on entry.
+            snapshotsReady = library != nil
             lastError = "Could not open library: \(error.localizedDescription)"
             #if DEBUG
             print("[LibrarySession] Open failed: \(error)")
@@ -290,37 +435,74 @@ final class LibrarySession {
     private func refreshAO3MetaCaches() {
         guard let library, let metaDB else { return }
         Task { [weak self] in
-            async let wordCounts = metaDB.allAO3WordCounts()
-            async let kudos = metaDB.allAO3Kudos()
-            async let dates = metaDB.allAO3Dates()
-            async let crossoverIDs = metaDB.allCrossoverBookIDs()
-            async let workIDs = metaDB.allAO3WorkIDs()
-            let resolvedWordCounts = await wordCounts
-            let resolvedKudos = await kudos
-            let resolvedDates = await dates
-            let resolvedCrossoverIDs = await crossoverIDs
-            let resolvedWorkIDs = await workIDs
-            // This Task was created from a MainActor context and is not detached,
-            // so it already runs on the MainActor — no MainActor.run hop needed.
-            // `library` is a separate actor now, so the call into it still needs `await`.
-            guard self?.library === library else { return }
-            await library.updateAO3MetaCaches(
-                wordCounts: resolvedWordCounts,
-                kudos: resolvedKudos,
-                dates: resolvedDates,
-                crossoverIDs: resolvedCrossoverIDs,
-                workIDs: resolvedWorkIDs
-            )
+            guard let self else { return }
+            await self.loadAO3MetaCaches(library: library, metaDB: metaDB)
+            guard self.library === library else { return }
             // `duplicateLoserIDCache` was just recomputed inside the actor from
-            // the freshly-fetched work IDs/dates — mirror it into
+            // the freshly-fetched work IDs/dates, so mirror it into
             // `cachedDuplicateLoserIDs` now rather than waiting for the next
             // unrelated `refreshCollectionSnapshots()` call (e.g. after a
             // like/skip toggle) to happen to pick it up.
-            await self?.refreshCollectionSnapshots()
+            await self.refreshCollectionSnapshots()
         }
     }
 
+    /// Bulk-loads the five AO3 maps from `AmbrosiaMetaDB` and pushes them into
+    /// `CalibreLibrary`, which also recomputes its duplicate-loser set from
+    /// them. Split out of `refreshAO3MetaCaches` so `open` can await it
+    /// before the first list load.
+    private func loadAO3MetaCaches(library: CalibreLibrary, metaDB: AmbrosiaMetaDB) async {
+        let bulkSignpost = LaunchSignposts.begin("refreshAO3MetaCaches.bulkLoads")
+        async let wordCounts = metaDB.allAO3WordCounts()
+        async let kudos = metaDB.allAO3Kudos()
+        async let dates = metaDB.allAO3Dates()
+        async let crossoverIDs = metaDB.allCrossoverBookIDs()
+        async let workIDs = metaDB.allAO3WorkIDs()
+        let resolvedWordCounts = await wordCounts
+        let resolvedKudos = await kudos
+        let resolvedDates = await dates
+        let resolvedCrossoverIDs = await crossoverIDs
+        let resolvedWorkIDs = await workIDs
+        LaunchSignposts.end("refreshAO3MetaCaches.bulkLoads", bulkSignpost)
+        guard self.library === library else { return }
+        let pushSignpost = LaunchSignposts.begin("refreshAO3MetaCaches.pushToLibrary")
+        await library.updateAO3MetaCaches(
+            wordCounts: resolvedWordCounts,
+            kudos: resolvedKudos,
+            dates: resolvedDates,
+            crossoverIDs: resolvedCrossoverIDs,
+            workIDs: resolvedWorkIDs
+        )
+        LaunchSignposts.end("refreshAO3MetaCaches.pushToLibrary", pushSignpost)
+    }
+
+    /// Loads everything the first page needs to be correct: the AO3 bulk caches
+    /// (which feed the duplicate-loser set) and then the persisted membership
+    /// sets. Order matters: `duplicateLoserBookIDs` is derived from the AO3
+    /// caches, so the snapshot refresh must come second.
+    private func hydrateSnapshots(library: CalibreLibrary, metaDB: AmbrosiaMetaDB) async {
+        let hydrateSignpost = LaunchSignposts.begin("hydrateSnapshots")
+        defer { LaunchSignposts.end("hydrateSnapshots", hydrateSignpost) }
+        await loadAO3MetaCaches(library: library, metaDB: metaDB)
+        guard self.library === library else { return }
+        await refreshCollectionSnapshots()
+    }
+
+    /// Starts the per-launch scans. Only the series seed gates the first
+    /// Series or Merged sync; extraction follows it and re-syncs only if it
+    /// wrote data that can change membership (see `startAO3Extraction`).
+    private func startBackgroundWork() {
+        importAO3TagSeeds()
+        let seriesSyncGen = beginCoordinatedSeriesSync(awaiting: 1)
+        startAO3Extraction(seriesSyncGeneration: seriesSyncGen, followsSeedSync: true)
+        seedCalibreSeriesCache(seriesSyncGeneration: seriesSyncGen)
+    }
+
     func close() {
+        snapshotsReady = false
+        restoredLastView = nil
+        knownFingerprint = nil
+        lastLibraryCheckAt = nil
         extractionTask?.cancel()
         extractionTask = nil
         extractionProgress.isRunning = false
@@ -544,8 +726,9 @@ final class LibrarySession {
     /// that depend on collection / liked / status membership data.
     /// Call after: liked/skipped toggle, series sync. An AO3 extraction flush does
     /// not bump this; it advances `bookTagsRevision` instead.
-    func bumpMembershipVersion() {
+    func bumpMembershipVersion(caller: String = #function) {
         membershipVersion &+= 1   // wrapping add — no overflow crash
+        LaunchSignposts.membershipBump(caller: caller, newValue: membershipVersion)
     }
 
     // MARK: - §4: Feed server lifecycle
@@ -666,11 +849,18 @@ final class LibrarySession {
         }
     }
 
-    private func startAO3Extraction(forceAll: Bool = false, seriesSyncGeneration: Int? = nil) {
+    /// `followsSeedSync`: true when the series seed owns the first sync for
+    /// `seriesSyncGeneration` (library open). Extraction then does not count as a
+    /// completion; it runs one extra sync after it finishes only if it wrote
+    /// data. False keeps the old behavior where extraction's completion is one
+    /// of the awaited completions (re-extract).
+    private func startAO3Extraction(forceAll: Bool = false, seriesSyncGeneration: Int? = nil,
+                                    followsSeedSync: Bool = false) {
         extractionTask?.cancel()
         let generation = seriesSyncGeneration ?? beginCoordinatedSeriesSync(awaiting: 1)
         guard let library, let metaDB else {
-            Task { await self.completeCoordinatedSeriesSync(generation: generation) }
+            Task { await self.extractionFinished(generation: generation, followsSeedSync: followsSeedSync,
+                                                 wroteSeriesAffectingData: false) }
             return
         }
 
@@ -679,6 +869,24 @@ final class LibrarySession {
         extractionProgress.isRunning = true
 
         extractionTask = Task(priority: .background) { [weak self, library, metaDB] in
+            // Skip the scan when nothing changed since a run that finished with
+            // nothing left to extract. `forceAll` (re-extract) always scans.
+            let fingerprint = await library.libraryFingerprint()
+            if !forceAll, let fingerprint {
+                let stored = LibraryFingerprint.decode(await metaDB.libraryState(LibraryStateKey.extractionScanFingerprint))
+                if LibraryFingerprint.isUnchanged(stored: stored, current: fingerprint) {
+                    LaunchSignposts.event("extraction.scanSkippedUnchanged")
+                    DispatchQueue.main.async { [weak self] in
+                        self?.extractionProgress.total = 0
+                        self?.extractionProgress.completed = 0
+                        self?.extractionProgress.isRunning = false
+                    }
+                    await self?.extractionFinished(generation: generation, followsSeedSync: followsSeedSync,
+                                                   wroteSeriesAffectingData: false)
+                    return
+                }
+            }
+            let scanSignpost = LaunchSignposts.begin("extraction.scan")
             let allIDs = await library.allBookIDs()
             let existing = (try? await metaDB.existingAO3MetadataIDs()) ?? []
             let attempted = (try? await metaDB.attemptedAO3ExtractionIDs()) ?? []
@@ -690,6 +898,7 @@ final class LibrarySession {
             let missing = forceAll ? allIDs : allIDs.filter {
                 !existing.contains($0) && !attempted.contains($0) && !indexed.contains($0)
             }
+            LaunchSignposts.end("extraction.scan", scanSignpost)
 
             DispatchQueue.main.async { [weak self] in
                 self?.extractionProgress.total = missing.count
@@ -698,7 +907,11 @@ final class LibrarySession {
             }
 
             guard !missing.isEmpty else {
-                await self?.completeCoordinatedSeriesSync(generation: generation)
+                if let fingerprint {
+                    try? await metaDB.setLibraryState(LibraryStateKey.extractionScanFingerprint, fingerprint.encoded())
+                }
+                await self?.extractionFinished(generation: generation, followsSeedSync: followsSeedSync,
+                                               wroteSeriesAffectingData: false)
                 return
             }
 
@@ -721,6 +934,7 @@ final class LibrarySession {
             var pendingFailure: [AO3ExtractionDiagnostic] = []
             var pendingIndexed: [(BookIndexRecord, Int)] = []
             var lastFlushAt = Date()
+            var wroteSeriesAffectingData = false
 
             func flushBatch() async {
                 guard !pendingSuccess.isEmpty || !pendingFailure.isEmpty || !pendingIndexed.isEmpty else { return }
@@ -735,6 +949,7 @@ final class LibrarySession {
                     let wroteBookTags = !pendingSuccess.isEmpty
                     try await metaDB.insertBatch(pendingSuccess, diagnostics: pendingFailure, indexed: pendingIndexed)
                     if wroteBookTags {
+                        wroteSeriesAffectingData = true
                         // `book_tags` changed: cached tag results are stale (plan PR J).
                         let revision = await metaDB.bookTagsRevision
                         await self?.adoptBookTagsRevision(revision)
@@ -934,18 +1149,42 @@ final class LibrarySession {
             }
             // Flush any remaining records.
             await flushBatch()
+            // A run that was not cancelled and flushed everything leaves nothing
+            // to extract for this fingerprint, so the next launch can skip the
+            // scan. A cancelled or partially flushed run is not recorded.
+            if let fingerprint, !Task.isCancelled,
+               pendingSuccess.isEmpty, pendingFailure.isEmpty, pendingIndexed.isEmpty {
+                try? await metaDB.setLibraryState(LibraryStateKey.extractionScanFingerprint, fingerprint.encoded())
+            }
 
             DispatchQueue.main.async { [weak self] in
                 self?.extractionProgress.isRunning = false
             }
-            await self?.completeCoordinatedSeriesSync(generation: generation)
+            await self?.extractionFinished(generation: generation, followsSeedSync: followsSeedSync,
+                                           wroteSeriesAffectingData: wroteSeriesAffectingData)
             self?.refreshAO3MetaCaches()
+        }
+    }
+
+    /// Extraction's completion hook. Standalone runs (re-extract) count as one of
+    /// the awaited completions. A run that follows the series seed never gates the
+    /// first sync; it only re-syncs when it actually wrote data, and only if its
+    /// batch was not superseded.
+    private func extractionFinished(generation: Int, followsSeedSync: Bool,
+                                    wroteSeriesAffectingData: Bool) async {
+        if followsSeedSync {
+            guard wroteSeriesAffectingData, seriesSyncCoordinator.isCurrent(generation) else { return }
+            await syncSeriesOrMergedCollection()
+        } else {
+            await completeCoordinatedSeriesSync(generation: generation)
         }
     }
 
     private func importAO3TagSeeds() {
         guard let metaDB else { return }
         Task.detached(priority: .background) {
+            let seedSignpost = LaunchSignposts.begin("importAO3TagSeeds")
+            defer { LaunchSignposts.end("importAO3TagSeeds", seedSignpost) }
             do {
                 try await metaDB.importConfiguredAO3TagSeedsIfNeeded()
                 guard AO3TagSeedDatabaseConfig.shared.isEnabled else { return }
@@ -971,16 +1210,50 @@ final class LibrarySession {
             return
         }
         Task.detached(priority: .background) { [weak self, library, metaDB] in
-            // CalibreLibrary is actor-isolated, so this serializes automatically
-            // with page fetches and rebuildItems tasks that also access it —
-            // no MainActor hop needed.
-            let entries = await library.allCalibreSeriesEntries()
-            do {
-                try await metaDB.insertCalibreSeriesFallback(entries)
-            } catch {
-                #if DEBUG
-                print("[LibrarySession] Calibre series cache seed failed: \(error)")
-                #endif
+            // Fingerprint first, before any scan: if the library changes while
+            // the seed runs, the stored value is older than the library and the
+            // next launch re-seeds instead of wrongly skipping.
+            let fingerprint = await library.libraryFingerprint()
+            if let fingerprint {
+                await self?.adoptFingerprintIfUnknown(fingerprint, library: library)
+                let stored = LibraryFingerprint.decode(await metaDB.libraryState(LibraryStateKey.seriesSeedFingerprint))
+                if LibraryFingerprint.isUnchanged(stored: stored, current: fingerprint) {
+                    LaunchSignposts.event("seed.skippedUnchanged")
+                    await self?.completeCoordinatedSeriesSync(generation: generation)
+                    return
+                }
+            }
+            let rewriteCount = await metaDB.seriesRewriteCount
+            var succeeded = true
+            // Walk book-id windows instead of one whole-library call. Each
+            // `await library...` is a separate actor turn, so page fetches queued
+            // behind the seed run between windows rather than after the whole scan.
+            let windowSize = 5_000
+            let maxID = fingerprint?.maxBookID ?? Int.max
+            var lower = 0
+            while lower < maxID {
+                let upper = fingerprint == nil ? nil : lower + windowSize
+                let scanSignpost = LaunchSignposts.begin("seed.calibreSeriesEntries")
+                let entries = await library.calibreSeriesEntries(bookIDsAfter: lower, through: upper)
+                LaunchSignposts.end("seed.calibreSeriesEntries", scanSignpost)
+                let insertSignpost = LaunchSignposts.begin("seed.insertCalibreSeriesFallback")
+                do {
+                    try await metaDB.insertCalibreSeriesFallback(entries)
+                } catch {
+                    succeeded = false
+                    #if DEBUG
+                    print("[LibrarySession] Calibre series cache seed failed: \(error)")
+                    #endif
+                }
+                LaunchSignposts.end("seed.insertCalibreSeriesFallback", insertSignpost)
+                guard let upper else { break }   // no fingerprint: one unbounded pass
+                lower = upper
+                await Task.yield()
+            }
+            // Record completion only for a clean pass over a known fingerprint,
+            // and only if no extraction write rewrote series rows meanwhile.
+            if succeeded, let fingerprint {
+                _ = try? await metaDB.markSeriesSeeded(fingerprint, ifRewriteCountIs: rewriteCount)
             }
             await self?.completeCoordinatedSeriesSync(generation: generation)
         }
@@ -988,6 +1261,8 @@ final class LibrarySession {
 
     func syncSeriesOrMergedCollection() async {
         guard let library, let metaDB, let collectionStore else { return }
+        let syncSignpost = LaunchSignposts.begin("syncSeriesOrMerged")
+        defer { LaunchSignposts.end("syncSeriesOrMerged", syncSignpost) }
         do {
             let neverLeadsIDs = try await metaDB.neverLeadsSeriesIDs()
             // CalibreLibrary is actor-isolated, so these calls serialize
@@ -1006,12 +1281,26 @@ final class LibrarySession {
                     ? String(format: "%.1f%%", Double(ids.count) / Double(totalLibraryBooks) * 100)
                     : "n/a"
             ])
-            try await collectionStore.replaceMembers(of: SystemCollectionID.seriesOrMerged, with: ids)
-            let verifyMembers = try await collectionStore.members(of: SystemCollectionID.seriesOrMerged)
+            let readSignpost = LaunchSignposts.begin("syncSeriesOrMerged.readCurrent")
+            let currentMembers = Set(try await collectionStore.members(of: SystemCollectionID.seriesOrMerged))
+            LaunchSignposts.end("syncSeriesOrMerged.readCurrent", readSignpost)
+            let delta = MembershipDelta(current: currentMembers, computed: ids)
+            let applySignpost = LaunchSignposts.begin("syncSeriesOrMerged.applyDelta")
+            try await collectionStore.applyMemberDelta(
+                of: SystemCollectionID.seriesOrMerged,
+                adding: delta.toAdd,
+                removing: delta.toRemove
+            )
+            LaunchSignposts.end("syncSeriesOrMerged.applyDelta", applySignpost)
             LibraryFilterDebug.log("syncSeriesOrMerged.persisted", [
-                "writtenCount": ids.count,
-                "readBackCount": verifyMembers.count
+                "added": delta.toAdd.count,
+                "removed": delta.toRemove.count,
+                "unchanged": ids.count - delta.toAdd.count
             ])
+            // Nothing changed: the surfaces already loaded with these exact sets
+            // (snapshots are hydrated before the first load), so a reload would
+            // only repeat work.
+            guard !delta.isEmpty else { return }
             await MainActor.run {
                 NotificationCenter.default.post(name: .seriesOrMergedCollectionDidChange, object: nil)
             }
