@@ -63,8 +63,9 @@ type defined in a differently named file can be undercounted, and a reference
 in a test does not mean the type is well covered. Real line coverage is
 collected in CI (`-enableCodeCoverage YES`) but is not reported anywhere yet.
 
-Current size: 35 test files, 325 test functions, all `XCTestCase` (no Swift
-Testing), against 89 source files.
+Current size: 54 test files, 478 test functions, all `XCTestCase` (no Swift
+Testing), against 96 source files (counted 2026-10-18 by `ls` and grep, not
+re-verified per source type).
 
 ### Covered by a dedicated test file
 
@@ -73,6 +74,7 @@ Testing), against 89 source files.
 | `SearchQueryParser` | `SearchQueryParserTests` |
 | `AO3MetadataExtractor`, `+Authors` | `AO3MetadataExtractorTests`, `AO3MetadataExtractorAuthorsTests`, `AO3RatingHighestTests` |
 | `LRUCache` (`CacheTypes.swift`) | `LRUCacheTests` |
+| Cache key shaping (`tagExpansionsDigest`, `FilterResultCacheKey`) and visibility-pref sensitivity of `PageCacheKey`/`FilterResultCacheKey` | `CacheTypesKeyShapeTests` (in `LRUCacheTests.swift`), `CacheKeyTests` |
 | `TagExpansionResolver` | `TagExpansionResolverTests` |
 | `MatchingSubqueryBuilder` (`FilterBuilder.swift`) | `MatchingSubqueryBuilderTests` |
 | `GzipEncoder` | `GzipEncoderTests` |
@@ -90,7 +92,13 @@ Testing), against 89 source files.
 | `AnnotationExportManager` | `AnnotationExportManagerTests` |
 | `CalibreLibrary` search | `CalibreLibrarySearchTests` |
 | EPUB image reference rewriting | `EPUBImageReferenceRewriteTests` |
-| `PagingOffsetState` | `PagingOffsetStateNavigationIntentTests` |
+| `PagingOffsetState` | `PagingOffsetStateNavigationIntentTests`, `PagingOffsetStateTests` (idempotent `commitNewPage`) |
+| `ExportManager.exportScope(for:)` | `ExportScopeTests` |
+| `LibraryQueryHelpers.indexed` (duplicate keys do not trap) | `IndexedHelperTests` |
+| Tag coverage hoisting and the `uncovered` fallback restriction (`FilterBuilder`) | `TagCoverageTests` |
+| `TagRuleStrategy`, `AndGroupOrdering`, candidate-restricted tag rules | `TagRuleStrategyTests`, `TagCandidateRestrictionTests` |
+| `IncrementalFilterPlanner`, `LibrarySession.narrowingBase`, narrowed vs full-compute equivalence | `IncrementalFilterPlannerTests`, `NarrowingBaseTests`, `IncrementalEquivalenceTests` |
+| `RuleMatchCache` | `RuleMatchCacheTests` |
 | `LibraryFilterDebug` | `LibraryFilterDebugSummaryTests` |
 | `AmbrosiaMetaDB` migrations | `AmbrosiaMetaDBMigrationTests` |
 | `LocalFeedServer` walk cache | `LocalFeedServerWalkCacheTests` |
@@ -114,11 +122,11 @@ Lines are source LOC. "Tests" is what exists today.
 
 | Source | LOC | Tests today |
 | --- | --- | --- |
-| `AmbrosiaMetaDB.swift` | 2459 | migrations and `CollectionStore` only |
+| `AmbrosiaMetaDB.swift` | 2482 | migrations and `CollectionStore`; tag queries indirectly through `TagCoverageTests` and `TagCandidateRestrictionTests` |
 | `LocalFeedServer.swift` | 2543 | walk cache only (4 tests); feed XML, JSON feed and OPML output untested |
-| `LibrarySession.swift` | 975 | none (only mentioned in a comment in `AnnotationExportManagerTests`) |
+| `LibrarySession.swift` | 1058 | full-text cache and failure rules (`LibrarySessionFulltextTests`), filter cache keys and `narrowingBase` (`CacheKeyTests`, `NarrowingBaseTests`, `RuleMatchCacheTests`); open/close lifecycle and collection snapshots untested |
 | `EPUBParser` and extensions (spine, OPF, merged HTML, offsets, `parseTOC`) | about 900 | image reference rewrite only |
-| `ExportManager.swift` | 516 | none (the CSV library export; `AnnotationExportManagerTests` covers a different type) |
+| `ExportManager.swift` | 543 | `exportScope(for:)` only (`ExportScopeTests`); CSV row building and the export panels untested (`AnnotationExportManagerTests` covers a different type) |
 | `CalibreFTSLibrary.swift` | about 380 | `CalibreFTSLibraryTests` (modes, phase 1 and 2, cancellation, busy, file replacement, error mapping) |
 | `TransferDatabaseBuilder.swift` | 196 | none |
 

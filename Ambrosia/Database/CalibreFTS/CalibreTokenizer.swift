@@ -67,6 +67,8 @@ enum CalibreTokenizer {
                     let raw = UnsafeRawBufferPointer(start: UnsafeRawPointer(token), count: Int(length))
                     collector.tokens.append(
                         CalibreToken(
+                            // Lossy decode is intentional: invalid bytes become U+FFFD rather than failing the token.
+                            // swiftlint:disable:next optional_data_string_conversion
                             text: String(decoding: raw, as: UTF8.self),
                             start: Int(start),
                             end: Int(end),

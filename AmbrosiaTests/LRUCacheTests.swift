@@ -90,7 +90,7 @@ final class LRUCacheTests: XCTestCase {
 
 // Covers FilterResultCacheKey/PageCacheKey/CountCacheKey/tagExpansionsDigest,
 // the cache-key shaping logic that sits next to LRUCache in CacheTypes.swift.
-final class CacheKeyTests: XCTestCase {
+final class CacheTypesKeyShapeTests: XCTestCase {
 
     func test_tagExpansionsDigest_isOrderIndependentOnKeysAndValues() {
         let dictA: [String: [String]] = ["fluff": ["comfort", "cozy"], "angst": ["hurt"]]

@@ -53,6 +53,12 @@ struct ActivityFeedView: View {
             // Export is handled by whichever content view owns the current book list.
             if triggered { toolbarState.triggerExport = false }
         }
+        .onChange(of: toolbarState.triggerEPUBExport) { _, triggered in
+            if triggered { toolbarState.triggerEPUBExport = false }
+        }
+        .onChange(of: toolbarState.triggerAnnotationExport) { _, triggered in
+            if triggered { toolbarState.triggerAnnotationExport = false }
+        }
         .task { await load() }
     }
 
@@ -222,8 +228,8 @@ struct ActivityFeedView: View {
                     .union(annotations.map(\.calibreID))
                     .union(collections.map(\.calibreID))
             )
-            let bookMap: [Int: CalibreBook] = Dictionary(
-                uniqueKeysWithValues: await library.booksForIDs(allIDs).map { ($0.id, $0) }
+            let bookMap: [Int: CalibreBook] = LibraryQueryHelpers.indexed(
+                await library.booksForIDs(allIDs).map { ($0.id, $0) }
             )
 
             var merged: [ActivityFeedEntry] = []

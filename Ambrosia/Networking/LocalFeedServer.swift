@@ -975,7 +975,7 @@ actor LocalFeedServer {
             return pairs.map { .book($0) }
         }
 
-        let pairByID = Dictionary(uniqueKeysWithValues: pairs.map { ($0.book.id, $0) })
+        let pairByID = LibraryQueryHelpers.indexed(pairs.map { ($0.book.id, $0) })
         let entries = pairs.flatMap { $0.seriesEntries }
         let anthologyIDs = Set(pairs.filter { $0.book.isDescriptionAnthology }.map { $0.book.id })
         let duplicateLoserIDs = ReaderPreferences.shared.hideDuplicateBooks
@@ -1001,7 +1001,7 @@ actor LocalFeedServer {
         // filter) — fetch every member so the group is complete, not just the
         // page-local subset.
         let allBooks = await library.booksForIDs(allIDs)
-        let byID = Dictionary(uniqueKeysWithValues: allBooks.map { ($0.id, $0) })
+        let byID = LibraryQueryHelpers.indexed(allBooks.map { ($0.id, $0) })
         let seriesMetadata = (try? await metaDB.ao3Metadata(for: allIDs)) ?? [:]
 
         let seriesByKey = buildSeriesGroups(
@@ -1364,7 +1364,10 @@ actor LocalFeedServer {
             let html = await cachedMergedHTML(book: pair.book, library: library)
             if html.isEmpty {
                 #if DEBUG
-                print("[LocalFeedServer] grouped RSS item \(group.seriesKey): member \(pair.book.id) (\"\(pair.book.displayTitle)\") produced empty merged HTML")
+                print(
+                    "[LocalFeedServer] grouped RSS item \(group.seriesKey): member \(pair.book.id) "
+                        + "(\"\(pair.book.displayTitle)\") produced empty merged HTML"
+                )
                 #endif
             }
             htmlParts.append(html)

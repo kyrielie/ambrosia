@@ -169,3 +169,16 @@ on macOS, against Apple's `libsqlite3` or `libicucore`, or against a real Calibr
 | G8 Apple's ICU and Unicode versions versus Calibre's 78.1 | NOT run | needs macOS |
 | G9 to G13 | NOT run | need macOS and the owner's library |
 | M7 benchmark numbers | NOT run | `CalibreFTSBenchmarkTests` is written and skipped without `AMBROSIA_FTS_BENCH_LIBRARY`; the 400 ms decision rule (D16) is undecided |
+
+## UI behavior on failure
+
+A failed `fulltext:` search is shown, not cached, and not retried until the user acts.
+
+- `LibrarySession.fulltextState(for:)` reports `.unknown`, `.resolved(ids)` or `.failed(message)`. Only `.unknown` starts a search.
+- Failures (busy, syntax, SQLite error, missing searcher) are recorded in `failedFulltextKeys` by phrase cache key. A missing searcher records "This library has no full-text index." once.
+- `queryWithCachedFullText` maps `.failed` to `ftsMatchedIDs: []`, so `loadPage` renders the empty state instead of starting another search.
+- A phrase `FTSQuery` cannot build is treated as resolved-empty.
+- Cleared by `retryFulltext(for:)` (Retry button, or editing the search text), by library open/close, and by an index-stamp change. A page load never clears it.
+- Cancellations are not failures and are not recorded.
+- The list shows a banner with Retry. Email applies the same loop fix but does not yet show a banner.
+- Search and count failures from `CalibreLibrary` live in `LibrarySession.lastSearchError`, separate from the library-open `lastError`.

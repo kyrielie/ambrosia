@@ -72,6 +72,18 @@ struct PagingOffsetState {
     /// mutated alongside `rawSQLOffsetFrontier`, for the same reason.
     var rawSQLOffsetOverflowFrontier: [CalibreBook] = []
 
+    /// Records a never-before-visited page after its drain loop finished.
+    /// Idempotent: a no-op unless `page` is exactly the next unrecorded page, so
+    /// two overlapping loads of the same page (or a stale commit after
+    /// `resetForNewFilter()`) cannot append twice or corrupt the frontier.
+    mutating func commitNewPage(page: Int, startOffset: Int, newFrontier: Int, overflow: [CalibreBook]) {
+        guard page == rawSQLOffsetByPage.count, page == currentPage else { return }
+        rawSQLOffsetByPage.append(startOffset)
+        seedOverflowByPage.append(rawSQLOffsetOverflowFrontier)
+        rawSQLOffsetFrontier = newFrontier
+        rawSQLOffsetOverflowFrontier = overflow
+    }
+
     mutating func resetForNewFilter() {
         currentPage = 0
         rawSQLOffsetByPage = []

@@ -123,7 +123,7 @@ private struct BookDetailContent: View {
                 switch phase {
                 case .success(let img):
                     img.resizable()
-                        .aspectRatio(contentMode: .fit)
+                        .scaledToFit()
                         .frame(width: 80, height: 110)
                         .clipShape(RoundedRectangle(cornerRadius: 5))
                         .shadow(radius: 3)

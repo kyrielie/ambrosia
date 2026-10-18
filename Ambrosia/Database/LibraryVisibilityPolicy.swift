@@ -79,3 +79,31 @@ struct LibraryVisibilityPolicy {
         books.filter(isVisible)
     }
 }
+
+// MARK: - Cache signatures
+
+extension LibraryVisibilityPolicy {
+    /// Everything about this policy that changes which books a sorted page
+    /// contains, as a stable string. Part of `PageCacheKey`: toggling any of these
+    /// changes no membership set, so `visibilityVersion` alone cannot tell the
+    /// cached pages apart.
+    var cacheSignature: String {
+        Self.signature(showSkippedCollection: showSkippedCollection,
+                       hideNonAO3PublisherBooks: hideNonAO3PublisherBooks,
+                       hideAnthologyBooks: hideAnthologyBooks,
+                       hideDuplicateBooks: hideDuplicateBooks)
+            + (shouldGroupSeriesRows ? ".grp1" : ".grp0")
+    }
+
+    /// The four preference toggles baked into cached filter-result ID lists.
+    /// Part of `FilterResultCacheKey`.
+    static func signature(showSkippedCollection: Bool,
+                          hideNonAO3PublisherBooks: Bool,
+                          hideAnthologyBooks: Bool,
+                          hideDuplicateBooks: Bool) -> String {
+        "skip\(showSkippedCollection ? 1 : 0)"
+            + ".pub\(hideNonAO3PublisherBooks ? 1 : 0)"
+            + ".anth\(hideAnthologyBooks ? 1 : 0)"
+            + ".dup\(hideDuplicateBooks ? 1 : 0)"
+    }
+}

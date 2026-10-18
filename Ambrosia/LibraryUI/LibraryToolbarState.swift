@@ -126,7 +126,4 @@ final class LibraryToolbarState {
         shouldSuppressNextSearchTextReload = false
         return true
     }
-
-    func syncFullTextFieldFromSearchText() {}
-    func applyFullTextFieldToSearchText() {}
 }

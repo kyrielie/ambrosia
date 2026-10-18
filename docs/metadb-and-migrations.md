@@ -41,3 +41,9 @@ Annotation inserts/deletes maintain `Has Annotations` membership. Series/antholo
 10. `AmbrosiaMetaDB` is the sole owner of `ambrosia_meta.db`. All reads and writes go through the actor, accessed via `LibrarySession.metaDB`. `CalibreLibrary` and the former `AO3TagSearchResolver` previously opened independent `Connection` objects to the same file, violating write-lock coordination; both have been fixed (`CalibreLibrary` now reads from caches pushed in via `updateAO3MetaCaches`, and tag resolution moved onto the `AmbrosiaMetaDB` actor). Do not reintroduce a third connection to this file.
 
 11. All destructive schema migrations (DROP, ALTER with data movement) must be wrapped in `db.transaction` and gated on `PRAGMA user_version`, not on table existence. `IF NOT EXISTS` guards cannot prevent a migration from re-running on subsequent launches.
+
+## `bookTagsRevision`
+
+`AmbrosiaMetaDB.bookTagsRevision` increments in `writeBookTags`, called only from
+`insertBatch`. It keys the filter-result and rule-match caches so cached tag results
+do not outlive an extraction pass. See `caching.md`.

@@ -56,7 +56,13 @@ class LibraryViewController: NSViewController {
 
     // MARK: - View mode switching
 
+    /// The mode whose surface is currently installed; nil before the first apply.
+    private var currentMode: LibraryViewMode?
+
     private func applyViewMode(_ mode: LibraryViewMode) {
+        // A same-value observation callback must not tear down and rebuild a surface.
+        guard mode != currentMode else { return }
+        defer { currentMode = mode }
         // §list-teardown fix: tell the outgoing List surface (if any) to stop
         // reloading before it's hidden. LibraryRootView's reload paths are
         // unstructured Task { } blocks kicked off from .onChange, which are not
@@ -65,6 +71,9 @@ class LibraryViewController: NSViewController {
         // guards in loadPage()/rebuildItems()/refreshBookStates().
         if listHostingView != nil, mode != .list {
             toolbarState.isListSurfaceTornDown = true
+            // The list's quick-filter handler must not outlive its surface; the
+            // incoming surface registers its own.
+            toolbarState.filterCommitHandler = nil
         }
 
         // Remove existing non-list child VCs. Unlike the list surface below,

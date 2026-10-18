@@ -18,11 +18,11 @@ import SwiftData
 // pass. This file covers only the pieces that are genuinely identical.
 enum LibraryQueryHelpers {
 
-    /// NOTE: `visibleIDs`/`visibleBooks` used to live here as free functions
-    /// taking 6-8 parameters each. Both call sites (LibraryRootView,
-    /// EmailLibraryViewController) now build a `LibraryVisibilityPolicy` once
-    /// (`currentVisibilityPolicy`) and call `.filter(_:)` directly — see
-    /// LibraryVisibilityPolicy.swift. Retired rather than left as unused dead code.
+    // NOTE: `visibleIDs`/`visibleBooks` used to live here as free functions
+    // taking 6-8 parameters each. Both call sites (LibraryRootView,
+    // EmailLibraryViewController) now build a `LibraryVisibilityPolicy` once
+    // (`currentVisibilityPolicy`) and call `.filter(_:)` directly — see
+    // LibraryVisibilityPolicy.swift. Retired rather than left as unused dead code.
 
     // MARK: - Full-text cache keys
 
@@ -42,6 +42,13 @@ enum LibraryQueryHelpers {
         return map
     }
 
+    /// Builds a dictionary from `pairs`, keeping the first value for a repeated key
+    /// instead of trapping like `Dictionary(uniqueKeysWithValues:)`. Use for any
+    /// map built from database rows.
+    static func indexed<K: Hashable, V>(_ pairs: [(K, V)]) -> [K: V] {
+        Dictionary(pairs, uniquingKeysWith: { first, _ in first })
+    }
+
     /// Intersects `ids` with `optionalIDs`, or returns `ids` unchanged if
     /// `optionalIDs` is nil (i.e. "no additional restriction").
     static func intersect(_ ids: [Int], with optionalIDs: [Int]?) -> [Int] {
@@ -57,7 +64,12 @@ enum LibraryQueryHelpers {
     static func queryWithCachedFullText(_ query: SearchQuery, session: LibrarySession) -> SearchQuery {
         guard let phrase = query.fulltextPhrase?.trimmingCharacters(in: .whitespacesAndNewlines),
               !phrase.isEmpty else { return query }
-        guard let ids = session.cachedFulltextIDs(for: phrase) else { return query }
+        let ids: [Int]
+        switch session.fulltextState(for: phrase) {
+        case .unknown: return query
+        case .resolved(let resolved): ids = resolved
+        case .failed: ids = []
+        }
         return SearchQuery(
             tagTerms: query.tagTerms,
             authorTerms: query.authorTerms,
