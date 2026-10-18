@@ -32,6 +32,19 @@ AmbrosiaApp
 - Email: AppKit split view with table sidebar and SwiftUI detail pane.
 - Ranking: `ActivityFeedView` (reading activity feed). `BookState` already has ELO fields for a future ranking surface.
 
+## Row height bounds
+
+List-mode rows are self-sizing `List` rows, so unbounded content makes row height unpredictable. Book rows bound it as follows:
+
+- `BookListRow.descriptionRow` renders `RowDescriptionLimit.capped(displayComment)` with `.lineLimit(RowDescriptionLimit.lines)`. Limits: 1,500 characters and 10 lines (an AO3 summary is at most 1,250 characters). Truncation happens in the view only; `CalibreBook.displayComment` is unchanged because `isDescriptionAnthology` reads it. Narrow windows or many paragraph breaks can clip at line 10; that is accepted.
+- `SeriesListRow` keeps its existing 4 line description limit.
+- Tag pills are capped at `TagPillDisplay.maxVisible` (30) per `BookListRow` and `TagPillDisplay.maxVisibleSeries` (30) per `SeriesListRow` (a series row shows the union of its works' tags, so it needs its own knob); the rest collapse into one non-interactive "+N" pill whose help text lists the hidden labels. Pill order from `TagPillDisplay.make` / `makeForSeries` puts rating, fandom, relationship and character first, so those survive. Set either to `Int.max` to disable. There is no per-row expand state, because a row that grows on click reintroduces height variance.
+- Ungrouped page loads assign `items` and `ao3Metadata` (plus `ao3ExtractionDiagnostics`, `singletonSeriesWarnings`, `rebuildDegraded`) together in one `MainActor.run`, via `rebuildUngroupedItems`, so rows do not render bare and then grow when metadata arrives. This mirrors the grouped `rebuildTask`. `items` is not cleared beforehand, so the previous page stays visible until the swap. A page turn therefore waits for the metadata query before showing rows.
+- `rebuildItems()` owns the page metadata fetch for non-empty pages in both modes; `loadPage` no longer calls `loadAO3MetadataForCurrentPage()` after it (that was a duplicate fetch in grouped mode, confirmed by reading the grouped `rebuildTask`). The loader is still called for empty-result branches, by the extraction-refresh `onChange`, and from `rebuildItems()`'s synchronous fallback (no metaDB or library) when the page is non-empty.
+- `rootContent` shows "Loading" whenever `items` is empty and `books` is not, in both modes (previously grouped only).
+- The list is no longer a `List`: `itemList` is `ScrollViewReader { ScrollView { VStack { ForEach(items) { row; Divider() } } } }`. All rows of a page (at most 25) are built once and kept, avoiding NSTableView row recycling and re-measurement on scroll-up. Rows carry their own 16/10 point padding (formerly `listRowInsets`), and `BookListRow`/`SeriesListRow` extend their frame to full width so the double-click hit area is unchanged. When the first item id changes (page turn or new filter result) the list scrolls to the top. The scroll view draws `controlBackgroundColor` behind the rows to match the surface `List` used to provide (uncolored tag pills fill with the same color). `LazyVStack` was not used because its row retention was not verified.
+- Known residual: `bookStates` is still assigned synchronously before the swap and drives the "% read" chip. If the list surface is torn down while a rebuild is in flight, `items` is not assigned; this was already true for grouped mode and now applies to ungrouped mode too.
+
 ## Collections
 
 - System collections live in `ambrosia_meta.db`.
