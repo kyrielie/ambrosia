@@ -123,4 +123,18 @@ jobs:
               --repo "${{ github.repository }}" \
               --title "$tag" \
               --generate-notes
+
+      - name: Normalize release version
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Request tap cask update
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.TAP_UPDATE_TOKEN }}
+          repository: kyrielie/homebrew-yggdrasil
+          event-type: app-release
+          client-payload: '{"app":"ambrosia","version":"${{ steps.release.outputs.version }}","asset_name":"Ambrosia.dmg","asset_url":"https://github.com/kyrielie/ambrosia/releases/download/v${{ steps.release.outputs.version }}/Ambrosia.dmg"}'
           fi
