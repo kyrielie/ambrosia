@@ -1,6 +1,6 @@
 # Ambrosia
 
-Ambrosia is a native macOS EPUB library reader for AO3-heavy Calibre libraries. It reads Calibre's `metadata.db`, renders EPUBs in a custom reader, and stores Ambrosia-only state in a separate per-library database.
+Ambrosia is a native macOS EPUB library reader for AO3-heavy Calibre libraries. It reads Calibre's `metadata.db`, renders EPUBs in a custom reader, and stores Ambrosia-only state in a separate per-library database. Designed for AO3 metadata first!
 
 ## Screenshots
 
@@ -32,6 +32,20 @@ Ambrosia is a native macOS EPUB library reader for AO3-heavy Calibre libraries. 
 - Includes CSV export of library metadata and annotations, an optional local read-only RSS feed server, and reader/library preferences.
 - Can import an external AO3 tag seed database for canonical tag and synonym expansion, with in-app validation feedback.
 - Remembers recently opened Calibre libraries.
+
+## Other cool swift native projects not made for AO3 but also support calibre
+
+Let me know if there are any more! I just searched `site:github.com macOS swift native book epub calibre` in google. 
+
+https://github.com/artemnovichkov/Octavo
+https://github.com/PratikRai0101/Varq
+https://github.com/Aletheie/Winston
+
+> [!IMPORTANT]
+> What ambrosia does differently:
+> - Support macos 15 sequoia because I still haven't updated to 26+ 😭. I don't even know if ambrosia works on 26+...
+> - Looks kinda worse tbh, not as well vibecoded.
+> - Not support cover art because like 90% of fanfiction doesn't have it and I never spent the time adding it.
 
 ## Installation
 
