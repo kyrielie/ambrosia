@@ -13,11 +13,12 @@ doc(s) relevant to your task**, not this whole index cover-to-cover.
 - **`ambrosia_meta.db` (collections, annotations, AO3 metadata, tag tables), or any migration** → `docs/metadb-and-migrations.md`
 - **`BookState`/`ReadingGoal` (the SwiftData store)** → `docs/swiftdata-store.md`
 - **`LibrarySession` (library open/close, registry, `ReaderPreferences`)** → `docs/session-model.md`
+- **Full-text search (`fulltext:`), `CalibreFTSLibrary`, the Calibre-compatible FTS5 tokenizer in `Database/CalibreFTS`** → `docs/calibre-fts.md`
 - **Search-bar parsing (`SearchQueryParser`), the filter drawer, or the AO3-style filter popup** → `docs/search-and-filter.md`
 - **LRU caches (`filterResultCache`/`pageCache`/`countCache`), or list-vs-email reload coordination** → `docs/caching.md`
 - **The library window shell, list/email/ranking modes, or collections** → `docs/library-ui.md`
 - **Row-selection behavior (multiselect, arrow-key navigation) specifically** → `docs/library-ui.md` (and see `docs/collections-management-selection-verification-checklist.md`, a still-open manual-verification checklist — see "Dangling references" below)
-- **AO3 preface metadata extraction, tag canonicalization/synonyms** → `docs/ao3-metadata-extraction.md` (and see `docs/ao3_epub_html_reference.md` for the raw HTML shape this extractor parses)
+- **AO3 preface metadata extraction, tag canonicalization/synonyms** → `docs/ao3-metadata-extraction.md` (and see `docs/ao3_epub_html_reference.md` for the raw HTML shape this extractor parses; that file is local-only, see "Local-only files" below)
 - **`EPUBParser` (zip/OPF/spine parsing, merged HTML, offset contract)** → `docs/epub-parsing.md`
 - **`ReaderViewController`/`ReaderWindowController`, scroll vs. paginated mode, the CSS preference pipeline** → `docs/reader.md`
 - **Highlights, point annotations, `HighlightBridge`** → `docs/annotations.md`
@@ -28,7 +29,7 @@ doc(s) relevant to your task**, not this whole index cover-to-cover.
 - **Adding a test file, or "why didn't my new test run"** → `docs/testing.md`
 
 If nothing above fits, grep the codebase before assuming it's
-undocumented — this split is complete as of the date below, but the
+undocumented — this split was complete when it was written, but the
 codebase moves faster than docs do. See "Keeping this current" below.
 
 ## Conventions every doc here follows
@@ -88,12 +89,13 @@ it's trusted by default. Specifically:
 | `AmbrosiaMetaDB` schema, `runMigrations`, `CollectionStore`, system collection bootstrapping | `docs/metadb-and-migrations.md` |
 | `BookState`, `ReadingGoal`, or the SwiftData `ModelContainer` | `docs/swiftdata-store.md` |
 | `LibrarySession`'s open/close lifecycle, `LibraryRegistry`, `ReaderPreferences` | `docs/session-model.md` |
+| `CalibreFTSLibrary`, anything under `Ambrosia/Database/CalibreFTS/` (tokenizer, registration, FTS query layer) | `docs/calibre-fts.md` |
 | `SearchQueryParser`, `FilterBuilder`, `FilterExpression`/`FilterRule`, the AO3 filter popup, `TagExpansionResolver` | `docs/search-and-filter.md` |
 | `filterResultCache`/`pageCache`/`countCache`/`groupAwareCountCache`, `LibraryFilterDebug`, `suppressNextReloadToken` | `docs/caching.md` |
 | `LibraryWindowController`, `LibraryRootView`, `EmailLibraryViewController`, `BookListRow`/`SeriesListRow`/`FlowLayout`, collections UI | `docs/library-ui.md` |
 | `AO3MetadataExtractor`, `AO3MetadataRecord`, `canonical_tags`/`tag_synonyms`/`tag_parent_links` | `docs/ao3-metadata-extraction.md` |
-| `EPUBParser` and its extensions, the UTF-16 offset contract | `docs/epub-parsing.md` |
-| `ReaderViewController`, `ReaderWindowController`, `PaginationEngine`/`PaginationJS`, `ReaderPreferences.css` | `docs/reader.md` |
+| `EPUBParser` and its extensions (including `parseTOC`), the UTF-16 offset contract | `docs/epub-parsing.md` |
+| `ReaderViewController`, `ReaderWindowController`, `PaginationEngine`/`PaginationJS`, `ReaderPreferences.css`, `TOCSidebarView`/`TOCPanelEntry` | `docs/reader.md` |
 | `Annotation`, `AnnotationSidebarView`, `AnnotationPopover`, `HighlightBridge`, `AnnotationExportManager` | `docs/annotations.md` |
 | `LocalFeedServer`, `RSSPublishView`, `GzipEncoder`, `TransferDatabaseBuilder` | `docs/local-feed-server.md` |
 | `NSHostingView` usage, `sizingOptions`, any new async-closure-at-call-site pattern | `docs/swiftui-appkit-bridging.md` |
@@ -120,6 +122,23 @@ relevant decision directly into the nearest doc above instead of citing a
 scratch file that may not survive to the next snapshot. Eight-plus missing
 citations in this codebase already is a sign this practice isn't working
 as a durable record.
+
+## Local-only files
+
+`docs/ao3_epub_html_reference.md` is listed in `.gitignore` on purpose: it
+contains material that is not open source and must not be committed or
+published. It exists in the maintainer's working tree and is included by
+`pack_repo.sh`, but it will be absent from a fresh clone and from CI.
+Consequences for anyone (human or AI) working here:
+
+- Do not rely on it being present. If it is missing, derive fixture HTML from
+  the extractor code in `AO3MetadataExtractor.swift` and the existing tests.
+- Do not copy its text into a tracked doc, a test fixture, or a code comment.
+  Tests must use synthetic fixture HTML written for this repo.
+- Docs that mention it (this file, `docs/testing.md`,
+  `docs/ao3-metadata-extraction.md`) should say it is local-only.
+
+`AGENTS.md` is also gitignored (local tooling instructions only).
 
 ## Files not covered by any topic doc
 

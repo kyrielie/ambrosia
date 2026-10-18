@@ -146,6 +146,18 @@ final class LibrarySession {
     private var resolvedFulltextCache: [String: [Int]] = [:]
     private let resolvedFulltextCacheLimit = 12
 
+    /// Message from the most recent failed `fulltext:` search, nil after a success, a
+    /// cancellation, or a library open/close. Failures are never cached (D13).
+    private(set) var lastFulltextError: String?
+
+    /// Index state (file identity plus `PRAGMA data_version`) the cached results were read
+    /// from. A different stamp on a later search clears the cache (D13, D19).
+    @ObservationIgnored private var fulltextIndexStamp: FTSIndexStamp?
+
+    /// Test seam: when set, replaces `ftsLibrary` as the full-text backend.
+    var fulltextSearcherOverride: (any FulltextSearching)?
+    private var fulltextSearcher: (any FulltextSearching)? { fulltextSearcherOverride ?? ftsLibrary }
+
     // §7: True LRU cache for FilterResult (limit 8).
     var filterResultCache = LRUCache<FilterResultCacheKey, FilterResult>(limit: 8)
 
@@ -204,6 +216,8 @@ final class LibrarySession {
             ftsLibrary = CalibreFTSLibrary(libraryURL: url)
             resolvedFulltextCache.removeAll()
             resolvedFulltextCacheOrder.removeAll()           // §7
+            fulltextIndexStamp = nil
+            lastFulltextError = nil
             filterResultCache.removeAll()                    // §7
             membershipVersion = 0                            // §7
             cachedLikedIDs = []
@@ -304,6 +318,8 @@ final class LibrarySession {
         ReaderPreferences.shared.reloadFeedPrefs(forLibraryHash: nil)
         resolvedFulltextCache.removeAll()
         resolvedFulltextCacheOrder.removeAll()           // §7
+        fulltextIndexStamp = nil
+        lastFulltextError = nil
         filterResultCache.removeAll()                    // §7
         membershipVersion = 0                            // §7
         cachedLikedIDs = []
@@ -341,87 +357,60 @@ final class LibrarySession {
     // MARK: - FTS resolution
 
     func cachedFulltextIDs(for phrase: String) -> [Int]? {
-        let trimmed = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return resolvedFulltextCache[fulltextCacheKey(trimmed)]
+        guard let key = FTSQuery.make(phrase)?.cacheKey else { return nil }
+        return resolvedFulltextCache[key]
     }
 
+    /// Resolves a `fulltext:` phrase to Calibre book ids.
+    ///
+    /// Only a successful search is cached, including a successful empty one. A failure
+    /// (busy, syntax, missing file, cancellation) returns `[]` for this call, records
+    /// `lastFulltextError` unless it was a cancellation, and caches nothing (D13).
     func resolveFulltextIDs(for phrase: String) async -> [Int] {
-        let trimmed = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
-        let key = fulltextCacheKey(trimmed)
-        if let cachedIDs = resolvedFulltextCache[key] {
-            return cachedIDs
-        }
-        guard let fts = ftsLibrary else {
+        guard let query = FTSQuery.make(phrase) else { return [] }
+        if let hit = resolvedFulltextCache[query.cacheKey] { return hit }
+        guard let fts = fulltextSearcher else {
             #if DEBUG
-            print("[LibrarySession] fulltext search unavailable for phrase=\"\(trimmed)\"")
+            print("[LibrarySession] fulltext search unavailable for phrase=\"\(query.normalized)\"")
             #endif
             return []
         }
-        let limit = max(await library?.bookCount() ?? 0, 1)
-        let ids = await fts.search(query: trimmed, limit: limit) ?? []
-        if ids.isEmpty {
+        let token = fts.beginSearch()
+        do {
+            let set = try await withTaskCancellationHandler {
+                try await fts.searchBooks(query, token: token)
+            } onCancel: {
+                fts.cancel(token)
+            }
+            // Invariant 23: every write below happens only after this check.
+            if Task.isCancelled { return [] }
+            if let previous = fulltextIndexStamp, previous != set.stamp {
+                resolvedFulltextCache.removeAll()
+                resolvedFulltextCacheOrder.removeAll()
+            }
+            fulltextIndexStamp = set.stamp
+            lastFulltextError = nil
+            rememberResolvedFulltext(ids: set.bookIDs, key: query.cacheKey)
+            return set.bookIDs
+        } catch FTSSearchError.cancelled {
+            return []
+        } catch {
+            if Task.isCancelled { return [] }
+            lastFulltextError = String(describing: error)
             #if DEBUG
-            print("[LibrarySession] fulltext search returned no matches for phrase=\"\(trimmed)\"")
+            print("[LibrarySession] fulltext search failed (not cached) for phrase=\"\(query.normalized)\": \(error)")
             #endif
+            return []
         }
-        rememberResolvedFulltext(ids: ids, key: key)
-        return ids
     }
 
     /// Attempts FTS resolution for explicit fulltext only.
     /// Shared between list view and email view — single source of truth.
     func resolvedQuery(_ query: SearchQuery) async -> SearchQuery {
-        guard let phrase = query.fulltextPhrase?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !phrase.isEmpty else {
+        guard let rawPhrase = query.fulltextPhrase, FTSQuery.make(rawPhrase) != nil else {
             return query
         }
-        let cacheKey = fulltextCacheKey(phrase)
-        if let cachedIDs = resolvedFulltextCache[cacheKey] {
-            return SearchQuery(
-                tagTerms: query.tagTerms,
-                authorTerms: query.authorTerms,
-                titleTerms: query.titleTerms,
-                seriesTerms: query.seriesTerms,
-                statusTerms: query.statusTerms,
-                fulltextPhrase: query.fulltextPhrase,
-                plainTerms: [],
-                ftsMatchedIDs: cachedIDs
-            )
-        }
-        guard let fts = ftsLibrary else {
-            #if DEBUG
-            print("[LibrarySession] fulltext search unavailable for phrase=\"\(phrase)\"")
-            #endif
-            return SearchQuery(
-                tagTerms: query.tagTerms,
-                authorTerms: query.authorTerms,
-                titleTerms: query.titleTerms,
-                seriesTerms: query.seriesTerms,
-                statusTerms: query.statusTerms,
-                fulltextPhrase: query.fulltextPhrase,
-                plainTerms: [],
-                ftsMatchedIDs: []
-            )
-        }
-        guard let ftsIDs = await fts.search(query: phrase), !ftsIDs.isEmpty else {
-            #if DEBUG
-            print("[LibrarySession] fulltext search returned no matches for phrase=\"\(phrase)\"")
-            #endif
-            rememberResolvedFulltext(ids: [], key: cacheKey)
-            return SearchQuery(
-                tagTerms: query.tagTerms,
-                authorTerms: query.authorTerms,
-                titleTerms: query.titleTerms,
-                seriesTerms: query.seriesTerms,
-                statusTerms: query.statusTerms,
-                fulltextPhrase: query.fulltextPhrase,
-                plainTerms: [],
-                ftsMatchedIDs: []
-            )
-        }
-        rememberResolvedFulltext(ids: ftsIDs, key: cacheKey)
+        let ids = await resolveFulltextIDs(for: rawPhrase)
         return SearchQuery(
             tagTerms: query.tagTerms,
             authorTerms: query.authorTerms,
@@ -430,7 +419,7 @@ final class LibrarySession {
             statusTerms: query.statusTerms,
             fulltextPhrase: query.fulltextPhrase,
             plainTerms: [],
-            ftsMatchedIDs: ftsIDs
+            ftsMatchedIDs: ids
         )
     }
 
@@ -555,10 +544,6 @@ final class LibrarySession {
         let savedPort = ud.object(forKey: feedServerPortKey(for: path)).flatMap { _ in ud.integer(forKey: feedServerPortKey(for: path)) }
         let port = savedPort.flatMap { UInt16(exactly: $0) } ?? 8765
         startFeedServer(port: port)
-    }
-
-    private func fulltextCacheKey(_ phrase: String) -> String {
-        phrase.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }
 
     // MARK: - Re-open saved library on launch

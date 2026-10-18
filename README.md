@@ -22,7 +22,7 @@ Ambrosia is a native macOS EPUB library reader for AO3-heavy Calibre libraries. 
 
 - Opens an existing Calibre library folder with `metadata.db`.
 - Reads Calibre metadata read-only, including authors, tags, series, comments, custom columns, and EPUB file locations.
-- Provides list, email-style, and activity library modes, search prefixes, filter rules, pagination, and optional Calibre full-text-search fallback.
+- Provides list, email-style, and activity library modes, search prefixes, filter rules, pagination, and optional full-text search through Calibre's own FTS index (`fulltext:`).
 - Extracts AO3 EPUB preface metadata into a per-library `ambrosia_meta.db`, including fandoms, relationships, characters, additional tags, categories, word counts, chapter counts, AO3 series, and extraction diagnostics.
 - Supports system collections (Read Later, Liked, Skipped, Finished, In Progress, Has Annotations, Series or Merged) as well as user-created, renameable collections.
 - Groups collapsed series through cached AO3/Calibre series metadata and tracks merged or anthology-style works in Series or Merged.
@@ -74,7 +74,7 @@ Ambrosia expects a Calibre library directory, not an individual EPUB folder. (Wi
 
 - `metadata.db`
 - Calibre's normal author/book subfolders and EPUB files
-- optionally `full-text-search.db` for FTS-backed plain-text search
+- optionally `full-text-search.db` for `fulltext:` search (Calibre's FTS index, queried natively)
 
 On first open, Ambrosia records the library path and creates its own writable database under:
 
@@ -118,7 +118,7 @@ This is a work-in-progress app. Keep changes scoped, preserve Calibre read-only 
 
 ## License
 
-This project is licensed under the MIT license.
+This project is licensed under the GNU General Public License v3.0 only (GPL-3.0-only). See `LICENSE`. Third-party dependency licenses are listed in `THIRD_PARTY.md`.
 
 #### Note to self
 

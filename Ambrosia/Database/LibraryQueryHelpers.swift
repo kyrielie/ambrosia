@@ -24,6 +24,24 @@ enum LibraryQueryHelpers {
     /// (`currentVisibilityPolicy`) and call `.filter(_:)` directly — see
     /// LibraryVisibilityPolicy.swift. Retired rather than left as unused dead code.
 
+    // MARK: - Full-text cache keys
+
+    // The cache key for a `fulltext:` phrase is `FTSQuery.make(phrase)?.cacheKey`:
+    // trimmed and NFKC-normalized, deliberately NOT case- or diacritic-folded.
+
+    /// Builds the `fulltextMap` handed to `FilterBuilder` from the values of every
+    /// full-text rule. Rules whose values normalize to the same key collapse to one
+    /// entry (first wins) instead of trapping, which `Dictionary(uniqueKeysWithValues:)`
+    /// did. A phrase with no cached result maps to an empty set, as before.
+    static func fulltextMap(values: [String], lookup: (String) -> [Int]?) -> [String: Set<Int>] {
+        var map: [String: Set<Int>] = [:]
+        for value in values {
+            guard let key = FTSQuery.make(value)?.cacheKey, map[key] == nil else { continue }
+            map[key] = Set(lookup(value) ?? [])
+        }
+        return map
+    }
+
     /// Intersects `ids` with `optionalIDs`, or returns `ids` unchanged if
     /// `optionalIDs` is nil (i.e. "no additional restriction").
     static func intersect(_ ids: [Int], with optionalIDs: [Int]?) -> [Int] {

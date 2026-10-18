@@ -55,30 +55,102 @@ file. If a bug lives in one of those, look for a pure sub-piece that can be
 pulled out and tested the way `SeriesSpineMap` and `PagingOffsetState`
 already were.
 
-## Untested pure-logic modules (as of this doc)
+## Coverage map
 
-Confirmed by grepping `AmbrosiaTests/` for each type name — these have no
-test coverage at all:
+Verified 2026-10-17 by listing `AmbrosiaTests/` and grepping it for each
+source file's type name. This is a name-based heuristic, not line coverage: a
+type defined in a differently named file can be undercounted, and a reference
+in a test does not mean the type is well covered. Real line coverage is
+collected in CI (`-enableCodeCoverage YES`) but is not reported anywhere yet.
 
-- `SearchQueryParser.swift` — all `tag:`/`author:`/`title:`/`series:`/
-  `status:`/`fulltext:` prefix parsing and `asSingleFilterRule`.
-- `AO3MetadataExtractor.swift` / `AO3MetadataExtractor+Authors.swift` — see
-  `docs/ao3_epub_html_reference.md` for ready-made fixture HTML shapes.
-- `CacheTypes.swift`'s `LRUCache` — note its eviction is insertion-order,
-  not access-order: reading a key via the `subscript` getter does not move
-  it to the back of `order`, only `set(_:for:)` does. That is worth a test
-  precisely because "LRU" is the type's name, and a future reader is likely
-  to assume `get` refreshes recency.
-- `TagExpansionResolver.swift` and `MatchingSubqueryBuilder` (in
-  `FilterBuilder.swift`) — SQL fragment builders; test by asserting exact
-  string output.
-- `GzipEncoder.swift` — hand-rolled RFC 1952 framing; see
-  `GzipEncoderTests.swift` for a round-trip approach via
-  `compression_decode_buffer` (the decode counterpart to the
-  `compression_encode_buffer` call already in `rawDeflate`).
-- `HTMLStripper.swift`, `SeriesSpineMap.swift`, `DebounceTimer.swift`,
-  `CustomColumnConfig.swift`, `LibraryIndexManager.swift`,
-  `AO3TagSeedDatabaseConfig.swift`, `ExtractionProgress.swift`.
+Current size: 35 test files, 325 test functions, all `XCTestCase` (no Swift
+Testing), against 89 source files.
+
+### Covered by a dedicated test file
+
+| Source | Test file(s) |
+| --- | --- |
+| `SearchQueryParser` | `SearchQueryParserTests` |
+| `AO3MetadataExtractor`, `+Authors` | `AO3MetadataExtractorTests`, `AO3MetadataExtractorAuthorsTests`, `AO3RatingHighestTests` |
+| `LRUCache` (`CacheTypes.swift`) | `LRUCacheTests` |
+| `TagExpansionResolver` | `TagExpansionResolverTests` |
+| `MatchingSubqueryBuilder` (`FilterBuilder.swift`) | `MatchingSubqueryBuilderTests` |
+| `GzipEncoder` | `GzipEncoderTests` |
+| `HTMLStripper` | `HTMLStripperTests` |
+| `SeriesSpineMap` | `SeriesSpineMapTests` |
+| `SeriesMatchExpansion`, `SeriesGroupBuilder` | `SeriesMatchExpansionTests`, `SeriesGroupBuilderTests` (plus `SeriesHelpersTests`) |
+| `DebounceTimer` | `DebounceTimerTests` |
+| `CustomColumnConfig` | `CustomColumnConfigTests` |
+| `LibraryIndexManager` | `LibraryIndexManagerTests` |
+| `AO3TagSeedDatabaseConfig` | `AO3TagSeedDatabaseConfigValidationTests`, `AO3TagSeedDatabaseConfigInstanceTests` |
+| `ExtractionProgress` | `ExtractionProgressTests` |
+| `LibraryQueryHelpers`, `LibraryVisibilityPolicy`, `DuplicateBookDetector` | `LibraryQueryHelpersTests`, `LibraryVisibilityPolicyTests`, `DuplicateBookDetectorTests` |
+| `KeyBinding.validate` | `KeyBindingValidationTests` |
+| `CollectionStore`, `ErrorLogEntry` storage | `CollectionStoreTests`, `ErrorLogTests` |
+| `AnnotationExportManager` | `AnnotationExportManagerTests` |
+| `CalibreLibrary` search | `CalibreLibrarySearchTests` |
+| EPUB image reference rewriting | `EPUBImageReferenceRewriteTests` |
+| `PagingOffsetState` | `PagingOffsetStateNavigationIntentTests` |
+| `LibraryFilterDebug` | `LibraryFilterDebugSummaryTests` |
+| `AmbrosiaMetaDB` migrations | `AmbrosiaMetaDBMigrationTests` |
+| `LocalFeedServer` walk cache | `LocalFeedServerWalkCacheTests` |
+| `LibraryQueryHelpers` full-text cache key and `fulltextMap` | `FulltextCacheKeyTests` |
+| `FTSQuery` normalization, cache key, sanitized expression | `FTSQueryTests` |
+| `SearchControl` generation and cancel semantics | `SearchControlTests` |
+| `SQLIDList` single-binding id sets (40,000 ids) | `SQLIDListTests` |
+| `CalibreFTSLibrary` against a Calibre-shaped fixture | `CalibreFTSLibraryTests` |
+| `LibrarySession` fulltext cache rules, via the `FulltextSearching` seam | `LibrarySessionFulltextTests` |
+| Real-library FTS timings (skipped unless `AMBROSIA_FTS_BENCH_LIBRARY` is set to a library folder) | `CalibreFTSBenchmarkTests` |
+| `CalibreTokenizer` (C port of Calibre's FTS5 tokenizer, `Database/CalibreFTS`) | `CalibreTokenizerTests`; the golden-corpus test skips until `AmbrosiaTests/calibre_tokenizer_golden.json` is generated (see `calibre-fts.md`) |
+| `CalibreTokenizerRegistration` against a Calibre-shaped fixture (`FTSTestFixture`, `calibre_fts_schema.sql`) | `CalibreTokenizerRegistrationTests` |
+
+Note on `LRUCache`: eviction is insertion-order, not access-order. Reading a
+key via the `subscript` getter does not move it to the back of `order`; only
+`set(_:for:)` does. `LRUCacheTests` is the place that behavior is pinned.
+
+### Thin relative to size (logic worth testing)
+
+Lines are source LOC. "Tests" is what exists today.
+
+| Source | LOC | Tests today |
+| --- | --- | --- |
+| `AmbrosiaMetaDB.swift` | 2459 | migrations and `CollectionStore` only |
+| `LocalFeedServer.swift` | 2543 | walk cache only (4 tests); feed XML, JSON feed and OPML output untested |
+| `LibrarySession.swift` | 975 | none (only mentioned in a comment in `AnnotationExportManagerTests`) |
+| `EPUBParser` and extensions (spine, OPF, merged HTML, offsets, `parseTOC`) | about 900 | image reference rewrite only |
+| `ExportManager.swift` | 516 | none (the CSV library export; `AnnotationExportManagerTests` covers a different type) |
+| `CalibreFTSLibrary.swift` | about 380 | `CalibreFTSLibraryTests` (modes, phase 1 and 2, cancellation, busy, file replacement, error mapping) |
+| `TransferDatabaseBuilder.swift` | 196 | none |
+
+The UTF-16 offset contract in `epub-parsing.md` (Invariant 5) is the
+highest-risk untested behavior, because annotations depend on it.
+
+### Out of scope for unit tests (UI and web view)
+
+No file below has a test, and per the rule above none is expected to until a
+pure piece is extracted from it: `ReaderViewController`,
+`PreferencesWindowController`, `LibraryWindowController`,
+`EmailLibraryViewController`, `EmailSidebarViewController`, `LibraryRootView`,
+`BookListRow`, `FilterDrawerView`, `AO3FilterPopupView`, `ActivityFeedView`,
+`PaginationJS`/`PaginationEngine` and `HighlightBridge` (both need a live
+`WKWebView`).
+
+### Keeping this table current
+
+When you add a test file, add or update its row here in the same change.
+When a "thin" entry gains meaningful tests, move it up a section.
+
+## Fixture HTML and local-only references
+
+Tests that need AO3 preface HTML must use synthetic fixtures written for this
+repo. `docs/ao3_epub_html_reference.md` is gitignored because it contains
+non-open-source material (see `CLAUDE.md`, "Local-only files"), so it is not
+available in CI or fresh clones and its text must not be copied into test
+files. `AO3MetadataExtractorTests.swift` currently cites that file in its
+header comment and states its fixture HTML was built from that file's
+templates and example tables. The fixtures are inline in the test file and are
+tracked in git, so the maintainer should confirm they contain no material from
+the reference that the exclusion was meant to keep out.
 
 ## CI test-completeness gap
 

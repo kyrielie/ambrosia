@@ -86,9 +86,13 @@ targets:
         product: FlyingFox
       - package: FlyingFox
         product: FlyingSocks
+      # ICU C API for the Calibre-compatible FTS tokenizer (Database/CalibreFTS/C).
+      # If XcodeGen rejects this, use OTHER_LDFLAGS: "-licucore" instead.
+      - sdk: libicucore.tbd
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_OBJC_BRIDGING_HEADER: Ambrosia/Ambrosia-Bridging-Header.h
         CODE_SIGN_ENTITLEMENTS: Ambrosia/Ambrosia.entitlements
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Automatic
