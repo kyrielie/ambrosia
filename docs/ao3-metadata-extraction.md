@@ -3,7 +3,11 @@
 Scope: how AO3 preface HTML embedded in an EPUB is parsed into structured
 metadata, and how tag canonicalization/synonym expansion is stored. For how
 that metadata is used in search/filter, see `search-and-filter.md`. For the
-EPUB container/HTML parsing this reads from, see `epub-parsing.md`.
+EPUB container/HTML parsing this reads from, see `epub-parsing.md`. The raw
+HTML shapes this extractor parses are described in
+`docs/ao3_epub_html_reference.md`, a local-only file that is gitignored because
+it contains non-open-source material (see `CLAUDE.md`, "Local-only files").
+It may be absent from your checkout; do not copy its text into tracked files.
 
 ---
 

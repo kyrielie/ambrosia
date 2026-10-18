@@ -40,6 +40,17 @@ Collections:
 
 ---
 
+### Full-text result cache
+
+`LibrarySession.resolvedFulltextCache` maps a `fulltext:` phrase to the matching Calibre book ids (insertion-order LRU).
+
+- Key: `FTSQuery.cacheKey`, which is the trimmed, NFKC-normalized phrase with a `u|` prefix (`s|` for the stemmed table, unused until stemming exists). It is not case- or diacritic-folded, because `resume` and `résumé` are different queries. Every site that derives a key (`LibrarySession`, `FilterBuilder`, and `LibraryQueryHelpers.fulltextMap`, which `LibraryRootView` and `EmailLibraryViewController` use) goes through `FTSQuery.make(...)?.cacheKey`.
+- Only a successful search is cached, including a successful search with zero matches. A busy, syntax, missing-file or cancelled search returns no ids for that call and caches nothing; `LibrarySession.lastFulltextError` records the failure (not for cancellations).
+- Invalidation: each result carries an `FTSIndexStamp` (device and inode of `full-text-search.db`, plus `PRAGMA data_version` on the connection). When a later successful search reports a different stamp, the whole cache is cleared before the new entry is stored. This is checked only when a search runs, so a cache hit does not revalidate. The cache is also cleared on library open and close.
+- Whether `data_version` changes on a read-only connection (gate G5) is exercised by `CalibreFTSLibraryTests.testDataVersionChangesWhenAnotherConnectionCommits`; that test has not been run on macOS yet. File replacement is detected independently through the inode, so the cache does not depend on `data_version` alone.
+
+---
+
 ## Key invariants
 
 23. Async work that writes to shared or cached state on behalf of a UI surface must gate *every* one of its writes behind the same staleness check (task-cancellation or a generation/token guard) as its other results — not just the ones that are obviously part of the "final" result. A guard that protects some writes but not others is worse than no guard: code that reads the guarded writes assumes the whole function is safe, so the unguarded write's staleness is invisible on read. Full rule in `concurrency-invariants.md`. Found in `applyFilterRules()`: `cachedFilterTagExpansions` was written several `await` points before the existing `libraryFilterApplicationToken` guard, so a superseded filter-application task could overwrite a newer task's tag-synonym expansions after the fact, even though the token guard correctly protected `activeFilterResult` and the other post-guard writes. Fixed by moving the write to after the guard, alongside the other post-guard writes, in both `LibraryRootView` and `EmailLibraryViewController`.

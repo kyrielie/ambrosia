@@ -1551,11 +1551,9 @@ struct LibraryRootView: View {
                     collectionMap[SystemCollectionID.seriesOrMergedName] = (try? await metaDB.leadsAtLeastOneSeriesIDs()) ?? []
                 }
             }
-            let fulltextMap = Dictionary(uniqueKeysWithValues: fulltextRules.map { rule in
-                let key = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-                return (key, Set(session.cachedFulltextIDs(for: rule.value) ?? []))
-            })
+            let fulltextMap = LibraryQueryHelpers.fulltextMap(values: fulltextRules.map(\.value)) {
+                session.cachedFulltextIDs(for: $0)
+            }
             // Snapshot the var maps as immutable lets before any async let
             // binding below. Swift 6 forbids capturing a var into a
             // concurrently-executing closure — these two lines fix the

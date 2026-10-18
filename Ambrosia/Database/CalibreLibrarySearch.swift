@@ -18,9 +18,8 @@ extension CalibreLibrary {
             if ftsIDs.isEmpty {
                 clauses.append("0 = 1")
             } else {
-                let ph = ftsIDs.map { _ in "?" }.joined(separator: ",")
-                clauses.append("b.id IN (\(ph))")
-                args.append(contentsOf: ftsIDs.map { $0 as Binding? })
+                clauses.append(SQLIDList.clause(column: "b.id"))
+                args.append(SQLIDList.binding(ftsIDs))
             }
         } else if !query.plainTerms.isEmpty {
             let joined = query.plainTerms.joined(separator: " ")

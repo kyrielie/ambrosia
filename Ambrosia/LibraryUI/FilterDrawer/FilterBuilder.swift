@@ -652,8 +652,7 @@ struct FilterBuilder {
         var fulltextCache: [String: Set<Int>] = [:]
 
         func cachedFulltextIDs(for rule: FilterRule) async -> Set<Int> {
-            let phrase = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
-            let key = phrase.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            let key = FTSQuery.make(rule.value)?.cacheKey ?? ""
             if let cached = fulltextCache[key] { return cached }
             let result: Set<Int>
             if let mapped = fulltextMap[key] {
@@ -721,10 +720,17 @@ struct FilterBuilder {
     }
 
     private func fulltextIDs(for rule: FilterRule) async -> Set<Int> {
-        let phrase = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !phrase.isEmpty, let ftsLibrary else { return [] }
-        let limit = max(await library.bookCount(), 1)
-        return Set(await ftsLibrary.search(query: phrase, limit: limit) ?? [])
+        guard let query = FTSQuery.make(rule.value), let ftsLibrary else { return [] }
+        let token = ftsLibrary.beginSearch()
+        do {
+            return Set(try await ftsLibrary.searchBooks(query, token: token).bookIDs)
+        } catch {
+            // Not cached: the result is used once and `fulltextCache` is per call.
+            #if DEBUG
+            print("[FilterBuilder] fulltext search failed for phrase=\"\(query.normalized)\": \(error)")
+            #endif
+            return []
+        }
     }
 
     // Legacy single-group entry point — used by quick tag/author taps

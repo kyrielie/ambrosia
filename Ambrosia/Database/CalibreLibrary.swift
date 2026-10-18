@@ -616,9 +616,8 @@ actor CalibreLibrary {
     /// the whole matched set, not just the final page, would be wasteful.
     func bulkTitles(ids: [Int]) -> [Int: String] {
         guard !ids.isEmpty else { return [:] }
-        let placeholders = ids.map { _ in "?" }.joined(separator: ",")
-        let sql = "SELECT id, title FROM books WHERE id IN (\(placeholders))"
-        guard let rows = try? db.prepare(sql, ids.map { $0 as Binding? }).map({ $0 }) else { return [:] }
+        let sql = "SELECT id, title FROM books WHERE \(SQLIDList.clause(column: "id"))"
+        guard let rows = try? db.prepare(sql, [SQLIDList.binding(ids)]).map({ $0 }) else { return [:] }
         var result: [Int: String] = [:]
         for row in rows {
             guard let id = (row[0] as? Int64).map(Int.init), let title = row[1] as? String else { continue }
@@ -851,9 +850,8 @@ actor CalibreLibrary {
         var args: [Binding?] = []
 
         if let ids = restrictIDs, !ids.isEmpty {
-            let ph = ids.map { _ in "?" }.joined(separator: ",")
-            conditions.append("b.id IN (\(ph))")
-            args.append(contentsOf: ids.map { $0 as Binding? })
+            conditions.append(SQLIDList.clause(column: "b.id"))
+            args.append(SQLIDList.binding(ids))
         }
         let (qClause, qArgs) = whereClause(for: query)
         if !qClause.isEmpty {
@@ -1048,9 +1046,8 @@ actor CalibreLibrary {
 
         // Restrict to explicit ID set (FilterResult path)
         if let ids = restrictIDs, !ids.isEmpty {
-            let ph = ids.map { _ in "?" }.joined(separator: ",")
-            conditions.append("b.id IN (\(ph))")
-            args.append(contentsOf: ids.map { $0 as Binding? })
+            conditions.append(SQLIDList.clause(column: "b.id"))
+            args.append(SQLIDList.binding(ids))
         }
 
         let (qClause, qArgs) = whereClause(for: query)
@@ -1467,9 +1464,8 @@ extension CalibreLibrary {
     /// (Moved here from FilterBuilder.swift — this is CalibreLibrary's data, not a filter concern.)
     func bulkCustomColumnInts(table: String, ids: [Int]) -> [Int: Int] {
         guard !ids.isEmpty else { return [:] }
-        let placeholders = ids.map { _ in "?" }.joined(separator: ",")
-        let sql = "SELECT book, value FROM \(table) WHERE book IN (\(placeholders))"
-        let args = ids.map { $0 as Binding? }
+        let sql = "SELECT book, value FROM \(table) WHERE \(SQLIDList.clause(column: "book"))"
+        let args: [Binding?] = [SQLIDList.binding(ids)]
         guard let rows = try? db.prepare(sql, args).map({ $0 }) else { return [:] }
         var result: [Int: Int] = [:]
         for row in rows {
@@ -1483,9 +1479,8 @@ extension CalibreLibrary {
     /// Count books within a given ID set (for the footer when a filter is active).
     func bookCount(ids: [Int]) -> Int {
         guard !ids.isEmpty else { return 0 }
-        let placeholders = ids.map { _ in "?" }.joined(separator: ",")
-        let sql = "SELECT COUNT(*) FROM books WHERE id IN (\(placeholders))"
-        let args = ids.map { $0 as Binding? }
+        let sql = "SELECT COUNT(*) FROM books WHERE \(SQLIDList.clause(column: "id"))"
+        let args: [Binding?] = [SQLIDList.binding(ids)]
         return (try? db.scalar(sql, args) as? Int64).map(Int.init) ?? 0
     }
 }

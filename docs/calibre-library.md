@@ -28,9 +28,12 @@ Important schema facts:
 
 ## Full-text search
 
-Optional FTS search through Calibre's `full-text-search.db` (FTS5), via `CalibreFTSLibrary`. Search-bar plain-text terms prefer this when available; see `search-and-filter.md` for how terms fall back to fuzzy title `LIKE` when it isn't.
+Optional search through Calibre's `full-text-search.db`, via `CalibreFTSLibrary`, for explicit `fulltext:` queries only (plain terms never reach it; see `search-and-filter.md`). The file is opened read-only and never written. Two modes, chosen when the file is opened:
 
----
+- `native`: a real FTS5 `MATCH` against `books_fts`. `books_fts` is declared with Calibre's `calibre` tokenizer, so Ambrosia registers a Swift/C port of that tokenizer on its own connection first. Ids only, unranked, `DISTINCT book`, no result cap, no format filter by default. Details, schema and gate results are in `calibre-fts.md`.
+- `likeFallback`: a `LIKE` scan over `books_text.searchable_text` with the user's text escaped and matched literally (ASCII case-insensitive, substring, not token-based). Used only when tokenizer registration fails or the file's `PRAGMA user_version` is not 1.
+
+If `books_text` lacks `id, book, format, searchable_text`, `CalibreFTSLibrary.init?` returns nil and `fulltext:` finds nothing. A failed query returns no matches for that call and is never cached.
 
 ## Key invariants
 

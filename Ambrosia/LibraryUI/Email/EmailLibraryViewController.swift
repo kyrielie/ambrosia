@@ -784,11 +784,9 @@ final class EmailLibraryViewController: NSViewController {
                     collectionMap[SystemCollectionID.seriesOrMergedName] = (try? await metaDB.leadsAtLeastOneSeriesIDs()) ?? []
                 }
             }
-            let fulltextMap = Dictionary(uniqueKeysWithValues: fulltextRules.map { rule in
-                let key = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-                return (key, Set(session.cachedFulltextIDs(for: rule.value) ?? []))
-            })
+            let fulltextMap = LibraryQueryHelpers.fulltextMap(values: fulltextRules.map(\.value)) {
+                session.cachedFulltextIDs(for: $0)
+            }
 
             // §6: Crossover map
             var crossoverMap: Set<Int> = []

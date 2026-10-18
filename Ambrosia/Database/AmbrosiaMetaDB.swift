@@ -1735,8 +1735,7 @@ actor AmbrosiaMetaDB {
     /// series.
     func expandedSeriesMemberIDs(for calibreIDs: [Int]) throws -> Set<Int> {
         guard !calibreIDs.isEmpty else { return [] }
-        let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")
-        let args = calibreIDs.map { $0 as Binding? }
+        let args: [Binding?] = [SQLIDList.binding(calibreIDs)]
         let sql = """
         WITH keyed AS (
             SELECT calibre_id,
@@ -1745,7 +1744,7 @@ actor AmbrosiaMetaDB {
             FROM series_cache
         ),
         matched_keys AS (
-            SELECT DISTINCT series_key FROM keyed WHERE calibre_id IN (\(placeholders))
+            SELECT DISTINCT series_key FROM keyed WHERE \(SQLIDList.clause(column: "calibre_id"))
         ),
         qualifying_keys AS (
             SELECT series_key
@@ -1779,8 +1778,7 @@ actor AmbrosiaMetaDB {
     /// alphabetizes on its own.
     func qualifyingSeriesNames(for calibreIDs: [Int]) throws -> [Int: String] {
         guard !calibreIDs.isEmpty else { return [:] }
-        let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")
-        let args = calibreIDs.map { $0 as Binding? }
+        let args: [Binding?] = [SQLIDList.binding(calibreIDs)]
         let sql = """
         WITH keyed AS (
             SELECT calibre_id, series_name,
@@ -1796,7 +1794,7 @@ actor AmbrosiaMetaDB {
         )
         SELECT calibre_id, series_name
         FROM keyed
-        WHERE calibre_id IN (\(placeholders))
+        WHERE \(SQLIDList.clause(column: "calibre_id"))
           AND series_key IN (SELECT series_key FROM qualifying_keys)
         """
         let rows = try prepare(sql, args)
