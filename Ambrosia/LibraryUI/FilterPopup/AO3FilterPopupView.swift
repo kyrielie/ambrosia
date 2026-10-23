@@ -116,6 +116,8 @@ struct AO3FilterPopupView: View {
             .padding()
         }
         .task { refreshFacets() }
+        .task(id: toolbarState.searchText) { refreshFacets() }
+        .task(id: facetController.baseIDs) { refreshFacets() }
         .frame(minWidth: 360, minHeight: 400)
     }
 
@@ -479,6 +481,8 @@ struct DirectionalTagFacetSection: View {
                         .font(.caption)
                     if !searchText.isEmpty {
                         Button {
+                            searchTask?.cancel()
+                            searchTask = nil
                             searchText = ""
                             searchResults = []
                         } label: {
@@ -524,11 +528,13 @@ struct DirectionalTagFacetSection: View {
     private func performSearch(query: String) {
         searchTask?.cancel()
         let trimmed = query.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, let facetController else {
+        guard trimmed.count >= 2, let facetController else {
             searchResults = []
             return
         }
         searchTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else { return }
             let fandoms = Array(state.includedFandoms)
             let results = await facetController.searchTags(
                 query: trimmed, field: field, fandomContext: fandoms, limit: 10

@@ -2476,50 +2476,54 @@ actor AmbrosiaMetaDB {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
 
         if field == .author {
-            var conditions: [String] = []
-            var bindings: [Binding?] = []
-            if !trimmed.isEmpty {
-                conditions.append("name LIKE ?")
-                bindings.append("%\(trimmed)%")
-            }
-            if !fandomContext.isEmpty {
-                let placeholders = fandomContext.map { _ in "?" }.joined(separator: ", ")
-                conditions.append("""
-                    calibre_id IN (
-                        SELECT calibre_id FROM book_tags
-                        WHERE tag_type = 'fandom' AND tag_name IN (\(placeholders))
-                    )
-                """)
-                bindings.append(contentsOf: fandomContext.map { $0 as Binding? })
-            }
-            let whereClause = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
-            let sql = """
-                SELECT name, COUNT(*) AS cnt
-                FROM book_authors
-                \(whereClause)
-                GROUP BY name
-                ORDER BY cnt DESC
-                LIMIT ?
-                """
-            bindings.append(limit as Binding?)
-            if let rows = try? readDB.prepare(sql, bindings).map({ $0 }), !rows.isEmpty {
-                return rows.compactMap { row in
-                    guard let name = row[0] as? String else { return nil }
-                    let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) ?? 0
-                    return (name, count)
+            let hasBookAuthors = (try? readDB.scalar("SELECT 1 FROM book_authors LIMIT 1") as? Int64) != nil
+            if hasBookAuthors {
+                var conditions: [String] = []
+                var bindings: [Binding?] = []
+                if !trimmed.isEmpty {
+                    conditions.append("name LIKE ?")
+                    bindings.append("%\(trimmed)%")
                 }
+                if !fandomContext.isEmpty {
+                    let placeholders = fandomContext.map { _ in "?" }.joined(separator: ", ")
+                    conditions.append("""
+                        calibre_id IN (
+                            SELECT calibre_id FROM book_tags
+                            WHERE tag_type = 'fandom' AND tag_name IN (\(placeholders))
+                        )
+                    """)
+                    bindings.append(contentsOf: fandomContext.map { $0 as Binding? })
+                }
+                let whereClause = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
+                let sql = """
+                    SELECT name, COUNT(*) AS cnt
+                    FROM book_authors
+                    \(whereClause)
+                    GROUP BY name
+                    ORDER BY cnt DESC
+                    LIMIT ?
+                    """
+                bindings.append(limit as Binding?)
+                if let rows = try? readDB.prepare(sql, bindings).map({ $0 }) {
+                    return rows.compactMap { row in
+                        guard let name = row[0] as? String else { return nil }
+                        let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) ?? 0
+                        return (name, count)
+                    }
+                }
+                return []
             }
 
-            // Fallback to ao3_metadata JSON column if book_authors is not populated
+            // Fallback to ao3_metadata JSON column ONLY if book_authors table is empty
             let jsonSQL = """
                 SELECT je.value AS name, COUNT(*) AS cnt
                 FROM ao3_metadata, json_each(ao3_metadata.author_names_json) AS je
-                \(trimmed.isEmpty ? "" : "WHERE je.value LIKE ?")
+                WHERE je.value LIKE ?
                 GROUP BY je.value
                 ORDER BY cnt DESC
                 LIMIT ?
                 """
-            let jsonBindings: [Binding?] = trimmed.isEmpty ? [limit as Binding?] : ["%\(trimmed)%", limit as Binding?]
+            let jsonBindings: [Binding?] = ["%\(trimmed)%", limit as Binding?]
             guard let rows = try? readDB.prepare(jsonSQL, jsonBindings).map({ $0 }) else { return [] }
             return rows.compactMap { row in
                 guard let name = row[0] as? String else { return nil }
@@ -2528,50 +2532,54 @@ actor AmbrosiaMetaDB {
             }
         }
 
-        var conditions: [String] = ["bt.tag_type = ?"]
-        var bindings: [Binding?] = [field.rawValue]
-        if !trimmed.isEmpty {
-            conditions.append("bt.tag_name LIKE ?")
-            bindings.append("%\(trimmed)%")
-        }
-        if !fandomContext.isEmpty && field != .fandom {
-            let placeholders = fandomContext.map { _ in "?" }.joined(separator: ", ")
-            conditions.append("""
-                bt.calibre_id IN (
-                    SELECT calibre_id FROM book_tags
-                    WHERE tag_type = 'fandom' AND tag_name IN (\(placeholders))
-                )
-            """)
-            bindings.append(contentsOf: fandomContext.map { $0 as Binding? })
-        }
-        let whereClause = "WHERE " + conditions.joined(separator: " AND ")
-        let sql = """
-            SELECT bt.tag_name, COUNT(*) AS cnt
-            FROM book_tags bt
-            \(whereClause)
-            GROUP BY bt.tag_name
-            ORDER BY cnt DESC
-            LIMIT ?
-            """
-        bindings.append(limit as Binding?)
-        if let rows = try? readDB.prepare(sql, bindings).map({ $0 }), !rows.isEmpty {
-            return rows.compactMap { row in
-                guard let name = row[0] as? String else { return nil }
-                let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) ?? 0
-                return (name, count)
+        let hasBookTags = (try? readDB.scalar("SELECT 1 FROM book_tags LIMIT 1") as? Int64) != nil
+        if hasBookTags {
+            var conditions: [String] = ["bt.tag_type = ?"]
+            var bindings: [Binding?] = [field.rawValue]
+            if !trimmed.isEmpty {
+                conditions.append("bt.tag_name LIKE ?")
+                bindings.append("%\(trimmed)%")
             }
+            if !fandomContext.isEmpty && field != .fandom {
+                let placeholders = fandomContext.map { _ in "?" }.joined(separator: ", ")
+                conditions.append("""
+                    bt.calibre_id IN (
+                        SELECT calibre_id FROM book_tags
+                        WHERE tag_type = 'fandom' AND tag_name IN (\(placeholders))
+                    )
+                """)
+                bindings.append(contentsOf: fandomContext.map { $0 as Binding? })
+            }
+            let whereClause = "WHERE " + conditions.joined(separator: " AND ")
+            let sql = """
+                SELECT bt.tag_name, COUNT(*) AS cnt
+                FROM book_tags bt
+                \(whereClause)
+                GROUP BY bt.tag_name
+                ORDER BY cnt DESC
+                LIMIT ?
+                """
+            bindings.append(limit as Binding?)
+            if let rows = try? readDB.prepare(sql, bindings).map({ $0 }) {
+                return rows.compactMap { row in
+                    guard let name = row[0] as? String else { return nil }
+                    let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) ?? 0
+                    return (name, count)
+                }
+            }
+            return []
         }
 
-        // Fallback to ao3_metadata JSON column if book_tags has not yet been populated
+        // Fallback to ao3_metadata JSON column ONLY if book_tags is not populated
         let jsonSQL = """
             SELECT je.value AS name, COUNT(*) AS cnt
             FROM ao3_metadata, json_each(ao3_metadata.\(field.jsonColumn)) AS je
-            \(trimmed.isEmpty ? "" : "WHERE je.value LIKE ?")
+            WHERE je.value LIKE ?
             GROUP BY je.value
             ORDER BY cnt DESC
             LIMIT ?
             """
-        let jsonBindings: [Binding?] = trimmed.isEmpty ? [limit as Binding?] : ["%\(trimmed)%", limit as Binding?]
+        let jsonBindings: [Binding?] = ["%\(trimmed)%", limit as Binding?]
         guard let rows = try? readDB.prepare(jsonSQL, jsonBindings).map({ $0 }) else { return [] }
         return rows.compactMap { row in
             guard let name = row[0] as? String else { return nil }

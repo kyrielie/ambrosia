@@ -87,6 +87,9 @@ struct AO3FilterSidebarView: View {
         .task(id: toolbarState.filterExpression) {
             await reloadFacetController()
         }
+        .task(id: toolbarState.searchText) {
+            await reloadFacetController()
+        }
         .task(id: session.membershipVersion) {
             await reloadFacetController()
         }
