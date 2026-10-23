@@ -3,6 +3,11 @@ import Combine
 import SwiftUI
 
 // MARK: - EmailLibraryViewController
+//
+// Refactored in Phase 2 (Presentation Model & View Controller Unification).
+// Three-pane email-style reading interface backed by `LibraryDisplayController`.
+// All query planning, pagination offset tracking, series grouping, and
+// metadata hydration are managed centrally by `displayController`.
 
 final class EmailLibraryViewController: NSViewController {
 
@@ -10,9 +15,7 @@ final class EmailLibraryViewController: NSViewController {
 
     let session: LibrarySession
     let toolbarState: LibraryToolbarState
-    // §Phase2: shared visibility-filtering logic, also owned by
-    // LibraryRootView. Stateless aside from its debug-log label.
-    private let queryController = LibraryQueryController(surfaceLabel: "email")
+    let displayController: LibraryDisplayController
 
     // MARK: - Child VCs
 
@@ -23,131 +26,25 @@ final class EmailLibraryViewController: NSViewController {
     private var readerPaneItem: NSSplitViewItem!
     private var annotationsSidebarItem: NSSplitViewItem!
 
-    // MARK: - Filter sheet host
+    // MARK: - Popovers & Sheets
 
     private var filterSheetHost: NSHostingView<FilterSheetCarrier>?
     private var collectionPickerPopover: NSPopover?
-    private var skippedCollectionCancellable: AnyCancellable?
-    private var seriesOrMergedCancellable: AnyCancellable?
-    private var snapshotsReadyCancellable: AnyCancellable?
-    private var appearanceCancellable: AnyCancellable?
     private var preferenceCancellables: Set<AnyCancellable> = []
 
-    // MARK: - Sidebar state
+    // MARK: - Sidebar & Split State
 
     private var isSidebarHidden = false
     private var lastSidebarThickness: CGFloat = 280
-
-    // MARK: - Pagination
-
-    private var books: [CalibreBook]    = []
-    private var items: [LibraryItem]    = []
-    var currentBooks: [CalibreBook] { books }
-    var bookStates: [Int: BookState] = [:]
-    private var ao3Metadata: [Int: AO3MetadataRecord] = [:]
-    private var likedIDs: Set<Int> = []
-    private var readLaterIDs: Set<Int> = []
-    private var skippedIDs: Set<Int> = []
-    private var seriesOrMergedIDs: Set<Int> = []
-    private var ao3PublisherIDs: Set<Int> = []
-    private var anthologyIDs: Set<Int> = []
-    private var duplicateLoserIDs: Set<Int> = []
-    private var collectionMembership: [String: Set<Int>] = [:]
     private var pendingCollectionSeedIDs: [Int] = []
-    // §Phase2-Pass1: currentPage/rawSQLOffset/rawSQLOffsetHistory/
-    // groupAwareOverflow used to be four independent properties (this file
-    // used the name "groupAwareOverflow" where LibraryRootView used
-    // "rawSQLOffsetOverflow" for the identical purpose). Bundled into one
-    // PagingOffsetState, shared type with LibraryRootView, so
-    // LibraryQueryController (Pass 4/5) can take one inout value instead of
-    // four/five loosely-named parameters.
-    //
-    // PagingOffsetState was since refactored to a per-page model
-    // (rawSQLOffsetByPage/seedOverflowByPage/rawSQLOffsetFrontier/
-    // rawSQLOffsetOverflowFrontier -- see that type's doc comment in
-    // LibraryQueryController.swift for why). This view has no Previous, only
-    // forward/append-only paging via loadNextPageIfAvailable, so every load
-    // here is a new page: it always reads from and advances the frontier,
-    // and never reads back rawSQLOffsetByPage/seedOverflowByPage -- they're
-    // recorded on each load purely to keep this view's usage of the shared
-    // type consistent with LibraryRootView's, not because anything here
-    // reads them back.
-    private var offsetState = PagingOffsetState()
-    private var hasNextPage = false
-    private let pageSize    = 25
-    private var pageFetchLimit: Int { (pageSize * 3) + 1 }
 
-    /// Async-resolved synonym expansions for the current search query's tag terms.
-    /// Mirrors `LibraryRootView.resolvedTagExpansions` — see that property for rationale.
-    private var resolvedTagExpansions: [String: [String]] = [:]
+    // MARK: - Toolbar Toggle Baselines
 
-    /// Expansions for committed filter rule tag values, populated async in
-    /// `applyFilterRules` and read sync in `loadPage`'s SQL-paged path.
-    private var cachedFilterTagExpansions: [String: [String]] = [:]
-
-    // MARK: - Toolbar snapshots
-
-    private var lastSearch: String    = ""
-    private var lastSort: SortField = .title
-    private var lastAscending: Bool      = true
-    private var lastFilterIDs: [Int]?
-    private var lastFilterToken: String?
-
-    /// Set immediately before `applyFilterRules()` triggers its own reload, so the
-    /// Observation-driven trigger in `toolbarStateDidChange()` does not also fire a
-    /// second, redundant `scheduleLoadPage` for the same filter completion.
-    /// Mirrors `LibraryRootView.suppressNextReloadToken`. See Invariant 25.
-    private var suppressNextReloadToken = false
-    private var lastSidebarToggle: Bool  = false
+    private var lastSidebarToggle: Bool = false
     private var lastReaderSidebarToggle: Bool = false
     private var lastShowReaderSidebarToggle: Bool = false
-    private var lastReshuffleToken: Bool = false
-    private var lastGroupBySeries: Bool = false
 
-    /// §switch-flicker fix: set true by `stopObserving()` when this controller is
-    /// removed from the view hierarchy (see LibraryViewController.applyViewMode).
-    /// Switching to email view recreates a brand new EmailLibraryViewController
-    /// every time — old instances were never deallocated because scheduleObservation()
-    /// implicitly captured `self` strongly via `self.toolbarState` inside the
-    /// withObservationTracking apply-closure, which the Observation runtime holds
-    /// onto until it next fires. Since toolbarState is shared and kept alive by
-    /// LibraryViewController, every "dead" EmailLibraryViewController stayed fully
-    /// alive too, kept reacting to toolbarState changes, and kept calling
-    /// loadPage()/applyFilterRules() — racing with the current, visible instance and
-    /// overwriting the shared toolbarState.activeFilterResult out from under it.
-    /// That's the source of both the load/sort/loadPage "blink" and the
-    /// briefly-shows-then-clears flicker when a filter is active.
-    private var isTornDown = false
-
-    /// Called by LibraryViewController right before this controller is removed from
-    /// the view hierarchy. Stops the observation loop from rescheduling itself, so
-    /// the only remaining strong reference to self is released the next time
-    /// toolbarState changes (instead of being held indefinitely).
-    func stopObserving() {
-        isTornDown = true
-        filterComputeTask?.cancel()
-        filterComputeTask = nil
-    }
-
-    private let debouncer = DebounceTimer(delay: 0.4)
-    private var fullTextTask: Task<Void, Never>?
-    private var filterCountTask: Task<Void, Never>?
-    /// The filter compute (full or narrowed). A newer `applyFilterRules` cancels it;
-    /// the evaluator stops at its next phase boundary and the token guard at commit
-    /// stays the final authority.
-    private var filterComputeTask: Task<Void, Never>?
-    private var rebuildSidebarTask: Task<Void, Never>?
-    /// Cancel-and-replace handle for `loadPage(reset:)`. Several independent
-    /// triggers (applyFilterRules' own completion, the withObservationTracking
-    /// sink reacting to that same activeFilterResult change, sort/search/group
-    /// toggles, pagination scroll, tag-expansion resolution, ...) can each want
-    /// to reload the current page at nearly the same moment. Without this,
-    /// two `loadPage` calls run concurrently against the same mutable state
-    /// (books, items, offsetState, hasNextPage) and whichever finishes last
-    /// wins — producing stale/partial results until a later reload happens to
-    /// land cleanly. All `loadPage` calls should go through
-    /// `scheduleLoadPage(reset:)` instead of constructing their own `Task`.
-    private var loadPageTask: Task<Void, Never>?
+    // MARK: - Reader State
 
     private var selectedBook: CalibreBook?
     private weak var currentReaderVC: ReaderViewController?
@@ -156,173 +53,92 @@ final class EmailLibraryViewController: NSViewController {
     private weak var lastAppliedFullTextReader: ReaderViewController?
     private var pendingFullTextPhrase = ""
     private var readerAnnotations: [Annotation] = []
+    private var readerSidebarMode: EmailReaderSidebarMode = .annotations
 
-    // MARK: - Init
+    // MARK: - Computed Properties
 
-    init(session: LibrarySession,
-         toolbarState: LibraryToolbarState) {
-        self.session        = session
-        self.toolbarState   = toolbarState
+    var currentBooks: [CalibreBook] {
+        displayController.books
+    }
+
+    var activeCollectionID: String? {
+        let collectionRules = toolbarState.filterExpression.groups.flatMap(\.rules)
+            .filter { $0.field == .collection && $0.op == .equals }
+        guard collectionRules.count == 1 else { return nil }
+        return collectionRules[0].value
+    }
+
+    // MARK: - Initializers
+
+    init(
+        session: LibrarySession,
+        toolbarState: LibraryToolbarState,
+        displayController: LibraryDisplayController
+    ) {
+        self.session = session
+        self.toolbarState = toolbarState
+        self.displayController = displayController
         super.init(nibName: nil, bundle: nil)
+    }
+
+    convenience init(session: LibrarySession, toolbarState: LibraryToolbarState) {
+        self.init(
+            session: session,
+            toolbarState: toolbarState,
+            displayController: LibraryDisplayController(session: session, toolbarState: toolbarState)
+        )
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    deinit {
+        toolbarState.isEmailReaderSidebarVisible = false
+    }
+
     // MARK: - Lifecycle
 
-    override func loadView() { view = NSView() }
+    override func loadView() {
+        view = NSView()
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
         toolbarState.isEmailReaderSidebarVisible = false
         buildSplitView()
         addFilterSheetHost()
-        // §switch-flicker fix: seed visibility snapshots from the session cache so the
-        // first loadPage/applyFilterRules call below sees correct data and doesn't flash
-        // all books before the async refreshCollectionSnapshots completes.
-        // LibraryRootView writes these caches back after every refresh; they are cleared
-        // on library open/close. If the cache is empty (first launch, library just opened)
-        // the initial render is the same as before and refreshCollectionSnapshots corrects it.
-        seriesOrMergedIDs = session.cachedSeriesOrMergedIDs
-        skippedIDs        = session.cachedSkippedIDs
-        likedIDs          = session.cachedLikedIDs
-        ao3PublisherIDs   = session.cachedAO3PublisherIDs
-        anthologyIDs      = session.cachedAnthologyIDs
-        duplicateLoserIDs = session.cachedDuplicateLoserIDs
-        readLaterIDs      = session.cachedReadLaterIDs
-        lastGroupBySeries = toolbarState.groupBySeries
-        refreshBookStates()
-        refreshCollections()
-        if toolbarState.filterExpression.hasCompleteRules {
-            applyFilterRules()
-        } else {
-            scheduleLoadPage(reset: true)
-        }
-        startObservingToolbarState()
         startObservingPreferences()
-        // Register so LibraryWindowController can deliver committed filter rules
-        toolbarState.registerFilterCommitHandler { [weak self] rule in
-            self?.addOrReplaceRule(rule)
-        }
+        startObservingToolbarToggles()
+        startObservingDisplayController()
+        syncSidebarFromDisplayController()
     }
 
-    deinit {
-        toolbarState.isEmailReaderSidebarVisible = false
-    }
-
-    /// The session finished hydrating membership and AO3 caches after this
-    /// surface was created (first launch or library switch). `loadPage` was
-    /// holding back until now, so seed the local sets exactly as `viewDidLoad`
-    /// does and run the first real load.
-    private func sessionSnapshotsDidBecomeReady() {
-        seriesOrMergedIDs = session.cachedSeriesOrMergedIDs
-        skippedIDs        = session.cachedSkippedIDs
-        likedIDs          = session.cachedLikedIDs
-        ao3PublisherIDs   = session.cachedAO3PublisherIDs
-        anthologyIDs      = session.cachedAnthologyIDs
-        duplicateLoserIDs = session.cachedDuplicateLoserIDs
-        readLaterIDs      = session.cachedReadLaterIDs
-        refreshCollections()
-        if toolbarState.filterExpression.hasCompleteRules {
-            applyFilterRules()
-        } else {
-            scheduleLoadPage(reset: true)
-        }
-    }
-
-    private func startObservingPreferences() {
-        skippedCollectionCancellable = ReaderPreferences.shared.$showSkippedCollection
-            .dropFirst()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                if toolbarState.filterExpression.hasCompleteRules {
-                    applyFilterRules()
-                } else {
-                    scheduleLoadPage(reset: true)
-                }
-            }
-
-        appearanceCancellable = ReaderPreferences.shared.$libraryAppearanceMode
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.applyLibraryAppearance()
-            }
-
-        seriesOrMergedCancellable = NotificationCenter.default.publisher(for: .seriesOrMergedCollectionDidChange)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.refreshCollections()
-            }
-        snapshotsReadyCancellable = NotificationCenter.default.publisher(for: .librarySnapshotsDidBecomeReady)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.sessionSnapshotsDidBecomeReady()
-            }
-        ReaderPreferences.shared.$hideNonAO3PublisherBooks
-            .dropFirst()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.refreshCollections()
-            }
-            .store(in: &preferenceCancellables)
-        ReaderPreferences.shared.$hideAnthologyBooks
-            .dropFirst()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.refreshCollections()
-            }
-            .store(in: &preferenceCancellables)
-        ReaderPreferences.shared.$hideDuplicateBooks
-            .dropFirst()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.refreshCollections()
-            }
-            .store(in: &preferenceCancellables)
-        ReaderPreferences.shared.$emailPillsShowCollections
-            .dropFirst()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.sidebarVC?.reloadAppearance()
-            }
-            .store(in: &preferenceCancellables)
-    }
-
-    private func applyLibraryAppearance() {
-        let appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
-        view.appearance = appearance
-        splitVC?.view.appearance = appearance
-        sidebarVC?.view.appearance = appearance
-        filterSheetHost?.appearance = appearance
-        sidebarVC?.reloadAppearance()
-    }
-
-    // MARK: - Split-view setup
+    // MARK: - Split-View Setup
 
     private func buildSplitView() {
         sidebarVC = EmailSidebarViewController()
         sidebarVC.toolbarState = toolbarState
-        sidebarVC.onSelect     = { [weak self] book in self?.setSelectedBook(book) }
-        sidebarVC.onOpen       = { [weak self] target in
-            guard let self else { return }
+        sidebarVC.onSelect = { [weak self] book in self?.setSelectedBook(book) }
+        sidebarVC.onOpen = { target in
             AppDelegate.shared?.openReaderWindow(target: target)
         }
-        sidebarVC.onLoadMore   = { [weak self] in self?.loadNextPageIfAvailable() }
-        sidebarVC.onRetryTapped = { [weak self] in self?.rebuildSidebarItems() }
+        sidebarVC.onLoadMore = { [weak self] in
+            self?.displayController.loadNextBatchIfAvailable()
+        }
+        sidebarVC.onRetryTapped = { [weak self] in
+            self?.displayController.reloadCurrentPage()
+        }
         sidebarVC.onEditFilter = { [weak self] in
             self?.toolbarState.showFilterDrawer = true
         }
         sidebarVC.onClearFilter = { [weak self] in
             guard let self else { return }
-            toolbarState.filterExpression   = FilterExpression()
-            toolbarState.activeFilterResult = nil
-            toolbarState.cancelLibraryFilterApplication()
-            scheduleLoadPage(reset: true)
+            self.toolbarState.filterExpression = FilterExpression()
+            self.toolbarState.activeFilterResult = nil
+            self.toolbarState.cancelLibraryFilterApplication()
+            self.displayController.scheduleLoadPage()
         }
-        sidebarVC.onContextMenuOpen = { [weak self] books in
-            guard let self else { return }
+        sidebarVC.onContextMenuOpen = { books in
             for book in books {
                 AppDelegate.shared?.openReaderWindow(book: book)
             }
@@ -331,17 +147,17 @@ final class EmailLibraryViewController: NSViewController {
             guard let self else { return }
             Task {
                 try? await self.session.collectionStore?.setLiked(calibreIDs: books.map(\.id), liked: liked)
-                self.session.bumpMembershipVersion()  // §7
-                await self.refreshCollectionSnapshots()
+                self.session.bumpMembershipVersion()
+                await self.displayController.refreshVisibilitySnapshots(resetPage: false)
             }
         }
         sidebarVC.onToggleLiked = { [weak self] books in
             guard let self, !books.isEmpty else { return }
             Task {
-                let shouldLike = !books.allSatisfy { self.likedIDs.contains($0.id) }
+                let shouldLike = !books.allSatisfy { self.session.cachedLikedIDs.contains($0.id) }
                 try? await self.session.collectionStore?.setLiked(calibreIDs: books.map(\.id), liked: shouldLike)
-                self.session.bumpMembershipVersion()  // §7
-                await self.refreshCollectionSnapshots()
+                self.session.bumpMembershipVersion()
+                await self.displayController.refreshVisibilitySnapshots(resetPage: false)
             }
         }
         sidebarVC.onToggleReadLater = { [weak self] books in
@@ -351,8 +167,8 @@ final class EmailLibraryViewController: NSViewController {
             guard let self else { return }
             Task {
                 try? await self.session.collectionStore?.bulkAdd(calibreIDs: books.map(\.id), to: SystemCollectionID.readLater)
-                self.session.bumpMembershipVersion()  // §7
-                await self.refreshCollectionSnapshots()
+                self.session.bumpMembershipVersion()
+                await self.displayController.refreshVisibilitySnapshots(resetPage: false)
             }
         }
         sidebarVC.onContextMenuSkip = { [weak self] books in
@@ -361,9 +177,8 @@ final class EmailLibraryViewController: NSViewController {
                 for book in books {
                     try? await self.session.collectionStore?.skipBook(calibreID: book.id)
                 }
-                self.session.bumpMembershipVersion()  // §7
-                await self.refreshCollectionSnapshots()
-                self.applyFilterRules()
+                self.session.bumpMembershipVersion()
+                await self.displayController.refreshVisibilitySnapshots(resetPage: false)
             }
         }
         sidebarVC.onContextMenuMarkRead = { [weak self] books in
@@ -381,7 +196,7 @@ final class EmailLibraryViewController: NSViewController {
         }
 
         splitVC = AmbrosiaEmailSplitViewController()
-        splitVC.splitView.isVertical   = true
+        splitVC.splitView.isVertical = true
         splitVC.splitView.autosaveName = "AmbrosiaEmailSplitView"
         splitVC.onDividerResize = { [weak self] in
             self?.rememberSidebarThicknessIfVisible()
@@ -389,10 +204,10 @@ final class EmailLibraryViewController: NSViewController {
         applyLibraryAppearance()
 
         librarySidebarItem = NSSplitViewItem(viewController: sidebarVC)
-        librarySidebarItem.minimumThickness           = 200
-        librarySidebarItem.maximumThickness           = 380
+        librarySidebarItem.minimumThickness = 200
+        librarySidebarItem.maximumThickness = 380
         librarySidebarItem.preferredThicknessFraction = 0.26
-        librarySidebarItem.canCollapse                = true
+        librarySidebarItem.canCollapse = true
 
         readerPaneItem = NSSplitViewItem(viewController: makePlaceholderVC())
         readerPaneItem.minimumThickness = 420
@@ -405,10 +220,6 @@ final class EmailLibraryViewController: NSViewController {
         annotationsSidebarItem.canCollapse = true
         annotationsSidebarItem.isCollapsed = true
 
-        // Fixed order: [library | annotations | reader].
-        // The annotations pane is structurally at index 1 so it always
-        // appears between the book list and the reading pane. Collapsing
-        // it causes the reader to expand left and fill the gap naturally.
         splitVC.addSplitViewItem(librarySidebarItem)
         splitVC.addSplitViewItem(annotationsSidebarItem)
         splitVC.addSplitViewItem(readerPaneItem)
@@ -427,12 +238,114 @@ final class EmailLibraryViewController: NSViewController {
         }
     }
 
-    // MARK: - Filter sheet host
+    // MARK: - Display Controller Observation
+
+    private func startObservingDisplayController() {
+        observeDisplayController()
+    }
+
+    private func observeDisplayController() {
+        withObservationTracking {
+            _ = self.displayController.items
+            _ = self.displayController.bookStates
+            _ = self.displayController.ao3Metadata
+            _ = self.displayController.rebuildDegraded
+        } onChange: { [weak self] in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.syncSidebarFromDisplayController()
+                self.observeDisplayController()
+            }
+        }
+    }
+
+    private func syncSidebarFromDisplayController() {
+        guard let sidebar = sidebarVC else { return }
+        sidebar.items = displayController.items
+        sidebar.bookStates = displayController.bookStates
+        sidebar.ao3Metadata = displayController.ao3Metadata
+        sidebar.likedIDs = session.cachedLikedIDs
+        sidebar.readLaterIDs = session.cachedReadLaterIDs
+        sidebar.collectionMembership = session.collectionMembershipByName
+        sidebar.rebuildDegraded = displayController.rebuildDegraded
+        sidebar.activeCollectionID = activeCollectionID
+    }
+
+    // MARK: - Toolbar Toggles Observation
+
+    private func startObservingToolbarToggles() {
+        scheduleToolbarToggleObservation()
+    }
+
+    private func scheduleToolbarToggleObservation() {
+        withObservationTracking {
+            _ = self.toolbarState.toggleEmailSidebar
+            _ = self.toolbarState.toggleEmailReaderSidebar
+            _ = self.toolbarState.showEmailReaderSidebar
+        } onChange: { [weak self] in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.handleToolbarToggles()
+                self.scheduleToolbarToggleObservation()
+            }
+        }
+    }
+
+    private func handleToolbarToggles() {
+        if toolbarState.toggleEmailSidebar != lastSidebarToggle {
+            lastSidebarToggle = toolbarState.toggleEmailSidebar
+            performSidebarToggle()
+        }
+        if toolbarState.toggleEmailReaderSidebar != lastReaderSidebarToggle {
+            lastReaderSidebarToggle = toolbarState.toggleEmailReaderSidebar
+            performReaderSidebarToggle()
+        }
+        if toolbarState.showEmailReaderSidebar != lastShowReaderSidebarToggle {
+            lastShowReaderSidebarToggle = toolbarState.showEmailReaderSidebar
+            switch toolbarState.emailReaderSidebarMode {
+            case .annotations:
+                showEmailAnnotationSidebar(nil)
+            case .tableOfContents:
+                showTOCInEmailSidebar(nil)
+            }
+        }
+    }
+
+    // MARK: - Preferences Observation
+
+    private func startObservingPreferences() {
+        ReaderPreferences.shared.$libraryAppearanceMode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.applyLibraryAppearance()
+            }
+            .store(in: &preferenceCancellables)
+
+        ReaderPreferences.shared.$emailPillsShowCollections
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.sidebarVC?.reloadAppearance()
+            }
+            .store(in: &preferenceCancellables)
+    }
+
+    private func applyLibraryAppearance() {
+        let appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
+        view.appearance = appearance
+        splitVC?.view.appearance = appearance
+        sidebarVC?.view.appearance = appearance
+        filterSheetHost?.appearance = appearance
+        sidebarVC?.reloadAppearance()
+    }
+
+    // MARK: - Filter Sheet Host & Collection Picker
 
     private func addFilterSheetHost() {
         let carrier = FilterSheetCarrier(
             toolbarState: toolbarState,
             session: session,
+            displayController: displayController,
             emailVC: self
         )
         let hv = NSHostingView(rootView: carrier)
@@ -449,14 +362,14 @@ final class EmailLibraryViewController: NSViewController {
         filterSheetHost = hv
     }
 
-    private func showCollectionPicker(for calibreIDs: [Int], relativeTo rect: NSRect, of view: NSView) {
+    private func showCollectionPicker(for calibreIDs: [Int], relativeTo rect: NSRect, of anchorView: NSView) {
         collectionPickerPopover?.close()
         let popover = NSPopover()
         popover.behavior = .semitransient
         let root = CollectionSearchPickerView(
             calibreIDs: calibreIDs,
             onChange: { [weak self] in
-                await self?.refreshCollectionSnapshots()
+                await self?.displayController.refreshVisibilitySnapshots(resetPage: false)
             },
             onComplete: { [weak popover] in
                 popover?.close()
@@ -466,1339 +379,20 @@ final class EmailLibraryViewController: NSViewController {
         .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
         popover.contentViewController = NSHostingController(rootView: root)
         collectionPickerPopover = popover
-        popover.show(relativeTo: rect, of: view, preferredEdge: .maxX)
+        popover.show(relativeTo: rect, of: anchorView, preferredEdge: .maxX)
     }
 
-    /// Mirrors LibraryRootView.removeFromCollection(named:calibreIDs:) — see
-    /// its doc comment. Only reachable via the sidebar's "Remove from
-    /// Collection" item, which itself only appears when `activeCollectionID`
-    /// is non-nil (exactly one `.collection` filter rule active).
     private func removeFromCollection(named collectionName: String, calibreIDs: [Int]) {
         Task {
             guard let collections = try? await session.collectionStore?.collections(),
                   let match = collections.first(where: { $0.name == collectionName }) else { return }
             try? await session.collectionStore?.bulkRemove(calibreIDs: calibreIDs, from: match.id)
             CollectionAssignment.didAssign(session: session) { [weak self] in
-                guard let self else { return }
-                if toolbarState.filterExpression.hasCompleteRules {
-                    applyFilterRules()
-                } else {
-                    scheduleLoadPage(reset: true)
+                Task {
+                    await self?.displayController.refreshVisibilitySnapshots(resetPage: false)
                 }
             }
         }
-    }
-
-    // MARK: - Placeholder
-
-    private func makePlaceholderVC() -> NSViewController {
-        NSHostingController(rootView:
-                                VStack(spacing: 14) {
-                                    Image(systemName: "book.closed")
-                                        .font(.system(size: 48))
-                                        .foregroundStyle(.quaternary)
-                                    Text("Select a book to read")
-                                        .font(.title3)
-                                        .foregroundStyle(.tertiary)
-                                    Text("Filter by tag in the list view, then switch here to read through results.")
-                                        .font(.callout)
-                                        .foregroundStyle(.quaternary)
-                                        .multilineTextAlignment(.center)
-                                        .frame(maxWidth: 280)
-                                }
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
-        )
-    }
-
-    // MARK: - Sidebar toggle
-
-    @objc func performSidebarToggle() {
-        guard let item = librarySidebarItem else { return }
-        let willCollapse = !item.isCollapsed
-        if willCollapse {
-            // Capture the user's current width before it goes away — otherwise
-            // reopening falls back to whatever `lastSidebarThickness` was last
-            // set to (the 280pt default, if the pane was never dragged), not
-            // the size the user actually left it at.
-            rememberSidebarThickness()
-        }
-        isSidebarHidden = willCollapse
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.2
-            item.isCollapsed = willCollapse
-            splitVC.splitView.layoutSubtreeIfNeeded()
-        }
-        if !willCollapse {
-            // Un-collapsing an NSSplitViewItem doesn't reliably restore its
-            // pre-collapse width on its own here — this view controller (and
-            // its splitVC/split view items) is torn down and rebuilt from
-            // scratch on every List/Email mode switch, so there's no
-            // long-lived NSSplitView instance for AppKit's own autosave/
-            // collapse-memory to key off between toggles within a session.
-            // Explicitly reapply the remembered width.
-            restoreSidebarThickness(lastSidebarThickness)
-        }
-    }
-
-    /// Called from `AmbrosiaEmailSplitViewController.onDividerResize` as the
-    /// user manually drags the library divider, so a later collapse/reopen
-    /// (or a reader-pane swap via `replaceRightPane`) restores the width
-    /// actually in use rather than a stale value from setup or the last
-    /// programmatic resize.
-    private func rememberSidebarThicknessIfVisible() {
-        guard librarySidebarItem?.isCollapsed == false else { return }
-        rememberSidebarThickness()
-    }
-
-    // MARK: - Toolbar state observation
-
-    private func startObservingToolbarState() { scheduleObservation() }
-
-    private func scheduleObservation() {
-        // §switch-flicker fix: capture `ts` directly rather than reading
-        // `toolbarState` (= `self.toolbarState`) inside the apply-closure below.
-        // withObservationTracking's apply-closure is held by the Observation
-        // runtime until it next fires, so any implicit `self` capture there keeps
-        // this whole controller alive for as long as that closure goes unfired —
-        // which, since toolbarState is shared and long-lived, could be indefinitely
-        // after this controller has already been removed from the view hierarchy.
-        let ts = toolbarState
-        withObservationTracking {
-            _ = ts.searchText
-            _ = ts.sortField
-            _ = ts.ascending
-            _ = ts.activeFilterResult?.reloadToken
-            _ = ts.isApplyingLibraryFilter
-            _ = ts.pendingFullTextSearch
-            _ = ts.toggleEmailSidebar
-            _ = ts.toggleEmailReaderSidebar
-            _ = ts.showEmailReaderSidebar
-            _ = ts.reshuffleToken
-            _ = ts.groupBySeries
-        } onChange: { [weak self] in
-            DispatchQueue.main.async {
-                guard let self, !self.isTornDown else { return }
-                self.toolbarStateDidChange()
-                self.scheduleObservation()
-            }
-        }
-    }
-
-    private func toolbarStateDidChange() {
-        if toolbarState.toggleEmailSidebar != lastSidebarToggle {
-            lastSidebarToggle = toolbarState.toggleEmailSidebar
-            performSidebarToggle()
-        }
-        if toolbarState.toggleEmailReaderSidebar != lastReaderSidebarToggle {
-            lastReaderSidebarToggle = toolbarState.toggleEmailReaderSidebar
-            performReaderSidebarToggle()
-        }
-        if toolbarState.showEmailReaderSidebar != lastShowReaderSidebarToggle {
-            lastShowReaderSidebarToggle = toolbarState.showEmailReaderSidebar
-            switch toolbarState.emailReaderSidebarMode {
-            case .annotations:      showEmailAnnotationSidebar(nil)
-            case .tableOfContents:  showTOCInEmailSidebar(nil)
-            }
-        }
-        if toolbarState.reshuffleToken != lastReshuffleToken {
-            lastReshuffleToken = toolbarState.reshuffleToken
-            if toolbarState.sortField == .random {
-                scheduleLoadPage(reset: true)
-            }
-        }
-        if toolbarState.groupBySeries != lastGroupBySeries {
-            lastGroupBySeries = toolbarState.groupBySeries
-            scheduleLoadPage(reset: true)
-        }
-        let newSearch    = toolbarState.searchText
-        let newSort      = toolbarState.sortField
-        let newAscending = toolbarState.ascending
-        let newFilterToken = toolbarState.activeFilterResult?.reloadToken
-
-        if newFilterToken != lastFilterToken {
-            LibraryFilterDebug.log("toolbarState.filterTokenChanged", [
-                "surface": "email",
-                "old": lastFilterToken ?? "nil",
-                "new": newFilterToken ?? "nil"
-            ])
-        }
-
-        let changed = newSearch    != lastSearch
-            || newSort      != lastSort
-            || newAscending != lastAscending
-            || newFilterToken != lastFilterToken
-
-        guard changed else { return }
-
-        let searchChanged = newSearch != lastSearch
-        lastSearch    = newSearch
-        lastSort      = newSort
-        lastAscending = newAscending
-        lastFilterIDs = toolbarState.activeFilterResult?.calibreIDs
-        lastFilterToken = newFilterToken
-
-        if searchChanged {
-            applyFullTextPhraseToLocalFind()
-            refreshReaderSidebar()
-            if toolbarState.consumeSearchTextReloadSuppression() {
-                LibraryFilterDebug.log("searchText.suppressed", [
-                    "surface": "email",
-                    "searchText": toolbarState.searchText
-                ])
-                return
-            }
-            debouncer.schedule { [weak self] in
-                guard let self else { return }
-                LibraryFilterDebug.log("searchText.debounced", [
-                    "surface": "email",
-                    "searchText": self.toolbarState.searchText
-                ])
-                if let phrase = self.activeFullTextPhrase()?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !phrase.isEmpty {
-                    self.session.retryFulltext(for: phrase)
-                }
-                if self.toolbarState.activeFilterResult?.isSQLBacked == true,
-                   self.toolbarState.activeFilterResult?.totalCount != nil {
-                    self.suppressNextReloadToken = true
-                    self.toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
-                }
-                if !self.startPendingSearchTextFullTextIfNeeded() {
-                    let tagTerms = self.toolbarState.searchText.isEmpty
-                        ? []
-                        : SearchQueryParser.parse(self.toolbarState.searchText).tagTerms
-                    if tagTerms != Array(self.resolvedTagExpansions.keys).sorted() {
-                        self.resolveTagExpansionsIfNeeded(terms: tagTerms)
-                    }
-                    let token = self.toolbarState.beginLibraryFilterApplication()
-                    Task {
-                        await self.scheduleLoadPage(reset: true).value
-                        if self.toolbarState.libraryFilterApplicationToken == token {
-                            // A stale continuation's guard fails silently here, so an
-                            // abandoned in-progress query never reaches history — its
-                            // own resolution arrives after being superseded.
-                            let resultCount: Int
-                            if let knownTotal = self.toolbarState.activeFilterResult?.totalCount {
-                                resultCount = knownTotal
-                            } else if self.toolbarState.searchText.isEmpty {
-                                resultCount = self.books.count
-                            } else {
-                                let query = SearchQueryParser.parse(self.toolbarState.searchText)
-                                resultCount = await self.session.library?.bookCount(query: query) ?? self.books.count
-                                await self.session.refreshLastSearchError()
-                            }
-                            self.commitSearchActivityLogEntry(resultCount: resultCount)
-                        }
-                        self.toolbarState.finishLibraryFilterApplication(token: token)
-                    }
-                }
-            }
-        } else {
-            applyFullTextPhraseToLocalFind()
-            // §switch-flicker fix (2): applyFilterRules() sets suppressNextReloadToken
-            // right before triggering its own reload for this same filter completion.
-            // Without this check, that reload and this Observation-driven one both fire
-            // for the same activeFilterResult write and race through scheduleLoadPage's
-            // loadPageTask cancel/reassign. See Invariant 25.
-            if suppressNextReloadToken {
-                suppressNextReloadToken = false
-            } else {
-                scheduleLoadPage(reset: true)
-            }
-        }
-    }
-
-    // MARK: - Quick filter helper (mirrors BookGridItem.addOrReplaceRule)
-
-    func addOrReplaceRule(_ rule: FilterRule) {
-        LibraryQueryHelpers.addOrReplaceRule(rule, in: &toolbarState.filterExpression)
-        applyFilterRules()
-    }
-
-    // MARK: - Filter application
-
-    /// The four visibility preferences baked into cached filter-result ID lists
-    /// (part of `FilterResultCacheKey`).
-    private var filterVisibilitySignature: String {
-        let prefs = ReaderPreferences.shared
-        return LibraryVisibilityPolicy.signature(
-            showSkippedCollection: prefs.showSkippedCollection,
-            hideNonAO3PublisherBooks: prefs.hideNonAO3PublisherBooks,
-            hideAnthologyBooks: prefs.hideAnthologyBooks,
-            hideDuplicateBooks: prefs.hideDuplicateBooks
-        ) + FilterEvaluator.environmentSignature
-    }
-
-    func applyFilterRules() {
-        let applyStart = LibraryFilterDebug.now()
-        fullTextTask?.cancel()
-        fullTextTask = nil
-        filterCountTask?.cancel()
-        filterComputeTask?.cancel()
-        filterComputeTask = nil
-        guard let library = session.library else {
-            toolbarState.cancelLibraryFilterApplication()
-            return
-        }
-        guard toolbarState.filterExpression.hasCompleteRules else {
-            toolbarState.activeFilterResult = nil
-            toolbarState.cancelLibraryFilterApplication()
-            scheduleLoadPage(reset: true)
-            return
-        }
-        let expression = toolbarState.filterExpression
-        LibraryFilterDebug.log("applyFilter.start", [
-            "surface": "email",
-            "rules": LibraryFilterDebug.summary(expression: expression),
-            "sqlPageable": expression.isSQLPageable
-        ])
-        if expression.isSQLPageable {
-            let filterSignature = LibraryFilterDebug.summary(expression: expression)
-            // Same reuse-known-count guard as LibraryRootView.applyFilterRules() —
-            // viewDidLoad() calls applyFilterRules() unconditionally whenever this
-            // view controller is (re)mounted (e.g. switching to the Email surface),
-            // which previously reset an already-counted filter's totalCount back
-            // to nil on the shared toolbarState, restarting the spinner for no reason.
-            if let existing = toolbarState.activeFilterResult,
-               existing.isSQLBacked,
-               let existingTotalCount = existing.totalCount,
-               existing.filterSignature == filterSignature {
-                toolbarState.clearPendingFullTextSearch()
-                toolbarState.cancelLibraryFilterApplication()
-                commitSearchActivityLogEntry(resultCount: existingTotalCount)
-                suppressNextReloadToken = true
-                scheduleLoadPage(reset: true)
-                LibraryFilterDebug.log("applyFilter.end", [
-                    "surface": "email",
-                    "mode": "sqlPagedDeferredCount.reuseCount",
-                    "elapsedMS": LibraryFilterDebug.elapsedMS(since: applyStart)
-                ])
-                return
-            }
-            toolbarState.activeFilterResult = FilterResult(calibreIDs: [], isSQLBacked: true)
-            toolbarState.clearPendingFullTextSearch()
-            toolbarState.cancelLibraryFilterApplication()
-            suppressNextReloadToken = true
-            scheduleLoadPage(reset: true)
-            LibraryFilterDebug.log("applyFilter.end", [
-                "surface": "email",
-                "mode": "sqlPagedDeferredCount",
-                "elapsedMS": LibraryFilterDebug.elapsedMS(since: applyStart)
-            ])
-            return
-        }
-        // §7: Check the LRU cache before kicking off the expensive Task pipeline.
-        if let cached = session.cachedFilterResult(for: expression, visibilitySignature: filterVisibilitySignature) {
-            toolbarState.activeFilterResult = cached
-            toolbarState.clearPendingFullTextSearch()
-            toolbarState.cancelLibraryFilterApplication()
-            commitSearchActivityLogEntry(resultCount: cached.totalCount ?? cached.calibreIDs.count)
-            suppressNextReloadToken = true
-            scheduleLoadPage(reset: true)
-            LibraryFilterDebug.log("applyFilter.end", [
-                "surface": "email",
-                "mode": "cached",
-                "ids": cached.calibreIDs.count,
-                "elapsedMS": LibraryFilterDebug.elapsedMS(since: applyStart)
-            ])
-            return
-        }
-        let token = toolbarState.beginLibraryFilterApplication()
-        let fulltextRules = expression.groups.flatMap(\.rules)
-            .filter { $0.field == .fulltext && $0.isComplete }
-        if let firstPendingRule = fulltextRules.first(where: { session.fulltextState(for: $0.value) == .unknown }) {
-            startPendingFilterFullText(rule: firstPendingRule, token: token)
-            return
-        }
-
-        // Captured before any await: results computed from this evaluation are
-        // filed under this revision, even if an extraction flush lands meanwhile.
-        let bookTagsRevisionAtStart = session.bookTagsRevision
-        let evaluator = FilterEvaluator(library: library, ftsLibrary: session.ftsLibrary,
-                                        metaDB: session.metaDB, collectionStore: session.collectionStore,
-                                        ruleMatchCache: session.ruleMatchCache,
-                                        bookTagsRevision: bookTagsRevisionAtStart)
-
-        // Plan PR I: evaluate only the newly added AND rule against a cached base.
-        // The base shares this key's membership version and visibility signature,
-        // so it and its subset are already visibility-filtered.
-        if IncrementalFilterFlag.isEnabled,
-           let narrowing = session.narrowingBase(for: expression, visibilitySignature: filterVisibilitySignature) {
-            filterComputeTask = Task {
-                let delta = narrowing.delta
-                let fulltextMap = LibraryQueryHelpers.fulltextMap(
-                    values: delta.field == .fulltext ? [delta.value] : []
-                ) { session.cachedFulltextIDs(for: $0) }
-                let baseIDs = narrowing.base.calibreIDs
-                guard let evaluated = await evaluator.evaluate(
-                    expression: IncrementalFilterPlanner.deltaExpression(for: delta),
-                    fulltextMap: fulltextMap,
-                    candidates: Set(baseIDs)
-                ) else { return }
-                let deltaSet = Set(evaluated.result.calibreIDs)
-                let narrowedIDs = baseIDs.filter { deltaSet.contains($0) }
-                guard !isTornDown, !Task.isCancelled,
-                      toolbarState.libraryFilterApplicationToken == token else { return }
-                defer { toolbarState.finishLibraryFilterApplication(token: token) }
-                let narrowed = FilterResult(calibreIDs: narrowedIDs, totalCount: narrowedIDs.count)
-                session.rememberFilterResult(narrowed, for: expression,
-                                             visibilitySignature: filterVisibilitySignature,
-                                             bookTagsRevision: bookTagsRevisionAtStart)
-                toolbarState.clearPendingFullTextSearch()
-                cachedFilterTagExpansions = cachedFilterTagExpansions.merging(evaluated.tagExpansions) { _, new in new }
-                // Written last: it is the property the observation sink watches (Invariant 25).
-                toolbarState.activeFilterResult = narrowed
-                commitSearchActivityLogEntry(resultCount: narrowedIDs.count)
-                suppressNextReloadToken = true
-                await scheduleLoadPage(reset: true).value
-                LibraryFilterDebug.log("applyFilter.end", [
-                    "surface": "email",
-                    "mode": "narrowed",
-                    "ids": narrowedIDs.count,
-                    "baseIDs": baseIDs.count,
-                    "elapsedMS": LibraryFilterDebug.elapsedMS(since: applyStart)
-                ])
-            }
-            return
-        }
-
-        filterComputeTask = Task {
-            let currentLikedIDs = session.cachedLikedIDs
-            let fulltextMap = LibraryQueryHelpers.fulltextMap(values: fulltextRules.map(\.value)) {
-                session.cachedFulltextIDs(for: $0)
-            }
-            guard let evaluated = await evaluator.evaluate(expression: expression, fulltextMap: fulltextMap) else {
-                return
-            }
-            let result = evaluated.result
-            let filterTagExpansions = evaluated.tagExpansions
-            let currentSkipped = Set((try? await session.collectionStore?.members(of: SystemCollectionID.skipped)) ?? [])
-            let currentSeriesOrMerged = Set((try? await session.collectionStore?.members(of: SystemCollectionID.seriesOrMerged)) ?? [])
-            let currentAO3PublisherIDs = await library.ao3PublisherBookIDs()
-            let currentAnthologyIDs = await library.anthologyBookIDs()
-            let currentDuplicateLoserIDs = await library.duplicateLoserBookIDs()
-            let visibilitySignature = filterVisibilitySignature
-            let filteredIDs = ReaderPreferences.shared.showSkippedCollection
-                ? result.calibreIDs
-                : result.calibreIDs.filter { !currentSkipped.contains($0) }
-            let visibleFilteredIDs = filteredIDs
-                .filter { !currentSeriesOrMerged.contains($0) }
-                .filter { !ReaderPreferences.shared.hideNonAO3PublisherBooks || currentAO3PublisherIDs.contains($0) }
-                .filter { !ReaderPreferences.shared.hideAnthologyBooks || !currentAnthologyIDs.contains($0) }
-                .filter { !ReaderPreferences.shared.hideDuplicateBooks || !currentDuplicateLoserIDs.contains($0) }
-            guard toolbarState.libraryFilterApplicationToken == token else { return }
-            defer { toolbarState.finishLibraryFilterApplication(token: token) }
-            let cacheableResult = FilterResult(
-                calibreIDs: visibleFilteredIDs,
-                totalCount: visibleFilteredIDs.count
-            )
-            session.rememberFilterResult(cacheableResult, for: expression, visibilitySignature: visibilitySignature,
-                                         bookTagsRevision: bookTagsRevisionAtStart)  // §7
-            toolbarState.clearPendingFullTextSearch()
-            cachedFilterTagExpansions = filterTagExpansions
-            likedIDs = currentLikedIDs
-            skippedIDs = currentSkipped
-            seriesOrMergedIDs = currentSeriesOrMerged
-            ao3PublisherIDs = currentAO3PublisherIDs
-            anthologyIDs = currentAnthologyIDs
-            session.cachedAnthologyIDs = currentAnthologyIDs
-            duplicateLoserIDs = currentDuplicateLoserIDs
-            session.cachedDuplicateLoserIDs = currentDuplicateLoserIDs
-            // §switch-flicker fix (2): activeFilterResult is written last, since it is
-            // the property withObservationTracking watches (scheduleObservation()) —
-            // writing it before the visibility-dependent state above would let the
-            // Observation-driven reload race in and read stale skippedIDs/
-            // seriesOrMergedIDs/etc. See Invariant 25.
-            toolbarState.activeFilterResult = cacheableResult
-            commitSearchActivityLogEntry(resultCount: cacheableResult.totalCount ?? visibleFilteredIDs.count)
-            suppressNextReloadToken = true
-            await scheduleLoadPage(reset: true).value
-            LibraryFilterDebug.log("applyFilter.end", [
-                "surface": "email",
-                "mode": "explicitIDs",
-                "ids": visibleFilteredIDs.count,
-                "elapsedMS": LibraryFilterDebug.elapsedMS(since: applyStart)
-            ])
-        }
-    }
-
-    private func startPendingSearchTextFullTextIfNeeded() -> Bool {
-        guard let phrase = activeFullTextPhrase()?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !phrase.isEmpty else {
-            toolbarState.clearPendingFullTextSearch()
-            return false
-        }
-        switch session.fulltextState(for: phrase) {
-        case .resolved(let cached):
-            applyResolvedSearchTextFullText(phrase: phrase, ids: cached)
-            return false
-        case .failed:
-            // Not searched again until the search text is edited (retryFulltext).
-            applyResolvedSearchTextFullText(phrase: phrase, ids: [])
-            return false
-        case .unknown:
-            break
-        }
-        let token = UUID()
-        let applicationToken = toolbarState.beginLibraryFilterApplication()
-        toolbarState.pendingFullTextSearch = PendingFullTextSearch(token: token, phrase: phrase, source: .searchText)
-        fullTextTask?.cancel()
-        fullTextTask = Task {
-            let ids = await session.resolveFulltextIDs(for: phrase)
-            await MainActor.run {
-                guard self.toolbarState.pendingFullTextSearch?.token == token,
-                      self.toolbarState.libraryFilterApplicationToken == applicationToken,
-                      self.activeFullTextPhrase()?.trimmingCharacters(in: .whitespacesAndNewlines) == phrase else { return }
-                defer { self.toolbarState.finishLibraryFilterApplication(token: applicationToken) }
-                self.applyResolvedSearchTextFullText(phrase: phrase, ids: ids)
-            }
-        }
-        return true
-    }
-
-    private func startPendingFilterFullText(rule: FilterRule, token applicationToken: UUID) {
-        let phrase = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !phrase.isEmpty else {
-            toolbarState.finishLibraryFilterApplication(token: applicationToken)
-            return
-        }
-        let token = UUID()
-        toolbarState.pendingFullTextSearch = PendingFullTextSearch(token: token, phrase: phrase, source: .filterExpression)
-        fullTextTask?.cancel()
-        fullTextTask = Task {
-            _ = await session.resolveFulltextIDs(for: phrase)
-            await MainActor.run {
-                guard self.toolbarState.pendingFullTextSearch?.token == token,
-                      self.toolbarState.libraryFilterApplicationToken == applicationToken,
-                      self.toolbarState.filterExpression.groups.flatMap(\.rules).contains(where: {
-                        $0.field == .fulltext && $0.value == phrase && $0.isComplete
-                      }) else { return }
-                self.toolbarState.clearPendingFullTextSearch()
-                self.toolbarState.finishLibraryFilterApplication(token: applicationToken)
-                self.applyFilterRules()
-            }
-        }
-    }
-
-    private func applyResolvedSearchTextFullText(phrase: String, ids: [Int]) {
-        guard activeFullTextPhrase()?.trimmingCharacters(in: .whitespacesAndNewlines) == phrase else { return }
-        toolbarState.activeFilterResult = FilterResult(calibreIDs: ids, totalCount: ids.count)
-        toolbarState.clearPendingFullTextSearch()
-        scheduleLoadPage(reset: true)
-    }
-
-    /// Single call site for kicking off the deferred count of a SQL-backed
-    /// filter's total row count, mirroring LibraryRootView's identical
-    /// helper. Used by the word-count and grouped-title sort branches of
-    /// loadPage(), which previously never triggered the count at all.
-    private func triggerDeferredSQLCountIfNeeded(query: SearchQuery) {
-        guard let result = toolbarState.activeFilterResult, result.isSQLBacked else { return }
-        scheduleDeferredSQLFilterCount(query: query)
-    }
-
-    private func scheduleDeferredSQLFilterCount(query: SearchQuery) {
-        guard let library = session.library,
-              let result = toolbarState.activeFilterResult,
-              result.isSQLBacked,
-              result.totalCount == nil else { return }
-        let expression = toolbarState.filterExpression
-        let filterSignature = LibraryFilterDebug.summary(expression: expression)
-        let querySignature = LibraryFilterDebug.summary(query: query)
-        filterCountTask?.cancel()
-        LibraryFilterDebug.log("deferredCount.schedule", [
-            "surface": "email",
-            "mode": "sqlPagedDeferredCount",
-            "query": querySignature,
-            "filter": filterSignature
-        ])
-        filterCountTask = Task { [weak self] in
-            let tagExpansions = self?.cachedFilterTagExpansions ?? [:]
-            let count = await library.bookCount(query: query, filter: expression,
-                                                filterTagExpansions: tagExpansions)
-            await self?.session.refreshLastSearchError()
-            await MainActor.run {
-                guard let self else { return }
-                let currentQuery = self.toolbarState.searchText.isEmpty
-                    ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
-                    : SearchQueryParser.parse(self.toolbarState.searchText)
-                guard !Task.isCancelled,
-                      self.toolbarState.activeFilterResult?.isSQLBacked == true,
-                      self.toolbarState.activeFilterResult?.totalCount == nil,
-                      LibraryFilterDebug.summary(expression: self.toolbarState.filterExpression) == filterSignature,
-                      LibraryFilterDebug.summary(query: self.queryWithCachedFullText(currentQuery)) == querySignature
-                else {
-                    LibraryFilterDebug.log("deferredCount.discard", [
-                        "surface": "email",
-                        "mode": "sqlPagedDeferredCount"
-                    ])
-                    return
-                }
-                self.toolbarState.activeFilterResult = FilterResult(
-                    calibreIDs: [],
-                    totalCount: count,
-                    isSQLBacked: true,
-                    filterSignature: filterSignature
-                )
-                self.commitSearchActivityLogEntry(resultCount: count)
-                LibraryFilterDebug.log("deferredCount.apply", [
-                    "surface": "email",
-                    "mode": "sqlPagedDeferredCount",
-                    "count": count
-                ])
-            }
-        }
-    }
-
-    // MARK: - Data loading (uses SearchQuery path — mirrors BookGridItem exactly)
-
-    /// Single entry point for reloading the current page. Cancels any
-    /// in-flight `loadPage` before starting a new one, so overlapping
-    /// triggers (see `loadPageTask`'s doc comment) resolve to exactly one
-    /// winning run instead of racing. Not `private` — `FilterSheetCarrier`
-    /// (a sibling SwiftUI type holding a weak `emailVC` reference) calls
-    /// this too, and needs the same guard, not a bare `Task { loadPage(...) }`.
-    @discardableResult
-    func scheduleLoadPage(reset: Bool) -> Task<Void, Never> {
-        loadPageTask?.cancel()
-        let task = Task { [weak self] in
-            guard let self, !self.isTornDown else { return }
-            await self.loadPage(reset: reset)
-        }
-        loadPageTask = task
-        return task
-    }
-
-    @MainActor
-    func loadPage(reset: Bool) async {
-        let loadStart = LibraryFilterDebug.now()
-        guard let library = session.library else {
-            books = []
-            items = []
-            ao3Metadata = [:]
-            setSelectedBook(nil)
-            sidebarVC?.books = []
-            sidebarVC?.items = []
-            sidebarVC?.ao3Metadata = [:]
-            return
-        }
-        guard !isTornDown, !Task.isCancelled else { return }
-        // Hold the first load until the session has hydrated membership and the AO3
-        // caches; `sessionSnapshotsDidBecomeReady` runs the real one.
-        guard session.snapshotsReady else { return }
-        // Parse search text into a structured query — same path as list view
-        let rawQuery = toolbarState.searchText.isEmpty
-            ? SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
-            : SearchQueryParser.parse(toolbarState.searchText)
-        var query = queryWithCachedFullText(rawQuery)
-        // Inject pre-resolved synonym expansions (Invariant 10 — mirrors LibraryRootView).
-        query.expandedTagTerms = resolvedTagExpansions
-        if rawQuery.fulltextPhrase?.isEmpty == false && query.ftsMatchedIDs == nil {
-            _ = startPendingSearchTextFullTextIfNeeded()
-            return
-        }
-
-        if reset {
-            offsetState.resetForNewFilter()
-            books = []
-            // §grouping-flash fix: clear items immediately on a fresh query so the
-            // sidebar shows nothing rather than the previous query's stale rows while
-            // rebuildSidebarItems' async Task (when grouping) is in flight. Mirrors
-            // LibraryRootView's loadPage clearing items before rebuildItems().
-            if shouldGroupSidebarRows {
-                items = []
-                sidebarVC?.items = []
-            }
-        }
-
-        let raw: [CalibreBook]
-        var wordCountPage: [CalibreBook]?
-        var wordCountHasMore = false
-        // §grouping-pagination fix: when shouldGroupSidebarRows is true, the
-        // sqlPagedDeferredCount and unfiltered branches below populate this directly
-        // via a group-aware drain loop instead of relying on the shared raw/visibleBooks
-        // computation after the if/else chain, which assumed pageFetchLimit raw rows
-        // collapse to roughly pageSize visible rows — false once series grouping strips
-        // most rows. nil means "use the shared raw-based path below" (ungrouped, or a
-        // branch — explicitIDs, emptyExplicitIDs, random, wordCount — that already
-        // computes its own page).
-        var groupAwareVisible: [CalibreBook]?
-        if toolbarState.sortField == .random {
-            let restrictIDs: [Int]?
-            let filterForSQL: FilterExpression?
-            var isEmptyExplicitIDs = false
-            if let result = toolbarState.activeFilterResult, result.isSQLBacked {
-                restrictIDs = nil
-                filterForSQL = toolbarState.filterExpression
-            } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
-                restrictIDs = intersect(result.calibreIDs, with: query.ftsMatchedIDs)
-                filterForSQL = nil
-            } else if toolbarState.activeFilterResult != nil {
-                isEmptyExplicitIDs = true
-                restrictIDs = nil
-                filterForSQL = nil
-            } else {
-                restrictIDs = nil
-                filterForSQL = nil
-            }
-            LibraryFilterDebug.log("loadPage.start", [
-                "surface": "email", "mode": "random", "page": offsetState.currentPage
-            ])
-            if isEmptyExplicitIDs {
-                if reset { books = [] }
-                hasNextPage = false
-                rebuildSidebarItems()
-                sidebarVC?.books = books
-                sidebarVC?.items = items
-                sidebarVC?.ao3Metadata = ao3Metadata
-                sidebarVC?.likedIDs = likedIDs
-                return
-            }
-            // The visibility policy is applied once, uniformly, inside
-            // randomSortedPage — see LibraryRootView's equivalent branch for
-            // why the restrictIDs mutation this used to do per-branch was
-            // replaced.
-            let (page, hasMore) = await library.randomSortedPage(
-                offset: offsetState.currentPage * pageSize, limit: pageSize,
-                CalibreLibrary.PageQuery(
-                    query: query, filter: filterForSQL, restrictIDs: restrictIDs,
-                    visibility: currentVisibilityPolicy,
-                    filterTagExpansions: cachedFilterTagExpansions,
-                    visibilityVersion: session.membershipVersion
-                )
-            )
-            guard !isTornDown, !Task.isCancelled else { return }
-            if reset { books = page } else { books.append(contentsOf: page) }
-            hasNextPage = hasMore
-            rebuildSidebarItems()
-            sidebarVC?.books = books
-            sidebarVC?.bookStates = bookStates
-            sidebarVC?.ao3Metadata = ao3Metadata
-            sidebarVC?.likedIDs = likedIDs
-            loadAO3MetadataForSidebarBooks()
-            return
-        } else if toolbarState.sortField == .wordCount {
-            // §2a fix (2): see orderByClause(.wordCount) / wordCountSortedPage(...)
-            // in CalibreLibrary.swift — word count can't be sorted via a single SQL
-            // ORDER BY, so it's resolved in memory over the full matching set.
-            let restrictIDs: [Int]?
-            let filterForSQL: FilterExpression?
-            var isEmptyExplicitIDs = false
-            if let result = toolbarState.activeFilterResult, result.isSQLBacked {
-                restrictIDs = nil
-                filterForSQL = toolbarState.filterExpression
-            } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
-                restrictIDs = intersect(result.calibreIDs, with: query.ftsMatchedIDs)
-                filterForSQL = nil
-            } else if toolbarState.activeFilterResult != nil {
-                restrictIDs = nil
-                filterForSQL = nil
-                isEmptyExplicitIDs = true
-            } else {
-                restrictIDs = nil
-                filterForSQL = nil
-            }
-            LibraryFilterDebug.log("loadPage.start", [
-                "surface": "email", "mode": "wordCountSorted", "page": offsetState.currentPage,
-                "query": LibraryFilterDebug.summary(query: query)
-            ])
-            if isEmptyExplicitIDs {
-                wordCountPage = []
-                wordCountHasMore = false
-            } else {
-                let (page, hasMore) = await library.wordCountSortedPage(
-                    offset: offsetState.currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
-                    CalibreLibrary.PageQuery(
-                        query: query, filter: filterForSQL, restrictIDs: restrictIDs,
-                        visibility: currentVisibilityPolicy,
-                        filterTagExpansions: cachedFilterTagExpansions,
-                        visibilityVersion: session.membershipVersion
-                    )
-                )
-                guard !isTornDown, !Task.isCancelled else { return }
-                wordCountPage = page
-                wordCountHasMore = hasMore
-            }
-            raw = []
-            triggerDeferredSQLCountIfNeeded(query: query)
-        } else if toolbarState.sortField == .kudos {
-            // §2.2d: mirrors the .wordCount branch immediately above exactly —
-            // kudos can't be sorted via a single SQL ORDER BY when no custom
-            // column is configured, so it's resolved in memory over the full
-            // matching set. Reuses the wordCountPage/wordCountHasMore sink,
-            // same precedent as the title-grouping branch below.
-            let restrictIDs: [Int]?
-            let filterForSQL: FilterExpression?
-            var isEmptyExplicitIDs = false
-            if let result = toolbarState.activeFilterResult, result.isSQLBacked {
-                restrictIDs = nil
-                filterForSQL = toolbarState.filterExpression
-            } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
-                restrictIDs = intersect(result.calibreIDs, with: query.ftsMatchedIDs)
-                filterForSQL = nil
-            } else if toolbarState.activeFilterResult != nil {
-                restrictIDs = nil
-                filterForSQL = nil
-                isEmptyExplicitIDs = true
-            } else {
-                restrictIDs = nil
-                filterForSQL = nil
-            }
-            LibraryFilterDebug.log("loadPage.start", [
-                "surface": "email", "mode": "kudosSorted", "page": offsetState.currentPage,
-                "query": LibraryFilterDebug.summary(query: query)
-            ])
-            if isEmptyExplicitIDs {
-                wordCountPage = []
-                wordCountHasMore = false
-            } else {
-                let (page, hasMore) = await library.kudosSortedPage(
-                    offset: offsetState.currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
-                    CalibreLibrary.PageQuery(
-                        query: query, filter: filterForSQL, restrictIDs: restrictIDs,
-                        visibility: currentVisibilityPolicy,
-                        filterTagExpansions: cachedFilterTagExpansions,
-                        visibilityVersion: session.membershipVersion
-                    )
-                )
-                guard !isTornDown, !Task.isCancelled else { return }
-                wordCountPage = page
-                wordCountHasMore = hasMore
-            }
-            raw = []
-            triggerDeferredSQLCountIfNeeded(query: query)
-        } else if toolbarState.sortField == .title && shouldGroupSidebarRows {
-            // §SeriesGrouping Phase 2: mirrors LibraryRootView's equivalent
-            // branch — title sort needs materialize-then-sort once grouping
-            // is on, same as word count, so a series' representative row
-            // sorts under the series' name and a match on a non-leading
-            // member still pulls the leader in. Reuses the wordCountPage/
-            // wordCountHasMore sink (see the comment above their
-            // declaration) rather than adding a fifth "already computed its
-            // own page" variable.
-            let restrictIDs: [Int]?
-            let filterForSQL: FilterExpression?
-            var isEmptyExplicitIDs = false
-            if let result = toolbarState.activeFilterResult, result.isSQLBacked {
-                restrictIDs = nil
-                filterForSQL = toolbarState.filterExpression
-            } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
-                restrictIDs = intersect(result.calibreIDs, with: query.ftsMatchedIDs)
-                filterForSQL = nil
-            } else if toolbarState.activeFilterResult != nil {
-                restrictIDs = nil
-                filterForSQL = nil
-                isEmptyExplicitIDs = true
-            } else {
-                restrictIDs = nil
-                filterForSQL = nil
-            }
-            LibraryFilterDebug.log("loadPage.start", [
-                "surface": "email", "mode": "titleSortedGrouped", "page": offsetState.currentPage,
-                "query": LibraryFilterDebug.summary(query: query)
-            ])
-            if isEmptyExplicitIDs {
-                wordCountPage = []
-                wordCountHasMore = false
-            } else {
-                let (page, hasMore) = await library.groupAwareTitleSortedPage(
-                    offset: offsetState.currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
-                    CalibreLibrary.PageQuery(
-                        query: query, filter: filterForSQL, restrictIDs: restrictIDs,
-                        visibility: currentVisibilityPolicy,
-                        filterTagExpansions: cachedFilterTagExpansions,
-                        visibilityVersion: session.membershipVersion,
-                        metaDB: session.metaDB
-                    )
-                )
-                guard !isTornDown, !Task.isCancelled else { return }
-                wordCountPage = page
-                wordCountHasMore = hasMore
-            }
-            raw = []
-            triggerDeferredSQLCountIfNeeded(query: query)
-        } else if let result = toolbarState.activeFilterResult, result.isSQLBacked {
-            LibraryFilterDebug.log("loadPage.start", [
-                "surface": "email",
-                "mode": "sqlPagedDeferredCount",
-                "page": offsetState.currentPage,
-                "query": LibraryFilterDebug.summary(query: query),
-                "filter": LibraryFilterDebug.summary(expression: toolbarState.filterExpression)
-            ])
-            if shouldGroupSidebarRows {
-                // PagingOffsetState was refactored to a per-page model
-                // (rawSQLOffsetByPage/seedOverflowByPage/rawSQLOffsetFrontier/
-                // rawSQLOffsetOverflowFrontier — see that type's doc comment
-                // in LibraryQueryController.swift) but this view still has no
-                // Previous, only forward/append-only paging via
-                // loadNextPageIfAvailable, so every load here is a new page:
-                // read from the frontier, then record it, mirroring
-                // LibraryRootView's isNewPage branch.
-                let startOffset = offsetState.rawSQLOffsetFrontier
-                let startOverflow = reset ? [] : offsetState.rawSQLOffsetOverflowFrontier
-                var visible: [CalibreBook] = startOverflow
-                if !reset { offsetState.rawSQLOffsetOverflowFrontier = [] }
-                var offset = startOffset
-                var exhausted = false
-                var totalRawFetched = 0
-                var iterations = 0
-                let maxIterations = 40
-                while visible.count < pageSize && iterations < maxIterations {
-                    iterations += 1
-                    let rawChunk = await library.books(
-                        offset: offset, limit: pageFetchLimit,
-                        sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                        query: query,
-                        filter: toolbarState.filterExpression,
-                        filterTagExpansions: cachedFilterTagExpansions,
-                        visibilityVersion: session.membershipVersion
-                    )
-                    LibraryFilterDebug.log("visibleBooks.fetch", [
-                        "surface": "email", "offset": offset, "raw": rawChunk.count
-                    ])
-                    totalRawFetched += rawChunk.count
-                    offset += rawChunk.count
-                    visible.append(contentsOf: visibleBooks(rawChunk))
-                    if rawChunk.count < pageFetchLimit { exhausted = true; break }
-                    guard !isTornDown, !Task.isCancelled else { return }
-                }
-                guard !isTornDown, !Task.isCancelled else { return }
-                offsetState.rawSQLOffsetByPage.append(startOffset)
-                offsetState.seedOverflowByPage.append(startOverflow)
-                offsetState.rawSQLOffsetFrontier = offset
-                groupAwareVisible = visible
-                hasNextPage = !exhausted || visible.count > pageSize
-                LibraryFilterDebug.log("visibleBooks.end", [
-                    "surface": "email",
-                    "rawFetched": totalRawFetched,
-                    "visibleAfterFilter": visible.count,
-                    "shouldGroup": true,
-                    "exhausted": exhausted
-                ])
-                raw = []
-            } else {
-                raw = await library.books(
-                    offset: offsetState.currentPage * pageSize, limit: pageFetchLimit,
-                    sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                    query: query,
-                    filter: toolbarState.filterExpression,
-                    filterTagExpansions: cachedFilterTagExpansions,
-                    visibilityVersion: session.membershipVersion
-                )
-                guard !isTornDown, !Task.isCancelled else { return }
-            }
-            scheduleDeferredSQLFilterCount(query: query)
-        } else if let result = toolbarState.activeFilterResult, !result.calibreIDs.isEmpty {
-            LibraryFilterDebug.log("loadPage.start", [
-                "surface": "email",
-                "mode": "explicitIDs",
-                "page": offsetState.currentPage,
-                "candidateIDs": result.calibreIDs.count,
-                "query": LibraryFilterDebug.summary(query: query)
-            ])
-            let ids = visibleIDs(intersect(result.calibreIDs, with: query.ftsMatchedIDs))
-            raw = await library.books(
-                ids: ids,
-                offset: offsetState.currentPage * pageSize, limit: pageSize + 1,
-                sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                query: query
-            )
-            guard !isTornDown, !Task.isCancelled else { return }
-        } else if toolbarState.activeFilterResult != nil {
-            LibraryFilterDebug.log("loadPage.start", [
-                "surface": "email",
-                "mode": "emptyExplicitIDs",
-                "page": offsetState.currentPage
-            ])
-            raw = []
-        } else {
-            LibraryFilterDebug.log("loadPage.start", [
-                "surface": "email",
-                "mode": "unfiltered",
-                "page": offsetState.currentPage,
-                "query": LibraryFilterDebug.summary(query: query)
-            ])
-            if shouldGroupSidebarRows {
-                let startOffset = offsetState.rawSQLOffsetFrontier
-                let startOverflow = reset ? [] : offsetState.rawSQLOffsetOverflowFrontier
-                var visible: [CalibreBook] = startOverflow
-                if !reset { offsetState.rawSQLOffsetOverflowFrontier = [] }
-                var offset = startOffset
-                var exhausted = false
-                var totalRawFetched = 0
-                var iterations = 0
-                let maxIterations = 40
-                while visible.count < pageSize && iterations < maxIterations {
-                    iterations += 1
-                    let rawChunk = await library.books(
-                        offset: offset, limit: pageFetchLimit,
-                        sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                        query: query,
-                        visibilityVersion: session.membershipVersion
-                    )
-                    LibraryFilterDebug.log("visibleBooks.fetch", [
-                        "surface": "email", "offset": offset, "raw": rawChunk.count
-                    ])
-                    totalRawFetched += rawChunk.count
-                    offset += rawChunk.count
-                    visible.append(contentsOf: visibleBooks(rawChunk))
-                    if rawChunk.count < pageFetchLimit { exhausted = true; break }
-                    guard !isTornDown, !Task.isCancelled else { return }
-                }
-                guard !isTornDown, !Task.isCancelled else { return }
-                offsetState.rawSQLOffsetByPage.append(startOffset)
-                offsetState.seedOverflowByPage.append(startOverflow)
-                offsetState.rawSQLOffsetFrontier = offset
-                groupAwareVisible = visible
-                hasNextPage = !exhausted || visible.count > pageSize
-                LibraryFilterDebug.log("visibleBooks.end", [
-                    "surface": "email",
-                    "rawFetched": totalRawFetched,
-                    "visibleAfterFilter": visible.count,
-                    "shouldGroup": true,
-                    "exhausted": exhausted
-                ])
-                raw = []
-            } else {
-                raw = await library.books(
-                    offset: offsetState.currentPage * pageSize, limit: pageFetchLimit,
-                    sort: toolbarState.sortField, ascending: toolbarState.ascending,
-                    query: query,
-                    visibilityVersion: session.membershipVersion
-                )
-                guard !isTornDown, !Task.isCancelled else { return }
-            }
-        }
-
-        guard !isTornDown, !Task.isCancelled else { return }
-        let page: [CalibreBook]
-        if let wordCountPage {
-            hasNextPage = wordCountHasMore
-            page = wordCountPage
-        } else if let groupAwareVisible {
-            // hasNextPage was already set by the group-aware drain loop above.
-            page = Array(groupAwareVisible.prefix(pageSize))
-            offsetState.rawSQLOffsetOverflowFrontier = Array(groupAwareVisible.dropFirst(pageSize))
-            LibraryFilterDebug.log("visibleBooks.pagePrefix", [
-                "surface": "email",
-                "visible": groupAwareVisible.count,
-                "page": page.count,
-                "overflow": offsetState.rawSQLOffsetOverflowFrontier.count
-            ])
-        } else {
-            let visible = visibleBooks(raw)
-            hasNextPage = raw.count == pageFetchLimit || visible.count > pageSize
-            page = Array(visible.prefix(pageSize))
-            LibraryFilterDebug.log("visibleBooks.end", [
-                "surface": "email",
-                "raw": raw.count,
-                "visibleAfterFilter": visible.count,
-                "page": page.count,
-                "seriesOrMergedStripped": raw.count - visible.count,
-                "shouldGroup": false
-            ])
-        }
-        if reset { books = page } else { books.append(contentsOf: page) }
-
-        rebuildSidebarItems()
-        sidebarVC?.books      = books
-        sidebarVC?.bookStates = bookStates
-        sidebarVC?.ao3Metadata = ao3Metadata
-        sidebarVC?.likedIDs = likedIDs
-        sidebarVC?.readLaterIDs = readLaterIDs
-        loadAO3MetadataForSidebarBooks()
-        LibraryFilterDebug.log("loadPage.end", [
-            "surface": "email",
-            "rows": books.count,
-            "pageRows": page.count,
-            "hasNext": hasNextPage,
-            "elapsedMS": LibraryFilterDebug.elapsedMS(since: loadStart)
-        ])
-    }
-
-    /// Commits a settled search generation to the activity log. Called only
-    /// from the guarded commit points that know a final, non-superseded
-    /// result count (the plain-text debounce continuation and each
-    /// `applyFilterRules()` branch) — never from `loadPage(reset:)` itself,
-    /// since a page-0 load can happen more than once per settled query.
-    /// `SearchActivityLog.append` already no-ops on an empty/no-filter query
-    /// and dedupes against the most recent entry.
-    private func commitSearchActivityLogEntry(resultCount: Int) {
-        let expr = toolbarState.filterExpression.hasCompleteRules
-            ? toolbarState.filterExpression : nil
-        SearchActivityLog.shared.append(
-            searchText: toolbarState.searchText,
-            filterExpression: expr,
-            resultCount: resultCount
-        )
-    }
-
-    private func queryWithCachedFullText(_ query: SearchQuery) -> SearchQuery {
-        LibraryQueryHelpers.queryWithCachedFullText(query, session: session)
-    }
-
-    /// Mirrors `LibraryRootView.resolveTagExpansionsIfNeeded`. See that method for rationale.
-    private func resolveTagExpansionsIfNeeded(terms: [String]) {
-        guard !terms.isEmpty, let metaDB = session.metaDB else {
-            resolvedTagExpansions = [:]
-            return
-        }
-        Task { @MainActor [weak self] in
-            guard let self, !self.isTornDown else { return }
-            let resolved = await TagExpansionResolver.resolvedTagExpansions(for: terms, metaDB: metaDB)
-            self.resolvedTagExpansions = resolved
-            await self.scheduleLoadPage(reset: false).value
-        }
-    }
-
-    private func rebuildSidebarItems() {
-        sidebarVC?.activeCollectionID = activeCollectionID
-        guard shouldGroupSidebarRows,
-              let metaDB = session.metaDB,
-              let library = session.library else {
-            LibraryFilterDebug.log("rebuildSidebarItems.ungrouped", [
-                "surface": "email",
-                "books": books.count,
-                "reason": shouldGroupSidebarRows ? "noMetaDB" : "groupingOff"
-            ])
-            items = books.map { .book($0) }
-            sidebarVC?.items = items
-            sidebarVC?.rebuildDegraded = false
-            return
-        }
-
-        // §grouping-flash fix: do NOT pre-assign items = books.map(.book) here — see
-        // the matching comment in LibraryRootView.rebuildItems. loadPage(reset:) clears
-        // items to [] on a fresh query so ungrouped works are never shown.
-        let pageBooks = books
-        LibraryFilterDebug.log("rebuildSidebarItems.start", [
-            "surface": "email",
-            "pageBooks": pageBooks.count
-        ])
-        // Cancel any in-flight task before starting a new one. CalibreLibrary is
-        // actor-isolated, so overlapping calls to library.booksForIDs from rapid
-        // search changes now serialize safely rather than crash — but without this
-        // cancellation, a slow stale task could still finish after a newer one and
-        // overwrite `items` with out-of-date results.
-        rebuildSidebarTask?.cancel()
-        rebuildSidebarTask = Task {
-            let pageIDs = pageBooks.map(\.id)
-            let entries: [SeriesCacheEntry]
-            let allEntries: [SeriesCacheEntry]
-            let metadata: [Int: AO3MetadataRecord]
-            let placeholders: [String: [SeriesPlaceholder]]
-            let singletonWarnings: [Int: [SingletonSeriesWarning]]
-            var degraded = false
-
-            // entries and singletonWarnings both only depend on pageIDs.
-            async let entriesTask = metaDB.seriesEntries(for: pageIDs)
-            async let singletonWarningsTask = metaDB.singletonNonLeadingSeriesEntries(for: pageIDs)
-
-            guard !Task.isCancelled else { return }
-            do { entries = try await entriesTask } catch {
-                entries = []
-                #if DEBUG
-                print("[EmailLibraryViewController] rebuildSidebarItems: seriesEntries(page) failed: \(error)")
-                #endif
-                degraded = true
-            }
-            let visibleEntries = entries.filter {
-                !anthologyIDs.contains($0.calibreID) && !duplicateLoserIDs.contains($0.calibreID)
-            }
-            let groupedEntries = Dictionary(grouping: visibleEntries, by: \.seriesKey)
-            let seriesKeys = groupedEntries.keys.sorted()
-
-            // allEntries and placeholders both only depend on seriesKeys.
-            async let allEntriesTask = metaDB.seriesEntries(keys: seriesKeys)
-            async let placeholdersTask = metaDB.placeholders(for: seriesKeys)
-
-            guard !Task.isCancelled else { return }
-            do { allEntries = try await allEntriesTask } catch {
-                allEntries = []
-                #if DEBUG
-                print("[EmailLibraryViewController] rebuildSidebarItems: seriesEntries(keys) failed: \(error)")
-                #endif
-                degraded = true
-            }
-            let allIDs = Array(Set(allEntries.map(\.calibreID)))
-            guard !Task.isCancelled else { return }
-            // CalibreLibrary is actor-isolated now: this await serializes automatically
-            // with loadPage(reset:)'s page-fetch calls and any other in-flight query
-            // against the same library. The SQLITE_BUSY race this MainActor hop used
-            // to guard against is no longer possible — the actor itself is
-            // CalibreLibrary.db's only access path. See the matching fix in
-            // LibraryRootView.rebuildItems.
-            //
-            // allBooks and metadata both only depend on allIDs.
-            async let allBooksTask = library.booksForIDs(allIDs)
-            async let metadataTask = metaDB.ao3Metadata(for: allIDs)
-
-            let allBooks = await allBooksTask
-            guard !Task.isCancelled else { return }
-            do { metadata = try await metadataTask } catch {
-                metadata = [:]
-                #if DEBUG
-                print("[EmailLibraryViewController] rebuildSidebarItems: ao3Metadata failed: \(error)")
-                #endif
-                degraded = true
-            }
-            guard !Task.isCancelled else { return }
-            do { placeholders = try await placeholdersTask } catch {
-                placeholders = [:]
-                #if DEBUG
-                print("[EmailLibraryViewController] rebuildSidebarItems: placeholders failed: \(error)")
-                #endif
-                degraded = true
-            }
-            guard !Task.isCancelled else { return }
-            do { singletonWarnings = try await singletonWarningsTask } catch {
-                singletonWarnings = [:]
-                #if DEBUG
-                print("[EmailLibraryViewController] rebuildSidebarItems: singletonNonLeadingSeriesEntries failed: \(error)")
-                #endif
-                degraded = true
-            }
-            let byID = LibraryQueryHelpers.indexed(allBooks.map { ($0.id, $0) })
-            // Shared with LibraryRootView.rebuildItems via buildSeriesGroups
-            // (SeriesGroupBuilder.swift) — this used to be a near-duplicate loop
-            // with slightly different plumbing (no anthology filtering carried
-            // through to indices/placeholders bookkeeping the way LibraryRootView's
-            // copy did); both call sites now agree on one implementation.
-            let groups = buildSeriesGroups(
-                allEntries: allEntries,
-                byID: byID,
-                seriesMetadata: metadata,
-                anthologyIDs: anthologyIDs,
-                duplicateLoserIDs: duplicateLoserIDs,
-                placeholders: placeholders
-            )
-
-            // Build collapsedIDs so books subsumed into an emitted series row are not
-            // also emitted as standalone .book rows. Mirrors rebuildItems in LibraryRootView.
-            let collapsedIDs = Set(groups.values.flatMap { $0.works.map(\.id) })
-            let nextItems = assignSeriesItems(
-                pageBooks: pageBooks,
-                entries: entries,
-                seriesByKey: groups,
-                collapsedIDs: collapsedIDs,
-                singletonWarningsByCalibreID: singletonWarnings,
-                anthologyIDs: anthologyIDs
-            )
-            await MainActor.run {
-                guard self.books.map(\.id) == pageBooks.map(\.id) else {
-                    LibraryFilterDebug.log("rebuildSidebarItems.stale", [
-                        "surface": "email",
-                        "pageBooks": pageBooks.count,
-                        "currentBooks": self.books.count
-                    ])
-                    return
-                }
-                self.items = nextItems
-                self.sidebarVC?.items = nextItems
-                self.sidebarVC?.rebuildDegraded = degraded
-                LibraryFilterDebug.log("rebuildSidebarItems.end", [
-                    "surface": "email",
-                    "pageBooks": pageBooks.count,
-                    "groups": groups.count,
-                    "collapsedIDs": collapsedIDs.count,
-                    "items": nextItems.count,
-                    "series": nextItems.filter { if case .series = $0 { return true }; return false }.count,
-                    "singletons": nextItems.filter { if case .book = $0 { return true }; return false }.count,
-                    "firstIDs": pageBooks.prefix(5).map(\.id).map(String.init).joined(separator: ","),
-                    "firstTitles": pageBooks.prefix(5).map(\.title).joined(separator: " | ")
-                ])
-            }
-        }
-    }
-
-    private func loadAO3MetadataForSidebarBooks() {
-        let ids = books.map(\.id)
-        guard !ids.isEmpty, let metaDB = session.metaDB else {
-            ao3Metadata = [:]
-            sidebarVC?.ao3Metadata = [:]
-            return
-        }
-
-        Task {
-            let metadata = (try? await metaDB.ao3Metadata(for: ids)) ?? [:]
-            await MainActor.run {
-                let currentIDs = Set(self.books.map(\.id))
-                guard currentIDs == Set(ids) else { return }
-                self.ao3Metadata = metadata
-                self.sidebarVC?.ao3Metadata = metadata
-            }
-        }
-    }
-
-    /// Mirrors LibraryRootView.shouldGroupSeriesRows: grouping is active either because
-    /// the user has the groupBySeries toggle on, or because a "Series or Merged" filter
-    /// rule is committed (which always implies grouping regardless of the toggle).
-    private var shouldGroupSidebarRows: Bool {
-        toolbarState.groupBySeries || toolbarState.filterExpression.hasSeriesOrMergedEqualsRule
-    }
-
-    /// Mirrors LibraryRootView.activeCollectionID — see its doc comment.
-    private var activeCollectionID: String? {
-        let collectionRules = toolbarState.filterExpression.groups.flatMap(\.rules)
-            .filter { $0.field == .collection && $0.op == .equals }
-        guard collectionRules.count == 1 else { return nil }
-        return collectionRules[0].value
-    }
-
-    /// Mirrors LibraryRootView.currentVisibilityPolicy — see LibraryVisibilityPolicy.swift.
-    private var currentVisibilityPolicy: LibraryVisibilityPolicy {
-        LibraryVisibilityPolicy(
-            showSkippedCollection: ReaderPreferences.shared.showSkippedCollection,
-            shouldGroupSeriesRows: shouldGroupSidebarRows,
-            hideNonAO3PublisherBooks: ReaderPreferences.shared.hideNonAO3PublisherBooks,
-            hideAnthologyBooks: ReaderPreferences.shared.hideAnthologyBooks,
-            hideDuplicateBooks: ReaderPreferences.shared.hideDuplicateBooks,
-            skippedIDs: skippedIDs,
-            seriesOrMergedIDs: seriesOrMergedIDs,
-            ao3PublisherIDs: ao3PublisherIDs,
-            anthologyIDs: anthologyIDs,
-            duplicateLoserIDs: duplicateLoserIDs
-        )
-    }
-
-    private func visibleIDs(_ ids: [Int]) -> [Int] {
-        queryController.visibleIDs(ids, policy: currentVisibilityPolicy)
-    }
-
-    private func intersect(_ ids: [Int], with optionalIDs: [Int]?) -> [Int] {
-        queryController.intersect(ids, with: optionalIDs)
-    }
-
-    private func visibleBooks(_ raw: [CalibreBook]) -> [CalibreBook] {
-        queryController.visibleBooks(raw, policy: currentVisibilityPolicy)
-    }
-
-    private func loadNextPageIfAvailable() {
-        guard hasNextPage else { return }
-        offsetState.currentPage += 1
-        scheduleLoadPage(reset: false)
-    }
-
-    func refreshBookStates() {
-        let pageIDs = books.map(\.id)
-        guard !pageIDs.isEmpty else {
-            sidebarVC?.bookStates = [:]
-            Task { await refreshCollectionSnapshots() }
-            return
-        }
-        Task {
-            if let metaDB = session.metaDB {
-                let states = await metaDB.bookStates(for: pageIDs)
-                await MainActor.run {
-                    self.bookStates = states
-                    self.sidebarVC?.bookStates = states
-                }
-            }
-            await refreshCollectionSnapshots()
-        }
-    }
-
-    func refreshCollections() {
-        Task { await refreshCollectionSnapshots() }
     }
 
     func consumePendingCollectionSeedIDs() -> [Int] {
@@ -1807,26 +401,20 @@ final class EmailLibraryViewController: NSViewController {
         return ids
     }
 
-    /// "All satisfy" mirrors LibraryRootView's `toggleReadLater(for series:)`
-    /// semantics: a series only shows as read-later once every work is, so a
-    /// partially-added group adds the rest rather than removing the ones
-    /// already in. For a single-book `books` array this reduces to the
-    /// original book-level toggle.
+    // MARK: - Row Actions
+
     private func toggleReadLater(for books: [CalibreBook]) {
-        guard !books.isEmpty else { return }
-        let shouldAdd = !books.allSatisfy { readLaterIDs.contains($0.id) }
+        let ids = books.map(\.id)
+        let shouldAdd = !books.allSatisfy { session.cachedReadLaterIDs.contains($0.id) }
         Task {
-            try? await session.collectionStore?.setReadLater(calibreIDs: books.map(\.id), inReadLater: shouldAdd)
-            await refreshCollectionSnapshots()
+            try? await session.collectionStore?.setReadLater(calibreIDs: ids, inReadLater: shouldAdd)
+            session.bumpMembershipVersion()
+            await displayController.refreshVisibilitySnapshots(resetPage: false)
         }
     }
 
     private func markRead(_ books: [CalibreBook]) {
         let ids = books.map(\.id)
-        for calibreID in ids {
-            bookStates[calibreID]?.markRead()
-        }
-        sidebarVC?.bookStates = bookStates
         Task {
             if let metaDB = session.metaDB {
                 for calibreID in ids {
@@ -1845,18 +433,13 @@ final class EmailLibraryViewController: NSViewController {
                     shouldBeMember: false
                 )
             }
-            session.bumpMembershipVersion()  // §7
-            refreshBookStates()
-            await scheduleLoadPage(reset: true).value
+            session.bumpMembershipVersion()
+            displayController.refreshBookStates()
         }
     }
 
     private func resetProgress(_ books: [CalibreBook]) {
         let ids = books.map(\.id)
-        for calibreID in ids {
-            bookStates[calibreID]?.resetReadingProgress()
-        }
-        sidebarVC?.bookStates = bookStates
         Task {
             if let metaDB = session.metaDB {
                 for calibreID in ids {
@@ -1875,55 +458,15 @@ final class EmailLibraryViewController: NSViewController {
                     shouldBeMember: false
                 )
             }
-            session.bumpMembershipVersion()  // §7
-            refreshBookStates()
-            await scheduleLoadPage(reset: true).value
+            session.bumpMembershipVersion()
+            displayController.refreshBookStates()
         }
     }
 
-    @MainActor
-    private func refreshCollectionSnapshots() async {
-        // §Phase1: was previously the only writer of five of the six cachedX
-        // sets on the List side and the ONLY writer of NONE of them on this
-        // (Email) side except cachedAnthologyIDs — now delegates to the
-        // single shared writer on LibrarySession, which writes all six and
-        // bumps membershipVersion itself exactly once if anything changed.
-        let previousSkipped = skippedIDs
-        let previousSeriesOrMerged = seriesOrMergedIDs
-        let previousAO3PublisherIDs = ao3PublisherIDs
-        let previousAnthologyIDs = anthologyIDs
-        let previousDuplicateLoserIDs = duplicateLoserIDs
-
-        await session.refreshCollectionSnapshots()
-
-        collectionMembership = session.collectionMembershipByName
-        likedIDs = session.cachedLikedIDs
-        readLaterIDs = session.cachedReadLaterIDs
-        skippedIDs = session.cachedSkippedIDs
-        seriesOrMergedIDs = session.cachedSeriesOrMergedIDs
-        ao3PublisherIDs = session.cachedAO3PublisherIDs
-        anthologyIDs = session.cachedAnthologyIDs
-        duplicateLoserIDs = session.cachedDuplicateLoserIDs
-        sidebarVC?.collectionMembership = collectionMembership
-        sidebarVC?.likedIDs = likedIDs
-        sidebarVC?.readLaterIDs = readLaterIDs
-
-        let shouldReloadPage = skippedIDs != previousSkipped
-            || seriesOrMergedIDs != previousSeriesOrMerged
-            || ao3PublisherIDs != previousAO3PublisherIDs
-            || anthologyIDs != previousAnthologyIDs
-            || duplicateLoserIDs != previousDuplicateLoserIDs
-        if shouldReloadPage {
-            await scheduleLoadPage(reset: true).value
-        }
-    }
-
-    // MARK: - Inline reader pane
+    // MARK: - Inline Reader Pane
 
     private func setSelectedBook(_ book: CalibreBook?) {
-        if selectedBook == nil, book == nil {
-            return
-        }
+        if selectedBook == nil, book == nil { return }
         if let selectedBook, let book,
            selectedBook.id == book.id,
            let currentReaderVC,
@@ -1952,7 +495,7 @@ final class EmailLibraryViewController: NSViewController {
         rvc.view.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
         rvc.onReadingProgressChanged = { [weak self] in
             DispatchQueue.main.async {
-                self?.refreshBookStates()
+                self?.displayController.refreshBookStates()
             }
         }
         rvc.onAnnotationsChanged = { [weak self] annotations in
@@ -2001,15 +544,30 @@ final class EmailLibraryViewController: NSViewController {
         item.minimumThickness = 420
         item.canCollapse = false
         readerPaneItem = item
-        // The reader pane is always at index 2: [library(0) | annotations(1) | reader(2)].
-        // annotationsSidebarItem is never removed, so after removing the old readerPaneItem
-        // the array always has exactly 2 items. Appending places it correctly at index 2.
         splitVC.addSplitViewItem(item)
         oldVC?.removeFromParent()
         restoreSidebarThickness(sidebarThickness)
     }
 
-    private var readerSidebarMode: EmailReaderSidebarMode = .annotations
+    private func makePlaceholderVC() -> NSViewController {
+        NSHostingController(rootView:
+            VStack(spacing: 14) {
+                Image(systemName: "book.closed")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.quaternary)
+                Text("Select a book to read")
+                    .font(.title3)
+                    .foregroundStyle(.tertiary)
+                Text("Filter by tag in the list view, then switch here to read through results.")
+                    .font(.callout)
+                    .foregroundStyle(.quaternary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
+        )
+    }
 
     private func makeReaderSidebarVC() -> NSViewController {
         let vc = NSHostingController(rootView: makeReaderSidebarView())
@@ -2051,11 +609,6 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     private func applyFullTextPhraseToLocalFind(reader: ReaderViewController? = nil, allowDeferred: Bool = true) {
-        // Respect the user's preference: when disabled, behave exactly as if
-        // there were no active full-text phrase (clears/no-ops rather than
-        // auto-showing the Find bar). Everything below this line is
-        // unchanged so the dedup/deferred-application bookkeeping stays
-        // correct whether or not the phrase is real.
         let phrase = ReaderPreferences.shared.autoOpenFindBarForFullTextSearch
             ? (activeFullTextPhrase() ?? "")
             : ""
@@ -2087,31 +640,28 @@ final class EmailLibraryViewController: NSViewController {
         readerLocalFindState = targetReader.currentLocalFindState()
     }
 
-    @objc func performReaderSidebarToggle() {
-        setReaderSidebarVisible(!(annotationsSidebarItem?.isCollapsed ?? true))
-    }
+    // MARK: - Sidebar Toggles & Thickness
 
-    private func setReaderSidebarVisible(_ visible: Bool) {
-        guard let item = annotationsSidebarItem else { return }
+    @objc func performSidebarToggle() {
+        guard let item = librarySidebarItem else { return }
+        let willCollapse = !item.isCollapsed
+        if willCollapse {
+            rememberSidebarThickness()
+        }
+        isSidebarHidden = willCollapse
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.2
-            item.isCollapsed = !visible
+            item.isCollapsed = willCollapse
             splitVC.splitView.layoutSubtreeIfNeeded()
         }
-        repairReaderSplitItems()
-        toolbarState.isEmailReaderSidebarVisible = visible
+        if !willCollapse {
+            restoreSidebarThickness(lastSidebarThickness)
+        }
     }
 
-    @objc func showEmailAnnotationSidebar(_ sender: Any?) {
-        readerSidebarMode = .annotations
-        refreshReaderSidebar()
-        setReaderSidebarVisible(true)
-    }
-
-    @objc func showTOCInEmailSidebar(_ sender: Any?) {
-        readerSidebarMode = .tableOfContents
-        refreshReaderSidebar()
-        setReaderSidebarVisible(true)
+    private func rememberSidebarThicknessIfVisible() {
+        guard librarySidebarItem?.isCollapsed == false else { return }
+        rememberSidebarThickness()
     }
 
     private func currentSidebarThickness() -> CGFloat {
@@ -2142,6 +692,33 @@ final class EmailLibraryViewController: NSViewController {
         }
     }
 
+    @objc func performReaderSidebarToggle() {
+        setReaderSidebarVisible(!(annotationsSidebarItem?.isCollapsed ?? true))
+    }
+
+    private func setReaderSidebarVisible(_ visible: Bool) {
+        guard let item = annotationsSidebarItem else { return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.2
+            item.isCollapsed = !visible
+            splitVC.splitView.layoutSubtreeIfNeeded()
+        }
+        repairReaderSplitItems()
+        toolbarState.isEmailReaderSidebarVisible = visible
+    }
+
+    @objc func showEmailAnnotationSidebar(_ sender: Any?) {
+        readerSidebarMode = .annotations
+        refreshReaderSidebar()
+        setReaderSidebarVisible(true)
+    }
+
+    @objc func showTOCInEmailSidebar(_ sender: Any?) {
+        readerSidebarMode = .tableOfContents
+        refreshReaderSidebar()
+        setReaderSidebarVisible(true)
+    }
+
     private func repairReaderSplitItems() {
         guard let readerPaneItem, let annotationsSidebarItem else { return }
         readerPaneItem.isCollapsed = false
@@ -2152,10 +729,6 @@ final class EmailLibraryViewController: NSViewController {
         annotationsSidebarItem.maximumThickness = 360
         annotationsSidebarItem.preferredThicknessFraction = 0.24
 
-        // Split order is fixed: [library | annotations | reader].
-        // The divider between annotations and reader is always the last divider
-        // (splitViewItems.count - 2), whether or not library is collapsed.
-        // Position it so the annotations pane gets its desired width from the right.
         guard splitVC.view.window != nil,
               !annotationsSidebarItem.isCollapsed,
               splitVC.splitView.bounds.width > 0 else { return }
@@ -2177,6 +750,7 @@ final class EmailLibraryViewController: NSViewController {
 struct FilterSheetCarrier: View {
     let toolbarState: LibraryToolbarState
     let session: LibrarySession
+    let displayController: LibraryDisplayController
     weak var emailVC: EmailLibraryViewController?
 
     var body: some View {
@@ -2192,15 +766,15 @@ struct FilterSheetCarrier: View {
                         set: { toolbarState.filterExpression = $0 }
                     ),
                     onApply: {
-                        emailVC?.applyFilterRules()
+                        displayController.applyFilterRules()
                         toolbarState.showFilterDrawer = false
                     },
                     onClear: {
-                        toolbarState.filterExpression   = FilterExpression()
+                        toolbarState.filterExpression = FilterExpression()
                         toolbarState.activeFilterResult = nil
                         toolbarState.cancelLibraryFilterApplication()
-                        emailVC?.scheduleLoadPage(reset: true)
-                        toolbarState.showFilterDrawer = false   // see onApply's comment above
+                        displayController.scheduleLoadPage()
+                        toolbarState.showFilterDrawer = false
                     }
                 )
                 .environment(toolbarState)
@@ -2213,17 +787,8 @@ struct FilterSheetCarrier: View {
             )) {
                 let seedIDs = emailVC?.consumePendingCollectionSeedIDs() ?? []
                 CollectionsView(calibreIDsToAdd: seedIDs, onSelectCollection: { collection in
-                    let rule = FilterRule(field: .collection, op: .equals, value: collection.name)
-                    var expr = toolbarState.filterExpression
-                    if expr.groups.isEmpty {
-                        expr.groups = [FilterGroup(rules: [rule])]
-                    } else {
-                        expr.groups[0].rules.removeAll { $0.field == .collection }
-                        expr.groups[0].rules.append(rule)
-                    }
-                    toolbarState.filterExpression = expr
-                    toolbarState.showCollections  = false
-                    emailVC?.applyFilterRules()
+                    displayController.addOrReplaceRule(FilterRule(field: .collection, op: .equals, value: collection.name))
+                    toolbarState.showCollections = false
                 })
                 .environment(session)
                 .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
@@ -2238,57 +803,49 @@ struct FilterSheetCarrier: View {
             }
             .onChange(of: toolbarState.triggerExport) {
                 if toolbarState.triggerExport {
-                    if let books = emailVC?.currentBooks {
-                        ExportManager.presentExportPanel(         // §1
-                            books: books,
-                            session: emailVC?.session,
-                            filterResult: emailVC?.toolbarState.activeFilterResult,
-                            toolbarState: emailVC?.toolbarState
-                        )
-                    }
+                    ExportManager.presentExportPanel(
+                        books: displayController.books,
+                        session: session,
+                        filterResult: toolbarState.activeFilterResult,
+                        toolbarState: toolbarState
+                    )
                     toolbarState.triggerExport = false
                 }
             }
             .onChange(of: toolbarState.triggerAnnotationExport) {
                 if toolbarState.triggerAnnotationExport {
-                    if let session = emailVC?.session {
-                        AnnotationExportManager.presentExportPanel(session: session)
-                    }
+                    AnnotationExportManager.presentExportPanel(session: session)
                     toolbarState.triggerAnnotationExport = false
                 }
             }
             .onChange(of: toolbarState.triggerEPUBExport) {
                 if toolbarState.triggerEPUBExport {
-                    if let books = emailVC?.currentBooks,
-                       let session = emailVC?.session,
-                       let libraryRoot = session.library?.root {
-                        let capturedToolbarState = emailVC?.toolbarState
-                        Task {
-                            let rows = await ExportManager.buildExportRows(
-                                currentPageBooks: books,
-                                session: session,
-                                filterResult: capturedToolbarState?.activeFilterResult,
-                                toolbarState: capturedToolbarState
-                            )
-                            let ao3Map = LibraryQueryHelpers.indexed(rows.compactMap { row in
-                                row.ao3.map { (row.book.id, $0) }
-                            })
-                            var seriesEntriesByBook: [Int: [SeriesCacheEntry]] = [:]
-                            if capturedToolbarState?.groupBySeries == true, let metaDB = session.metaDB {
-                                let ids = rows.map(\.book.id)
-                                let currentAnthologyIDs = await session.library?.anthologyBookIDs() ?? []
-                                if let entries = try? await metaDB.seriesEntries(for: ids) {
-                                    seriesEntriesByBook = Dictionary(grouping: entries.filter { !currentAnthologyIDs.contains($0.calibreID) }, by: \.calibreID)
-                                }
+                    guard let libraryRoot = session.library?.root else { return }
+                    Task {
+                        let rows = await ExportManager.buildExportRows(
+                            currentPageBooks: displayController.books,
+                            session: session,
+                            filterResult: toolbarState.activeFilterResult,
+                            toolbarState: toolbarState
+                        )
+                        let ao3Map = LibraryQueryHelpers.indexed(rows.compactMap { row in
+                            row.ao3.map { (row.book.id, $0) }
+                        })
+                        var seriesEntriesByBook: [Int: [SeriesCacheEntry]] = [:]
+                        if toolbarState.groupBySeries, let metaDB = session.metaDB {
+                            let ids = rows.map(\.book.id)
+                            let currentAnthologyIDs = await session.library?.anthologyBookIDs() ?? []
+                            if let entries = try? await metaDB.seriesEntries(for: ids) {
+                                seriesEntriesByBook = Dictionary(grouping: entries.filter { !currentAnthologyIDs.contains($0.calibreID) }, by: \.calibreID)
                             }
-                            ExportManager.presentEPUBExportPanel(
-                                books: rows.map(\.book),
-                                libraryRoot: libraryRoot,
-                                ao3Map: ao3Map,
-                                groupBySeries: capturedToolbarState?.groupBySeries ?? false,
-                                seriesEntries: seriesEntriesByBook
-                            )
                         }
+                        ExportManager.presentEPUBExportPanel(
+                            books: rows.map(\.book),
+                            libraryRoot: libraryRoot,
+                            ao3Map: ao3Map,
+                            groupBySeries: toolbarState.groupBySeries,
+                            seriesEntries: seriesEntriesByBook
+                        )
                     }
                     toolbarState.triggerEPUBExport = false
                 }
@@ -2298,35 +855,15 @@ struct FilterSheetCarrier: View {
 
 // MARK: - AmbrosiaEmailSplitViewController
 
-/// `NSSplitViewController` installs itself as its managed `NSSplitView`'s
-/// delegate internally and hard-asserts (`NSInternalInconsistencyException`,
-/// "A SplitView managed by a SplitViewController cannot have its delegate
-/// modified") if anything else calls `splitView.delegate = ...` on it — this
-/// crashed at launch when that assignment was made directly against
-/// `EmailLibraryViewController`. The supported way to customize divider
-/// behavior is to subclass `NSSplitViewController` itself and override the
-/// `NSSplitViewDelegate` methods here, since `NSSplitViewController` already
-/// conforms to `NSSplitViewDelegate` and is the one object AppKit permits to
-/// hold that role.
 final class AmbrosiaEmailSplitViewController: NSSplitViewController {
 
-    /// Fired after a user-driven divider resize so the owning
-    /// `EmailLibraryViewController` can persist the new sidebar width.
     var onDividerResize: (() -> Void)?
 
-    /// Clamps divider drags to each pane's own min/max thickness.
-    ///
-    /// Without this, NSSplitView's default behavior lets a single fast mouse-
-    /// drag tick move a divider past a neighboring pane's collapse threshold
-    /// in one jump. With three collapsible-adjacent panes ([library |
-    /// annotations | reader]) and no delegate constraining drag targets, a
-    /// quick drag/close on the library divider (index 0) can overshoot far
-    /// enough that AppKit's redistribution logic also collapses or reveals
-    /// the annotations sidebar as collateral damage — the "annotations
-    /// sidebar appears when it shouldn't" bug. Clamping the proposed position
-    /// to the dragged pane's own bounds keeps each drag tick's effect local
-    /// to the divider actually being moved.
-    override func splitView(_ splitView: NSSplitView, constrainSplitPosition proposedPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+    override func splitView(
+        _ splitView: NSSplitView,
+        constrainSplitPosition proposedPosition: CGFloat,
+        ofSubviewAt dividerIndex: Int
+    ) -> CGFloat {
         guard dividerIndex >= 0, dividerIndex < splitViewItems.count - 1 else { return proposedPosition }
         let leadingItem = splitViewItems[dividerIndex]
         guard !leadingItem.isCollapsed else { return proposedPosition }

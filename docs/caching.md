@@ -30,11 +30,11 @@ Notes and known rough edges:
 
 ---
 
-### Reload triggers (List vs Email)
+### Reload triggers (Unified LibraryDisplayController)
 
-Both surfaces reload from two independent places on every `applyFilterRules()` completion: the explicit `scheduleLoadPage`/`loadPage` call each of its three branches (SQL-pageable, LRU-cached, full compute) makes itself, and a separate observer that exists to reload when *something else* — the other surface, a sort/search change, a preference toggle — changes `toolbarState.activeFilterResult` while this surface is the one onscreen. `LibraryRootView` uses SwiftUI's `.onChange(of: toolbarState.activeFilterResult?.reloadToken)`; `EmailLibraryViewController` uses a hand-rolled `withObservationTracking` observer (`scheduleObservation()` / `toolbarStateDidChange()`), since it's an `NSViewController`, not a SwiftUI view.
+Prior to Phase 2, both surfaces reloaded independently from multiple uncoordinated observers, requiring fragile `suppressNextReloadToken` flags and teardown guards to mitigate races.
 
-Every branch of `applyFilterRules()` on both surfaces sets a one-shot `suppressNextReloadToken` flag immediately before its own reload call, and the observer checks and consumes that flag before reloading — otherwise the filter completion double-fires and races through `scheduleLoadPage`'s non-atomic `loadPageTask?.cancel()`-then-reassign, since the explicit call and the observer-triggered call can run from different execution contexts. See Invariant 27.
+In Phase 2, all query planning, 3-branch filter execution (`sqlFilterClause`, LRU cached, full compute), and pagination reload triggers were consolidated into `LibraryDisplayController.swift`. A single observation loop tracks toolbar state mutations, preference updates, and notifications centrally. Both `LibraryRootView` and `EmailLibraryViewController` bind directly to `displayController.items`, `displayController.books`, and `displayController.offsetState`, completely eliminating cross-surface reload races and `suppressNextReloadToken` workarounds. Mode switching in `LibraryViewController` toggles `.isHidden` on cached views with zero reload delay.
 
 Collections:
 
