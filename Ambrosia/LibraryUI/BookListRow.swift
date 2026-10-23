@@ -1,5 +1,4 @@
 import SwiftUI
-import SwiftData
 import AppKit
 
 // MARK: - Book list row
@@ -15,7 +14,6 @@ struct BookListRow: View, Equatable {
     let onReadLaterToggle: () -> Void
     let hideFanworksTagPill: Bool
     let correctCalibreAmpEntities: Bool
-    let modelContext: ModelContext
     let onTagTap: (String, FilterField) -> Void
     let onAuthorTap: (String) -> Void
     let onOpen: () -> Void
@@ -59,7 +57,6 @@ struct BookListRow: View, Equatable {
          isLiked: Bool,
          hideFanworksTagPill: Bool,
          correctCalibreAmpEntities: Bool,
-         modelContext: ModelContext,
          onTagTap: @escaping (String, FilterField) -> Void,
          onAuthorTap: @escaping (String) -> Void,
          onOpen: @escaping () -> Void,
@@ -83,7 +80,6 @@ struct BookListRow: View, Equatable {
         self.onReadLaterToggle = onReadLaterToggle
         self.hideFanworksTagPill = hideFanworksTagPill
         self.correctCalibreAmpEntities = correctCalibreAmpEntities
-        self.modelContext = modelContext
         self.onTagTap     = onTagTap
         self.onAuthorTap  = onAuthorTap
         self.onOpen = onOpen

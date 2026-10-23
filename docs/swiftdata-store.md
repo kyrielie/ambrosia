@@ -1,25 +1,22 @@
-# SwiftData store
+# SwiftData Store (Deprecated & Consolidated into SQLite)
 
-Scope: the `BookState`/`ReadingGoal` SwiftData model container. For the
-larger app-owned database (collections, annotations, AO3 metadata), see
-`metadb-and-migrations.md`.
+Scope: Historical record of the legacy `BookState`/`ReadingGoal` SwiftData container and its consolidation into `ambrosia_meta.db`. For the current unified persistence architecture, see `metadb-and-migrations.md`.
 
 ---
 
-### SwiftData
+### Migration & Deprecation Summary
 
-`AmbrosiaApp` creates a persistent `ModelContainer("Ambrosia")` with exactly two model types:
+Previously, Ambrosia used a global SwiftData `ModelContainer("Ambrosia")` storing `@Model class BookState` and `@Model class ReadingGoal`.
 
-- `BookState`: keyed by `calibreID`, stores reading progress, reading position (UTF-16 offset), total reading time, and ELO fields.
-- `ReadingGoal`: reading-goal state.
+This architecture suffered from several critical flaws:
+1. **Cross-Library Collision**: `BookState` only keyed rows by Calibre integer ID (`calibreID: Int`). Opening multiple Calibre libraries caused ID collisions where reading progress from Library A overwrote Library B.
+2. **Dual-Store Fragmentation**: Progress and goals lived in SwiftData while annotations, reading history sessions, and collections lived in SQLite (`ambrosia_meta.db`), causing split-brain transactional updates.
+3. **Threading & Concurrency Hazards**: Passing `ModelContext` across SwiftUI view hierarchies and into background tasks caused actor isolation violations and crash-prone faulting.
 
-SwiftData does not store collections, annotations, or any AO3 metadata. The `Bookmark` and `Highlight` structs in `BookState.swift` are safe to delete; they were never stored as `@Model` properties and no migration depends on them.
+### Phase 1 Consolidation
 
-On SwiftData store init failure, the app shows an alert and falls back to in-memory recovery. It does not delete existing support files.
-
-
----
-
-## Key invariant
-
-4. The SwiftData schema contains only `BookState` and `ReadingGoal`. Do not add `@Model` types without a versioned migration plan. Do not store bare Swift collections on `@Model`; use scalar columns, delimited strings, or JSON data.
+In Phase 1 of the Database Consolidation plan:
+- `BookState` and `ReadingGoal` were converted from SwiftData `@Model` classes to immutable/thread-safe `Sendable` value structs (`struct BookState: Identifiable, Sendable, Equatable, Hashable`).
+- All reading state and reading goal persistence was migrated directly into per-library scoped `ambrosia_meta.db` SQLite databases (`book_state` and `reading_goals` tables).
+- A zero-data-loss SQLite-level migration (`migrate_legacy_swiftdata_to_sqlite`) was implemented to read any existing `ZBOOKSTATE` / `ZREADINGGOAL` tables from legacy `default.store` / `Ambrosia.store` and copy records into `book_state`, converting CoreData Apple Reference Date timestamps (`+ 978307200.0`) to standard Unix epoch seconds.
+- All `ModelContainer` and `ModelContext` parameters and environment injections were removed from `AmbrosiaApp`, `AppDelegate`, view controllers, and views.

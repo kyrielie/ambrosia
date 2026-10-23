@@ -87,6 +87,7 @@ actor CalibreLibrary {
 
     private static func openConnection(path: String) throws -> Connection {
         let connection = try Connection(path, readonly: true)
+        connection.busyTimeout = 5.0
         // Increase the page cache to 32 MB and keep temp tables in memory.
         // These are session-scoped PRAGMAs, safe on a read-only connection.
         try? connection.execute("PRAGMA cache_size = -32768")   // negative = kibibytes

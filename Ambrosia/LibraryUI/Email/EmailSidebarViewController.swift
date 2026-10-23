@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import SwiftData
 
 // MARK: - EmailSidebarViewController
 //

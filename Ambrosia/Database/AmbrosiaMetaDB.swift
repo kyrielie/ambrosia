@@ -71,6 +71,7 @@ actor AmbrosiaMetaDB {
     /// adopt the same pattern the other per-book caches above use, without a
     /// second migration to add cache invalidation retroactively.
     private var bookIndexCache: [Int: BookIndexRecord] = [:]
+    private var bookStateCache: [Int: BookState] = [:]
 
     init(libraryURL: URL) throws {
         self.libraryHash = Ambrosia.libraryHash(for: libraryURL)
@@ -79,6 +80,8 @@ actor AmbrosiaMetaDB {
         let writePath = databaseURL.path
         self.db = try Connection(writePath)
         self.readDB = try Connection(writePath, readonly: true)
+        db.busyTimeout = 5.0
+        readDB.busyTimeout = 5.0
         // WAL mode: readers never block writers and writers never block readers.
         // Must be set on the write connection before migrations run.
         try db.execute("PRAGMA journal_mode = WAL")
@@ -111,12 +114,15 @@ actor AmbrosiaMetaDB {
         try createBookAuthors(db: db)
         try createBookTags(db: db)
         try createErrorLog(db: db)
+        try createBookState(db: db)
+        try createReadingGoals(db: db)
         try createSchemaMigrations(db: db)
         try createLibraryState(db: db)
         try bridgeLegacyUserVersionMigrations(db: db)
         try migrateSeriesPlaceholdersToKeyedIfNeeded(db: db)
         try dedupeSeriesCacheIfNeeded(db: db)
         try dropAO3AuthorUsernameIfNeeded(db: db)
+        try migrateLegacySwiftDataIfNeeded(db: db)
         try createAO3TagSynonyms(db: db)
         try bootstrapSystemCollections(db: db)
     }
@@ -579,6 +585,128 @@ actor AmbrosiaMetaDB {
         CREATE INDEX IF NOT EXISTS idx_error_log_occurred_at ON error_log(occurred_at);
         CREATE INDEX IF NOT EXISTS idx_error_log_calibre ON error_log(calibre_id);
         """)
+    }
+
+    private static func createBookState(db: Connection) throws {
+        try db.execute("""
+        CREATE TABLE IF NOT EXISTS book_state (
+            calibre_id                  INTEGER PRIMARY KEY NOT NULL,
+            last_opened_date            REAL NOT NULL DEFAULT 0,
+            total_read_percent          REAL NOT NULL DEFAULT 0.0,
+            total_reading_time_seconds  REAL NOT NULL DEFAULT 0.0,
+            last_spine_index            INTEGER NOT NULL DEFAULT 0,
+            last_character_offset       INTEGER NOT NULL DEFAULT 0,
+            last_scroll_offset          REAL NOT NULL DEFAULT 0.0,
+            elo_score                   REAL NOT NULL DEFAULT 1000.0,
+            elo_match_count             INTEGER NOT NULL DEFAULT 0,
+            updated_at                  REAL NOT NULL DEFAULT (strftime('%s', 'now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_book_state_opened ON book_state(last_opened_date DESC);
+        CREATE INDEX IF NOT EXISTS idx_book_state_percent ON book_state(total_read_percent);
+        """)
+    }
+
+    private static func createReadingGoals(db: Connection) throws {
+        try db.execute("""
+        CREATE TABLE IF NOT EXISTS reading_goals (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_books_count  INTEGER NOT NULL,
+            period_start        REAL NOT NULL,
+            period_end          REAL NOT NULL,
+            created_at          REAL NOT NULL DEFAULT (strftime('%s', 'now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_reading_goals_period ON reading_goals(period_start, period_end);
+        """)
+    }
+
+    private static let migrationNameLegacySwiftData = "migrate_legacy_swiftdata_to_sqlite"
+
+    private static func migrateLegacySwiftDataIfNeeded(db: Connection) throws {
+        guard !hasAppliedMigration(migrationNameLegacySwiftData, db: db) else { return }
+
+        defer {
+            try? markMigrationApplied(migrationNameLegacySwiftData, db: db)
+        }
+
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+        let candidateURLs = [
+            appSupport.appendingPathComponent("default.store"),
+            appSupport.appendingPathComponent("Ambrosia").appendingPathComponent("default.store"),
+            appSupport.appendingPathComponent("Ambrosia.store")
+        ]
+
+        guard let storeURL = candidateURLs.first(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
+            return
+        }
+
+        guard let sourceConn = try? Connection(storeURL.path, readonly: true) else { return }
+        try migrateLegacySwiftDataRows(from: sourceConn, to: db)
+    }
+
+    static func migrateLegacySwiftDataRows(from sourceConn: Connection, to db: Connection) throws {
+        try db.transaction {
+            let hasBookState = (try? sourceConn.scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ZBOOKSTATE'")) as? Int64 ?? 0
+            if hasBookState > 0 {
+                let stmt = try sourceConn.prepare("""
+                    SELECT
+                        ZCALIBREID,
+                        COALESCE(ZLASTOPENEDDATE, 0.0),
+                        COALESCE(ZTOTALREADPERCENT, 0.0),
+                        COALESCE(ZTOTALREADINGTIMESECONDS, 0.0),
+                        COALESCE(ZLASTSPINEINDEX, 0),
+                        COALESCE(ZLASTCHARACTEROFFSET, 0),
+                        COALESCE(ZLASTSCROLLOFFSET, 0.0),
+                        COALESCE(ZELOSCORE, 1000.0),
+                        COALESCE(ZELOMATCHCOUNT, 0)
+                    FROM ZBOOKSTATE
+                """)
+                for row in stmt {
+                    guard let cid = row[0] as? Int64 else { continue }
+                    let coreDataDate = row[1] as? Double ?? 0.0
+                    let epochDate = coreDataDate > 0 ? (coreDataDate + 978307200.0) : 0.0
+                    let readPercent = row[2] as? Double ?? 0.0
+                    let readingTime = row[3] as? Double ?? 0.0
+                    let spineIndex = row[4] as? Int64 ?? 0
+                    let charOffset = row[5] as? Int64 ?? 0
+                    let scrollOffset = row[6] as? Double ?? 0.0
+                    let eloScore = row[7] as? Double ?? 1000.0
+                    let eloMatchCount = row[8] as? Int64 ?? 0
+
+                    try db.run("""
+                        INSERT OR IGNORE INTO book_state (
+                            calibre_id, last_opened_date, total_read_percent, total_reading_time_seconds,
+                            last_spine_index, last_character_offset, last_scroll_offset, elo_score, elo_match_count
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, cid, epochDate, readPercent, readingTime, spineIndex, charOffset, scrollOffset, eloScore, eloMatchCount)
+                }
+            }
+
+            let hasReadingGoal = (try? sourceConn.scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ZREADINGGOAL'")) as? Int64 ?? 0
+            if hasReadingGoal > 0 {
+                let stmt = try sourceConn.prepare("""
+                    SELECT
+                        ZTARGETBOOKSCOUNT,
+                        COALESCE(ZPERIODSTART, 0.0),
+                        COALESCE(ZPERIODEND, 0.0)
+                    FROM ZREADINGGOAL
+                """)
+                for row in stmt {
+                    guard let target = row[0] as? Int64 else { continue }
+                    let startCD = row[1] as? Double ?? 0.0
+                    let endCD = row[2] as? Double ?? 0.0
+                    let startEpoch = startCD > 0 ? (startCD + 978307200.0) : 0.0
+                    let endEpoch = endCD > 0 ? (endCD + 978307200.0) : 0.0
+
+                    try db.run("""
+                        INSERT INTO reading_goals (
+                            target_books_count, period_start, period_end
+                        ) VALUES (?, ?, ?)
+                    """, target, startEpoch, endEpoch)
+                }
+            }
+        }
     }
 
     private static func createAO3TagSynonyms(db: Connection) throws {
@@ -2510,6 +2638,241 @@ actor AmbrosiaMetaDB {
             result[tag] = terms.isEmpty ? [tag] : terms
         }
         return result
+    }
+
+    // MARK: - Book State (Reading Progress & Position)
+
+    public func bookState(for calibreID: Int) -> BookState {
+        if let cached = bookStateCache[calibreID] { return cached }
+        let state = fetchBookState(for: calibreID) ?? BookState(calibreID: calibreID)
+        bookStateCache[calibreID] = state
+        return state
+    }
+
+    public func bookStates(for calibreIDs: [Int]) -> [Int: BookState] {
+        guard !calibreIDs.isEmpty else { return [:] }
+        var result: [Int: BookState] = [:]
+        var missingIDs: [Int] = []
+
+        for id in calibreIDs {
+            if let cached = bookStateCache[id] {
+                result[id] = cached
+            } else {
+                missingIDs.append(id)
+            }
+        }
+
+        if !missingIDs.isEmpty {
+            let fetched = fetchBookStatesBatch(for: missingIDs)
+            for id in missingIDs {
+                let state = fetched[id] ?? BookState(calibreID: id)
+                bookStateCache[id] = state
+                result[id] = state
+            }
+        }
+
+        return result
+    }
+
+    private func fetchBookState(for calibreID: Int) -> BookState? {
+        let sql = """
+        SELECT calibre_id, last_opened_date, total_read_percent, total_reading_time_seconds,
+               last_spine_index, last_character_offset, last_scroll_offset, elo_score, elo_match_count
+        FROM book_state WHERE calibre_id = ?
+        """
+        guard let row = (try? readDB.prepare(sql, [Int64(calibreID) as Binding?]).map({ $0 }))?.first else {
+            return nil
+        }
+        return makeBookState(from: row)
+    }
+
+    private func fetchBookStatesBatch(for calibreIDs: [Int]) -> [Int: BookState] {
+        var result: [Int: BookState] = [:]
+        let chunkSize = 500
+        for chunk in stride(from: 0, to: calibreIDs.count, by: chunkSize) {
+            let slice = Array(calibreIDs[chunk..<min(chunk + chunkSize, calibreIDs.count)])
+            let placeholders = slice.map { _ in "?" }.joined(separator: ",")
+            let query = """
+            SELECT calibre_id, last_opened_date, total_read_percent, total_reading_time_seconds,
+                   last_spine_index, last_character_offset, last_scroll_offset, elo_score, elo_match_count
+            FROM book_state WHERE calibre_id IN (\(placeholders))
+            """
+            let bindings: [Binding?] = slice.map { Int64($0) as Binding? }
+            do {
+                let rows = try readDB.prepare(query, bindings).map { $0 }
+                for row in rows {
+                    if let state = makeBookState(from: row) {
+                        result[state.calibreID] = state
+                    }
+                }
+            } catch {
+                #if DEBUG
+                print("[AmbrosiaMetaDB] Failed to batch fetch book states: \(error)")
+                #endif
+            }
+        }
+        return result
+    }
+
+    private func makeBookState(from row: Statement.Element) -> BookState? {
+        guard let cid = row[0] as? Int64 else { return nil }
+        let opened = row[1] as? Double ?? 0.0
+        let percent = row[2] as? Double ?? 0.0
+        let readingTime = row[3] as? Double ?? 0.0
+        let spineIndex = row[4] as? Int64 ?? 0
+        let charOffset = row[5] as? Int64 ?? 0
+        let scrollOffset = row[6] as? Double ?? 0.0
+        let eloScore = row[7] as? Double ?? 1000.0
+        let eloMatches = row[8] as? Int64 ?? 0
+
+        return BookState(
+            calibreID: Int(cid),
+            lastOpenedDate: Date(timeIntervalSince1970: opened),
+            totalReadPercent: percent,
+            totalReadingTimeSeconds: readingTime,
+            lastSpineIndex: Int(spineIndex),
+            lastCharacterOffset: Int(charOffset),
+            lastScrollOffset: scrollOffset,
+            eloScore: eloScore,
+            eloMatchCount: Int(eloMatches)
+        )
+    }
+
+    public func updateReadingPosition(
+        calibreID: Int,
+        spineIndex: Int,
+        characterOffset: Int,
+        scrollOffset: Double,
+        readPercent: Double
+    ) throws {
+        let stmt = """
+        INSERT INTO book_state (
+            calibre_id, last_spine_index, last_character_offset, last_scroll_offset,
+            total_read_percent, last_opened_date, updated_at
+        ) VALUES (?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
+        ON CONFLICT(calibre_id) DO UPDATE SET
+            last_spine_index = excluded.last_spine_index,
+            last_character_offset = excluded.last_character_offset,
+            last_scroll_offset = excluded.last_scroll_offset,
+            total_read_percent = MAX(book_state.total_read_percent, excluded.total_read_percent),
+            last_opened_date = excluded.last_opened_date,
+            updated_at = excluded.updated_at;
+        """
+        try db.run(stmt, calibreID, spineIndex, characterOffset, scrollOffset, readPercent)
+        bookStateCache.removeValue(forKey: calibreID)
+    }
+
+    public func markBookOpened(calibreID: Int, date: Date = Date()) throws {
+        let stmt = """
+        INSERT INTO book_state (calibre_id, last_opened_date, updated_at)
+        VALUES (?, ?, strftime('%s', 'now'))
+        ON CONFLICT(calibre_id) DO UPDATE SET
+            last_opened_date = excluded.last_opened_date,
+            updated_at = excluded.updated_at;
+        """
+        try db.run(stmt, calibreID, date.timeIntervalSince1970)
+        bookStateCache.removeValue(forKey: calibreID)
+    }
+
+    public func addReadingTime(calibreID: Int, seconds: TimeInterval) throws {
+        let stmt = """
+        INSERT INTO book_state (calibre_id, total_reading_time_seconds, updated_at)
+        VALUES (?, ?, strftime('%s', 'now'))
+        ON CONFLICT(calibre_id) DO UPDATE SET
+            total_reading_time_seconds = book_state.total_reading_time_seconds + excluded.total_reading_time_seconds,
+            updated_at = excluded.updated_at;
+        """
+        try db.run(stmt, calibreID, seconds)
+        bookStateCache.removeValue(forKey: calibreID)
+    }
+
+    public func markBookRead(calibreID: Int) throws {
+        let stmt = """
+        INSERT INTO book_state (calibre_id, total_read_percent, updated_at)
+        VALUES (?, 1.0, strftime('%s', 'now'))
+        ON CONFLICT(calibre_id) DO UPDATE SET
+            total_read_percent = 1.0,
+            updated_at = excluded.updated_at;
+        """
+        try db.run(stmt, calibreID)
+        bookStateCache.removeValue(forKey: calibreID)
+    }
+
+    public func resetReadingProgress(calibreID: Int) throws {
+        let stmt = """
+        INSERT INTO book_state (
+            calibre_id, total_read_percent, last_spine_index, last_character_offset,
+            last_scroll_offset, last_opened_date, total_reading_time_seconds, updated_at
+        ) VALUES (?, 0.0, 0, 0, 0.0, 0, 0.0, strftime('%s', 'now'))
+        ON CONFLICT(calibre_id) DO UPDATE SET
+            total_read_percent = 0.0,
+            last_spine_index = 0,
+            last_character_offset = 0,
+            last_scroll_offset = 0.0,
+            last_opened_date = 0,
+            total_reading_time_seconds = 0.0,
+            updated_at = strftime('%s', 'now');
+        """
+        try db.run(stmt, calibreID)
+        bookStateCache.removeValue(forKey: calibreID)
+    }
+
+    // MARK: - Reading Goals
+
+    public func currentReadingGoal() -> ReadingGoal? {
+        let now = Date().timeIntervalSince1970
+        let query = """
+        SELECT id, target_books_count, period_start, period_end
+        FROM reading_goals WHERE ? BETWEEN period_start AND period_end
+        ORDER BY period_end DESC LIMIT 1
+        """
+        if let row = (try? readDB.prepare(query, [now as Binding?]).map({ $0 }))?.first {
+            return makeReadingGoal(from: row)
+        }
+        let latestQuery = """
+        SELECT id, target_books_count, period_start, period_end
+        FROM reading_goals ORDER BY period_end DESC LIMIT 1
+        """
+        if let row = (try? readDB.prepare(latestQuery).map({ $0 }))?.first {
+            return makeReadingGoal(from: row)
+        }
+        return nil
+    }
+
+    private func makeReadingGoal(from row: Statement.Element) -> ReadingGoal? {
+        guard let id = row[0] as? Int64,
+              let target = row[1] as? Int64 else { return nil }
+        let start = row[2] as? Double ?? 0.0
+        let end = row[3] as? Double ?? 0.0
+        return ReadingGoal(
+            id: id,
+            targetBooksCount: Int(target),
+            periodStart: Date(timeIntervalSince1970: start),
+            periodEnd: Date(timeIntervalSince1970: end)
+        )
+    }
+
+    public func saveReadingGoal(targetBooksCount: Int, periodStart: Date, periodEnd: Date) throws {
+        let stmt = """
+        INSERT INTO reading_goals (target_books_count, period_start, period_end, created_at)
+        VALUES (?, ?, ?, strftime('%s', 'now'));
+        """
+        try db.run(stmt, targetBooksCount, periodStart.timeIntervalSince1970, periodEnd.timeIntervalSince1970)
+    }
+
+    public func deleteReadingGoal(id: Int64) throws {
+        try db.run("DELETE FROM reading_goals WHERE id = ?", id)
+    }
+
+    public func completedBooksCount(from start: Date, to end: Date) -> Int {
+        let query = """
+        SELECT COUNT(*) FROM book_state
+        WHERE total_read_percent >= 0.98
+          AND last_opened_date >= ?
+          AND last_opened_date <= ?
+        """
+        let count = (try? readDB.scalar(query, [start.timeIntervalSince1970 as Binding?, end.timeIntervalSince1970 as Binding?])) as? Int64 ?? 0
+        return Int(count)
     }
 }
 

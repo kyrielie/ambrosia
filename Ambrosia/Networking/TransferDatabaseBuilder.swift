@@ -1,6 +1,5 @@
 import Foundation
 import SQLite
-import SwiftData
 
 // MARK: - TransferDatabaseBuilder
 //

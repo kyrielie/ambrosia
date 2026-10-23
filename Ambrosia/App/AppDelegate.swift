@@ -1,5 +1,4 @@
 import AppKit
-import SwiftData
 import Combine
 
 @MainActor
@@ -7,7 +6,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     static weak var shared: AppDelegate?
 
     var libraryWindowController: LibraryWindowController?
-    var modelContainer: ModelContainer!
     var session: LibrarySession!
 
     private var keyBindingsSubscription: AnyCancellable?
@@ -50,7 +48,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await session.reopenIfNeeded() }
 
         libraryWindowController = LibraryWindowController(
-            modelContainer: modelContainer,
             session: session
         )
         libraryWindowController?.showWindow(nil)
@@ -136,7 +133,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Opens a reader window for the given book.
     /// Deduplication (one window per book.id) is handled by ReaderWindowController.open.
     /// EPUB path validation happens here so we can show a user-facing error early.
-    func openReaderWindow(book: CalibreBook, modelContext: ModelContext) {
+    func openReaderWindow(book: CalibreBook) {
         guard let pathStr = LibraryRegistry.shared.activePath else {
             showOpenError("No library open.")
             return
@@ -151,13 +148,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // ReaderWindowController.open is the single source of truth for
         // deduplication (keyed by book.id) and window lifecycle.
-        ReaderWindowController.open(book: book, modelContainer: modelContext.container)
+        ReaderWindowController.open(book: book)
     }
 
-    func openReaderWindow(target: ReadingTarget, modelContext: ModelContext) {
+    func openReaderWindow(target: ReadingTarget) {
         switch target {
         case .singleBook(let book):
-            openReaderWindow(book: book, modelContext: modelContext)
+            openReaderWindow(book: book)
         case .series(let series):
             guard let pathStr = LibraryRegistry.shared.activePath else {
                 showOpenError("No library open.")
@@ -171,7 +168,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
             }
-            ReaderWindowController.open(target: target, modelContainer: modelContext.container)
+            ReaderWindowController.open(target: target)
         }
     }
 

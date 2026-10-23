@@ -1,11 +1,9 @@
 import SwiftUI
-import SwiftData
 
 // MARK: - Top-level view
 
 struct ActivityFeedView: View {
     let session: LibrarySession
-    let modelContainer: ModelContainer
 
     // Received from LibraryViewController so toolbar buttons work in this mode.
     @Environment(LibraryToolbarState.self) private var toolbarState
@@ -46,7 +44,7 @@ struct ActivityFeedView: View {
         }
         .sheet(isPresented: readingGoalBinding) {
             ReadingGoalView()
-                .modelContainer(modelContainer)
+                .environment(session)
         }
         .onChange(of: toolbarState.triggerExport) { _, triggered in
             // The activity view has no book list; silently reset the flag.
@@ -178,7 +176,7 @@ struct ActivityFeedView: View {
         case .session(_, let book),
              .annotation(_, _, let book),
              .collectionChange(_, let book):
-            ReaderWindowController.open(book: book, modelContainer: modelContainer)
+            ReaderWindowController.open(book: book)
 
         case .search(let searchEntry):
             // Re-apply the search and filter, then switch to list view.

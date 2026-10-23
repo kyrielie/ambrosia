@@ -1,11 +1,9 @@
 import AppKit
-import SwiftData
 
 class ReaderWindowController: NSWindowController, NSWindowDelegate {
 
     private let target: ReadingTarget
     private let book: CalibreBook
-    private let modelContainer: ModelContainer
     /// Recorded when the window loads; diffed on close to accumulate reading time.
     private var sessionStartDate: Date = Date()
     private var didApplyInitialWindowSize = false
@@ -25,26 +23,25 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
     private static var sessionWindowSize: NSSize?
 
     @MainActor
-    static func open(book: CalibreBook, modelContainer: ModelContainer) {
-        open(target: .singleBook(book), modelContainer: modelContainer)
+    static func open(book: CalibreBook) {
+        open(target: .singleBook(book))
     }
 
     @MainActor
-    static func open(target: ReadingTarget, modelContainer: ModelContainer) {
+    static func open(target: ReadingTarget) {
         if let existing = openWindows[target.windowKey] {
             existing.showWindow(nil)
             existing.window?.makeKeyAndOrderFront(nil)
             return
         }
-        let wc = ReaderWindowController(target: target, modelContainer: modelContainer)
+        let wc = ReaderWindowController(target: target)
         openWindows[target.windowKey] = wc
         wc.showWindow(nil)
     }
 
-    private init(target: ReadingTarget, modelContainer: ModelContainer) {
-        self.target         = target
-        self.book           = target.primaryBook
-        self.modelContainer = modelContainer
+    private init(target: ReadingTarget) {
+        self.target = target
+        self.book   = target.primaryBook
 
         // Create window with a placeholder size; actual size is set once the
         // window is actually shown (see the showWindow(_:) override below),
@@ -57,49 +54,19 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         )
         window.title   = target.displayTitle
         window.minSize = NSSize(width: 600, height: 500)
-        // AppKit's automatic window-restoration ("Resume") is on by default
-        // for every NSWindow (isRestorable == true) and runs independently
-        // of this controller's own sizing logic below. Since this window has
-        // no restoration identifier or registered NSWindowRestoration class,
-        // the system can't actually rebuild it on relaunch -- see the
-        // "restoreWindowWithIdentifier:state:completionHandler: Unable to
-        // find className=(null)" log line -- but it still runs, still tries
-        // to persist/apply its own snapshot of the window's frame at launch,
-        // and can race with or clobber our sizing. Disable it outright.
         window.isRestorable = false
         super.init(window: window)
         window.delegate = self
 
-        // Deliberately NOT using NSWindow's setFrameAutosaveName/
-        // setFrameUsingName here. That mechanism persists to UserDefaults
-        // indefinitely, keyed per book -- which contradicts the desired
-        // behavior (default size on every relaunch, shared across books
-        // within a session) and, worse, permanently pins a book to whatever
-        // frame it last had, including any bad/degenerate frame saved while
-        // a sizing bug was active. Window sizing here is instead driven
-        // entirely by sessionWindowSize (see applyDefaultWindowSize below),
-        // which lives only in memory for the lifetime of the app process.
-        let vc = ReaderViewController(target: target, modelContainer: modelContainer)
+        let vc = ReaderViewController(target: target)
         window.contentViewController = vc
 
         // Update lastOpenedDate in BookState
         let calibreID = book.id
-        // Explicit .userInitiated: this runs on Swift's cooperative thread
-        // pool at whatever priority Task.detached defaults to (.medium) if
-        // left unspecified, which can run at a lower QoS than the
-        // main-actor (.userInteractive) work opening this window. If
-        // ModelContainer's internal locking is ever contended between this
-        // save and main-thread SwiftData access, a lower-priority thread
-        // holding that lock while a user-interactive thread waits on it is
-        // a priority inversion (Thread Performance Checker's "Hang Risk").
-        // Raising this detached task's priority doesn't remove the
-        // contention, but keeps it from running at a lower QoS than the
-        // thread that might wait on it.
-        Task.detached(priority: .userInitiated) {
-            let ctx = ModelContext(modelContainer)
-            let state = LibraryQueryHelpers.stateForMutation(calibreID, in: ctx)
-            state.lastOpenedDate = Date()
-            try? ctx.save()
+        Task {
+            if let metaDB = AppDelegate.shared?.session.metaDB {
+                try? await metaDB.markBookOpened(calibreID: calibreID)
+            }
         }
     }
 
@@ -219,12 +186,10 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         // Accumulate reading session time into BookState.totalReadingTimeSeconds
         let elapsed   = Date().timeIntervalSince(sessionStartDate)
         let calibreID = book.id
-        let container = modelContainer
-        Task.detached {
-            let ctx = ModelContext(container)
-            let state = LibraryQueryHelpers.stateForMutation(calibreID, in: ctx)
-            state.totalReadingTimeSeconds += elapsed
-            try? ctx.save()
+        Task {
+            if let metaDB = AppDelegate.shared?.session.metaDB {
+                try? await metaDB.addReadingTime(calibreID: calibreID, seconds: elapsed)
+            }
         }
     }
 }

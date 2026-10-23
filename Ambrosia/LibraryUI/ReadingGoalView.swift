@@ -1,23 +1,18 @@
 import SwiftUI
-import SwiftData
 
 // MARK: - Reading Goal sheet
 
 /// Sheet that displays reading progress and lets the user set a goal.
 ///
-/// Progress is counted by looking at `BookState` records where
-/// `lastOpenedDate` falls within [periodStart, periodEnd] and
-/// `totalReadPercent >= 0.98` (>= 98% read counts as "finished").
-///
-/// Session time tracking: `ReaderWindowController` stores
-/// `sessionStartDate` at window load and diffs on `windowWillClose`.
+/// Progress is counted by looking at `reading_history` records and `book_state`
+/// records in ambrosia_meta.db where the reading session or lastOpenedDate
+/// falls within [periodStart, periodEnd] and totalReadPercent >= 0.98.
 struct ReadingGoalView: View {
-    @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     @Environment(LibrarySession.self) private var session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @Query private var goals: [ReadingGoal]
+    @State private var activeGoal: ReadingGoal?
 
     // New goal input state
     @State private var targetInput = 12
@@ -30,8 +25,6 @@ struct ReadingGoalView: View {
     }()
     @State private var isEditing = false
     @State private var historyReadCount: Int?
-
-    var activeGoal: ReadingGoal? { goals.first }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,11 +45,7 @@ struct ReadingGoalView: View {
         }
         .frame(minWidth: 360, minHeight: 300)
         .onAppear {
-            prepopulateEditor()
-            refreshHistoryProgress()
-        }
-        .onChange(of: goals.map(\.persistentModelID)) {
-            refreshHistoryProgress()
+            loadGoal()
         }
     }
 
@@ -73,7 +62,7 @@ struct ReadingGoalView: View {
     }
 
     private func progressSection(goal: ReadingGoal) -> some View {
-        let booksRead = historyReadCount ?? booksReadCountFallback(for: goal)
+        let booksRead = historyReadCount ?? 0
         let progress = goal.targetBooksCount > 0
             ? min(1.0, Double(booksRead) / Double(goal.targetBooksCount)) : 0.0
         let pct = Int(progress * 100)
@@ -124,9 +113,7 @@ struct ReadingGoalView: View {
                     Button("Edit Goal") { isEditing = true }
                         .buttonStyle(.borderless).font(.callout)
                     Button("Delete Goal", role: .destructive) {
-                        modelContext.delete(goal)
-                        try? modelContext.save()
-                        isEditing = false
+                        deleteGoal(goal)
                     }
                     .buttonStyle(.borderless).font(.callout)
                 }
@@ -192,43 +179,46 @@ struct ReadingGoalView: View {
 
     // MARK: - Logic
 
-    /// Count BookState records where lastOpenedDate is within the goal period
-    /// and totalReadPercent >= 0.98.
-    private func booksReadCountFallback(for goal: ReadingGoal) -> Int {
-        let start = goal.periodStart
-        let end   = goal.periodEnd
-        let desc  = FetchDescriptor<BookState>()
-        let all   = (try? modelContext.fetch(desc)) ?? []
-        return all.filter { state in
-            state.lastOpenedDate >= start
-                && state.lastOpenedDate <= end
-                && state.totalReadPercent >= 0.98
-        }.count
+    private func loadGoal() {
+        Task {
+            guard let metaDB = session.metaDB else { return }
+            let goal = await metaDB.currentReadingGoal()
+            await MainActor.run {
+                self.activeGoal = goal
+                if let goal {
+                    self.targetInput = goal.targetBooksCount
+                    self.periodStart = goal.periodStart
+                    self.periodEnd = goal.periodEnd
+                }
+                self.refreshHistoryProgress()
+            }
+        }
     }
 
     private func saveGoal() {
-        if let existing = activeGoal {
-            existing.targetBooksCount = targetInput
-            existing.periodStart      = periodStart
-            existing.periodEnd        = periodEnd
-        } else {
-            let goal = ReadingGoal(
+        Task {
+            guard let metaDB = session.metaDB else { return }
+            try? await metaDB.saveReadingGoal(
                 targetBooksCount: targetInput,
                 periodStart: periodStart,
                 periodEnd: periodEnd
             )
-            modelContext.insert(goal)
+            await MainActor.run {
+                self.isEditing = false
+                self.loadGoal()
+            }
         }
-        try? modelContext.save()
-        isEditing = false
-        refreshHistoryProgress()
     }
 
-    private func prepopulateEditor() {
-        if let goal = activeGoal {
-            targetInput = goal.targetBooksCount
-            periodStart = goal.periodStart
-            periodEnd   = goal.periodEnd
+    private func deleteGoal(_ goal: ReadingGoal) {
+        Task {
+            guard let metaDB = session.metaDB else { return }
+            try? await metaDB.deleteReadingGoal(id: goal.id)
+            await MainActor.run {
+                self.activeGoal = nil
+                self.isEditing = false
+                self.historyReadCount = nil
+            }
         }
     }
 
@@ -245,11 +235,11 @@ struct ReadingGoalView: View {
             of: goal.periodEnd
         ) ?? goal.periodEnd
         Task {
+            guard let metaDB = session.metaDB else {
+                await MainActor.run { historyReadCount = nil }
+                return
+            }
             do {
-                guard let metaDB = await MainActor.run(body: { session.metaDB }) else {
-                    await MainActor.run { historyReadCount = nil }
-                    return
-                }
                 let count = try await metaDB.completedBooksCount(start: start, end: end)
                 await MainActor.run { historyReadCount = count }
             } catch {

@@ -77,6 +77,7 @@
 		57A29F28E97E7E177A90B389 /* CalibreBook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E13595C5EFD2315BFCFCB1D /* CalibreBook.swift */; };
 		595660AB461D78EFE7C7A7A6 /* ReadingGoalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D149E6DEA5BB1619656D09A /* ReadingGoalView.swift */; };
 		5A3AF850DC6E762823323B64 /* EPUBParser+Rendering.swift in Sources */ = {isa = PBXBuildFile; fileRef = E641C8C7B9C3A83F6CC6BAC8 /* EPUBParser+Rendering.swift */; };
+		5D5EF38D6830B47CADF37F83 /* BookStateMetaDBTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6EAC7F9C519433C9DB9B5D1 /* BookStateMetaDBTests.swift */; };
 		5E1BBA23BDECC95514E409D5 /* ErrorLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEC2BCBAB97B36F5D1067F3F /* ErrorLogView.swift */; };
 		5F487DF04828BA069AA81387 /* CollectionActivityEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17179E3D13718C6440415E61 /* CollectionActivityEntry.swift */; };
 		602BCEC192040D4B6663C1FE /* calibre_fts5_register.c in Sources */ = {isa = PBXBuildFile; fileRef = C0F15DD8338D58C73038BCDC /* calibre_fts5_register.c */; };
@@ -350,6 +351,7 @@
 		D5259C27075B2E94DE827911 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		D5F148E07A324C6A679B6B53 /* SeriesSpineMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeriesSpineMap.swift; sourceTree = "<group>"; };
 		D61F8DA58119208BD69205D0 /* TagExpansionResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagExpansionResolver.swift; sourceTree = "<group>"; };
+		D6EAC7F9C519433C9DB9B5D1 /* BookStateMetaDBTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookStateMetaDBTests.swift; sourceTree = "<group>"; };
 		D7D96B91AE470B00B82F9660 /* FTSQueryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FTSQueryTests.swift; sourceTree = "<group>"; };
 		D8A61F2D229D7F73C2C24464 /* IncrementalFilterPlannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncrementalFilterPlannerTests.swift; sourceTree = "<group>"; };
 		D994F254FB5CDE8D644C5194 /* AO3FilterPopupWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AO3FilterPopupWindowController.swift; sourceTree = "<group>"; };
@@ -462,6 +464,7 @@
 				CE88E86CA96F48C382A226D8 /* AO3RatingHighestTests.swift */,
 				2D25627386848651795803BB /* AO3TagSeedDatabaseConfigInstanceTests.swift */,
 				BD9B92CC1C37EA7212428E62 /* AO3TagSeedDatabaseConfigValidationTests.swift */,
+				D6EAC7F9C519433C9DB9B5D1 /* BookStateMetaDBTests.swift */,
 				41FA5982B2DBB2C827688460 /* CacheKeyTests.swift */,
 				EB46547F0B0CEB082CB74EB9 /* calibre_fixture_data.sql */,
 				BC62015CF53BD65A58E9B2D2 /* calibre_fixture_schema.sql */,
@@ -875,6 +878,7 @@
 				CDBD4667C6CD26CD51600AA3 /* AO3TagSeedDatabaseConfigValidationTests.swift in Sources */,
 				416DF9CFCCDAC0594FA85852 /* AmbrosiaMetaDBMigrationTests.swift in Sources */,
 				835D158FC4F68BB3E66EF493 /* AnnotationExportManagerTests.swift in Sources */,
+				5D5EF38D6830B47CADF37F83 /* BookStateMetaDBTests.swift in Sources */,
 				D4899719E6B9205B3E4F8B4D /* CacheKeyTests.swift in Sources */,
 				E0F2AC5F2D49D6BCDA70FD89 /* CalibreFTSBenchmarkTests.swift in Sources */,
 				7F2DE14BFD259F63C1A999BD /* CalibreFTSLibraryTests.swift in Sources */,

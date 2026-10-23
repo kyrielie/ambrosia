@@ -1,10 +1,8 @@
 import AppKit
 import Combine
 import SwiftUI
-import SwiftData
 
 class LibraryViewController: NSViewController {
-    private let modelContainer: ModelContainer
     private let session: LibrarySession
 
     /// Shared state between NSToolbar and all content views.
@@ -15,8 +13,7 @@ class LibraryViewController: NSViewController {
     private var listHostingView: NSHostingView<AnyView>?
     private var appearanceCancellable: AnyCancellable?
 
-    init(modelContainer: ModelContainer, session: LibrarySession) {
-        self.modelContainer = modelContainer
+    init(session: LibrarySession) {
         self.session = session
         super.init(nibName: nil, bundle: nil)
     }
@@ -127,7 +124,6 @@ class LibraryViewController: NSViewController {
                 let root = AnyView(
                     LibraryRootView()
                         .environment(toolbarState)
-                        .modelContainer(modelContainer)
                         .environment(session)
                 )
                 let hv = NSHostingView(rootView: root)
@@ -151,7 +147,6 @@ class LibraryViewController: NSViewController {
         case .email:
             listHostingView?.isHidden = true
             let childVC = EmailLibraryViewController(
-                modelContainer: modelContainer,
                 session: session,
                 toolbarState: toolbarState
             )
@@ -169,7 +164,7 @@ class LibraryViewController: NSViewController {
         case .ranking:
             listHostingView?.isHidden = true
             let placeholder = AnyView(
-                ActivityFeedView(session: session, modelContainer: modelContainer)
+                ActivityFeedView(session: session)
                     .environment(session)
                     .environment(toolbarState)
             )

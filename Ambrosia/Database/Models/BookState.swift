@@ -1,48 +1,72 @@
-import SwiftData
 import Foundation
 
 /// App-owned state for a single book, keyed by Calibre's book ID.
-/// This is the ONLY @Model in the new architecture.
-/// All display metadata (title, authors, tags, description) is read
-/// directly from Calibre's metadata.db via CalibreLibrary.
+/// Stored in each library's scoped ambrosia_meta.db (book_state table).
 ///
 /// STORAGE INVARIANTS:
 /// - characterOffset fields use UTF-16 code units, text nodes only.
 ///   Must match EPUBParser, PaginationJS, HighlightBridge exactly.
-@Model
-final class BookState {
+public struct BookState: Identifiable, Sendable, Equatable, Hashable {
+    public var id: Int { calibreID }
+
     /// Foreign key into Calibre's books table. Unique per library.
-    var calibreID: Int
+    public var calibreID: Int
 
     // MARK: - Reading progress
-    var lastOpenedDate: Date = Date(timeIntervalSince1970: 0)
-    var totalReadPercent: Double = 0
-    var totalReadingTimeSeconds: TimeInterval = 0
+    public var lastOpenedDate: Date
+    public var totalReadPercent: Double
+    public var totalReadingTimeSeconds: TimeInterval
 
     // MARK: - Reading position
-    var lastSpineIndex: Int = 0
-    var lastCharacterOffset: Int = 0        // UTF-16 code units, text nodes only
-    var lastScrollOffset: Double = 0
+    public var lastSpineIndex: Int
+    public var lastCharacterOffset: Int        // UTF-16 code units, text nodes only
+    public var lastScrollOffset: Double
 
     // MARK: - ELO ranking
-    var eloScore: Double = 1000.0
-    var eloMatchCount: Int = 0
+    public var eloScore: Double
+    public var eloMatchCount: Int
 
-    init(calibreID: Int) {
+    public init(
+        calibreID: Int,
+        lastOpenedDate: Date = Date(timeIntervalSince1970: 0),
+        totalReadPercent: Double = 0.0,
+        totalReadingTimeSeconds: TimeInterval = 0.0,
+        lastSpineIndex: Int = 0,
+        lastCharacterOffset: Int = 0,
+        lastScrollOffset: Double = 0.0,
+        eloScore: Double = 1000.0,
+        eloMatchCount: Int = 0
+    ) {
         self.calibreID = calibreID
+        self.lastOpenedDate = lastOpenedDate
+        self.totalReadPercent = totalReadPercent
+        self.totalReadingTimeSeconds = totalReadingTimeSeconds
+        self.lastSpineIndex = lastSpineIndex
+        self.lastCharacterOffset = lastCharacterOffset
+        self.lastScrollOffset = lastScrollOffset
+        self.eloScore = eloScore
+        self.eloMatchCount = eloMatchCount
     }
 
-    func markRead() {
+    public var isRead: Bool {
+        totalReadPercent >= 0.98
+    }
+
+    public var hasBeenOpened: Bool {
+        lastOpenedDate > Date(timeIntervalSince1970: 0)
+    }
+
+    public mutating func markRead() {
         totalReadPercent = 1.0
     }
 
-    func resetReadingProgress() {
-        totalReadPercent = 0
+    public mutating func resetReadingProgress() {
+        totalReadPercent = 0.0
         lastSpineIndex = 0
         lastCharacterOffset = 0
-        lastScrollOffset = 0
+        lastScrollOffset = 0.0
         lastOpenedDate = Date(timeIntervalSince1970: 0)
-        totalReadingTimeSeconds = 0
+        totalReadingTimeSeconds = 0.0
     }
 }
 

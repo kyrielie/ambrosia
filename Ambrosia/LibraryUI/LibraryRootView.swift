@@ -1,12 +1,10 @@
 import SwiftUI
-import SwiftData
 
 // MARK: - Library root view
 
 struct LibraryRootView: View {
     @Environment(LibrarySession.self) private var session
     @Environment(LibraryToolbarState.self) private var toolbarState
-    @Environment(\.modelContext) private var modelContext
     @Environment(\.colorScheme) private var systemColorScheme
     @ObservedObject private var prefs = ReaderPreferences.shared
 
@@ -1617,12 +1615,16 @@ struct LibraryRootView: View {
     private func refreshBookStatesForCurrentPage() {
         // §list-teardown fix: no-op if the List surface has been torn down.
         guard !toolbarState.isListSurfaceTornDown else { return }
-        let pageIDs = Set(books.map(\.id))
-        let descriptor = FetchDescriptor<BookState>(
-            predicate: #Predicate { pageIDs.contains($0.calibreID) }
-        )
-        let all = (try? modelContext.fetch(descriptor)) ?? []
-        bookStates = all.reduce(into: [:]) { $0[$1.calibreID] = $1 }
+        let pageIDs = books.map(\.id)
+        guard !pageIDs.isEmpty else { return }
+        Task {
+            if let metaDB = session.metaDB {
+                let states = await metaDB.bookStates(for: pageIDs)
+                await MainActor.run {
+                    self.bookStates = states
+                }
+            }
+        }
     }
 
     /// Mirrors the session's membership snapshots into this view's `@State`.
@@ -2250,7 +2252,6 @@ struct LibraryRootView: View {
             isLiked: likedIDs.contains(book.id),
             hideFanworksTagPill: prefs.hideFanworksTagPill,
             correctCalibreAmpEntities: prefs.correctCalibreAmpEntities,
-            modelContext: modelContext,
             onTagTap: { tag, field in
                 addTagPillRule(tag: tag, field: field)
             },
@@ -2289,7 +2290,7 @@ struct LibraryRootView: View {
                 addTagPillRule(tag: tag, field: field)
             },
             onLikeToggle: { toggleLike(for: series) },
-            onOpen: { AppDelegate.shared?.openReaderWindow(target: .series(series), modelContext: modelContext) },
+            onOpen: { AppDelegate.shared?.openReaderWindow(target: .series(series)) },
             isInReadLater: series.works.allSatisfy { readLaterIDs.contains($0.id) },
             onReadLaterToggle: { toggleReadLater(for: series) },
             onSkip: { skip(series.works) },
@@ -2394,7 +2395,7 @@ struct LibraryRootView: View {
 
     private func open(_ books: [CalibreBook]) {
         for book in books {
-            AppDelegate.shared?.openReaderWindow(book: book, modelContext: modelContext)
+            AppDelegate.shared?.openReaderWindow(book: book)
         }
     }
 
@@ -2435,12 +2436,16 @@ struct LibraryRootView: View {
     private func markRead(_ books: [CalibreBook]) {
         let ids = books.map(\.id)
         for calibreID in ids {
-            let state = stateForMutation(calibreID)
+            var state = bookStates[calibreID] ?? BookState(calibreID: calibreID)
             state.markRead()
             bookStates[calibreID] = state
         }
-        try? modelContext.save()
         Task {
+            if let metaDB = session.metaDB {
+                for calibreID in ids {
+                    try? await metaDB.markBookRead(calibreID: calibreID)
+                }
+            }
             for calibreID in ids {
                 try? await session.collectionStore?.syncAutomatedCollection(
                     collectionID: SystemCollectionID.finished,
@@ -2460,12 +2465,16 @@ struct LibraryRootView: View {
     private func resetProgress(_ books: [CalibreBook]) {
         let ids = books.map(\.id)
         for calibreID in ids {
-            let state = stateForMutation(calibreID)
+            var state = bookStates[calibreID] ?? BookState(calibreID: calibreID)
             state.resetReadingProgress()
             bookStates[calibreID] = state
         }
-        try? modelContext.save()
         Task {
+            if let metaDB = session.metaDB {
+                for calibreID in ids {
+                    try? await metaDB.resetReadingProgress(calibreID: calibreID)
+                }
+            }
             for calibreID in ids {
                 try? await session.collectionStore?.syncAutomatedCollection(
                     collectionID: SystemCollectionID.finished,
@@ -2480,10 +2489,6 @@ struct LibraryRootView: View {
             }
             session.bumpMembershipVersion()  // §7
         }
-    }
-
-    private func stateForMutation(_ calibreID: Int) -> BookState {
-        LibraryQueryHelpers.stateForMutation(calibreID, in: modelContext)
     }
 
     private var footer: some View {

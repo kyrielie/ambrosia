@@ -2,7 +2,7 @@
 
 Scope: the per-library, app-owned SQLite database — its owner, schema, and
 migration rules. For the read-only Calibre database, see
-`calibre-library.md`. For the SwiftData store (`BookState`/`ReadingGoal`),
+`calibre-library.md`. For the deprecated SwiftData store consolidation,
 see `swiftdata-store.md`.
 
 ---
@@ -11,6 +11,8 @@ see `swiftdata-store.md`.
 
 `AmbrosiaMetaDB` is an actor-backed writable SQLite DB scoped by a hash of the Calibre library path. It stores:
 
+- `book_state` — reading progress (`total_read_percent`), reading position (`last_spine_index`, `last_character_offset`, `last_scroll_offset`), `last_opened_date`, `total_reading_time_seconds`, and ELO fields.
+- `reading_goals` — reading targets (`target_books_count`, `period_start`, `period_end`).
 - `collections`, `collection_members`.
 - `annotations`.
 - `ao3_metadata`, `ao3_extraction_diagnostics`.
@@ -18,6 +20,14 @@ see `swiftdata-store.md`.
 - `canonical_tags`, `tag_synonyms`, `tag_parent_links`, `tag_subtag_sections`.
 - `reading_history`, `book_opens` (write path wired up: `startReadingSession`, `updateReadingSession`, `closeZombieReadingSessions` are called from the reader session lifecycle).
 - `error_log` — a general-purpose, prunable failure trail (`logError`/`recentErrors`/`pruneErrorLog`/`clearErrorLog`), viewable via `ErrorLogView` (Export menu → "Error Log…"). Complements, not replaces, `ao3_extraction_diagnostics`'s scoped-per-subsystem diagnostics.
+
+### Lock Contention & Busy Timeout
+
+`AmbrosiaMetaDB` configures `db.busyTimeout = 5.0` and `readDB.busyTimeout = 5.0` (as well as WAL journal mode). This gives writers and concurrent readers up to 5 seconds to wait for transient SQLite locks to clear, preventing immediate `SQLITE_BUSY` (code 5) runtime exceptions under concurrent reader progress updates and background extraction passes. Calibre library connections also configure `connection.busyTimeout = 5.0` and execute `PRAGMA busy_timeout = 5000`.
+
+### Legacy SwiftData Migration
+
+`migrate_legacy_swiftdata_to_sqlite` is recorded in `schema_migrations`. It checks for legacy `default.store` / `Ambrosia.store` SQLite files from early SwiftData versions and migrates `ZBOOKSTATE` and `ZREADINGGOAL` records into `book_state` and `reading_goals`. CoreData timestamps (measured in seconds since Jan 1, 2001) are converted to Unix epoch timestamps by adding `+ 978307200.0`.
 
 `CollectionStore` wraps collection operations. Bootstrapped system collections:
 
