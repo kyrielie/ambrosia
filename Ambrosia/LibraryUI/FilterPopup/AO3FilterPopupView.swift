@@ -213,6 +213,7 @@ struct AO3FilterPopupView: View {
         toolbarState.filterExpression = state.buildExpression()
         toolbarState.sortField = state.sortField
         toolbarState.ascending = state.ascending
+        state.capturedDigest = AO3FilterPopupDigest.current(toolbarState: toolbarState)
         onApply()
     }
 }
@@ -415,7 +416,24 @@ struct DirectionalTagFacetSection: View {
         onToggle()
     }
 
-    private var hasActiveSelection: Bool { entries.contains { isOn($0.name) } }
+    private var hasActiveSelection: Bool {
+        entries.contains { isOn($0.name) } || !selectedTagsNotInEntries.isEmpty
+    }
+
+    private var allSelectedForThisFieldAndDirection: Set<String> {
+        switch stringField {
+        case .fandom: return direction == .include ? state.includedFandoms : state.excludedFandoms
+        case .relationship: return direction == .include ? state.includedRelationships : state.excludedRelationships
+        case .character: return direction == .include ? state.includedCharacters : state.excludedCharacters
+        case .freeform: return direction == .include ? state.includedFreeforms : state.excludedFreeforms
+        case .author: return direction == .include ? state.includedAuthors : state.excludedAuthors
+        }
+    }
+
+    private var selectedTagsNotInEntries: [String] {
+        let entryNames = Set(entries.map(\.name))
+        return allSelectedForThisFieldAndDirection.filter { !entryNames.contains($0) }.sorted()
+    }
 
     // `entries.count` hit the requested `limit` exactly -- there may be more
     // tags in this scope than we've fetched, so offer another page. If the
@@ -425,12 +443,38 @@ struct DirectionalTagFacetSection: View {
     var body: some View {
         AccordionSection(title: field.sectionLabel, isExpanded: $isExpanded) {
             VStack(alignment: .leading, spacing: 3) {
-                // Authentic AO3 inline search box
+                // 1. Common tag entries
+                ForEach(entries, id: \.name) { entry in
+                    Toggle(isOn: Binding(get: { isOn(entry.name) }, set: { _ in toggle(entry.name) })) {
+                        Text("\(entry.name) (\(entry.count))")
+                    }
+                    .toggleStyle(.checkbox)
+                }
+
+                // 2. Checked tags not currently in top entries
+                ForEach(selectedTagsNotInEntries, id: \.self) { tagName in
+                    Toggle(isOn: Binding(get: { true }, set: { _ in toggle(tagName) })) {
+                        Text(tagName)
+                    }
+                    .toggleStyle(.checkbox)
+                }
+
+                // 3. Load more button
+                if hasMore {
+                    Button("Load more", action: onLoadMore)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 2)
+                }
+
+                // 4. Authentic AO3 inline search box placed at the bottom
+                Divider().padding(.vertical, 2)
+
                 HStack(spacing: 4) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
                         .font(.caption2)
-                    TextField("Search \(field.sectionLabel.lowercased()) to \(direction.rawValue)…", text: $searchText)
+                    TextField("Search other \(field.sectionLabel.lowercased())…", text: $searchText)
                         .textFieldStyle(.plain)
                         .font(.caption)
                     if !searchText.isEmpty {
@@ -449,16 +493,18 @@ struct DirectionalTagFacetSection: View {
                 .padding(.vertical, 3)
                 .background(Color(NSColor.controlBackgroundColor))
                 .clipShape(RoundedRectangle(cornerRadius: 4))
-                .padding(.bottom, 2)
+                .padding(.top, 2)
                 .onChange(of: searchText) { _, newValue in
                     performSearch(query: newValue)
                 }
 
+                // 5. Search results shown directly under the search box
                 if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
                     if searchResults.isEmpty {
                         Text("No matching tags found")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .padding(.leading, 4)
                             .padding(.vertical, 2)
                     } else {
                         ForEach(searchResults, id: \.name) { result in
@@ -466,19 +512,8 @@ struct DirectionalTagFacetSection: View {
                                 Text("\(result.name) (\(result.count))")
                             }
                             .toggleStyle(.checkbox)
+                            .padding(.leading, 4)
                         }
-                    }
-                } else {
-                    ForEach(entries, id: \.name) { entry in
-                        Toggle(isOn: Binding(get: { isOn(entry.name) }, set: { _ in toggle(entry.name) })) {
-                            Text("\(entry.name) (\(entry.count))")
-                        }
-                        .toggleStyle(.checkbox)
-                    }
-                    if hasMore {
-                        Button("Load more", action: onLoadMore)
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
                     }
                 }
             }

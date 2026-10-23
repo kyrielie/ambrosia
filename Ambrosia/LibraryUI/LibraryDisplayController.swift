@@ -58,6 +58,10 @@ final class LibraryDisplayController {
     private(set) var didFinishFirstLoad: Bool = false
     private(set) var rebuildDegraded: Bool = false
 
+    // MARK: - AO3 Filter Sidebar Caching
+    var cachedAO3FacetController: AO3FilterFacetController?
+    var cachedAO3FilterPopupState: AO3FilterPopupState?
+
     // MARK: - Internal Tasks & Generation Counters
 
     private var loadGeneration = 0
