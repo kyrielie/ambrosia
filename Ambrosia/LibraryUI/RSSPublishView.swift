@@ -10,7 +10,7 @@ struct RSSPublishWarningView: View {
     let onPublish: () -> Void
     let onCancel: () -> Void
 
-    @ObservedObject private var prefs = ReaderPreferences.shared
+    @Bindable private var prefs = ReaderPreferences.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -87,7 +87,7 @@ struct ManageFeedsView: View {
     let onStopServer: () -> Void
     let onDone: () -> Void
 
-    @ObservedObject private var prefs = ReaderPreferences.shared
+    @Bindable private var prefs = ReaderPreferences.shared
     @State private var selected: FeedTarget = .currentSearch
     @State private var copyConfirmation: Bool = false
     @State private var snapshotLabel: String?

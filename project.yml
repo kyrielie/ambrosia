@@ -103,6 +103,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.kyrielie.ambrosia
         PRODUCT_NAME: "$(TARGET_NAME)"
         SWIFT_VERSION: 5.0
+        SWIFT_STRICT_CONCURRENCY: targeted
         TARGETED_DEVICE_FAMILY: 1
 
   AmbrosiaTests:
@@ -122,6 +123,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.kyrielie.ambrosia.AmbrosiaTests
         PRODUCT_NAME: "$(TARGET_NAME)"
         SWIFT_VERSION: 5.0
+        SWIFT_STRICT_CONCURRENCY: targeted
         TARGETED_DEVICE_FAMILY: 1
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Ambrosia.app/Contents/MacOS/Ambrosia"
 

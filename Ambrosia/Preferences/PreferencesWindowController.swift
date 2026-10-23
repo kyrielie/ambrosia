@@ -49,7 +49,7 @@ final class PreferencesWindowController: NSWindowController {
 // MARK: - Root tabbed view
 
 private struct PreferencesRootView: View {
-    @ObservedObject private var prefs = ReaderPreferences.shared
+    @Bindable private var prefs = ReaderPreferences.shared
     @State private var tab: PrefTab = PrefTab(rawValue: UserDefaults.standard.string(forKey: "lastPreferencesTab") ?? "") ?? .reader
 
     var body: some View {
@@ -90,7 +90,7 @@ private enum PrefTab: String { case reader, library, data, rss, shortcuts }
 // ─────────────────────────────────────────────────────────────────────────────
 
 private struct ReaderTab: View {
-    @ObservedObject private var prefs = ReaderPreferences.shared
+    @Bindable private var prefs = ReaderPreferences.shared
     @Namespace private var a11y
 
     // Reader colour local state
@@ -407,7 +407,7 @@ private struct ReaderTab: View {
 // ─────────────────────────────────────────────────────────────────────────────
 
 private struct LibraryTab: View {
-    @ObservedObject private var prefs = ReaderPreferences.shared
+    @Bindable private var prefs = ReaderPreferences.shared
     @Environment(\.colorScheme) private var systemScheme
     @Namespace private var a11y
 
@@ -717,8 +717,8 @@ private enum AO3ExtractionStatus {
 
 private struct DataTab: View {
     @Environment(LibrarySession.self) private var session
-    @ObservedObject private var prefs = ReaderPreferences.shared
-    @ObservedObject private var tagSeedConfig = AO3TagSeedDatabaseConfig.shared
+    @Bindable private var prefs = ReaderPreferences.shared
+    @Bindable private var tagSeedConfig = AO3TagSeedDatabaseConfig.shared
     @State private var knownLibraries: [LibraryIndexEntry] = []
     @State private var tagSynonymCacheMessage: String?
     @State private var wordCountLabel: String = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
@@ -1038,7 +1038,7 @@ private struct DataTab: View {
 // ─────────────────────────────────────────────────────────────────────────────
 
 private struct RSSTab: View {
-    @ObservedObject private var prefs = ReaderPreferences.shared
+    @Bindable private var prefs = ReaderPreferences.shared
     @State private var rssCollections: [(id: String, name: String)] = []
 
     var body: some View {
@@ -1143,7 +1143,7 @@ private enum ReaderTheme: String, CaseIterable, Identifiable {
 // ─────────────────────────────────────────────────────────────────────────────
 
 private struct ShortcutsTab: View {
-    @ObservedObject private var prefs = ReaderPreferences.shared
+    @Bindable private var prefs = ReaderPreferences.shared
     @State private var rejectionMessages: [RebindableAction: String] = [:]
 
     var body: some View {

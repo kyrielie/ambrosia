@@ -12,7 +12,7 @@ struct LibraryRootView: View {
     @Environment(LibraryToolbarState.self) private var toolbarState
     @Environment(LibraryDisplayController.self) private var displayController
     @Environment(\.colorScheme) private var systemColorScheme
-    @ObservedObject private var prefs = ReaderPreferences.shared
+    @Bindable private var prefs = ReaderPreferences.shared
 
     // MARK: - View Identity & Scroll Position
 
