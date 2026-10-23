@@ -2383,16 +2383,15 @@ actor AmbrosiaMetaDB {
     /// Top-N tag values by number of matching books, scoped to `ids`.
     func topFacets(for field: AO3FacetField, scopedTo ids: [Int], limit: Int = 10) -> [(name: String, count: Int)] {
         guard !ids.isEmpty else { return [] }
-        let idPlaceholders = ids.map { _ in "?" }.joined(separator: ", ")
         let sql = """
             SELECT je.value AS name, COUNT(*) AS cnt
             FROM ao3_metadata, json_each(ao3_metadata.\(field.jsonColumn)) AS je
-            WHERE ao3_metadata.calibre_id IN (\(idPlaceholders))
+            WHERE \(SQLIDList.clause(column: "ao3_metadata.calibre_id"))
             GROUP BY je.value
             ORDER BY cnt DESC
             LIMIT ?
             """
-        let bindings: [Binding?] = ids.map { $0 as Binding? } + [limit as Binding?]
+        let bindings: [Binding?] = [SQLIDList.binding(ids), limit as Binding?]
         guard let rows = try? readDB.prepare(sql, bindings).map({ $0 }) else { return [] }
         return rows.compactMap { row in
             guard let name = row[0] as? String else { return nil }
@@ -2431,15 +2430,14 @@ actor AmbrosiaMetaDB {
     /// `GROUP BY`, not a `json_each` aggregation.
     func topRatingFacets(scopedTo ids: [Int]) -> [(name: String, count: Int)] {
         guard !ids.isEmpty else { return [] }
-        let idPlaceholders = ids.map { _ in "?" }.joined(separator: ", ")
         let sql = """
             SELECT rating, COUNT(*) AS cnt
             FROM ao3_metadata
-            WHERE calibre_id IN (\(idPlaceholders)) AND rating IS NOT NULL
+            WHERE \(SQLIDList.clause(column: "calibre_id")) AND rating IS NOT NULL
             GROUP BY rating
             ORDER BY cnt DESC
             """
-        let bindings: [Binding?] = ids.map { $0 as Binding? }
+        let bindings: [Binding?] = [SQLIDList.binding(ids)]
         guard let rows = try? readDB.prepare(sql, bindings).map({ $0 }) else { return [] }
         return rows.compactMap { row in
             guard let name = row[0] as? String else { return nil }

@@ -90,18 +90,19 @@ flowchart TD
   - [x] Verified full build and test suite (`./test.sh`): **0 SwiftLint violations**, **all 576 unit tests passed**.
 
 ### Phase 5: Search & Facet Query Scalability
-- **Status**: **Up Next** 🎯
+- **Status**: Completed (2026-10-23)
 - **Problem**:
-  - `AO3FilterFacetController` dispatches 7 simultaneous SQL aggregations on every checkbox toggle without debouncing.
-  - Aggregations bind the entire scoped ID set as thousands of `IN (?, ?, ...)` parameters.
-  - `SearchQueryParser` only parses a single scoped token, rejecting combined queries like `author:X tag:Y`.
+  - `AO3FilterFacetController` dispatched 7 simultaneous SQL aggregations on every checkbox toggle without debouncing.
+  - Aggregations bound the entire scoped ID set as thousands of `IN (?, ?, ...)` parameters.
+  - `SearchQueryParser` only parsed a single scoped token, dropping subsequent prefixes like `author:Alice tag:Romance`.
 - **Milestones**:
-  - Wrap `refreshFacets()` in `DebounceTimer`.
-  - Replace large parameter-bound `IN` clauses with temporary SQLite candidate tables (`temp.candidate_ids`).
-  - Upgrade `SearchQueryParser` to parse multiple scoped tokens with proper Boolean logic.
+  - [x] Wrapped `refreshFacets()` in `DebounceTimer(delay: 0.15)` in `AO3FilterPopupView` to collapse rapid checkbox toggles into a single aggregation pass.
+  - [x] Migrated `AmbrosiaMetaDB.topFacets(for:scopedTo:)` and `topRatingFacets(scopedTo:)` to `SQLIDList.clause(column:)` using JSON-bound single parameters (`json_each(?)`), eliminating parameter explosion and query size inflation.
+  - [x] Upgraded `SearchQueryParser` with `parseMultiToken(_:)` and `asFilterRules()`, supporting quoted values (e.g. `author:"Jane Doe" tag:"Slow Burn"`), preserving plain words, and converting them into filter rules committed to `LibraryToolbarState`.
+  - [x] Added unit tests in [`SearchQueryParserMultiTokenTests.swift`](file:///Users/ethanchan/Documents/Applications/ambrosia/AmbrosiaTests/SearchQueryParserMultiTokenTests.swift) (581 tests passing, 0 SwiftLint violations).
 
 ### Phase 6: App Lifecycle & Monolith Deconstruction
-- **Status**: Planned
+- **Status**: **Up Next** 🎯
 - **Problem**:
   - `AmbrosiaApp` initializes an invisible `WindowGroup` with `Color.clear` that must be hidden on launch and suppressed on dock reopen.
   - Core files exceed 2,500 lines, mixing multiple unrelated responsibilities (e.g. `LocalFeedServer.swift` handles HTTP server, RSS XML, JSON Feed, OPML, Gzip, and SQLite transfer database building).

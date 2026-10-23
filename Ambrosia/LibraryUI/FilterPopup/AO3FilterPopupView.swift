@@ -44,6 +44,7 @@ struct AO3FilterPopupView: View {
     @State private var ratingFacets: [(name: String, count: Int)] = []
     @State private var facetRefreshTask: Task<Void, Never>?
     @State private var facetLimits: [AO3FacetField: Int] = [:]
+    private let facetDebouncer = DebounceTimer(delay: 0.15)
 
     private static let facetPageSize = 10
 
@@ -142,32 +143,34 @@ struct AO3FilterPopupView: View {
     // uses an ID-list-free query instead, cached per membershipVersion.
     private func refreshFacets() {
         facetRefreshTask?.cancel()
-        facetRefreshTask = Task {
-            async let ratingFacetsTask = facetController.topRatingFacets(state: state, membershipVersion: membershipVersion)
+        facetDebouncer.schedule {
+            facetRefreshTask = Task { @MainActor in
+                async let ratingFacetsTask = facetController.topRatingFacets(state: state, membershipVersion: membershipVersion)
 
-            let newFacets: [AO3FacetField: [(name: String, count: Int)]] =
-                await withTaskGroup(of: (AO3FacetField, [(name: String, count: Int)]).self) { group in
-                    for field in AO3FacetField.allCases {
-                        group.addTask {
-                            let entries = await facetController.topFacets(
-                                for: field, state: state, limit: limit(for: field), membershipVersion: membershipVersion
-                            )
-                            return (field, entries)
+                let newFacets: [AO3FacetField: [(name: String, count: Int)]] =
+                    await withTaskGroup(of: (AO3FacetField, [(name: String, count: Int)]).self) { group in
+                        for field in AO3FacetField.allCases {
+                            group.addTask {
+                                let entries = await facetController.topFacets(
+                                    for: field, state: state, limit: limit(for: field), membershipVersion: membershipVersion
+                                )
+                                return (field, entries)
+                            }
                         }
+                        var result: [AO3FacetField: [(name: String, count: Int)]] = [:]
+                        for await (field, entries) in group {
+                            result[field] = entries
+                        }
+                        return result
                     }
-                    var result: [AO3FacetField: [(name: String, count: Int)]] = [:]
-                    for await (field, entries) in group {
-                        result[field] = entries
-                    }
-                    return result
-                }
 
-            guard !Task.isCancelled else { return }
-            facets = newFacets
+                guard !Task.isCancelled else { return }
+                facets = newFacets
 
-            let ratingFacetsResult = await ratingFacetsTask
-            guard !Task.isCancelled else { return }
-            ratingFacets = ratingFacetsResult
+                let ratingFacetsResult = await ratingFacetsTask
+                guard !Task.isCancelled else { return }
+                ratingFacets = ratingFacetsResult
+            }
         }
     }
 

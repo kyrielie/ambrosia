@@ -101,6 +101,53 @@ struct SearchQuery {
         return nil
     }
 
+    /// Converts all scoped terms in this query into an array of `FilterRule`s.
+    /// Tags are canonicalized via `canonicalTagResolver` if provided.
+    func asFilterRules(canonicalTagResolver: ((String) async -> String)? = nil) async -> [FilterRule] {
+        var rules: [FilterRule] = []
+
+        for tag in tagTerms {
+            let resolved: String
+            if let resolver = canonicalTagResolver {
+                resolved = await resolver(tag)
+            } else {
+                resolved = tag
+            }
+            let kind = AO3TagKind.classify(resolved)
+            let field = kind.filterField
+            let op: FilterOperator
+            switch kind {
+            case .rating: op = .ratingAtMost
+            default:      op = .equals
+            }
+            rules.append(FilterRule(field: field, op: op, value: resolved))
+        }
+
+        for author in authorTerms {
+            rules.append(FilterRule(field: .authorName, op: .equals, value: author))
+        }
+
+        for title in titleTerms {
+            rules.append(FilterRule(field: .title, op: .contains, value: title))
+        }
+
+        for series in seriesTerms {
+            rules.append(FilterRule(field: .series, op: .contains, value: series))
+        }
+
+        for status in statusTerms {
+            if let parsed = AO3CompletionStatus(userValue: status) {
+                rules.append(FilterRule(field: .status, op: .equals, value: parsed.rawValue))
+            }
+        }
+
+        if let fulltext = fulltextPhrase, !fulltext.isEmpty {
+            rules.append(FilterRule(field: .fulltext, op: .contains, value: fulltext))
+        }
+
+        return rules
+    }
+
     // Convenience init without seriesTerms
     init(tagTerms: [String], authorTerms: [String], titleTerms: [String],
          plainTerms: [String], ftsMatchedIDs: [Int]? = nil) {
@@ -192,6 +239,82 @@ struct SearchQueryParser {
             .filter { !$0.isEmpty }
         return SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [],
                            seriesTerms: [], plainTerms: words)
+    }
+
+    /// Parse multiple tokens (e.g. `author:Alice tag:"Slow Burn" title:Secret`)
+    /// into structured scoped lists and remaining plain search words.
+    static func parseMultiToken(_ input: String) -> SearchQuery {
+        let trimmed = input.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else {
+            return SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [], plainTerms: [])
+        }
+
+        var tags: [String] = []
+        var authors: [String] = []
+        var titles: [String] = []
+        var series: [String] = []
+        var statuses: [String] = []
+        var fulltext: String?
+        var plain: [String] = []
+
+        let tokens = tokenize(trimmed)
+        let prefixMap: [(String, (String) -> Void)] = [
+            ("author:", { authors.append($0) }),
+            ("series:", { series.append($0) }),
+            ("status:", { statuses.append($0) }),
+            ("fulltext:", { fulltext = $0 }),
+            ("title:", { titles.append($0) }),
+            ("tag:", { tags.append($0) })
+        ]
+
+        for token in tokens {
+            var matched = false
+            for (prefix, assign) in prefixMap where token.lowercased().hasPrefix(prefix) {
+                let val = String(token.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+                if !val.isEmpty {
+                    assign(val)
+                    matched = true
+                    break
+                }
+            }
+            if !matched && !token.isEmpty {
+                plain.append(token)
+            }
+        }
+
+        return SearchQuery(
+            tagTerms: tags,
+            authorTerms: authors,
+            titleTerms: titles,
+            seriesTerms: series,
+            statusTerms: statuses,
+            fulltextPhrase: fulltext,
+            plainTerms: plain
+        )
+    }
+
+    /// Splits input into tokens while respecting double quotes (e.g. `tag:"Slow Burn"`).
+    private static func tokenize(_ input: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        var inQuotes = false
+
+        for char in input {
+            if char == "\"" {
+                inQuotes.toggle()
+            } else if char.isWhitespace && !inQuotes {
+                if !current.isEmpty {
+                    tokens.append(current)
+                    current = ""
+                }
+            } else {
+                current.append(char)
+            }
+        }
+        if !current.isEmpty {
+            tokens.append(current)
+        }
+        return tokens
     }
 }
 
