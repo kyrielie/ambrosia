@@ -1,7 +1,9 @@
 import Foundation
+import Observation
 import SQLite
 
-final class AO3TagSeedDatabaseConfig: ObservableObject {
+@Observable
+final class AO3TagSeedDatabaseConfig {
     static let shared = AO3TagSeedDatabaseConfig()
 
     struct Counts: Equatable {
@@ -34,14 +36,14 @@ final class AO3TagSeedDatabaseConfig: ObservableObject {
         static let path = "ao3TagSeedDatabase.path"
     }
 
-    @Published var isEnabled: Bool = false {
+    var isEnabled: Bool = false {
         didSet {
             UserDefaults.standard.set(isEnabled, forKey: Keys.enabled)
             refreshValidation()
         }
     }
 
-    @Published var databasePath: String? {
+    var databasePath: String? {
         didSet {
             if let databasePath, !databasePath.isEmpty {
                 UserDefaults.standard.set(databasePath, forKey: Keys.path)
@@ -52,7 +54,7 @@ final class AO3TagSeedDatabaseConfig: ObservableObject {
         }
     }
 
-    @Published private(set) var validationStatus: ValidationStatus = .notConfigured
+    private(set) var validationStatus: ValidationStatus = .notConfigured
 
     var databaseURL: URL? {
         guard let databasePath, !databasePath.isEmpty else { return nil }

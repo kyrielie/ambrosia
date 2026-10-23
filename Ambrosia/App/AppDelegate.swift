@@ -53,10 +53,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         libraryWindowController?.showWindow(nil)
 
         syncReaderMenuShortcuts()
-        keyBindingsSubscription = ReaderPreferences.shared.$keyBindings
-            .sink { [weak self] _ in
+        startObservingKeyBindings()
+    }
+
+    private func startObservingKeyBindings() {
+        withObservationTracking {
+            _ = ReaderPreferences.shared.keyBindings
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
                 self?.syncReaderMenuShortcuts()
+                self?.startObservingKeyBindings()
             }
+        }
     }
 
     // MARK: - Reader menu shortcut sync

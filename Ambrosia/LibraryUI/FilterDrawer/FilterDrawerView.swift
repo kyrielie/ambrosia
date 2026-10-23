@@ -235,7 +235,7 @@ struct FilterRuleRow: View {
     let onDelete: () -> Void
 
     @Environment(LibrarySession.self) private var session
-    @ObservedObject private var prefs = ReaderPreferences.shared
+    @Bindable private var prefs = ReaderPreferences.shared
     @State private var collections: [CollectionRow] = []
     @State private var collectionSearchText = ""
     @State private var showCollectionPicker = false

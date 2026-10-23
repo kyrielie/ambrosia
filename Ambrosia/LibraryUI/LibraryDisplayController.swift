@@ -255,10 +255,10 @@ final class LibraryDisplayController {
     }
 
     private func startObservingPreferences() {
-        ReaderPreferences.shared.$showSkippedCollection
-            .dropFirst()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
+        withObservationTracking {
+            _ = ReaderPreferences.shared.showSkippedCollection
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.offsetState.resetForNewFilter()
                 if self.toolbarState.filterExpression.hasCompleteRules {
@@ -266,20 +266,35 @@ final class LibraryDisplayController {
                 } else {
                     self.scheduleLoadPage()
                 }
+                self.startObservingPreferences()
             }
-            .store(in: &cancellables)
-
-        Publishers.Merge3(
-            ReaderPreferences.shared.$hideNonAO3PublisherBooks.dropFirst(),
-            ReaderPreferences.shared.$hideAnthologyBooks.dropFirst(),
-            ReaderPreferences.shared.$hideDuplicateBooks.dropFirst()
-        )
-        .receive(on: DispatchQueue.main)
-        .sink { [weak self] _ in
-            guard let self else { return }
-            Task { await self.refreshVisibilitySnapshots() }
         }
-        .store(in: &cancellables)
+
+        withObservationTracking {
+            _ = ReaderPreferences.shared.hideNonAO3PublisherBooks
+            _ = ReaderPreferences.shared.hideAnthologyBooks
+            _ = ReaderPreferences.shared.hideDuplicateBooks
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.refreshVisibilitySnapshots()
+                self.startObservingVisibilityPreferences()
+            }
+        }
+    }
+
+    private func startObservingVisibilityPreferences() {
+        withObservationTracking {
+            _ = ReaderPreferences.shared.hideNonAO3PublisherBooks
+            _ = ReaderPreferences.shared.hideAnthologyBooks
+            _ = ReaderPreferences.shared.hideDuplicateBooks
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.refreshVisibilitySnapshots()
+                self.startObservingVisibilityPreferences()
+            }
+        }
     }
 
     private func startObservingNotifications() {

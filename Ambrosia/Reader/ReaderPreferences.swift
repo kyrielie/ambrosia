@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Combine
+import Observation
 import SwiftUI
 
 // MARK: - LibraryColorMode
@@ -62,68 +63,68 @@ enum PreferenceChangeKind: Equatable {
 // MARK: - ReaderPreferences
 
 /// User-configurable reading and library preferences, all UserDefaults-backed.
+@Observable
 final class ReaderPreferences: ObservableObject {
 
     static let shared = ReaderPreferences()
 
-    /// Fired once per cosmetic or structural preference change, in addition
-    /// to the blanket `objectWillChange` Combine already provides via
-    /// `@Published`. `ReaderViewController.subscribeToPreferences()` sinks on
-    /// this instead of `objectWillChange` so cosmetic changes can take the
-    /// live CSS-variable path instead of a full reload.
+    /// Fired once per cosmetic or structural preference change.
+    /// `ReaderViewController.subscribeToPreferences()` sinks on
+    /// this so cosmetic changes can take the live CSS-variable path
+    /// instead of a full reload.
     let preferenceChangeKind = PassthroughSubject<PreferenceChangeKind, Never>()
 
     // MARK: - Reader appearance
 
-    @Published var fontFamily: String {
+    var fontFamily: String {
         didSet {
             UserDefaults.standard.set(fontFamily, forKey: Keys.fontFamily)
             preferenceChangeKind.send(.cosmetic)
         }
     }
-    @Published var fontSize: Int {
+    var fontSize: Int {
         didSet {
             UserDefaults.standard.set(fontSize, forKey: Keys.fontSize)
             preferenceChangeKind.send(.cosmetic)
         }
     }
-    @Published var lineHeight: Double {
+    var lineHeight: Double {
         didSet {
             UserDefaults.standard.set(lineHeight, forKey: Keys.lineHeight)
             preferenceChangeKind.send(.cosmetic)
         }
     }
-    @Published var maxWidth: Int {
+    var maxWidth: Int {
         didSet {
             UserDefaults.standard.set(maxWidth, forKey: Keys.maxWidth)
             preferenceChangeKind.send(.cosmetic)
         }
     }
-    @Published var readerBackgroundColor: String {
+    var readerBackgroundColor: String {
         didSet {
             UserDefaults.standard.set(readerBackgroundColor, forKey: Keys.readerBackgroundColor)
             preferenceChangeKind.send(.cosmetic)
         }
     }
-    @Published var readerTextColor: String {
+    var readerTextColor: String {
         didSet {
             UserDefaults.standard.set(readerTextColor, forKey: Keys.readerTextColor)
             preferenceChangeKind.send(.cosmetic)
         }
     }
-    @Published var paddingH: Int {
+    var paddingH: Int {
         didSet {
             UserDefaults.standard.set(paddingH, forKey: Keys.paddingH)
             preferenceChangeKind.send(.cosmetic)
         }
     }
-    @Published var paddingV: Int {
+    var paddingV: Int {
         didSet {
             UserDefaults.standard.set(paddingV, forKey: Keys.paddingV)
             preferenceChangeKind.send(.cosmetic)
         }
     }
-    @Published var allowReaderLinkClicks: Bool {
+    var allowReaderLinkClicks: Bool {
         didSet {
             UserDefaults.standard.set(allowReaderLinkClicks, forKey: Keys.allowReaderLinkClicks)
             preferenceChangeKind.send(.cosmetic)
@@ -134,13 +135,13 @@ final class ReaderPreferences: ObservableObject {
     /// sanitise/extractBodyContent), not by a live CSS variable, so toggling
     /// this needs a full reloadHTML() to regenerate the document — a
     /// cosmetic-path CSS swap has nothing left to update.
-    @Published var removeParagraphIndents: Bool {
+    var removeParagraphIndents: Bool {
         didSet {
             UserDefaults.standard.set(removeParagraphIndents, forKey: Keys.removeParagraphIndents)
             preferenceChangeKind.send(.structural)
         }
     }
-    @Published var colsPerScreen: ColsPerScreen {
+    var colsPerScreen: ColsPerScreen {
         didSet {
             UserDefaults.standard.set(colsPerScreen.rawValue, forKey: Keys.colsPerScreen)
             preferenceChangeKind.send(.structural)
@@ -153,7 +154,7 @@ final class ReaderPreferences: ObservableObject {
     /// Some readers find this intrusive (e.g. short/common phrases producing
     /// a wall of highlights, or wanting to read without the find bar taking
     /// up screen space), so it's user-toggleable rather than always-on.
-    @Published var autoOpenFindBarForFullTextSearch: Bool {
+    var autoOpenFindBarForFullTextSearch: Bool {
         didSet {
             UserDefaults.standard.set(autoOpenFindBarForFullTextSearch, forKey: Keys.autoOpenFindBarForFullTextSearch)
         }
@@ -161,37 +162,37 @@ final class ReaderPreferences: ObservableObject {
 
     // MARK: - Library appearance — colour mode
 
-    @Published var libraryColorMode: LibraryColorMode {
+    var libraryColorMode: LibraryColorMode {
         didSet { UserDefaults.standard.set(libraryColorMode.rawValue, forKey: Keys.libraryColorMode) }
     }
 
-    @Published var libraryAppearanceMode: LibraryAppearanceMode {
+    var libraryAppearanceMode: LibraryAppearanceMode {
         didSet { UserDefaults.standard.set(libraryAppearanceMode.rawValue, forKey: Keys.libraryAppearanceMode) }
     }
 
     // Custom light/dark colour pairs (used when libraryColorMode == .custom)
-    @Published var libraryLightBackgroundColor: String {
+    var libraryLightBackgroundColor: String {
         didSet { UserDefaults.standard.set(libraryLightBackgroundColor, forKey: Keys.libraryLightBG) }
     }
-    @Published var libraryDarkBackgroundColor: String {
+    var libraryDarkBackgroundColor: String {
         didSet { UserDefaults.standard.set(libraryDarkBackgroundColor, forKey: Keys.libraryDarkBG) }
     }
-    @Published var libraryLightTextColor: String {
+    var libraryLightTextColor: String {
         didSet { UserDefaults.standard.set(libraryLightTextColor, forKey: Keys.libraryLightText) }
     }
-    @Published var libraryDarkTextColor: String {
+    var libraryDarkTextColor: String {
         didSet { UserDefaults.standard.set(libraryDarkTextColor, forKey: Keys.libraryDarkText) }
     }
-    @Published var showSkippedCollection: Bool {
+    var showSkippedCollection: Bool {
         didSet { UserDefaults.standard.set(showSkippedCollection, forKey: Keys.showSkippedCollection) }
     }
-    @Published var hideFanworksTagPill: Bool {
+    var hideFanworksTagPill: Bool {
         didSet { UserDefaults.standard.set(hideFanworksTagPill, forKey: Keys.hideFanworksTagPill) }
     }
-    @Published var correctCalibreAmpEntities: Bool {
+    var correctCalibreAmpEntities: Bool {
         didSet { UserDefaults.standard.set(correctCalibreAmpEntities, forKey: Keys.correctCalibreAmpEntities) }
     }
-    @Published var hideNonAO3PublisherBooks: Bool {
+    var hideNonAO3PublisherBooks: Bool {
         didSet { UserDefaults.standard.set(hideNonAO3PublisherBooks, forKey: Keys.hideNonAO3PublisherBooks) }
     }
     /// Hides books whose Calibre description was written by the EPUB-merge plugin
@@ -199,7 +200,7 @@ final class ReaderPreferences: ObservableObject {
     /// from the library list entirely, separate from the existing series-grouping
     /// exclusion (which only keeps them out of grouped series rows, not out of the
     /// library altogether).
-    @Published var hideAnthologyBooks: Bool {
+    var hideAnthologyBooks: Bool {
         didSet { UserDefaults.standard.set(hideAnthologyBooks, forKey: Keys.hideAnthologyBooks) }
     }
     /// Hides the non-winning copy of a Calibre duplicate — two rows for the
@@ -210,10 +211,10 @@ final class ReaderPreferences: ObservableObject {
     /// list, search, series grouping, and feeds. See `DuplicateBookDetector`.
     /// Never silent by default — surfaced as its own toggle next to
     /// `hideNonAO3PublisherBooks` so the user knows books are being hidden.
-    @Published var hideDuplicateBooks: Bool {
+    var hideDuplicateBooks: Bool {
         didSet { UserDefaults.standard.set(hideDuplicateBooks, forKey: Keys.hideDuplicateBooks) }
     }
-    @Published var emailPillsShowCollections: Bool {
+    var emailPillsShowCollections: Bool {
         didSet { UserDefaults.standard.set(emailPillsShowCollections, forKey: Keys.emailPillsShowCollections) }
     }
 
@@ -235,14 +236,14 @@ final class ReaderPreferences: ObservableObject {
 
     /// Whether the random daily-story feed (/feed/random-daily.xml) is enabled
     /// for the currently active library. Off by default.
-    @Published var feedServerEnableDailyStory: Bool {
+    var feedServerEnableDailyStory: Bool {
         didSet { UserDefaults.standard.set(feedServerEnableDailyStory, forKey: feedKey(Keys.feedServerEnableDailyStory)) }
     }
 
     /// Collection IDs excluded from the RSS feed server, for the currently
     /// active library. Stored as a comma-delimited string to match the
     /// pattern used by other multi-value prefs.
-    @Published var feedServerExcludedCollectionIDs: Set<String> {
+    var feedServerExcludedCollectionIDs: Set<String> {
         didSet {
             UserDefaults.standard.set(
                 feedServerExcludedCollectionIDs.sorted().joined(separator: ","),
@@ -256,7 +257,7 @@ final class ReaderPreferences: ObservableObject {
     /// `LibrarySession.open()`). Off by default — restarting a server that
     /// broadcasts on the LAN without the user re-confirming each launch
     /// would be a quiet posture change.
-    @Published var feedServerAutoRestart: Bool {
+    var feedServerAutoRestart: Bool {
         didSet { UserDefaults.standard.set(feedServerAutoRestart, forKey: Keys.feedServerAutoRestart) }
     }
 
@@ -335,7 +336,7 @@ final class ReaderPreferences: ObservableObject {
 
     // MARK: - Reading mode
 
-    @Published var defaultReadingMode: ReadingMode {
+    var defaultReadingMode: ReadingMode {
         didSet {
             UserDefaults.standard.set(defaultReadingMode.rawValue, forKey: Keys.defaultReadingMode)
             preferenceChangeKind.send(.structural)
@@ -350,7 +351,7 @@ final class ReaderPreferences: ObservableObject {
     /// `UserDefaults.didChangeNotification` bridge already keeps the two in
     /// sync for free. Do not migrate this to a new key or add a second sync
     /// mechanism.
-    @Published var groupBySeries: Bool {
+    var groupBySeries: Bool {
         didSet { UserDefaults.standard.set(groupBySeries, forKey: Keys.groupBySeries) }
     }
 
@@ -364,7 +365,7 @@ final class ReaderPreferences: ObservableObject {
     /// Pass A) rather than being given one now — a mixed "some actions have
     /// no default shortcut" state is fine as long as it's a deliberate
     /// choice, which this comment is recording it as.
-    @Published var keyBindings: [RebindableAction: KeyBinding] {
+    var keyBindings: [RebindableAction: KeyBinding] {
         didSet {
             if let data = try? JSONEncoder().encode(keyBindings) {
                 UserDefaults.standard.set(data, forKey: Keys.keyBindings)
@@ -387,7 +388,7 @@ final class ReaderPreferences: ObservableObject {
     /// single-value preference), so it's deliberately NOT part of
     /// `isReaderCustomized`/`resetReaderToDefaults()` — there's no "default"
     /// saved-theme list to reset to.
-    @Published var savedThemes: [SavedTheme] {
+    var savedThemes: [SavedTheme] {
         didSet {
             if let data = try? JSONEncoder().encode(savedThemes) {
                 UserDefaults.standard.set(data, forKey: Keys.savedThemes)

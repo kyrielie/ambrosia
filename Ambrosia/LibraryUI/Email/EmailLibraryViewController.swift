@@ -314,20 +314,34 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Preferences Observation
 
     private func startObservingPreferences() {
-        ReaderPreferences.shared.$libraryAppearanceMode
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
+        withObservationTracking {
+            _ = ReaderPreferences.shared.libraryAppearanceMode
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
                 self?.applyLibraryAppearance()
+                self?.startObservingPreferences()
             }
-            .store(in: &preferenceCancellables)
+        }
 
-        ReaderPreferences.shared.$emailPillsShowCollections
-            .dropFirst()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
+        withObservationTracking {
+            _ = ReaderPreferences.shared.emailPillsShowCollections
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
                 self?.sidebarVC?.reloadAppearance()
+                self?.startObservingEmailPillsPreference()
             }
-            .store(in: &preferenceCancellables)
+        }
+    }
+
+    private func startObservingEmailPillsPreference() {
+        withObservationTracking {
+            _ = ReaderPreferences.shared.emailPillsShowCollections
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.sidebarVC?.reloadAppearance()
+                self?.startObservingEmailPillsPreference()
+            }
+        }
     }
 
     private func applyLibraryAppearance() {

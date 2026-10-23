@@ -17,7 +17,7 @@ func membershipState(for members: Set<Int>, selected: Set<Int>) -> MembershipSta
 struct CollectionsView: View {
     @Environment(LibrarySession.self) private var session
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject private var prefs = ReaderPreferences.shared
+    @Bindable private var prefs = ReaderPreferences.shared
 
     var bookToAdd: CalibreBook?
     var calibreIDsToAdd: [Int] = []

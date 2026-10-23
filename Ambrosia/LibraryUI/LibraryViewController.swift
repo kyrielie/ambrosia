@@ -54,11 +54,14 @@ class LibraryViewController: NSViewController {
     }
 
     private func startObservingAppearance() {
-        appearanceCancellable = ReaderPreferences.shared.$libraryAppearanceMode
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
+        withObservationTracking {
+            _ = ReaderPreferences.shared.libraryAppearanceMode
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
                 self?.applyLibraryAppearance()
+                self?.startObservingAppearance()
             }
+        }
     }
 
     // MARK: - View mode switching

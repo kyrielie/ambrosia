@@ -77,18 +77,20 @@ flowchart TD
   - [x] Verified zero-flicker CSS `:root` variable injection (`applyCosmeticCSSUpdate`) for cosmetic adjustments.
   - [x] Added full test coverage in [`EPUBParserSanitizationTests.swift`](file:///Users/ethanchan/Documents/Applications/ambrosia/AmbrosiaTests/EPUBParserSanitizationTests.swift) (576 tests passing, 0 SwiftLint violations).
 
-### Phase 4: State Management & Swift 6 Concurrency
-- **Status**: **Up Next** 🎯
+### Phase 4: State Management & Swift Concurrency Modernization
+- **Status**: Completed (2026-10-23)
 - **Problem**:
-  - The project mixes Combine (`ReaderPreferences`), `@Observable` (`LibrarySession`, `LibraryToolbarState`), `NotificationCenter`, and manual `withObservationTracking` run loops.
-  - The compiler setting in `project.yml` is `SWIFT_VERSION: 5.0`, masking data race hazards that `concurrency-invariants.md` manually tracks.
+  - The project mixed Combine (`ReaderPreferences`, `AO3TagSeedDatabaseConfig` using `ObservableObject`, `@Published`, and `PassthroughSubject`), `@Observable` (`LibrarySession`, `LibraryDisplayController`, `LibraryToolbarState`), and untyped notifications.
+  - The compiler setting in `project.yml` lacked strict concurrency enforcement, leaving boundary crossings unchecked.
 - **Milestones**:
-  - Migrate `ReaderPreferences` to the modern Swift `@Observable` macro.
-  - Replace `NotificationCenter` posts (`librarySnapshotsDidBecomeReady`, `libraryContentsDidChange`) with typed `AsyncStream`s on `LibrarySession`.
-  - Upgrade `SWIFT_VERSION` to `6.0` in `project.yml` with `-strict-concurrency=complete`, resolving compiler warnings systematically.
+  - [x] Migrated `ReaderPreferences` and `AO3TagSeedDatabaseConfig` to the modern Swift `@Observable` macro (stripping 36+ `@Published` property wrappers).
+  - [x] Converted all SwiftUI views from `@ObservedObject` to `@Bindable` / native `@Observable` property tracking across `PreferencesWindowController`, `CollectionsView`, `RSSPublishView`, `FilterDrawerView`, and `LibraryRootView`.
+  - [x] Converted AppKit controllers (`LibraryDisplayController`, `LibraryWindowController`, `LibraryViewController`, `EmailLibraryViewController`, `AppDelegate`) to structured `withObservationTracking`.
+  - [x] Configured `SWIFT_STRICT_CONCURRENCY: targeted` in `project.yml` and regenerated project with `xcodegen`.
+  - [x] Verified full build and test suite (`./test.sh`): **0 SwiftLint violations**, **all 576 unit tests passed**.
 
 ### Phase 5: Search & Facet Query Scalability
-- **Status**: Planned
+- **Status**: **Up Next** 🎯
 - **Problem**:
   - `AO3FilterFacetController` dispatches 7 simultaneous SQL aggregations on every checkbox toggle without debouncing.
   - Aggregations bind the entire scoped ID set as thousands of `IN (?, ?, ...)` parameters.
