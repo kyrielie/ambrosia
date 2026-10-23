@@ -116,6 +116,9 @@ final class AO3FilterFacetController {
         // With no active drawer/search filter, the popup's base scope is the
         // whole library, so that path is skipped here too.
         let baseIDs: Set<Int>
+        let trimmedSearch = toolbarState.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let searchQuery = trimmedSearch.isEmpty ? nil : SearchQueryParser.parse(trimmedSearch)
+
         if expression.hasCompleteRules {
             let baseResult = await filterBuilder.matchingIDs(
                 expression: expression,
@@ -123,14 +126,32 @@ final class AO3FilterFacetController {
                 crossoverMap: crossoverMap,
                 seriesNamesMap: seriesNamesMap
             )
-            baseIDs = Set(baseResult.calibreIDs)
+            if let searchQuery {
+                let searchIDs = await library.fetchAllMatchingIDs(
+                    query: searchQuery,
+                    filter: nil,
+                    restrictIDs: baseResult.calibreIDs
+                )
+                baseIDs = Set(searchIDs)
+            } else {
+                baseIDs = Set(baseResult.calibreIDs)
+            }
         } else {
-            baseIDs = Set(await library.allCalibreIDs())
+            if let searchQuery {
+                let searchIDs = await library.fetchAllMatchingIDs(
+                    query: searchQuery,
+                    filter: nil,
+                    restrictIDs: nil
+                )
+                baseIDs = Set(searchIDs)
+            } else {
+                baseIDs = Set(await library.allCalibreIDs())
+            }
         }
 
         return AO3FilterFacetController(
             metaDB: metaDB, library: library, filterBuilder: filterBuilder,
-            baseIDs: baseIDs, baseExpressionIsEmpty: !expression.hasCompleteRules,
+            baseIDs: baseIDs, baseExpressionIsEmpty: !expression.hasCompleteRules && trimmedSearch.isEmpty,
             crossoverMap: crossoverMap, statusMap: statusMap
         )
     }
