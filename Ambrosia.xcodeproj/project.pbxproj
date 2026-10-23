@@ -63,6 +63,7 @@
 		4532E6AA3F01FC2AD1613CC8 /* LibraryFilterDebugSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A321CD999E78A3B36DA89380 /* LibraryFilterDebugSummaryTests.swift */; };
 		45B2F387CC24FD727433ECBD /* LibraryIndexManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A66E991A68B82A428554C2 /* LibraryIndexManager.swift */; };
 		4737C337EFE6AD5DEBFEA00A /* GroupAwareSorter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 283B4EAB220F6EE49FB1995D /* GroupAwareSorter.swift */; };
+		4850C4766712F9F7C083A040 /* EPUBParserSanitizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E1E93F918BBFF9A4DD449B5 /* EPUBParserSanitizationTests.swift */; };
 		487BEF915156696F804AE0B2 /* CalibreTokenizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F2C8BE6161905710CFAE83 /* CalibreTokenizer.swift */; };
 		494E1E26712CD2CFA368CAA9 /* EPUBParser+XMLDelegates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B387CEFFD9799E907F89A96 /* EPUBParser+XMLDelegates.swift */; };
 		4B0CED8E8D6E7A055CE64D65 /* SeriesGroupBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F767F421D1E0C20B9862E1C3 /* SeriesGroupBuilderTests.swift */; };
@@ -300,6 +301,7 @@
 		8AD9970C2361B2D12F1D6DE9 /* BookListRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookListRow.swift; sourceTree = "<group>"; };
 		8B138D1DB34466F96DD4F131 /* TagExpansionResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagExpansionResolverTests.swift; sourceTree = "<group>"; };
 		8BBBD7713006663FF0D9CB60 /* LibrarySessionFulltextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySessionFulltextTests.swift; sourceTree = "<group>"; };
+		8E1E93F918BBFF9A4DD449B5 /* EPUBParserSanitizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EPUBParserSanitizationTests.swift; sourceTree = "<group>"; };
 		8F53BD64D951290BA376D108 /* EPUBParser+ImagesAndTOC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EPUBParser+ImagesAndTOC.swift"; sourceTree = "<group>"; };
 		912135D585D5A944C064538D /* LibraryQueryHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryQueryHelpers.swift; sourceTree = "<group>"; };
 		924FF25A20F2B23710B28DCB /* CollectionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionStoreTests.swift; sourceTree = "<group>"; };
@@ -486,6 +488,7 @@
 				C93A7D6EB654A54A2B397977 /* DebounceTimerTests.swift */,
 				BC4127C048C740C4D67ABA73 /* DuplicateBookDetectorTests.swift */,
 				297CD455A315792CBB99DA9C /* EPUBImageReferenceRewriteTests.swift */,
+				8E1E93F918BBFF9A4DD449B5 /* EPUBParserSanitizationTests.swift */,
 				29E9191C79107F9B6884A4E6 /* ErrorLogTests.swift */,
 				EF0466F15217C6C1FBCB1F59 /* ExportScopeTests.swift */,
 				060BF9352739D33CF84CCD35 /* ExtractionProgressTests.swift */,
@@ -898,6 +901,7 @@
 				21E04E2D3EA285585E88FA53 /* DebounceTimerTests.swift in Sources */,
 				60ED45101F91AD7575088757 /* DuplicateBookDetectorTests.swift in Sources */,
 				90D62691A9BD717CE84C64A1 /* EPUBImageReferenceRewriteTests.swift in Sources */,
+				4850C4766712F9F7C083A040 /* EPUBParserSanitizationTests.swift in Sources */,
 				C013EBCC781E2673811AD2B9 /* ErrorLogTests.swift in Sources */,
 				8A2618FD7916ADAC208BA627 /* ExportScopeTests.swift in Sources */,
 				DB22E5D2901A950AC9308369 /* ExtractionProgressTests.swift in Sources */,
