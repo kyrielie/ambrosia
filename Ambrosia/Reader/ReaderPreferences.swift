@@ -40,6 +40,24 @@ enum LibraryAppearanceMode: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - PreferredReaderOption
+
+/// The reader application used to open EPUB books.
+enum PreferredReaderOption: String, CaseIterable, Identifiable {
+    case inbuilt
+    case systemDefault
+    case customApp
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .inbuilt:       return "Inbuilt Ambrosia Reader"
+        case .systemDefault: return "System Default Application"
+        case .customApp:     return "Custom Application…"
+        }
+    }
+}
+
 // MARK: - LibraryColorScheme
 
 /// The colour pair applied to the library background and text.
@@ -158,6 +176,25 @@ final class ReaderPreferences: ObservableObject {
         didSet {
             UserDefaults.standard.set(autoOpenFindBarForFullTextSearch, forKey: Keys.autoOpenFindBarForFullTextSearch)
         }
+    }
+
+    // MARK: - Reader application choice
+
+    var preferredReader: PreferredReaderOption {
+        didSet {
+            UserDefaults.standard.set(preferredReader.rawValue, forKey: Keys.preferredReader)
+        }
+    }
+    var customReaderAppPath: String {
+        didSet {
+            UserDefaults.standard.set(customReaderAppPath, forKey: Keys.customReaderAppPath)
+        }
+    }
+    var customReaderAppName: String {
+        guard !customReaderAppPath.isEmpty else { return "" }
+        let url = URL(fileURLWithPath: customReaderAppPath)
+        let name = url.deletingPathExtension().lastPathComponent
+        return name.isEmpty ? url.lastPathComponent : name
     }
 
     // MARK: - Library appearance — colour mode
@@ -438,6 +475,8 @@ final class ReaderPreferences: ObservableObject {
         ]
         static let groupBySeries               = false
         static let defaultReadingMode          = ReadingMode.scroll
+        static let preferredReader              = PreferredReaderOption.inbuilt
+        static let customReaderAppPath          = ""
 
         // showTOCSidebar is intentionally absent — see keyBindings' doc comment.
         static let keyBindings: [RebindableAction: KeyBinding] = [
@@ -483,6 +522,8 @@ final class ReaderPreferences: ObservableObject {
         // not a new namespaced key. See the `groupBySeries` property comment.
         static let groupBySeries               = "groupBySeries"
         static let defaultReadingMode          = "rp.defaultReadingMode"
+        static let preferredReader             = "rp.preferredReader"
+        static let customReaderAppPath         = "rp.customReaderAppPath"
         static let keyBindings                 = "rp.keyBindings"
         static let savedThemes                 = "rp.savedThemes"
     }
@@ -581,6 +622,14 @@ final class ReaderPreferences: ObservableObject {
 
         let rawMode = ud.string(forKey: Keys.defaultReadingMode) ?? Defaults.defaultReadingMode.rawValue
         defaultReadingMode = ReadingMode(rawValue: rawMode) ?? .scroll
+
+        if let rawReader = ud.string(forKey: Keys.preferredReader),
+           let option = PreferredReaderOption(rawValue: rawReader) {
+            preferredReader = option
+        } else {
+            preferredReader = Defaults.preferredReader
+        }
+        customReaderAppPath = ud.string(forKey: Keys.customReaderAppPath) ?? Defaults.customReaderAppPath
 
         if let data = ud.data(forKey: Keys.keyBindings),
            let decoded = try? JSONDecoder().decode([RebindableAction: KeyBinding].self, from: data) {
@@ -681,6 +730,59 @@ final class ReaderPreferences: ObservableObject {
         pre { overflow-x: auto; padding: 1em; background: rgba(128,128,128,0.1); border-radius: 4px; }
         div, section, article { float: none !important; position: static !important; }
         nav[epub\\:type="toc"], nav[epub\\:type="landmarks"] { display: none; }
+
+        /* === AO3 & Calibre tailored styling === */
+        body[class] {
+            margin-left: auto;
+            margin-right: auto;
+        }
+        #preface {
+            margin-bottom: 2em;
+            padding-bottom: 1.5em;
+            border-bottom: 1px solid currentColor;
+            opacity: 0.95;
+        }
+        #preface .message {
+            font-size: 1.05em;
+            margin-bottom: 1.2em;
+            line-height: 1.45;
+        }
+        #preface dl.tags {
+            margin: 1.2em 0;
+            font-size: 0.9em;
+            line-height: 1.45;
+        }
+        #preface dl.tags dt {
+            font-weight: 600;
+            opacity: 0.75;
+            display: inline;
+        }
+        #preface dl.tags dt::after {
+            content: " ";
+        }
+        #preface dl.tags dd {
+            display: inline;
+            margin: 0;
+        }
+        #preface dl.tags dd::after {
+            content: "\\A";
+            white-space: pre;
+        }
+        blockquote, .summary, .notes {
+            margin: 1.2em 0;
+            padding: 0.6em 1em;
+            border-left: 3px solid currentColor;
+            opacity: 0.9;
+            background: rgba(128, 128, 128, 0.05);
+            border-radius: 0 4px 4px 0;
+        }
+        .ao3-endmatter {
+            margin-top: 3em;
+            padding-top: 1.5em;
+            border-top: 1px solid currentColor;
+            opacity: 0.85;
+            font-size: 0.95em;
+        }
         """
     }
 
@@ -889,6 +991,8 @@ final class ReaderPreferences: ObservableObject {
             || colsPerScreen != Defaults.colsPerScreen
             || autoOpenFindBarForFullTextSearch != Defaults.autoOpenFindBarForFullTextSearch
             || defaultReadingMode != Defaults.defaultReadingMode
+            || preferredReader != Defaults.preferredReader
+            || customReaderAppPath != Defaults.customReaderAppPath
             || keyBindings != Defaults.keyBindings
     }
 
@@ -922,6 +1026,8 @@ final class ReaderPreferences: ObservableObject {
         colsPerScreen          = Defaults.colsPerScreen
         autoOpenFindBarForFullTextSearch = Defaults.autoOpenFindBarForFullTextSearch
         defaultReadingMode    = Defaults.defaultReadingMode
+        preferredReader       = Defaults.preferredReader
+        customReaderAppPath   = Defaults.customReaderAppPath
         keyBindings           = Defaults.keyBindings
     }
 
