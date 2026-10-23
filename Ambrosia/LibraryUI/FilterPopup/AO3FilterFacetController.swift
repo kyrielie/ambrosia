@@ -199,16 +199,6 @@ final class AO3FilterFacetController {
         return await metaDB.topRatingFacets(scopedTo: ids)
     }
 
-    /// Contextual tag search for autocomplete or tag picker popover.
-    func searchTags(
-        query: String,
-        field: AO3FacetField,
-        fandomContext: [String] = [],
-        limit: Int = 20
-    ) async -> [(name: String, count: Int)] {
-        await metaDB.searchTags(query: query, field: field, fandomContext: fandomContext, limit: limit)
-    }
-
     /// Builds a throwaway `FilterExpression` representing every popup field's
     /// current selections EXCEPT `field` (and except rating, which has its
     /// own scoping entry point below). Used purely for scoping — never
@@ -240,29 +230,10 @@ final class AO3FilterFacetController {
         // facet — none of them has a same-type facet list of its own to
         // avoid self-narrowing.
         if let includedRating = state.includedRating {
-            switch state.ratingMatch {
-            case .exact:
-                includeGroup.rules.append(FilterRule(field: .rating, op: .equals, value: includedRating.rawValue))
-            case .orHigher:
-                includeGroup.rules.append(FilterRule(field: .rating, op: .ratingAtLeast, value: includedRating.rawValue))
-            case .orLower:
-                includeGroup.rules.append(FilterRule(field: .rating, op: .ratingAtMost, value: includedRating.rawValue))
-            }
+            includeGroup.rules.append(FilterRule(field: .rating, op: .equals, value: includedRating.rawValue))
         }
         for rating in state.excludedRatings {
             excludeGroup.rules.append(FilterRule(field: .rating, op: .notEquals, value: rating.rawValue))
-        }
-        if let wordsFrom = state.wordsFrom {
-            includeGroup.rules.append(FilterRule(field: .wordCountGT, op: .equals, value: "\(wordsFrom)"))
-        }
-        if let wordsTo = state.wordsTo {
-            includeGroup.rules.append(FilterRule(field: .wordCountLT, op: .equals, value: "\(wordsTo)"))
-        }
-        if let kudosFrom = state.kudosFrom {
-            includeGroup.rules.append(FilterRule(field: .kudosGT, op: .equals, value: "\(kudosFrom)"))
-        }
-        if let kudosTo = state.kudosTo {
-            includeGroup.rules.append(FilterRule(field: .kudosLT, op: .equals, value: "\(kudosTo)"))
         }
         switch state.crossoverState {
         case .any: break
@@ -274,8 +245,6 @@ final class AO3FilterFacetController {
         case .includeOnly: includeGroup.rules.append(FilterRule(field: .status, op: .equals, value: AO3CompletionStatus.complete.rawValue))
         case .excludeOnly: includeGroup.rules.append(FilterRule(field: .status, op: .equals, value: AO3CompletionStatus.workInProgress.rawValue))
         }
-
-        includeGroup.rules.append(contentsOf: state.passthroughRules)
 
         var expr = FilterExpression()
         expr.groups = [includeGroup, excludeGroup].filter { !$0.rules.isEmpty }
