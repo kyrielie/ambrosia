@@ -40,18 +40,6 @@ struct AO3FilterSidebarView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Open in separate window")
-
-                // Collapse sidebar button
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        toolbarState.showAO3FilterSidebar = false
-                    }
-                } label: {
-                    Image(systemName: "sidebar.left")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Hide filter sidebar")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -86,6 +74,16 @@ struct AO3FilterSidebarView: View {
                 hostingWindow = win
             }
         })
+        .onAppear {
+            if let cachedState = displayController.cachedAO3FilterPopupState {
+                state = cachedState
+            } else {
+                displayController.cachedAO3FilterPopupState = state
+            }
+            if let cachedFacet = displayController.cachedAO3FacetController {
+                facetController = cachedFacet
+            }
+        }
         .task(id: toolbarState.filterExpression) {
             await reloadFacetController()
         }
@@ -95,17 +93,21 @@ struct AO3FilterSidebarView: View {
     }
 
     private func handleApply() {
+        state.capturedDigest = AO3FilterPopupDigest.current(toolbarState: toolbarState)
+        displayController.cachedAO3FilterPopupState = state
         displayController.applyFilterRules()
         loadTask?.cancel()
         loadTask = Task { @MainActor in
             guard let metaDB = session.metaDB, let library = session.library else { return }
-            facetController = await AO3FilterFacetController.make(
+            let controller = await AO3FilterFacetController.make(
                 toolbarState: toolbarState,
                 metaDB: metaDB,
                 library: library,
                 ftsLibrary: session.ftsLibrary,
                 collectionStore: session.collectionStore
             )
+            self.facetController = controller
+            self.displayController.cachedAO3FacetController = controller
         }
     }
 
@@ -116,6 +118,7 @@ struct AO3FilterSidebarView: View {
             let newState = AO3FilterPopupState(capturedDigest: liveDigest)
             newState.syncPassthrough(from: toolbarState.filterExpression)
             state = newState
+            displayController.cachedAO3FilterPopupState = newState
         }
         let controller = await AO3FilterFacetController.make(
             toolbarState: toolbarState,
@@ -126,6 +129,7 @@ struct AO3FilterSidebarView: View {
         )
         await MainActor.run {
             self.facetController = controller
+            self.displayController.cachedAO3FacetController = controller
         }
     }
 
