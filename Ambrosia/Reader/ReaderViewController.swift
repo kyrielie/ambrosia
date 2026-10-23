@@ -1,6 +1,5 @@
 import AppKit
 import WebKit
-import SwiftData
 import SwiftUI
 import Combine
 
@@ -66,7 +65,6 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     let target: ReadingTarget
     let book: CalibreBook
-    let modelContainer: ModelContainer
     var onReaderContentReady: (() -> Void)?
     private(set) var isReaderContentReady = false
 
@@ -185,7 +183,6 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     private var saveTimer: Timer?
     private var readingHistorySessionID: Int64?
-    private var saveContext: ModelContext { modelContainer.mainContext }
     private var bookStates: [Int: BookState] = [:]
     /// The calibreID of whichever work currently owns `currentSpineIndex`.
     /// Falls back to the reading target's primary book before spineMap is
@@ -197,26 +194,16 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     /// `bookStates` on every access (not cached in a single stored property)
     /// so that crossing a work boundary in a series transparently retargets
     /// reads/writes to that work's own row — the per-work-keying design in
-    /// ambrosia_series_fix_plan.md Task 2c. Assigning through this (e.g.
-    /// `bookState?.lastSpineIndex = x`) mutates the same cached class
-    /// instance `bookState(for:)` returns, so this being get-only is fine.
+    /// ambrosia_series_fix_plan.md Task 2c.
     private var bookState: BookState? {
-        bookState(for: activeCalibreID)
+        bookStates[activeCalibreID] ?? bookState(for: activeCalibreID)
     }
     /// Fetches (or creates) the BookState row for a specific calibreID,
     /// caching it in `bookStates`. Every work touched during a reading
     /// session — not just the target's primary book — gets its own row here.
     private func bookState(for calibreID: Int) -> BookState {
         if let cached = bookStates[calibreID] { return cached }
-        let all = (try? saveContext.fetch(FetchDescriptor<BookState>())) ?? []
-        let state: BookState
-        if let existing = all.first(where: { $0.calibreID == calibreID }) {
-            state = existing
-        } else {
-            state = BookState(calibreID: calibreID)
-            saveContext.insert(state)
-            try? saveContext.save()
-        }
+        let state = BookState(calibreID: calibreID)
         bookStates[calibreID] = state
         return state
     }
@@ -234,17 +221,15 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     // MARK: - Init
 
-    init(book: CalibreBook, modelContainer: ModelContainer) {
-        self.target         = .singleBook(book)
-        self.book           = book
-        self.modelContainer = modelContainer
+    init(book: CalibreBook) {
+        self.target = .singleBook(book)
+        self.book   = book
         super.init(nibName: nil, bundle: nil)
     }
 
-    init(target: ReadingTarget, modelContainer: ModelContainer) {
-        self.target         = target
-        self.book           = target.primaryBook
-        self.modelContainer = modelContainer
+    init(target: ReadingTarget) {
+        self.target = target
+        self.book   = target.primaryBook
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -547,9 +532,16 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         do {
             let record = await fetchAO3Record()
             let loaded = try await loadWorks(for: target, libraryRoot: libraryRoot, primaryAO3Record: record)
+            var fetchedStates: [Int: BookState] = [:]
+            if let metaDB = await MainActor.run(body: { AppDelegate.shared?.session.metaDB }) {
+                fetchedStates = await metaDB.bookStates(for: loaded.workIDs)
+            }
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
+                for (cid, st) in fetchedStates {
+                    self.bookStates[cid] = st
+                }
                 self.ao3Record         = record
                 self.workParsers       = loaded.parsers
                 self.workImageBaseURLs = loaded.imageBaseURLs
@@ -771,7 +763,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
         currentSpineIndex = index
         let calibreID = spineMap.workIDs[ref.workIndex]
-        bookState(for: calibreID).lastSpineIndex = ref.localIndex
+        var state = bookState(for: calibreID)
+        state.lastSpineIndex = ref.localIndex
+        bookStates[calibreID] = state
 
         let item = workParser.spine[ref.localIndex]
         do {
@@ -1203,7 +1197,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             guard total > 1 || col > 0 else { return }
             guard let ref = self.spineMap.ref(atGlobalIndex: self.currentSpineIndex) else { return }
             let calibreID = self.spineMap.workIDs[ref.workIndex]
-            let state = self.bookState(for: calibreID)
+            var state = self.bookState(for: calibreID)
             state.lastSpineIndex = ref.localIndex
             state.lastScrollOffset = fraction
 
@@ -1229,6 +1223,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             } else {
                 state.totalReadPercent = fraction
             }
+            self.bookStates[calibreID] = state
             self.onReadingProgressChanged?()
         }
     }
@@ -1289,10 +1284,11 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 if let ref = self.spineMap.ref(atGlobalIndex: globalSpineIndex) {
                     self.currentSpineIndex = globalSpineIndex
                     let calibreID = self.spineMap.workIDs[ref.workIndex]
-                    let state = self.bookState(for: calibreID)
+                    var state = self.bookState(for: calibreID)
                     state.lastSpineIndex      = ref.localIndex
                     state.lastScrollOffset    = min(max(fraction, 0), 1)
                     state.lastCharacterOffset = charOffset
+                    self.bookStates[calibreID] = state
                 }
                 completion()
             }
@@ -1304,7 +1300,17 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     }
 
     private func ensureBookState() {
-        _ = bookState(for: book.id)
+        let workIDs = target.workIDs
+        Task {
+            if let metaDB = await MainActor.run(body: { AppDelegate.shared?.session.metaDB }) {
+                let fetched = await metaDB.bookStates(for: workIDs)
+                await MainActor.run {
+                    for (cid, st) in fetched where self.bookStates[cid] == nil {
+                        self.bookStates[cid] = st
+                    }
+                }
+            }
+        }
     }
 
     /// Writes spine/scroll progress into the correct work's own BookState,
@@ -1316,12 +1322,13 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         guard let ref = spineMap.ref(atGlobalIndex: globalIndex) else { return }
         currentSpineIndex = globalIndex
         let calibreID = spineMap.workIDs[ref.workIndex]
-        let state = bookState(for: calibreID)
+        var state = bookState(for: calibreID)
         state.lastSpineIndex = ref.localIndex
         state.lastScrollOffset = min(max(fraction, 0), 1)
         if let totalPercent {
             state.totalReadPercent = min(max(totalPercent, 0), 1)
         }
+        bookStates[calibreID] = state
     }
 
     private func startAutoSave() {
@@ -1332,8 +1339,21 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     }
 
     private func flushPosition(final: Bool = false) {
-        guard bookState != nil else { return }
-        try? saveContext.save()
+        let statesToSave = Array(bookStates.values)
+        guard !statesToSave.isEmpty else { return }
+        Task {
+            if let metaDB = await MainActor.run(body: { AppDelegate.shared?.session.metaDB }) {
+                for state in statesToSave {
+                    try? await metaDB.updateReadingPosition(
+                        calibreID: state.calibreID,
+                        spineIndex: state.lastSpineIndex,
+                        characterOffset: state.lastCharacterOffset,
+                        scrollOffset: state.lastScrollOffset,
+                        readPercent: state.totalReadPercent
+                    )
+                }
+            }
+        }
         updateReadingHistory(final: final)
         onReadingProgressChanged?()
     }
@@ -1441,8 +1461,12 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             } else if let fraction = Self.double(from: json["fraction"]) {
                 applySpineProgress(globalIndex: currentSpineIndex, fraction: fraction, totalPercent: fraction)
             } else if let percent = Self.double(from: json["percent"]) {
-                bookState?.lastScrollOffset = min(max(percent, 0), 1)
-                bookState?.totalReadPercent = min(max(percent, 0), 1)
+                let cid = activeCalibreID
+                var st = bookState(for: cid)
+                let clamped = min(max(percent, 0), 1)
+                st.lastScrollOffset = clamped
+                st.totalReadPercent = clamped
+                bookStates[cid] = st
             }
 
         case "pageAction":

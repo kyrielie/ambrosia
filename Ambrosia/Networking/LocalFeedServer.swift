@@ -1,7 +1,6 @@
 import Foundation
 import Darwin
 import FlyingFox
-import SwiftData
 
 /// Order-preserving dedup for feed metadata arrays (fandoms, relationships,
 /// characters, warnings, categories, freeform tags). Used by
@@ -317,17 +316,6 @@ actor LocalFeedServer {
     private var metaDB: AmbrosiaMetaDB?
     private var collectionStore: CollectionStore?
 
-    /// App-scoped, not library-scoped — unlike `library`/`metaDB`/
-    /// `collectionStore` this isn't replaced by `updateLibrary(_:metaDB:
-    /// collectionStore:)` on a library switch, since the SwiftData store
-    /// backing `BookState` is shared across every library. Used only by the
-    /// Phase 2 `.sqlite` route to read `totalReadPercent` for the wire
-    /// schema's `reading_progress` column. Optional because `LibrarySession`
-    /// itself may not have one yet in edge-case startup ordering; the
-    /// `.sqlite` route treats a nil container as "no progress data
-    /// available" rather than failing the whole request.
-    private var modelContainer: ModelContainer?
-
     /// Per-library namespace for UserDefaults-backed prefs (excluded
     /// collections, daily-story toggle, search snapshot).
     /// Empty when no library is set (server shouldn't be running then anyway).
@@ -376,12 +364,10 @@ actor LocalFeedServer {
     func start(library: CalibreLibrary,
                metaDB: AmbrosiaMetaDB,
                collectionStore: CollectionStore,
-               modelContainer: ModelContainer? = nil,
                config: Config = Config()) {
         self.library = library
         self.metaDB  = metaDB
         self.collectionStore = collectionStore
-        self.modelContainer = modelContainer
         self.config  = config
         _port = config.port
         restartServerTask()
@@ -398,11 +384,9 @@ actor LocalFeedServer {
     func startAndWaitUntilListening(library: CalibreLibrary,
                                     metaDB: AmbrosiaMetaDB,
                                     collectionStore: CollectionStore,
-                                    modelContainer: ModelContainer? = nil,
                                     config: Config = Config(),
                                     timeout: TimeInterval = 5) async -> Bool {
-        start(library: library, metaDB: metaDB, collectionStore: collectionStore,
-              modelContainer: modelContainer, config: config)
+        start(library: library, metaDB: metaDB, collectionStore: collectionStore, config: config)
         guard let server = httpServer else { return _isRunning }
         do {
             try await server.waitUntilListening(timeout: timeout)
@@ -2012,23 +1996,13 @@ actor LocalFeedServer {
     }
 
     /// `BookState.totalReadPercent` for a batch of calibre IDs, keyed by
-    /// calibre ID. Returns an empty map (not a thrown error) when there's no
-    /// `ModelContainer` yet or the fetch fails — a missing SwiftData store
-    /// means "no progress data available," not "fail the whole route."
+    /// calibre ID. Reads directly from AmbrosiaMetaDB.
     private func readingProgressByCalibreID(for calibreIDs: [Int]) async -> [Int: Double] {
-        guard let modelContainer, !calibreIDs.isEmpty else { return [:] }
-        let idSet = Set(calibreIDs)
-        return await Task.detached(priority: .utility) {
-            let context = ModelContext(modelContainer)
-            var descriptor = FetchDescriptor<BookState>(
-                predicate: #Predicate { idSet.contains($0.calibreID) }
-            )
-            descriptor.propertiesToFetch = [\.calibreID, \.totalReadPercent]
-            guard let states = try? context.fetch(descriptor) else { return [:] }
-            return states.reduce(into: [Int: Double]()) { partial, state in
-                partial[state.calibreID] = state.totalReadPercent
-            }
-        }.value
+        guard let metaDB, !calibreIDs.isEmpty else { return [:] }
+        let states = await metaDB.bookStates(for: calibreIDs)
+        return states.reduce(into: [Int: Double]()) { partial, pair in
+            partial[pair.key] = pair.value.totalReadPercent
+        }
     }
 
     /// Per-book reader-state flags needed to build one transfer-DB row.

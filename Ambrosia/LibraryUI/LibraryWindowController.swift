@@ -1,7 +1,6 @@
 import AppKit
 import Combine
 import SwiftUI
-import SwiftData
 import UniformTypeIdentifiers
 
 // MARK: - Toolbar item identifiers
@@ -70,7 +69,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
     // MARK: - Init
 
-    init(modelContainer: ModelContainer, session: LibrarySession) {
+    init(session: LibrarySession) {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 740),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -93,7 +92,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         super.init(window: window)
 
         let libraryVC = LibraryViewController(
-            modelContainer: modelContainer,
             session: session
         )
         window.contentViewController = libraryVC

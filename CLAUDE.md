@@ -11,7 +11,7 @@ doc(s) relevant to your task**, not this whole index cover-to-cover.
 - **Anything — start here if you're new to the codebase** → `docs/overview.md` (product shape and stack; every other doc assumes you've read it)
 - **Calibre's `metadata.db` (schema, read-only access, book/author/series/tag queries)** → `docs/calibre-library.md`
 - **`ambrosia_meta.db` (collections, annotations, AO3 metadata, tag tables), or any migration** → `docs/metadb-and-migrations.md`
-- **`BookState`/`ReadingGoal` (the SwiftData store)** → `docs/swiftdata-store.md`
+- **`BookState`/`ReadingGoal` (state, reading progress, and historical SwiftData store consolidation)** → `docs/swiftdata-store.md`
 - **`LibrarySession` (library open/close, registry, `ReaderPreferences`)** → `docs/session-model.md`
 - **Full-text search (`fulltext:`), `CalibreFTSLibrary`, the Calibre-compatible FTS5 tokenizer in `Database/CalibreFTS`** → `docs/calibre-fts.md`
 - **Search-bar parsing (`SearchQueryParser`), the filter drawer, or the AO3-style filter popup** → `docs/search-and-filter.md`
@@ -26,6 +26,7 @@ doc(s) relevant to your task**, not this whole index cover-to-cover.
 - **`NSHostingView` inside AppKit, or an `async` closure that won't compile where you expect** → `docs/swiftui-appkit-bridging.md`
 - **Any Swift 6 actor/`Task`/`async let` compile error, or "why is this cached value stale"** → `docs/concurrency-invariants.md`
 - **"Does feature X exist yet?"** → `docs/not-yet-built.md`
+- **Architectural modernization roadmap and implementation plans** → `docs/roadmap.md` and `docs/plans/phase1-database-consolidation-plan.md`
 - **Adding a test file, or "why didn't my new test run"** → `docs/testing.md`
 
 If nothing above fits, grep the codebase before assuming it's
@@ -87,7 +88,7 @@ it's trusted by default. Specifically:
 | --- | --- |
 | `CalibreLibrary`'s schema assumptions, read-only connection handling, or bulk-fetch queries | `docs/calibre-library.md` |
 | `AmbrosiaMetaDB` schema, `runMigrations`, `CollectionStore`, system collection bootstrapping | `docs/metadb-and-migrations.md` |
-| `BookState`, `ReadingGoal`, or the SwiftData `ModelContainer` | `docs/swiftdata-store.md` |
+| `BookState`, `ReadingGoal`, or reading progress persistence | `docs/swiftdata-store.md`, `docs/metadb-and-migrations.md` |
 | `LibrarySession`'s open/close lifecycle, `LibraryRegistry`, `ReaderPreferences` | `docs/session-model.md` |
 | `CalibreFTSLibrary`, anything under `Ambrosia/Database/CalibreFTS/` (tokenizer, registration, FTS query layer) | `docs/calibre-fts.md` |
 | `SearchQueryParser`, `FilterBuilder`, `FilterExpression`/`FilterRule`, the AO3 filter popup, `TagExpansionResolver` | `docs/search-and-filter.md` |
@@ -103,6 +104,7 @@ it's trusted by default. Specifically:
 | Shipping something previously listed as not-yet-built | `docs/not-yet-built.md` (remove the line) and whichever system doc now owns it |
 | `.swiftlint.yml` rules (adding/disabling a rule, changing thresholds), or a new accepted force-unwrap exception | `docs/overview.md`'s "Repo-wide engineering rules" (Invariant 12) |
 | Adding an `AmbrosiaTests/` file, or changing what CI verifies about test-file wiring | `docs/testing.md` |
+| Strategic roadmap, modernization milestones, or implementation plans | `docs/roadmap.md` and `docs/plans/phase1-database-consolidation-plan.md` |
 
 If a change doesn't fit any row above — new system, new cross-cutting
 concern, or something genuinely new — **add a new doc** rather than

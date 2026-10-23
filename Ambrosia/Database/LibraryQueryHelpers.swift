@@ -1,5 +1,4 @@
 import Foundation
-import SwiftData
 
 // MARK: - LibraryQueryHelpers
 //
@@ -99,19 +98,5 @@ enum LibraryQueryHelpers {
             expression.groups[0].rules.removeAll { $0.field == rule.field }
         }
         expression.groups[0].rules.append(rule)
-    }
-
-    /// Fetches (or creates and inserts) the `BookState` row for `calibreID` in
-    /// `context`. Callers are responsible for calling `context.save()`.
-    static func stateForMutation(_ calibreID: Int, in context: ModelContext) -> BookState {
-        var desc = FetchDescriptor<BookState>(
-            predicate: #Predicate { $0.calibreID == calibreID }
-        )
-        desc.fetchLimit = 1
-        let state = (try? context.fetch(desc).first) ?? BookState(calibreID: calibreID)
-        if state.modelContext == nil {
-            context.insert(state)
-        }
-        return state
     }
 }

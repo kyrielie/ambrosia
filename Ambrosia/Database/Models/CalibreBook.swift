@@ -336,4 +336,11 @@ enum ReadingTarget: Hashable {
         case .series(let series): return series.seriesName
         }
     }
+
+    var workIDs: [Int] {
+        switch self {
+        case .singleBook(let book): return [book.id]
+        case .series(let series): return series.works.map(\.id)
+        }
+    }
 }

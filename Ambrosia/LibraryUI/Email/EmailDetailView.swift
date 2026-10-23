@@ -1,5 +1,4 @@
 import SwiftUI
-import SwiftData
 
 // MARK: - EmailDetailView
 
@@ -8,7 +7,6 @@ import SwiftData
 struct EmailDetailView: View {
     let book: CalibreBook?
     let bookState: BookState?
-    let modelContext: ModelContext
     let libraryRoot: URL?
 
     var body: some View {
@@ -16,7 +14,6 @@ struct EmailDetailView: View {
             BookDetailContent(
                 book: book,
                 bookState: bookState,
-                modelContext: modelContext,
                 libraryRoot: libraryRoot
             )
         } else {
@@ -44,16 +41,14 @@ struct EmailDetailView: View {
 private struct BookDetailContent: View {
     let book: CalibreBook
     let bookState: BookState?
-    let modelContext: ModelContext
     let libraryRoot: URL?
 
     // AO3 buckets computed once
     private let buckets: AO3TagBuckets
 
-    init(book: CalibreBook, bookState: BookState?, modelContext: ModelContext, libraryRoot: URL?) {
+    init(book: CalibreBook, bookState: BookState?, libraryRoot: URL?) {
         self.book        = book
         self.bookState   = bookState
-        self.modelContext = modelContext
         self.libraryRoot  = libraryRoot
         self.buckets     = AO3TagBuckets.from(tags: book.tags)
     }
@@ -100,7 +95,7 @@ private struct BookDetailContent: View {
                 HStack {
                     Spacer()
                     Button {
-                        AppDelegate.shared?.openReaderWindow(book: book, modelContext: modelContext)
+                        AppDelegate.shared?.openReaderWindow(book: book)
                     } label: {
                         Label("Open Book", systemImage: "book.fill")
                     }

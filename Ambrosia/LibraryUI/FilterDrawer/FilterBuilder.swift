@@ -1,5 +1,4 @@
 import Foundation
-import SwiftData
 import SQLite
 
 // MARK: - Shared tag/author/series EXISTS-subquery builders (§3, Phase 2)

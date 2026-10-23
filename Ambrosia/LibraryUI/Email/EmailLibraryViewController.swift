@@ -1,7 +1,6 @@
 import AppKit
 import Combine
 import SwiftUI
-import SwiftData
 
 // MARK: - EmailLibraryViewController
 
@@ -9,7 +8,6 @@ final class EmailLibraryViewController: NSViewController {
 
     // MARK: - Dependencies
 
-    let modelContainer: ModelContainer
     let session: LibrarySession
     let toolbarState: LibraryToolbarState
     // §Phase2: shared visibility-filtering logic, also owned by
@@ -161,10 +159,8 @@ final class EmailLibraryViewController: NSViewController {
 
     // MARK: - Init
 
-    init(modelContainer: ModelContainer,
-         session: LibrarySession,
+    init(session: LibrarySession,
          toolbarState: LibraryToolbarState) {
-        self.modelContainer = modelContainer
         self.session        = session
         self.toolbarState   = toolbarState
         super.init(nibName: nil, bundle: nil)
@@ -311,7 +307,7 @@ final class EmailLibraryViewController: NSViewController {
         sidebarVC.onSelect     = { [weak self] book in self?.setSelectedBook(book) }
         sidebarVC.onOpen       = { [weak self] target in
             guard let self else { return }
-            AppDelegate.shared?.openReaderWindow(target: target, modelContext: modelContainer.mainContext)
+            AppDelegate.shared?.openReaderWindow(target: target)
         }
         sidebarVC.onLoadMore   = { [weak self] in self?.loadNextPageIfAvailable() }
         sidebarVC.onRetryTapped = { [weak self] in self?.rebuildSidebarItems() }
@@ -328,7 +324,7 @@ final class EmailLibraryViewController: NSViewController {
         sidebarVC.onContextMenuOpen = { [weak self] books in
             guard let self else { return }
             for book in books {
-                AppDelegate.shared?.openReaderWindow(book: book, modelContext: modelContainer.mainContext)
+                AppDelegate.shared?.openReaderWindow(book: book)
             }
         }
         sidebarVC.onContextMenuSetLiked = { [weak self] books, liked in
@@ -436,7 +432,6 @@ final class EmailLibraryViewController: NSViewController {
     private func addFilterSheetHost() {
         let carrier = FilterSheetCarrier(
             toolbarState: toolbarState,
-            modelContainer: modelContainer,
             session: session,
             emailVC: self
         )
@@ -1784,15 +1779,22 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     func refreshBookStates() {
-        let ctx = modelContainer.mainContext
-        let pageIDs = Set(books.map(\.id))
-        let descriptor = FetchDescriptor<BookState>(
-            predicate: #Predicate { pageIDs.contains($0.calibreID) }
-        )
-        let all = (try? ctx.fetch(descriptor)) ?? []
-        bookStates = all.reduce(into: [:]) { $0[$1.calibreID] = $1 }
-        sidebarVC?.bookStates = bookStates
-        Task { await refreshCollectionSnapshots() }
+        let pageIDs = books.map(\.id)
+        guard !pageIDs.isEmpty else {
+            sidebarVC?.bookStates = [:]
+            Task { await refreshCollectionSnapshots() }
+            return
+        }
+        Task {
+            if let metaDB = session.metaDB {
+                let states = await metaDB.bookStates(for: pageIDs)
+                await MainActor.run {
+                    self.bookStates = states
+                    self.sidebarVC?.bookStates = states
+                }
+            }
+            await refreshCollectionSnapshots()
+        }
     }
 
     func refreshCollections() {
@@ -1821,13 +1823,16 @@ final class EmailLibraryViewController: NSViewController {
 
     private func markRead(_ books: [CalibreBook]) {
         let ids = books.map(\.id)
+        for calibreID in ids {
+            bookStates[calibreID]?.markRead()
+        }
+        sidebarVC?.bookStates = bookStates
         Task {
-            let ctx = modelContainer.mainContext
-            for calibreID in ids {
-                let state = LibraryQueryHelpers.stateForMutation(calibreID, in: ctx)
-                state.markRead()
+            if let metaDB = session.metaDB {
+                for calibreID in ids {
+                    try? await metaDB.markBookRead(calibreID: calibreID)
+                }
             }
-            try? ctx.save()
             for calibreID in ids {
                 try? await session.collectionStore?.syncAutomatedCollection(
                     collectionID: SystemCollectionID.finished,
@@ -1848,13 +1853,16 @@ final class EmailLibraryViewController: NSViewController {
 
     private func resetProgress(_ books: [CalibreBook]) {
         let ids = books.map(\.id)
+        for calibreID in ids {
+            bookStates[calibreID]?.resetReadingProgress()
+        }
+        sidebarVC?.bookStates = bookStates
         Task {
-            let ctx = modelContainer.mainContext
-            for calibreID in ids {
-                let state = LibraryQueryHelpers.stateForMutation(calibreID, in: ctx)
-                state.resetReadingProgress()
+            if let metaDB = session.metaDB {
+                for calibreID in ids {
+                    try? await metaDB.resetReadingProgress(calibreID: calibreID)
+                }
             }
-            try? ctx.save()
             for calibreID in ids {
                 try? await session.collectionStore?.syncAutomatedCollection(
                     collectionID: SystemCollectionID.finished,
@@ -1939,7 +1947,7 @@ final class EmailLibraryViewController: NSViewController {
 
     private func makeRightVC() -> NSViewController {
         guard let book = selectedBook else { return makePlaceholderVC() }
-        let rvc = ReaderViewController(book: book, modelContainer: modelContainer)
+        let rvc = ReaderViewController(book: book)
         currentReaderVC = rvc
         rvc.view.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
         rvc.onReadingProgressChanged = { [weak self] in
@@ -1972,11 +1980,10 @@ final class EmailLibraryViewController: NSViewController {
         }
         readerLocalFindState = rvc.currentLocalFindState()
         let cid = book.id
-        Task.detached { [mc = modelContainer] in
-            let ctx = ModelContext(mc)
-            let state = LibraryQueryHelpers.stateForMutation(cid, in: ctx)
-            state.lastOpenedDate = Date()
-            try? ctx.save()
+        Task {
+            if let metaDB = session.metaDB {
+                try? await metaDB.markBookOpened(calibreID: cid)
+            }
         }
         return rvc
     }
@@ -2169,7 +2176,6 @@ final class EmailLibraryViewController: NSViewController {
 
 struct FilterSheetCarrier: View {
     let toolbarState: LibraryToolbarState
-    let modelContainer: ModelContainer
     let session: LibrarySession
     weak var emailVC: EmailLibraryViewController?
 
@@ -2187,21 +2193,6 @@ struct FilterSheetCarrier: View {
                     ),
                     onApply: {
                         emailVC?.applyFilterRules()
-                        // Don't rely solely on FilterDrawerView's own dismiss()
-                        // (an @Environment(\.dismiss) call). That dismiss is
-                        // anchored to filterSheetHost, a 0x0 NSHostingView glued
-                        // onto this NSViewController purely so SwiftUI's .sheet
-                        // has somewhere to attach -- a fragile interop pattern
-                        // (see the "NSHostingView is being laid out reentrantly"
-                        // / "layoutSubtreeIfNeeded on a view which is already
-                        // being laid out" warnings this can trigger while the
-                        // tag-suggestions popover is repositioning). If that
-                        // dismiss() call lands during a skipped layout pass it
-                        // can silently no-op, leaving the sheet's window stuck
-                        // open with nothing tracking it as still presented.
-                        // Flipping the state binding directly closes the sheet
-                        // regardless of whether the environment dismiss() made
-                        // it through.
                         toolbarState.showFilterDrawer = false
                     },
                     onClear: {
@@ -2214,7 +2205,6 @@ struct FilterSheetCarrier: View {
                 )
                 .environment(toolbarState)
                 .environment(session)
-                .modelContainer(modelContainer)
                 .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
             }
             .sheet(isPresented: Binding(
@@ -2235,7 +2225,6 @@ struct FilterSheetCarrier: View {
                     toolbarState.showCollections  = false
                     emailVC?.applyFilterRules()
                 })
-                .modelContainer(modelContainer)
                 .environment(session)
                 .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
             }
@@ -2244,7 +2233,7 @@ struct FilterSheetCarrier: View {
                 set: { toolbarState.showReadingGoal = $0 }
             )) {
                 ReadingGoalView()
-                    .modelContainer(modelContainer)
+                    .environment(session)
                     .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
             }
             .onChange(of: toolbarState.triggerExport) {

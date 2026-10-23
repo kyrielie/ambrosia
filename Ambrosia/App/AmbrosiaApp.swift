@@ -1,57 +1,20 @@
 import SwiftUI
-import SwiftData
 import AppKit
 
 @main
 struct AmbrosiaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
-    let sharedModelContainer: ModelContainer
     let session = LibrarySession()
 
     init() {
-        // Schema contains only app-owned state. Calibre metadata is never copied.
-        let schema = Schema([
-            BookState.self,
-            ReadingGoal.self
-        ])
-        let config = ModelConfiguration("Ambrosia", schema: schema, isStoredInMemoryOnly: false)
-        do {
-            let container = try ModelContainer(for: schema, configurations: [config])
-            sharedModelContainer = container
-            appDelegate.modelContainer = container
-            appDelegate.session = session
-            session.modelContainer = container
-        } catch {
-            #if DEBUG
-            print("[Ambrosia] SwiftData store incompatible: \(error)")
-            #endif
-            let alert = NSAlert()
-            alert.messageText = "Could Not Open Reading State"
-            alert.informativeText = "Ambrosia could not open its reading-state database. " +
-                "No files were deleted. The app will run with temporary reading state " +
-                "until this is resolved.\n\n\(error.localizedDescription)"
-            alert.alertStyle = .critical
-            alert.runModal()
-
-            let fallback = ModelConfiguration("AmbrosiaRecovery", schema: schema, isStoredInMemoryOnly: true)
-            do {
-                let container = try ModelContainer(for: schema, configurations: [fallback])
-                sharedModelContainer = container
-                appDelegate.modelContainer = container
-                appDelegate.session = session
-                session.modelContainer = container
-            } catch {
-                fatalError("Could not create temporary ModelContainer: \(error)")
-            }
-        }
+        appDelegate.session = session
     }
 
     var body: some Scene {
         WindowGroup {
             Color.clear.frame(width: 0, height: 0)
         }
-        .modelContainer(sharedModelContainer)
         .environment(session)
         .commands {
             // ── Ambrosia → Preferences… (⌘,) ─────────────────────────────
