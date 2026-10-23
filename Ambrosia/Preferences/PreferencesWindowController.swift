@@ -102,6 +102,35 @@ private struct ReaderTab: View {
     var body: some View {
         Form {
 
+            // ── Reader Application ────────────────────────────────────────
+            Section {
+                Picker("Open EPUBs in", selection: $prefs.preferredReader) {
+                    ForEach(PreferredReaderOption.allCases) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                if prefs.preferredReader == .customApp {
+                    HStack {
+                        Text(prefs.customReaderAppName.isEmpty ? "No application chosen" : prefs.customReaderAppName)
+                            .foregroundStyle(prefs.customReaderAppName.isEmpty ? .secondary : .primary)
+                        Spacer()
+                        Button("Choose…") {
+                            chooseCustomReaderApp()
+                        }
+                    }
+                }
+            } header: {
+                Label("Reader Application", systemImage: "app.badge").font(.headline)
+            } footer: {
+                Text(
+                    "Choose whether double-clicking a work opens it in Ambrosia's built-in reader " +
+                    "(tailored to AO3 EPUBs), your system default reader, or a custom application."
+                )
+                .font(.caption).foregroundStyle(.secondary)
+            }
+
             // ── Typography ────────────────────────────────────────────────
             Section {
                 fontFamilyRow
@@ -215,6 +244,20 @@ private struct ReaderTab: View {
         prefs.resetReaderToDefaults()
         readerBgColor   = Color(hex: prefs.readerBackgroundColor) ?? .white
         readerTextColor = Color(hex: prefs.readerTextColor) ?? .black
+    }
+
+    private func chooseCustomReaderApp() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.prompt = "Choose"
+        panel.message = "Select an EPUB reader application"
+        if panel.runModal() == .OK, let url = panel.url {
+            prefs.customReaderAppPath = url.path
+        }
     }
 
     // MARK: Font family row
@@ -1110,29 +1153,38 @@ private struct RSSTab: View {
 // ─────────────────────────────────────────────────────────────────────────────
 
 private enum ReaderTheme: String, CaseIterable, Identifiable {
-    case parchment, night, paper, slate
+    case parchment, sepia, paper, night, dark, oled, slate
     var id: String { rawValue }
     var label: String {
         switch self {
         case .parchment: return "Parchment"
-        case .night:     return "Night"
+        case .sepia:     return "Sepia"
         case .paper:     return "Paper"
+        case .night:     return "Night"
+        case .dark:      return "Dark"
+        case .oled:      return "OLED"
         case .slate:     return "Slate"
         }
     }
     var bg: String {
         switch self {
         case .parchment: return "#FFFDF6"
-        case .night:     return "#1C1C1E"
+        case .sepia:     return "#FBF0D9"
         case .paper:     return "#FFFFFF"
+        case .night:     return "#1C1C1E"
+        case .dark:      return "#16161A"
+        case .oled:      return "#000000"
         case .slate:     return "#2C2C2E"
         }
     }
     var fg: String {
         switch self {
         case .parchment: return "#1A1A1A"
-        case .night:     return "#E5E5EA"
+        case .sepia:     return "#5B4636"
         case .paper:     return "#111111"
+        case .night:     return "#E5E5EA"
+        case .dark:      return "#CFCFD4"
+        case .oled:      return "#CFCFD4"
         case .slate:     return "#EBEBF5"
         }
     }

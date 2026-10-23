@@ -428,7 +428,8 @@ extension EPUBParser {
     /// Appended after the last spine item when an AO3MetadataRecord is available.
     private static func buildAO3Endmatter(record: AO3MetadataRecord, workURL: String) -> String {
         var lines: [String] = ["<section class=\"ao3-endmatter\">", "<hr>"]
-        lines.append("<p><a href=\"\(workURL)\">Read on AO3</a></p>")
+        let commentsURL = "\(workURL)?show_comments=true#comments"
+        lines.append("<p><a href=\"\(workURL)\">Read on AO3</a> • <a href=\"\(commentsURL)\">Comments on AO3</a></p>")
 
         for entry in record.series {
             guard let ao3ID = entry.ao3ID else { continue }

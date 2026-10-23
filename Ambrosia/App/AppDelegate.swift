@@ -144,9 +144,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // ReaderWindowController.open is the single source of truth for
-        // deduplication (keyed by book.id) and window lifecycle.
-        ReaderWindowController.open(book: book)
+        // Record last opened date in AmbrosiaMetaDB regardless of reader choice
+        let bookID = book.id
+        Task { [weak self] in
+            if let metaDB = self?.session.metaDB {
+                try? await metaDB.markBookOpened(calibreID: bookID)
+            }
+        }
+
+        switch ReaderPreferences.shared.preferredReader {
+        case .inbuilt:
+            // ReaderWindowController.open is the single source of truth for
+            // deduplication (keyed by book.id) and window lifecycle.
+            ReaderWindowController.open(book: book)
+        case .systemDefault:
+            NSWorkspace.shared.open(epubURL)
+        case .customApp:
+            let appPath = ReaderPreferences.shared.customReaderAppPath
+            let appURL = URL(fileURLWithPath: appPath)
+            if !appPath.isEmpty && FileManager.default.fileExists(atPath: appPath) {
+                NSWorkspace.shared.open([epubURL], withApplicationAt: appURL, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in
+                    if let error {
+                        Task { @MainActor [weak self] in
+                            self?.showOpenError("Failed to open with \(ReaderPreferences.shared.customReaderAppName): \(error.localizedDescription)")
+                        }
+                    }
+                }
+            } else {
+                // Fall back to system default if custom app path was moved or missing
+                NSWorkspace.shared.open(epubURL)
+            }
+        }
     }
 
     func openReaderWindow(target: ReadingTarget) {
@@ -159,14 +187,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             let libraryRoot = URL(fileURLWithPath: pathStr)
+            var epubURLs: [URL] = []
             for book in series.works {
                 guard let epubURL = book.epubURL(libraryRoot: libraryRoot),
                       FileManager.default.fileExists(atPath: epubURL.path) else {
                     showOpenError("EPUB file not found: \(book.displayTitle)")
                     return
                 }
+                epubURLs.append(epubURL)
             }
-            ReaderWindowController.open(target: target)
+
+            switch ReaderPreferences.shared.preferredReader {
+            case .inbuilt:
+                ReaderWindowController.open(target: target)
+            case .systemDefault:
+                if let first = epubURLs.first {
+                    NSWorkspace.shared.open(first)
+                }
+            case .customApp:
+                let appPath = ReaderPreferences.shared.customReaderAppPath
+                let appURL = URL(fileURLWithPath: appPath)
+                if !appPath.isEmpty && FileManager.default.fileExists(atPath: appPath), let first = epubURLs.first {
+                    NSWorkspace.shared.open([first], withApplicationAt: appURL, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in
+                        if let error {
+                            Task { @MainActor [weak self] in
+                                self?.showOpenError("Failed to open with \(ReaderPreferences.shared.customReaderAppName): \(error.localizedDescription)")
+                            }
+                        }
+                    }
+                } else if let first = epubURLs.first {
+                    NSWorkspace.shared.open(first)
+                }
+            }
         }
     }
 
