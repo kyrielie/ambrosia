@@ -93,7 +93,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
     private init(toolbarState: LibraryToolbarState, anchorWindow: NSWindow) {
         self.toolbarState = toolbarState
         self.anchorWindow = anchorWindow
-        self.state = AO3FilterPopupState(capturedDigest: AO3FilterPopupDigest.current(toolbarState: toolbarState))
+        self.state = AO3FilterPopupState(from: toolbarState.filterExpression, capturedDigest: AO3FilterPopupDigest.current(toolbarState: toolbarState))
         self.hostingController = NSHostingController(rootView: AnyView(ProgressView("Loading filters…").padding()))
 
         let width = Self.persistedWidth()
@@ -187,7 +187,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
         guard liveDigest != state.capturedDigest else { return }
         guard let session = AppDelegate.shared?.session,
               let metaDB = session.metaDB, let library = session.library else { return }
-        state = AO3FilterPopupState(capturedDigest: liveDigest)
+        state = AO3FilterPopupState(from: toolbarState.filterExpression, capturedDigest: liveDigest)
         let facetController = await AO3FilterFacetController.make(
             toolbarState: toolbarState, metaDB: metaDB, library: library,
             ftsLibrary: session.ftsLibrary, collectionStore: session.collectionStore

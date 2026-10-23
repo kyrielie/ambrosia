@@ -2465,6 +2465,121 @@ actor AmbrosiaMetaDB {
         }
     }
 
+    /// Contextual tag search for autocomplete and tag selection popovers.
+    /// Fast indexed lookup over `book_tags` / `book_authors` with fallback to `ao3_metadata`.
+    func searchTags(
+        query: String,
+        field: AO3FacetField,
+        fandomContext: [String] = [],
+        limit: Int = 20
+    ) -> [(name: String, count: Int)] {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+
+        if field == .author {
+            var conditions: [String] = []
+            var bindings: [Binding?] = []
+            if !trimmed.isEmpty {
+                conditions.append("name LIKE ?")
+                bindings.append("%\(trimmed)%")
+            }
+            if !fandomContext.isEmpty {
+                let placeholders = fandomContext.map { _ in "?" }.joined(separator: ", ")
+                conditions.append("""
+                    calibre_id IN (
+                        SELECT calibre_id FROM book_tags
+                        WHERE tag_type = 'fandom' AND tag_name IN (\(placeholders))
+                    )
+                """)
+                bindings.append(contentsOf: fandomContext.map { $0 as Binding? })
+            }
+            let whereClause = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
+            let sql = """
+                SELECT name, COUNT(*) AS cnt
+                FROM book_authors
+                \(whereClause)
+                GROUP BY name
+                ORDER BY cnt DESC
+                LIMIT ?
+                """
+            bindings.append(limit as Binding?)
+            if let rows = try? readDB.prepare(sql, bindings).map({ $0 }), !rows.isEmpty {
+                return rows.compactMap { row in
+                    guard let name = row[0] as? String else { return nil }
+                    let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) ?? 0
+                    return (name, count)
+                }
+            }
+
+            // Fallback to ao3_metadata JSON column if book_authors is not populated
+            let jsonSQL = """
+                SELECT je.value AS name, COUNT(*) AS cnt
+                FROM ao3_metadata, json_each(ao3_metadata.author_names_json) AS je
+                \(trimmed.isEmpty ? "" : "WHERE je.value LIKE ?")
+                GROUP BY je.value
+                ORDER BY cnt DESC
+                LIMIT ?
+                """
+            let jsonBindings: [Binding?] = trimmed.isEmpty ? [limit as Binding?] : ["%\(trimmed)%", limit as Binding?]
+            guard let rows = try? readDB.prepare(jsonSQL, jsonBindings).map({ $0 }) else { return [] }
+            return rows.compactMap { row in
+                guard let name = row[0] as? String else { return nil }
+                let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) ?? 0
+                return (name, count)
+            }
+        }
+
+        var conditions: [String] = ["bt.tag_type = ?"]
+        var bindings: [Binding?] = [field.rawValue]
+        if !trimmed.isEmpty {
+            conditions.append("bt.tag_name LIKE ?")
+            bindings.append("%\(trimmed)%")
+        }
+        if !fandomContext.isEmpty && field != .fandom {
+            let placeholders = fandomContext.map { _ in "?" }.joined(separator: ", ")
+            conditions.append("""
+                bt.calibre_id IN (
+                    SELECT calibre_id FROM book_tags
+                    WHERE tag_type = 'fandom' AND tag_name IN (\(placeholders))
+                )
+            """)
+            bindings.append(contentsOf: fandomContext.map { $0 as Binding? })
+        }
+        let whereClause = "WHERE " + conditions.joined(separator: " AND ")
+        let sql = """
+            SELECT bt.tag_name, COUNT(*) AS cnt
+            FROM book_tags bt
+            \(whereClause)
+            GROUP BY bt.tag_name
+            ORDER BY cnt DESC
+            LIMIT ?
+            """
+        bindings.append(limit as Binding?)
+        if let rows = try? readDB.prepare(sql, bindings).map({ $0 }), !rows.isEmpty {
+            return rows.compactMap { row in
+                guard let name = row[0] as? String else { return nil }
+                let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) ?? 0
+                return (name, count)
+            }
+        }
+
+        // Fallback to ao3_metadata JSON column if book_tags has not yet been populated
+        let jsonSQL = """
+            SELECT je.value AS name, COUNT(*) AS cnt
+            FROM ao3_metadata, json_each(ao3_metadata.\(field.jsonColumn)) AS je
+            \(trimmed.isEmpty ? "" : "WHERE je.value LIKE ?")
+            GROUP BY je.value
+            ORDER BY cnt DESC
+            LIMIT ?
+            """
+        let jsonBindings: [Binding?] = trimmed.isEmpty ? [limit as Binding?] : ["%\(trimmed)%", limit as Binding?]
+        guard let rows = try? readDB.prepare(jsonSQL, jsonBindings).map({ $0 }) else { return [] }
+        return rows.compactMap { row in
+            guard let name = row[0] as? String else { return nil }
+            let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) ?? 0
+            return (name, count)
+        }
+    }
+
     /// Re-groups raw facet rows by canonical name when the AO3 tag seed
     /// database is enabled, summing counts for names that canonicalize to
     /// the same tag. No-ops (returns input unchanged, re-sorted) when the

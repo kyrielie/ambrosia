@@ -12,8 +12,8 @@ struct AmbrosiaApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
-            Color.clear.frame(width: 0, height: 0)
+        Settings {
+            EmptyView()
         }
         .environment(session)
         .commands {
