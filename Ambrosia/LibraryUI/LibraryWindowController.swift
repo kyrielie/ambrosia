@@ -516,8 +516,35 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         let text = field.stringValue.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { closeSuggestionPanel(); return }
 
-        let query = SearchQueryParser.parse(text)
         let metaDB = AppDelegate.shared?.session.metaDB
+
+        // Multi-token scoped search check (e.g. "author:Alice tag:Romance")
+        let multiQuery = SearchQueryParser.parseMultiToken(text)
+        let totalScopedCount = multiQuery.tagTerms.count + multiQuery.authorTerms.count
+            + multiQuery.titleTerms.count + multiQuery.seriesTerms.count + multiQuery.statusTerms.count
+
+        if totalScopedCount > 1 && multiQuery.plainTerms.isEmpty {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let rules = await multiQuery.asFilterRules { tag in
+                    if let metaDB {
+                        return await metaDB.canonicalTerm(for: tag)
+                    }
+                    return tag
+                }
+                if !rules.isEmpty {
+                    self.toolbarState?.suppressNextSearchTextReload()
+                    self.clearSearchField()
+                    for rule in rules {
+                        self.commitFilterRule(rule)
+                    }
+                }
+                self.closeSuggestionPanel()
+            }
+            return
+        }
+
+        let query = SearchQueryParser.parse(text)
 
         // If the query is a single tag term, resolve the canonical form before
         // building the FilterRule. This was previously done synchronously inside
