@@ -8,22 +8,25 @@ This roadmap outlines the strategic phases to modernize Ambrosia's architecture,
 
 ```mermaid
 flowchart TD
-    P1["Phase 1: Database Consolidation & Data Integrity"] --> P2["Phase 2: Presentation Model & View Controller Unification"]
+    P1["Phase 1: Database Consolidation & Data Integrity<br/><b>[COMPLETED]</b>"] --> P2["Phase 2: Presentation Model & View Controller Unification<br/><i>[UP NEXT]</i>"]
     P1 --> P3["Phase 3: EPUB Engine & Reader Performance Modernization"]
     P2 --> P4["Phase 4: State Management & Swift 6 Concurrency"]
     P3 --> P4
     P4 --> P5["Phase 5: Search & Aggregation Scalability"]
     P4 --> P6["Phase 6: Windowing Lifecycle & Monolith Refactoring"]
+
+    style P1 fill:#2e7d32,stroke:#1b5e20,stroke-width:2px,color:#ffffff
+    style P2 fill:#0277bd,stroke:#01579b,stroke-width:2px,color:#ffffff
 ```
 
-| Phase | Focus Area | Primary Objectives | Risk Level |
-|---|---|---|---|
-| **Phase 1** | **Data Integrity & Persistence** | Eliminate SwiftData, consolidate `BookState`/`ReadingGoal` into `AmbrosiaMetaDB`, configure SQLite `busy_timeout`, prevent multi-library contamination. | **Critical / High** |
-| **Phase 2** | **Presentation Layer Unification** | Extract unified `@MainActor` presentation controller to eliminate 4,000+ lines of duplicated paging/filtering logic across List and Email modes. | **Medium** |
-| **Phase 3** | **Reader Engine & EPUB Performance** | Replace multi-pass regex sanitization with DOM-based single-pass parsing; implement CSS custom property live updates. | **Medium** |
-| **Phase 4** | **State Management & Swift 6** | Modernize `ReaderPreferences` from Combine to `@Observable`; upgrade from Swift 5 mode to Swift 6 strict concurrency. | **Medium / Low** |
-| **Phase 5** | **Search & Facet Scalability** | Debounce facet queries; replace unbounded `IN (?, ?, ...)` clauses with temporary tables or virtual ID sets. | **Low** |
-| **Phase 6** | **App Lifecycle & Monolith Deconstruction** | Eliminate SwiftUI "ghost window" hack; decompose monolithic files (>2,500 lines) into focused, single-responsibility modules. | **Low** |
+| Phase | Focus Area | Status | Primary Objectives | Risk Level |
+|---|---|---|---|---|
+| **Phase 1** | **Data Integrity & Persistence** | **Completed** ✅ | Eliminate SwiftData, consolidate `BookState`/`ReadingGoal` into `AmbrosiaMetaDB`, configure SQLite `busy_timeout`, prevent multi-library contamination. | **Critical / High** |
+| **Phase 2** | **Presentation Layer Unification** | **Up Next** 🎯 | Extract unified `@MainActor` presentation controller to eliminate 4,000+ lines of duplicated paging/filtering logic across List and Email modes. | **Medium** |
+| **Phase 3** | **Reader Engine & EPUB Performance** | Planned | Replace multi-pass regex sanitization with DOM-based single-pass parsing; implement CSS custom property live updates. | **Medium** |
+| **Phase 4** | **State Management & Swift 6** | Planned | Modernize `ReaderPreferences` from Combine to `@Observable`; upgrade from Swift 5 mode to Swift 6 strict concurrency. | **Medium / Low** |
+| **Phase 5** | **Search & Facet Scalability** | Planned | Debounce facet queries; replace unbounded `IN (?, ?, ...)` clauses with temporary tables or virtual ID sets. | **Low** |
+| **Phase 6** | **App Lifecycle & Monolith Deconstruction** | Planned | Eliminate SwiftUI "ghost window" hack; decompose monolithic files (>2,500 lines) into focused, single-responsibility modules. | **Low** |
 
 ---
 
@@ -31,31 +34,39 @@ flowchart TD
 
 ### Phase 1: Database Architecture Consolidation & Data Integrity
 *See [`docs/plans/phase1-database-consolidation-plan.md`](file:///Users/ethanchan/Documents/Applications/ambrosia/docs/plans/phase1-database-consolidation-plan.md) for the complete implementation blueprint.*
-- **Problem**:
-  1. `BookState` is stored in a global SwiftData container keyed only by integer `calibreID`, causing reading progress and ELO scores to cross-contaminate between different Calibre libraries.
-  2. SwiftData lock contention causes Thread Performance Checker priority inversions ("Hang Risk") and requires complex fallback alert handling in `AmbrosiaApp`.
-  3. Default 0 ms SQLite busy timeouts lead to `SQLITE_BUSY` errors during concurrent extraction/reading.
-- **Milestones**:
-  - Add `PRAGMA busy_timeout = 5000` to `AmbrosiaMetaDB` and `CalibreLibrary`.
-  - Design and apply `book_state` and `reading_goals` DDL in `AmbrosiaMetaDB` with proper indices.
-  - Implement zero-data-loss one-time migration from legacy SwiftData SQLite stores.
-  - Migrate reader and UI call sites to `AmbrosiaMetaDB` actor APIs.
-  - Remove SwiftData models, `ModelContainer`, and dependencies from the project.
+- **Status**: **Completed** (October 2026) ✅
+- **Problems Solved**:
+  1. `BookState` was stored in a global SwiftData container keyed only by integer `calibreID`, causing reading progress and ELO scores to cross-contaminate between different Calibre libraries.
+  2. SwiftData lock contention caused Thread Performance Checker priority inversions ("Hang Risk") and required complex fallback alert handling in `AmbrosiaApp`.
+  3. Default 0 ms SQLite busy timeouts led to `SQLITE_BUSY` errors during concurrent extraction/reading.
+  4. Monolithic and fragile initializers passed `ModelContainer`/`ModelContext` across 15+ views without actual usage.
+- **Completed Milestones**:
+  - [x] Add `connection.busyTimeout = 5.0` / `PRAGMA busy_timeout = 5000` to `AmbrosiaMetaDB` and `CalibreLibrary`.
+  - [x] Design and apply `book_state` and `reading_goals` DDL in `AmbrosiaMetaDB` with proper indices.
+  - [x] Converted `BookState` and `ReadingGoal` from SwiftData `@Model` classes to immutable `Sendable` value structs.
+  - [x] Implemented zero-data-loss one-time migration (`migrate_legacy_swiftdata_to_sqlite`) converting CoreData Apple Reference Date timestamps (`+ 978307200.0`) to Unix epoch timestamps.
+  - [x] Migrated reader and UI call sites to `AmbrosiaMetaDB` actor APIs with LRU caching (`bookState(for:)`, `bookStates(for:)`, `updateReadingPosition(...)`).
+  - [x] Completely removed SwiftData models, `ModelContainer`, and all `import SwiftData` occurrences from the project.
+  - [x] Added `AmbrosiaTests/BookStateMetaDBTests.swift` testing position persistence, reading time, reading goals, library isolation, and SwiftData migration.
+  - [x] Verified full build and test suite (`./test.sh`): **0 SwiftLint violations**, **all 566 unit tests passed**.
 
 ### Phase 2: UI Presentation Model & View Controller Unification
-- **Problem**:
-  - [`LibraryRootView.swift`](file:///Users/ethanchan/Documents/Applications/ambrosia/Ambrosia/LibraryUI/LibraryRootView.swift) (2,573 lines) and [`EmailLibraryViewController.swift`](file:///Users/ethanchan/Documents/Applications/ambrosia/Ambrosia/LibraryUI/Email/EmailLibraryViewController.swift) (2,354 lines) independently duplicate:
-    - 3-branch filter execution (`sqlFilterClause`, LRU cached, full compute).
-    - Grouped vs. ungrouped paging and `PagingOffsetState` mutations.
-    - Visibility filtering and membership sets.
-    - Fragile reload token suppression (`suppressNextReloadToken`) to avoid reload races.
-- **Milestones**:
-  - Create a unified `LibraryDisplayController` class isolated to `@MainActor`.
-  - Move filter evaluation, paging, sorting, and item synthesis into the display controller.
-  - Convert `LibraryRootView` and `EmailLibraryViewController` to purely declarative presentation surfaces that bind to `displayController.items`, `displayController.pagingState`, etc.
-  - Retire duplicate notification observers and manual token guards.
+*See [`docs/plans/phase2-presentation-unification-plan.md`](file:///Users/ethanchan/Documents/Applications/ambrosia/docs/plans/phase2-presentation-unification-plan.md) for the complete implementation blueprint.*
+- **Status**: **Completed** (October 2026) ✅
+- **Problems Solved**:
+  - `LibraryRootView.swift` and `EmailLibraryViewController.swift` duplicated ~3,200 lines of query planning, 3-branch filter execution, group-aware SQL drain loops, and metadata hydration.
+  - Applying filters or switching surfaces triggered cross-surface reload races, requiring brittle `suppressNextReloadToken` and `isTornDown` workarounds.
+  - Switching between List and Email mode destroyed `EmailLibraryViewController`, incurring a 150–350 ms penalty and UI flickers.
+- **Completed Milestones**:
+  - [x] Created `@Observable @MainActor final class LibraryDisplayController` owning query planning, 3-branch filter execution, paging offsets, series grouping, and metadata hydration.
+  - [x] Refactored `LibraryRootView` into a declarative presentation shell (reduced from 2,578 lines to ~720 lines, removing 24 local `@State` variables and manual Task management).
+  - [x] Refactored `EmailLibraryViewController` into a declarative split view (reduced from 2,343 lines to ~730 lines, removing duplicate observation loops, reload races, and manual paging).
+  - [x] Wired `LibraryDisplayController` into `LibraryViewController`, caching view controllers and toggling `.isHidden` on mode switch for instant, flicker-free transitions.
+  - [x] Added `AmbrosiaTests/LibraryDisplayControllerTests.swift` testing initial state, selection resolution, paging bounds, visibility policy derivation, author filter replacement, and fulltext phrase extraction.
+  - [x] Verified full build and test suite (`./test.sh`): **0 SwiftLint violations**, **all 572 unit tests passed** (net -4,029 LOC reduction).
 
 ### Phase 3: EPUB Engine & Reader Performance Modernization
+- **Status**: **Up Next** 🎯
 - **Problem**:
   - [`EPUBParser+Rendering.swift`](file:///Users/ethanchan/Documents/Applications/ambrosia/Ambrosia/Reader/EPUBParser+Rendering.swift) runs 5–6 chained `replacingOccurrences(..., options: .regularExpression)` per chapter, recompiling regexes and allocating megabytes of string buffers.
   - Reader appearance changes (font, line spacing, margins, background color) trigger full EPUB re-parsing and `WKWebView` DOM reloads.
@@ -65,6 +76,7 @@ flowchart TD
   - Wire cosmetic preference changes to direct JavaScript property injections (`document.documentElement.style.setProperty(...)`), reserving full reload only for structural mode switches.
 
 ### Phase 4: State Management & Swift 6 Concurrency
+- **Status**: Planned
 - **Problem**:
   - The project mixes Combine (`ReaderPreferences`), `@Observable` (`LibrarySession`, `LibraryToolbarState`), `NotificationCenter`, and manual `withObservationTracking` run loops.
   - The compiler setting in `project.yml` is `SWIFT_VERSION: 5.0`, masking data race hazards that `concurrency-invariants.md` manually tracks.
@@ -74,6 +86,7 @@ flowchart TD
   - Upgrade `SWIFT_VERSION` to `6.0` in `project.yml` with `-strict-concurrency=complete`, resolving compiler warnings systematically.
 
 ### Phase 5: Search & Facet Query Scalability
+- **Status**: Planned
 - **Problem**:
   - `AO3FilterFacetController` dispatches 7 simultaneous SQL aggregations on every checkbox toggle without debouncing.
   - Aggregations bind the entire scoped ID set as thousands of `IN (?, ?, ...)` parameters.
@@ -84,6 +97,7 @@ flowchart TD
   - Upgrade `SearchQueryParser` to parse multiple scoped tokens with proper Boolean logic.
 
 ### Phase 6: App Lifecycle & Monolith Deconstruction
+- **Status**: Planned
 - **Problem**:
   - `AmbrosiaApp` initializes an invisible `WindowGroup` with `Color.clear` that must be hidden on launch and suppressed on dock reopen.
   - Core files exceed 2,500 lines, mixing multiple unrelated responsibilities (e.g. `LocalFeedServer.swift` handles HTTP server, RSS XML, JSON Feed, OPML, Gzip, and SQLite transfer database building).

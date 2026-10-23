@@ -28,8 +28,8 @@ AmbrosiaApp
 
 ## Modes
 
-- List: SwiftUI AO3-style rows with title, series, authors, tags, stats, description, and pagination. `LibraryRootView.swift` holds paging/filtering/series-grouping orchestration; row rendering has been split out into `BookListRow.swift` and `SeriesListRow.swift`; shared layout and series-grouping helpers (`FlowLayout`, `isAnthology`, `missingIndices`, `parseISODate`, `logMissingVisibleWorkMetadata`) live in `FlowLayout.swift`. These helpers and the row-support types (`LibraryStats`, `LibraryStatsRow`, `TagPillDisplay`) are intentionally `internal`, not `private`, because more than one row file depends on them — see Invariant 16.
-- Email: AppKit split view with table sidebar and SwiftUI detail pane.
+- List: SwiftUI AO3-style rows with title, series, authors, tags, stats, description, and pagination. Querying, filtering, sorting, paging, series grouping, and metadata hydration are managed by `LibraryDisplayController.swift`. `LibraryRootView.swift` acts as a declarative presentation shell; row rendering is split out into `BookListRow.swift` and `SeriesListRow.swift`; shared layout and series-grouping helpers (`FlowLayout`, `isAnthology`, `missingIndices`, `parseISODate`, `logMissingVisibleWorkMetadata`) live in `FlowLayout.swift`. These helpers and the row-support types (`LibraryStats`, `LibraryStatsRow`, `TagPillDisplay`) are intentionally `internal`, not `private`, because more than one row file depends on them — see Invariant 16.
+- Email: AppKit split view with table sidebar and SwiftUI detail pane, also powered by `LibraryDisplayController.swift`.
 - Ranking: `ActivityFeedView` (reading activity feed). `BookState` already has ELO fields for a future ranking surface.
 
 ## Row height bounds

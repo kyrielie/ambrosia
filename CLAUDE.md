@@ -26,7 +26,7 @@ doc(s) relevant to your task**, not this whole index cover-to-cover.
 - **`NSHostingView` inside AppKit, or an `async` closure that won't compile where you expect** → `docs/swiftui-appkit-bridging.md`
 - **Any Swift 6 actor/`Task`/`async let` compile error, or "why is this cached value stale"** → `docs/concurrency-invariants.md`
 - **"Does feature X exist yet?"** → `docs/not-yet-built.md`
-- **Architectural modernization roadmap and implementation plans** → `docs/roadmap.md` and `docs/plans/phase1-database-consolidation-plan.md`
+- **Architectural modernization roadmap and implementation plans** → `docs/roadmap.md`, `docs/plans/phase1-database-consolidation-plan.md`, and `docs/plans/phase2-presentation-unification-plan.md`
 - **Adding a test file, or "why didn't my new test run"** → `docs/testing.md`
 
 If nothing above fits, grep the codebase before assuming it's

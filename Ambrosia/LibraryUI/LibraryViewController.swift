@@ -7,14 +7,24 @@ class LibraryViewController: NSViewController {
 
     /// Shared state between NSToolbar and all content views.
     /// Created here and vended upward to LibraryWindowController.
-    let toolbarState = LibraryToolbarState()
+    let toolbarState: LibraryToolbarState
 
-    /// Tracks the hosting view for list mode so we can remove it on mode switch.
+    /// Unified presentation controller for querying, paging, grouping, and metadata.
+    let displayController: LibraryDisplayController
+
+    /// Tracks the hosting view for list mode so we can toggle isHidden on mode switch.
     private var listHostingView: NSHostingView<AnyView>?
+    /// Tracks the view controller for email mode so we can toggle isHidden on mode switch.
+    private var emailVC: EmailLibraryViewController?
+    /// Tracks ranking view controller if created.
+    private var rankingVC: NSViewController?
     private var appearanceCancellable: AnyCancellable?
 
     init(session: LibrarySession) {
         self.session = session
+        let ts = LibraryToolbarState()
+        self.toolbarState = ts
+        self.displayController = LibraryDisplayController(session: session, toolbarState: ts)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -60,74 +70,23 @@ class LibraryViewController: NSViewController {
         // A same-value observation callback must not tear down and rebuild a surface.
         guard mode != currentMode else { return }
         defer { currentMode = mode }
-        // §list-teardown fix: tell the outgoing List surface (if any) to stop
-        // reloading before it's hidden. LibraryRootView's reload paths are
-        // unstructured Task { } blocks kicked off from .onChange, which are not
-        // cancelled just by the NSHostingView being hidden — see
-        // LibraryToolbarState.isListSurfaceTornDown and LibraryRootView's
-        // guards in loadPage()/rebuildItems()/refreshBookStates().
-        if listHostingView != nil, mode != .list {
-            toolbarState.isListSurfaceTornDown = true
-            // The list's quick-filter handler must not outlive its surface; the
-            // incoming surface registers its own.
-            toolbarState.filterCommitHandler = nil
-        }
-
-        // Remove existing non-list child VCs. Unlike the list surface below,
-        // email/ranking are still rebuilt fresh on every switch — they were
-        // not reported as slow, so widening this fix to them isn't justified
-        // yet.
-        children.forEach {
-            // §switch-flicker fix: stop EmailLibraryViewController's observation
-            // loop before it's removed, so it doesn't keep reacting to shared
-            // toolbarState changes (and racing the new view) after it's gone.
-            ($0 as? EmailLibraryViewController)?.stopObserving()
-            $0.view.removeFromSuperview()
-            $0.removeFromParent()
-        }
 
         switch mode {
         case .list:
-            // §mode-switch-latency fix: reuse the existing NSHostingView
-            // instead of destroying and reconstructing LibraryRootView from
-            // scratch on every switch into list mode. LibraryRootView owns a
-            // large amount of @State (items, books, bookStates, ao3Metadata,
-            // selectedItemIDs, ...) that used to reset to empty on every
-            // switch — even though session-level caches (cachedFilterResult,
-            // cachedFulltextIDs, cachedLikedIDs, ...) made the underlying
-            // AmbrosiaMetaDB fetch cheap, SwiftUI still had to reconstruct and
-            // lay out every visible BookListRow (including FlowLayout's
-            // tag-pill layout) from nothing on every single switch. Keeping
-            // the NSHostingView (and therefore the List's NSTableView and all
-            // of LibraryRootView's @State) alive and just hiding/showing it
-            // means a switch back to list mode is just an unhide.
-            //
-            // Trade-off: a hidden listHostingView keeps its last-loaded page
-            // of books/bookStates/ao3Metadata resident in memory for as long
-            // as this window stays open in another mode. Acceptable for the
-            // page sizes this view already deals with; revisit if very large
-            // collections make that footprint a problem.
+            emailVC?.view.isHidden = true
+            rankingVC?.view.isHidden = true
             if let hv = listHostingView {
                 hv.isHidden = false
-                view.addSubview(hv) // already a subview; this just re-fronts it
+                view.addSubview(hv)
             } else {
-                // Use NSHostingView directly so we control sizing entirely via constraints.
-                //
-                // The {inf, 88} intrinsicContentSize crash happens because NSHostingView's
-                // default sizingOptions (.intrinsicContentSize) makes Auto Layout ask SwiftUI
-                // for its natural size during a layout pass triggered by state changes (e.g.
-                // a tag tap mutating toolbarState).  SwiftUI returns {inf, 88} because it
-                // hasn't been given a concrete width yet, and AppKit rejects the size.
-                //
-                // Fix: set sizingOptions = [] so the hosting view is purely constraint-driven
-                // and never participates in intrinsic-size negotiation.
                 let root = AnyView(
                     LibraryRootView()
                         .environment(toolbarState)
                         .environment(session)
+                        .environment(displayController)
                 )
                 let hv = NSHostingView(rootView: root)
-                hv.sizingOptions = []                             // ← the real fix
+                hv.sizingOptions = []
                 hv.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
                 hv.translatesAutoresizingMaskIntoConstraints = false
                 view.addSubview(hv)
@@ -139,46 +98,57 @@ class LibraryViewController: NSViewController {
                 ])
                 listHostingView = hv
             }
-            // Resume (or start) LibraryRootView's .onAppear / .onChange-triggered
-            // reloads now that it's the visible surface again. Must happen after
-            // the hosting view is attached/unhidden, not before.
-            toolbarState.isListSurfaceTornDown = false
 
         case .email:
             listHostingView?.isHidden = true
-            let childVC = EmailLibraryViewController(
-                session: session,
-                toolbarState: toolbarState
-            )
-            addChild(childVC)
-            childVC.view.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
-            childVC.view.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(childVC.view)
-            NSLayoutConstraint.activate([
-                childVC.view.topAnchor.constraint(equalTo: view.topAnchor),
-                childVC.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-                childVC.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                childVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor)
-            ])
+            rankingVC?.view.isHidden = true
+            if let evc = emailVC {
+                evc.view.isHidden = false
+                view.addSubview(evc.view)
+            } else {
+                let childVC = EmailLibraryViewController(
+                    session: session,
+                    toolbarState: toolbarState,
+                    displayController: displayController
+                )
+                addChild(childVC)
+                childVC.view.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
+                childVC.view.translatesAutoresizingMaskIntoConstraints = false
+                view.addSubview(childVC.view)
+                NSLayoutConstraint.activate([
+                    childVC.view.topAnchor.constraint(equalTo: view.topAnchor),
+                    childVC.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                    childVC.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                    childVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+                ])
+                emailVC = childVC
+            }
 
         case .ranking:
             listHostingView?.isHidden = true
-            let placeholder = AnyView(
-                ActivityFeedView(session: session)
-                    .environment(session)
-                    .environment(toolbarState)
-            )
-            let childVC = NSHostingController(rootView: placeholder)
-            addChild(childVC)
-            childVC.view.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
-            childVC.view.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(childVC.view)
-            NSLayoutConstraint.activate([
-                childVC.view.topAnchor.constraint(equalTo: view.topAnchor),
-                childVC.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-                childVC.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                childVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor)
-            ])
+            emailVC?.view.isHidden = true
+            if let rvc = rankingVC {
+                rvc.view.isHidden = false
+                view.addSubview(rvc.view)
+            } else {
+                let placeholder = AnyView(
+                    ActivityFeedView(session: session)
+                        .environment(session)
+                        .environment(toolbarState)
+                )
+                let childVC = NSHostingController(rootView: placeholder)
+                addChild(childVC)
+                childVC.view.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
+                childVC.view.translatesAutoresizingMaskIntoConstraints = false
+                view.addSubview(childVC.view)
+                NSLayoutConstraint.activate([
+                    childVC.view.topAnchor.constraint(equalTo: view.topAnchor),
+                    childVC.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                    childVC.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                    childVC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+                ])
+                rankingVC = childVC
+            }
         }
     }
 
