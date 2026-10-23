@@ -1,4 +1,5 @@
 import Foundation
+import SwiftSoup
 
 // MARK: - EPUBParser rendering (html/mergedHTML/plainText)
 //
@@ -99,7 +100,16 @@ extension EPUBParser {
         removeParagraphIndents: Bool = false
     ) throws -> String {
         let archive = try openArchive()
-        var bodyChunks: [String] = []
+
+        // 1. Read entries sequentially from archive (ZIP archive access is thread-confined)
+        struct SpinePayload {
+            let index: Int
+            let id: String
+            let rawHTML: String
+        }
+
+        var payloads: [SpinePayload] = []
+        payloads.reserveCapacity(spine.count)
 
         for item in spine {
             guard let entry = archive[item.href],
@@ -109,22 +119,49 @@ extension EPUBParser {
             let raw = String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .isoLatin1)
                 ?? ""
+            payloads.append(SpinePayload(index: item.index, id: item.id, rawHTML: raw))
+        }
 
-            // Extract only the <body>…</body> content
-            var bodyContent = Self.extractBodyContent(
-                from: raw,
-                isFirstSpineItem: item.index == 0,
-                removeParagraphIndents: removeParagraphIndents
-            )
-            if let imageBase = imageBaseOverride {
-                bodyContent = Self.rewriteImageReferences(in: bodyContent, imageBaseURL: imageBase)
+        // 2. Parallel SwiftSoup sanitization and extraction across multi-core CPU pool
+        let count = payloads.count
+        var bodyChunks: [String] = Array(repeating: "", count: count)
+
+        if count <= 1 {
+            for index in 0..<count {
+                let payload = payloads[index]
+                var bodyContent = Self.extractBodyContent(
+                    from: payload.rawHTML,
+                    isFirstSpineItem: payload.index == 0,
+                    removeParagraphIndents: removeParagraphIndents
+                )
+                if let imageBase = imageBaseOverride {
+                    bodyContent = Self.rewriteImageReferences(in: bodyContent, imageBaseURL: imageBase)
+                }
+                let globalSpineIndex = payload.index + spineIndexOffset
+                bodyChunks[index] = """
+                <section data-spine-index="\(globalSpineIndex)" data-spine-id="\(payload.id)">
+                \(bodyContent)
+                </section>
+                """
             }
-            let globalSpineIndex = item.index + spineIndexOffset
-            bodyChunks.append("""
-            <section data-spine-index="\(globalSpineIndex)" data-spine-id="\(item.id)">
-            \(bodyContent)
-            </section>
-            """)
+        } else {
+            DispatchQueue.concurrentPerform(iterations: count) { index in
+                let payload = payloads[index]
+                var bodyContent = Self.extractBodyContent(
+                    from: payload.rawHTML,
+                    isFirstSpineItem: payload.index == 0,
+                    removeParagraphIndents: removeParagraphIndents
+                )
+                if let imageBase = imageBaseOverride {
+                    bodyContent = Self.rewriteImageReferences(in: bodyContent, imageBaseURL: imageBase)
+                }
+                let globalSpineIndex = payload.index + spineIndexOffset
+                bodyChunks[index] = """
+                <section data-spine-index="\(globalSpineIndex)" data-spine-id="\(payload.id)">
+                \(bodyContent)
+                </section>
+                """
+            }
         }
 
         if let record = ao3Record, let workURL = record.storyURL {
@@ -169,48 +206,172 @@ extension EPUBParser {
         return Self.stripAllTags(from: raw)
     }
 
-    // MARK: - Private rendering helpers
+    // MARK: - Sanitisation & Body extraction (package-internal for unit testing)
 
-    /// Strip all publisher CSS (link/style/style= attributes/script),
-    /// inject userCSS before </head>. Sets window.currentSpineIndex for JS.
-    private static func sanitise(
+    /// Strip all active content and publisher CSS (link/style/style= attributes/script) using SwiftSoup,
+    /// and inject userCSS before </head>. Sets window.currentSpineIndex for JS.
+    static func sanitise(
         _ xhtml: String,
         userCSS: String,
         spineIndex: Int,
         removeParagraphIndents: Bool = false
     ) -> String {
-        var html = xhtml
+        guard let doc = parseDocument(xhtml) else {
+            return fallbackSanitise(xhtml, userCSS: userCSS, spineIndex: spineIndex)
+        }
 
-        // Remove stylesheet links
+        cleanDOM(doc, removeParagraphIndents: removeParagraphIndents)
+
+        // Inject user CSS + spine index tracker into head
+        let head = doc.head() ?? {
+            let newHead = Element(Tag("head"), "")
+            _ = try? doc.children().first()?.prependChild(newHead)
+            return newHead
+        }()
+
+        let styleElement = Element(Tag("style"), "")
+        _ = try? styleElement.text(userCSS)
+        _ = try? head.appendChild(styleElement)
+
+        let scriptElement = Element(Tag("script"), "")
+        _ = try? scriptElement.text("window.currentSpineIndex = \(spineIndex);")
+        _ = try? head.appendChild(scriptElement)
+
+        return (try? doc.outerHtml()) ?? xhtml
+    }
+
+    /// Extracts the content between <body> and </body> tags, or the whole string if not found,
+    /// after stripping publisher CSS, styles, and active content.
+    static func extractBodyContent(
+        from xhtml: String,
+        isFirstSpineItem: Bool,
+        removeParagraphIndents: Bool = false
+    ) -> String {
+        guard let doc = parseDocument(xhtml) else {
+            return fallbackExtractBodyContent(
+                from: xhtml,
+                isFirstSpineItem: isFirstSpineItem,
+                removeParagraphIndents: removeParagraphIndents
+            )
+        }
+
+        cleanDOM(doc, removeParagraphIndents: removeParagraphIndents)
+
+        if isFirstSpineItem {
+            stripPrefaceHeadingDOM(in: doc)
+        }
+
+        if let body = doc.body() {
+            return (try? body.html()) ?? ""
+        }
+        return (try? doc.html()) ?? ""
+    }
+
+    /// Parses XHTML/HTML using SwiftSoup XML parser first, falling back to HTML parser.
+    private static func parseDocument(_ xhtml: String) -> Document? {
+        if let doc = try? Parser.xmlParser().parseInput(xhtml, "") {
+            _ = doc.outputSettings().prettyPrint(pretty: false).syntax(syntax: .html).charset(.utf8)
+            return doc
+        }
+        if let doc = try? Parser.htmlParser().parseInput(xhtml, "") {
+            _ = doc.outputSettings().prettyPrint(pretty: false).syntax(syntax: .html).charset(.utf8)
+            return doc
+        }
+        return nil
+    }
+
+    /// Single-pass DOM cleaning: strips stylesheet links, style blocks, inline styles, scripts,
+    /// and active attributes (event handlers, javascript: URLs).
+    private static func cleanDOM(_ doc: Document, removeParagraphIndents: Bool) {
+        // 1. Remove active and styling elements
+        if let elementsToRemove = try? doc.select("link[rel*='stylesheet'], link[rel*='Stylesheet'], style, script, iframe, object, embed, base") {
+            for el in elementsToRemove {
+                _ = try? el.remove()
+            }
+        }
+
+        // 2. Remove inline style attributes and JavaScript event handlers / javascript: URLs
+        if let allElements = try? doc.getAllElements() {
+            let urlAttrs: Set<String> = ["href", "src", "xlink:href", "action", "data"]
+            for el in allElements {
+                if el.hasAttr("style") {
+                    _ = try? el.removeAttr("style")
+                }
+                guard let attrs = el.getAttributes() else { continue }
+                for attr in attrs.asList() {
+                    let key = attr.getKey()
+                    let lower = key.lowercased()
+                    if lower.hasPrefix("on") || lower == "srcdoc" {
+                        _ = try? el.removeAttr(key)
+                        continue
+                    }
+                    if urlAttrs.contains(lower) {
+                        let val = attr.getValue().trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                        if val.hasPrefix("javascript:") {
+                            _ = try? el.removeAttr(key)
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Strip leading indentation whitespace if requested
+        if removeParagraphIndents {
+            stripLeadingIndentWhitespaceDOM(in: doc)
+        }
+    }
+
+    /// Strips leading whitespace runs inside paragraph-like elements.
+    private static func stripLeadingIndentWhitespaceDOM(in doc: Document) {
+        guard let elements = try? doc.select("p, div, li, h1, h2, h3, h4, h5, h6, blockquote, td, th") else { return }
+        for el in elements {
+            guard let firstNode = el.getChildNodes().first as? TextNode else { continue }
+            let whole = firstNode.getWholeText()
+            var idx = whole.startIndex
+            while idx < whole.endIndex && (whole[idx] == " " || whole[idx] == "\t") {
+                idx = whole.index(after: idx)
+            }
+            if idx > whole.startIndex {
+                let trimmed = String(whole[idx...])
+                firstNode.text(trimmed)
+            }
+        }
+    }
+
+    /// Strips redundant "Preface" heading from the first spine item.
+    private static func stripPrefaceHeadingDOM(in doc: Document) {
+        guard let headings = try? doc.select("h1, h2, h3, h4, h5, h6") else { return }
+        for heading in headings {
+            let text = (try? heading.text())?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if text.caseInsensitiveCompare("Preface") == .orderedSame {
+                _ = try? heading.remove()
+            }
+        }
+    }
+
+    /// Fallback sanitisation using regular expressions if SwiftSoup parsing fails on severely malformed markup.
+    private static func fallbackSanitise(
+        _ xhtml: String,
+        userCSS: String,
+        spineIndex: Int
+    ) -> String {
+        var html = xhtml
         html = html.replacingOccurrences(
             of: #"<link[^>]+stylesheet[^>]*/?>|<link[^>]+rel\s*=\s*["']stylesheet["'][^>]*/?>"#,
             with: "", options: .regularExpression)
-
-        // Remove inline <style> blocks
         html = html.replacingOccurrences(
             of: #"<style[^>]*>[\s\S]*?</style>"#,
             with: "", options: .regularExpression)
-
-        // Remove inline style= attributes
         html = html.replacingOccurrences(
             of: #"\s+style\s*=\s*"[^"]*""#,
             with: "", options: .regularExpression)
         html = html.replacingOccurrences(
             of: #"\s+style\s*=\s*'[^']*'"#,
             with: "", options: .regularExpression)
-
-        // Remove <script> blocks
         html = html.replacingOccurrences(
             of: #"<script[^>]*>[\s\S]*?</script>"#,
             with: "", options: .regularExpression)
 
-        // With publisher CSS gone, a leading indent can only be literal
-        // whitespace left in the text — see stripLeadingIndentWhitespace.
-        if removeParagraphIndents {
-            html = Self.stripLeadingIndentWhitespace(html)
-        }
-
-        // Inject user CSS + spine index tracker before </head>
         let injection = """
         <style>
         \(userCSS)
@@ -227,39 +388,18 @@ extension EPUBParser {
         return html
     }
 
-    /// Extracts the content between <body> and </body> tags, or the whole string if not found.
-    private static func extractBodyContent(
+    /// Fallback body extraction using regular expressions if SwiftSoup parsing fails.
+    private static func fallbackExtractBodyContent(
         from xhtml: String,
         isFirstSpineItem: Bool,
-        removeParagraphIndents: Bool = false
+        removeParagraphIndents: Bool
     ) -> String {
-        // Strip publisher CSS first so we don't drag styles into the merged doc
-        var html = xhtml
-        html = html.replacingOccurrences(
-            of: #"<link[^>]+stylesheet[^>]*/?>|<link[^>]+rel\s*=\s*["']stylesheet["'][^>]*/?>"#,
-            with: "", options: .regularExpression)
-        html = html.replacingOccurrences(
-            of: #"<style[^>]*>[\s\S]*?</style>"#,
-            with: "", options: .regularExpression)
-        html = html.replacingOccurrences(
-            of: #"\s+style\s*=\s*"[^"]*""#,
-            with: "", options: .regularExpression)
-        html = html.replacingOccurrences(
-            of: #"\s+style\s*=\s*'[^']*'"#,
-            with: "", options: .regularExpression)
-        html = html.replacingOccurrences(
-            of: #"<script[^>]*>[\s\S]*?</script>"#,
-            with: "", options: .regularExpression)
-
-        // With publisher CSS gone, a leading indent can only be literal
-        // whitespace left in the text — see stripLeadingIndentWhitespace.
-        // Shared by extractBodyContent (scroll mode + feeds) and sanitise
-        // (paginated mode) so there's one definition of "indent" between them.
+        var html = fallbackSanitise(xhtml, userCSS: "", spineIndex: 0)
         if removeParagraphIndents {
-            html = Self.stripLeadingIndentWhitespace(html)
+            html = html.replacingOccurrences(
+                of: #"(?i)(<(?:p|div|li|h[1-6]|blockquote|td|th)[^>]*>)[ \t]+"#,
+                with: "$1", options: .regularExpression)
         }
-
-        // Extract body content
         var body: String
         if let bodyStart = html.range(of: "<body", options: .caseInsensitive),
            let bodyTagEnd = html[bodyStart.lowerBound...].range(of: ">"),
@@ -268,37 +408,16 @@ extension EPUBParser {
         } else {
             body = html
         }
-
-        // AO3 EPUBs emit a redundant "Preface" heading on the first spine item;
-        // the spine item is the preface by definition once rendered in Ambrosia.
         if isFirstSpineItem {
             body = stripPrefaceHeading(body)
         }
-
         return body
-    }
-
-    /// Strips leading space/tab runs immediately inside paragraph-like
-    /// elements — the literal-whitespace equivalent of the old
-    /// `text-indent: 0` CSS override, for books that fake first-line
-    /// indentation with actual whitespace characters rather than CSS
-    /// (publisher CSS never survives `sanitise`/`extractBodyContent`, so
-    /// there's nothing left for a CSS override to cancel out). Scoped to the
-    /// same element set the CSS rule targeted (`p, div, li`), extended to
-    /// headings/blockquote/table cells since those are equally plausible
-    /// homes for a converted-from-plaintext indent. Deliberately does not
-    /// touch `&nbsp;`-based fake indents — a different, separate pattern.
-    private static func stripLeadingIndentWhitespace(_ html: String) -> String {
-        html.replacingOccurrences(
-            of: #"(?i)(<(?:p|div|li|h[1-6]|blockquote|td|th)[^>]*>)[ \t]+"#,
-            with: "$1", options: .regularExpression)
     }
 
     /// Strips a redundant "Preface" heading (AO3 uses <h2 class="toc-heading">
     /// in practice, but the level varies; match h1-h6 with a backreference so
-    /// only the matching close tag is eaten). Shared by extractBodyContent
-    /// (scroll mode) and html(for:) (paginated mode) so there is a single copy
-    /// of this regex — see architecture.md incident notes on drift between files.
+    /// only the matching close tag is eaten). Shared by fallbackExtractBodyContent
+    /// and html(for:) so there is a single copy of this regex.
     private static func stripPrefaceHeading(_ html: String) -> String {
         html.replacingOccurrences(
             of: #"<(h[1-6])[^>]*>\s*[Pp]reface\s*</\1>"#,
