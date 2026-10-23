@@ -9,7 +9,20 @@ highlight/annotation capture inside the webview, see `annotations.md`.
 
 ## Reader
 
-`ReaderWindowController.open(book:modelContainer:)` de-duplicates one reader window per Calibre book ID. It updates `BookState.lastOpenedDate` on open and accumulates `totalReadingTimeSeconds` on close.
+### Reader Application Routing
+`AppDelegate.openReaderWindow(book:)` and `openReaderWindow(target:)` inspect `ReaderPreferences.shared.preferredReader` (`PreferredReaderOption`):
+- `.inbuilt` (default): Uses `ReaderWindowController.open(...)`. Deduplicates one reader window per Calibre book ID, updates `BookState.lastOpenedDate` on open, and tracks `totalReadingTimeSeconds` on close.
+- `.systemDefault`: Opens the book's EPUB file via `NSWorkspace.shared.open(epubURL)` with the macOS system default EPUB application (e.g. Apple Books or Honeycrisp).
+- `.customApp`: Opens the EPUB file via `NSWorkspace.shared.open([epubURL], withApplicationAt: appURL, ...)` with a custom `.app` chosen by the user in Preferences (falling back to system default if the app was moved or deleted).
+Regardless of whether an internal or external reader is used, `AmbrosiaMetaDB.markBookOpened(calibreID:)` is triggered so reading history and last-opened dates remain current.
+
+### Inbuilt AO3 Reader Tailoring
+The inbuilt Ambrosia reader is explicitly tailored for AO3 fanfiction EPUBs:
+- **AO3 Preface Card**: `#preface` metadata is formatted with a distinct divider and clear typographic hierarchy. The metadata block (`dl.tags`) formats `<dt>` (Rating, Warnings, Fandoms, Relationships, Characters, Tags) with crisp semibold labels and `<dd>` with formatted inline tag runs, preventing layout blowout in multi-column paginated mode.
+- **Summaries and Author Notes**: `.summary`, `blockquote`, and `.notes` render with a 3px accent border on the leading edge and a subtle 5% background callout tint, making author notes and chapter summaries instantly recognizable.
+- **Calibre Style Overrides**: `body[class]` and `!important` rules override Calibre's hardcoded `.calibre` and `margin: 0 5pt` rules, ensuring user margins and max-widths take precedence.
+- **AO3 Endmatter**: `EPUBParser.buildAO3Endmatter` generates "Read on AO3", "Comments on AO3", and series index links at the conclusion of the story.
+- **Curated Reading Themes**: Built-in presets inspired by Kudos include Parchment, Sepia (`#FBF0D9`), Paper (`#FFFFFF`), Night (`#1C1C1E`), Dark (`#16161A`), OLED (`#000000`), and Slate.
 
 `ReaderViewController`:
 
