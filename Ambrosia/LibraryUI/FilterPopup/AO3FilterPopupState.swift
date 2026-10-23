@@ -8,6 +8,30 @@ import Foundation
 // state and performs a one-way overwrite of `LibraryToolbarState
 // .filterExpression` on Apply. See the AO3-style filter popup plan, §3.4.
 
+// MARK: - Rating Match Mode
+enum RatingMatch: String, CaseIterable, Identifiable {
+    case exact = "Exact"
+    case orHigher = "Rating+"
+    case orLower = "Rating−"
+
+    var id: String { rawValue }
+}
+
+// MARK: - FilterSelectionState (3-state cycling: Clear -> Included -> Excluded -> Clear)
+enum FilterSelectionState {
+    case clear
+    case included
+    case excluded
+
+    var next: FilterSelectionState {
+        switch self {
+        case .clear: return .included
+        case .included: return .excluded
+        case .excluded: return .clear
+        }
+    }
+}
+
 @Observable
 final class AO3FilterPopupState {
 
@@ -31,12 +55,20 @@ final class AO3FilterPopupState {
     var includedCategories: Set<AO3Category> = []
     var excludedCategories: Set<AO3Category> = []
 
-    // MARK: Rating — AO3 renders this as a radio group when including (only one
-    // rating can be "included" at a time), but still allows several ratings to
-    // be excluded independently. Mirrors that asymmetry exactly (see
-    // _filters.html.erb: radio only when filter_action == "include").
+    // MARK: Rating
     var includedRating: AO3Rating?
     var excludedRatings: Set<AO3Rating> = []
+    var ratingMatch: RatingMatch = .exact
+    var includeNotRated: Bool = false
+
+    // MARK: Numeric bounds (word count & kudos)
+    var wordsFrom: Int?
+    var wordsTo: Int?
+    var kudosFrom: Int?
+    var kudosTo: Int?
+
+    // MARK: Preserved unmanaged rules from drawer
+    var passthroughRules: [FilterRule] = []
 
     // MARK: More Options — 3-way, matching AO3's blank/F/T radio groups exactly.
     enum TriState {
@@ -52,21 +84,131 @@ final class AO3FilterPopupState {
     var ascending: Bool = true
 
     // MARK: Lifetime tracking
-    //
-    // Digest of (FilterExpression, searchText) captured when this state was
-    // created or last applied. Compared against the live toolbar state each
-    // time the popup window is (re)opened; a mismatch means the underlying
-    // search/filter changed since, so this state is discarded in favor of a
-    // fresh `AO3FilterPopupState()`.
-    //
-    // §9: `var`, not `let` — apply() resynchronizes this after a successful
-    // Apply so a reopen of the same popup doesn't see its own just-applied
-    // expression as an "external" change and wipe the checkboxes that
-    // produced it. See fix plan §3b.
     var capturedDigest: String
 
     init(capturedDigest: String) {
         self.capturedDigest = capturedDigest
+    }
+
+    /// Lossless initialization from an active `FilterExpression`, mapping
+    /// recognized fields into structured properties and retaining unmapped
+    /// drawer rules in `passthroughRules`.
+    convenience init(from expression: FilterExpression, capturedDigest: String) {
+        self.init(capturedDigest: capturedDigest)
+
+        for group in expression.groups {
+            for rule in group.rules {
+                switch rule.field {
+                case .tag:
+                    if rule.op == .equals {
+                        if let rating = AO3Rating(rawValue: rule.value) {
+                            includedRating = rating
+                            ratingMatch = .exact
+                        } else if let warning = AO3Warning(rawValue: rule.value) {
+                            includedWarnings.insert(warning)
+                        } else if let category = AO3Category(rawValue: rule.value) {
+                            includedCategories.insert(category)
+                        } else {
+                            includedFreeforms.insert(rule.value)
+                        }
+                    } else if rule.op == .notEquals {
+                        if let rating = AO3Rating(rawValue: rule.value) {
+                            excludedRatings.insert(rating)
+                        } else if let warning = AO3Warning(rawValue: rule.value) {
+                            excludedWarnings.insert(warning)
+                        } else if let category = AO3Category(rawValue: rule.value) {
+                            excludedCategories.insert(category)
+                        } else {
+                            excludedFreeforms.insert(rule.value)
+                        }
+                    } else if rule.op == .ratingAtMost {
+                        if let rating = AO3Rating(rawValue: rule.value) {
+                            includedRating = rating
+                            ratingMatch = .orLower
+                        }
+                    } else if rule.op == .ratingAtLeast {
+                        if let rating = AO3Rating(rawValue: rule.value) {
+                            includedRating = rating
+                            ratingMatch = .orHigher
+                        }
+                    } else {
+                        passthroughRules.append(rule)
+                    }
+
+                case .authorName:
+                    if rule.op == .equals {
+                        includedAuthors.insert(rule.value)
+                    } else if rule.op == .notEquals {
+                        excludedAuthors.insert(rule.value)
+                    } else {
+                        passthroughRules.append(rule)
+                    }
+
+                case .warning:
+                    if let warning = AO3Warning(rawValue: rule.value) {
+                        if rule.op == .equals {
+                            includedWarnings.insert(warning)
+                        } else if rule.op == .notEquals {
+                            excludedWarnings.insert(warning)
+                        }
+                    }
+
+                case .category:
+                    if let category = AO3Category(rawValue: rule.value) {
+                        if rule.op == .equals {
+                            includedCategories.insert(category)
+                        } else if rule.op == .notEquals {
+                            excludedCategories.insert(category)
+                        }
+                    }
+
+                case .rating:
+                    if let rating = AO3Rating(rawValue: rule.value) {
+                        switch rule.op {
+                        case .equals:
+                            includedRating = rating
+                            ratingMatch = .exact
+                        case .notEquals:
+                            excludedRatings.insert(rating)
+                        case .ratingAtMost:
+                            includedRating = rating
+                            ratingMatch = .orLower
+                        case .ratingAtLeast:
+                            includedRating = rating
+                            ratingMatch = .orHigher
+                        default:
+                            passthroughRules.append(rule)
+                        }
+                    }
+
+                case .crossover:
+                    if rule.op == .equals {
+                        crossoverState = .includeOnly
+                    } else if rule.op == .notEquals {
+                        crossoverState = .excludeOnly
+                    }
+
+                case .status:
+                    if rule.value == AO3CompletionStatus.complete.rawValue {
+                        completionState = .includeOnly
+                    } else if rule.value == AO3CompletionStatus.workInProgress.rawValue {
+                        completionState = .excludeOnly
+                    }
+
+                case .wordCountGT:
+                    wordsFrom = Int(rule.value)
+                case .wordCountLT:
+                    wordsTo = Int(rule.value)
+                case .kudosGT:
+                    kudosFrom = Int(rule.value)
+                case .kudosLT:
+                    kudosTo = Int(rule.value)
+
+                default:
+                    passthroughRules.append(rule)
+                }
+            }
+        }
     }
 
     // MARK: Mutual exclusion helpers (mirrors AO3's toggleInclude/toggleExclude)
@@ -153,6 +295,85 @@ final class AO3FilterPopupState {
             if excludedAuthors.contains(value) { excludedAuthors.remove(value) } else { excludedAuthors.insert(value); includedAuthors.remove(value) }
         }
     }
+
+    func removeTag(_ value: String, field: StringTagField) {
+        switch field {
+        case .fandom:
+            includedFandoms.remove(value)
+            excludedFandoms.remove(value)
+        case .relationship:
+            includedRelationships.remove(value)
+            excludedRelationships.remove(value)
+        case .character:
+            includedCharacters.remove(value)
+            excludedCharacters.remove(value)
+        case .freeform:
+            includedFreeforms.remove(value)
+            excludedFreeforms.remove(value)
+        case .author:
+            includedAuthors.remove(value)
+            excludedAuthors.remove(value)
+        }
+    }
+
+    func tagSelectionState(_ value: String, field: StringTagField) -> FilterSelectionState {
+        if isIncluded(value, field: field) { return .included }
+        if isExcluded(value, field: field) { return .excluded }
+        return .clear
+    }
+
+    func cycleTag(_ value: String, field: StringTagField) {
+        switch tagSelectionState(value, field: field) {
+        case .clear:
+            toggleInclude(value, field: field)
+        case .included:
+            toggleExclude(value, field: field)
+        case .excluded:
+            removeTag(value, field: field)
+        }
+    }
+
+    // MARK: - 3-State cycling for Warnings & Categories
+
+    func selectionState(for warning: AO3Warning) -> FilterSelectionState {
+        if includedWarnings.contains(warning) { return .included }
+        if excludedWarnings.contains(warning) { return .excluded }
+        return .clear
+    }
+
+    func cycleWarning(_ warning: AO3Warning) {
+        switch selectionState(for: warning) {
+        case .clear:
+            includedWarnings.insert(warning)
+            excludedWarnings.remove(warning)
+        case .included:
+            includedWarnings.remove(warning)
+            excludedWarnings.insert(warning)
+        case .excluded:
+            includedWarnings.remove(warning)
+            excludedWarnings.remove(warning)
+        }
+    }
+
+    func selectionState(for category: AO3Category) -> FilterSelectionState {
+        if includedCategories.contains(category) { return .included }
+        if excludedCategories.contains(category) { return .excluded }
+        return .clear
+    }
+
+    func cycleCategory(_ category: AO3Category) {
+        switch selectionState(for: category) {
+        case .clear:
+            includedCategories.insert(category)
+            excludedCategories.remove(category)
+        case .included:
+            includedCategories.remove(category)
+            excludedCategories.insert(category)
+        case .excluded:
+            includedCategories.remove(category)
+            excludedCategories.remove(category)
+        }
+    }
 }
 
 // MARK: - Digest helper
@@ -199,10 +420,30 @@ extension AO3FilterPopupState {
         for category in excludedCategories { excludeGroup.rules.append(FilterRule(field: .category, op: .notEquals, value: category.rawValue)) }
 
         if let includedRating {
-            includeGroup.rules.append(FilterRule(field: .rating, op: .equals, value: includedRating.rawValue))
+            switch ratingMatch {
+            case .exact:
+                includeGroup.rules.append(FilterRule(field: .rating, op: .equals, value: includedRating.rawValue))
+            case .orHigher:
+                includeGroup.rules.append(FilterRule(field: .rating, op: .ratingAtLeast, value: includedRating.rawValue))
+            case .orLower:
+                includeGroup.rules.append(FilterRule(field: .rating, op: .ratingAtMost, value: includedRating.rawValue))
+            }
         }
         for rating in excludedRatings {
             excludeGroup.rules.append(FilterRule(field: .rating, op: .notEquals, value: rating.rawValue))
+        }
+
+        if let wordsFrom {
+            includeGroup.rules.append(FilterRule(field: .wordCountGT, op: .equals, value: "\(wordsFrom)"))
+        }
+        if let wordsTo {
+            includeGroup.rules.append(FilterRule(field: .wordCountLT, op: .equals, value: "\(wordsTo)"))
+        }
+        if let kudosFrom {
+            includeGroup.rules.append(FilterRule(field: .kudosGT, op: .equals, value: "\(kudosFrom)"))
+        }
+        if let kudosTo {
+            includeGroup.rules.append(FilterRule(field: .kudosLT, op: .equals, value: "\(kudosTo)"))
         }
 
         switch crossoverState {
@@ -215,6 +456,9 @@ extension AO3FilterPopupState {
         case .includeOnly: includeGroup.rules.append(FilterRule(field: .status, op: .equals, value: AO3CompletionStatus.complete.rawValue))
         case .excludeOnly: includeGroup.rules.append(FilterRule(field: .status, op: .equals, value: AO3CompletionStatus.workInProgress.rawValue))
         }
+
+        // Preserve unmapped rules from the drawer
+        includeGroup.rules.append(contentsOf: passthroughRules)
 
         var expr = FilterExpression()
         expr.groups = [includeGroup, excludeGroup].filter { !$0.rules.isEmpty }

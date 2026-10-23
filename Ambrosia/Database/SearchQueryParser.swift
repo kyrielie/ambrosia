@@ -26,6 +26,13 @@ struct SearchQuery {
     let fulltextPhrase: String?
     let plainTerms: [String]
 
+    var excludedTagTerms: [String] = []
+    var excludedAuthorTerms: [String] = []
+    var excludedTitleTerms: [String] = []
+    var excludedSeriesTerms: [String] = []
+    var wordCountGT: Int?
+    var wordCountLT: Int?
+
     /// IDs matched by full-text search. When non-nil, plainTerms are replaced
     /// by this explicit ID set in the SQL layer.
     var ftsMatchedIDs: [Int]?
@@ -49,7 +56,10 @@ struct SearchQuery {
             statusTerms.isEmpty &&
             (fulltextPhrase?.isEmpty ?? true) &&
             plainTerms.isEmpty &&
-            (ftsMatchedIDs?.isEmpty ?? true)
+            (ftsMatchedIDs?.isEmpty ?? true) &&
+            excludedTagTerms.isEmpty && excludedAuthorTerms.isEmpty &&
+            excludedTitleTerms.isEmpty && excludedSeriesTerms.isEmpty &&
+            wordCountGT == nil && wordCountLT == nil
     }
 
     // MARK: - Scoped token detection
@@ -143,6 +153,38 @@ struct SearchQuery {
 
         if let fulltext = fulltextPhrase, !fulltext.isEmpty {
             rules.append(FilterRule(field: .fulltext, op: .contains, value: fulltext))
+        }
+
+        for tag in excludedTagTerms {
+            let resolved: String
+            if let resolver = canonicalTagResolver {
+                resolved = await resolver(tag)
+            } else {
+                resolved = tag
+            }
+            let kind = AO3TagKind.classify(resolved)
+            let field = kind.filterField
+            rules.append(FilterRule(field: field, op: .notEquals, value: resolved))
+        }
+
+        for author in excludedAuthorTerms {
+            rules.append(FilterRule(field: .authorName, op: .notEquals, value: author))
+        }
+
+        for title in excludedTitleTerms {
+            rules.append(FilterRule(field: .title, op: .notContains, value: title))
+        }
+
+        for series in excludedSeriesTerms {
+            rules.append(FilterRule(field: .series, op: .notContains, value: series))
+        }
+
+        if let gt = wordCountGT {
+            rules.append(FilterRule(field: .wordCountGT, op: .equals, value: "\(gt)"))
+        }
+
+        if let lt = wordCountLT {
+            rules.append(FilterRule(field: .wordCountLT, op: .equals, value: "\(lt)"))
         }
 
         return rules
@@ -241,8 +283,8 @@ struct SearchQueryParser {
                            seriesTerms: [], plainTerms: words)
     }
 
-    /// Parse multiple tokens (e.g. `author:Alice tag:"Slow Burn" title:Secret`)
-    /// into structured scoped lists and remaining plain search words.
+    /// Parse multiple tokens (e.g. `author:Alice tag:"Slow Burn" title:Secret -tag:Angst words:>50k`)
+    /// into structured scoped lists, numeric ranges, and remaining plain search words.
     static func parseMultiToken(_ input: String) -> SearchQuery {
         let trimmed = input.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else {
@@ -255,21 +297,56 @@ struct SearchQueryParser {
         var series: [String] = []
         var statuses: [String] = []
         var fulltext: String?
+        var excludedTags: [String] = []
+        var excludedAuthors: [String] = []
+        var excludedTitles: [String] = []
+        var excludedSeries: [String] = []
+        var wordGT: Int?
+        var wordLT: Int?
         var plain: [String] = []
 
         let tokens = tokenize(trimmed)
         let prefixMap: [(String, (String) -> Void)] = [
+            ("-author:", { excludedAuthors.append($0) }),
+            ("-series:", { excludedSeries.append($0) }),
+            ("-title:", { excludedTitles.append($0) }),
+            ("-tag:", { excludedTags.append($0) }),
+            ("-warning:", { excludedTags.append($0) }),
+            ("-category:", { excludedTags.append($0) }),
             ("author:", { authors.append($0) }),
             ("series:", { series.append($0) }),
             ("status:", { statuses.append($0) }),
             ("fulltext:", { fulltext = $0 }),
             ("title:", { titles.append($0) }),
-            ("tag:", { tags.append($0) })
+            ("tag:", { tags.append($0) }),
+            ("warning:", { tags.append($0) }),
+            ("category:", { tags.append($0) })
         ]
 
         for token in tokens {
+            let lower = token.lowercased()
+
+            // Check word count range syntax e.g. words:>50k, words:<20k, words:10k-50k
+            if lower.hasPrefix("words:") {
+                let rangeStr = String(token.dropFirst("words:".count)).trimmingCharacters(in: .whitespaces)
+                if rangeStr.hasPrefix(">") {
+                    wordGT = parseWordCount(String(rangeStr.dropFirst()))
+                } else if rangeStr.hasPrefix("<") {
+                    wordLT = parseWordCount(String(rangeStr.dropFirst()))
+                } else if rangeStr.contains("-") {
+                    let parts = rangeStr.split(separator: "-", maxSplits: 1).map(String.init)
+                    if parts.count == 2 {
+                        wordGT = parseWordCount(parts[0])
+                        wordLT = parseWordCount(parts[1])
+                    }
+                } else if let exact = parseWordCount(rangeStr) {
+                    wordGT = exact
+                }
+                continue
+            }
+
             var matched = false
-            for (prefix, assign) in prefixMap where token.lowercased().hasPrefix(prefix) {
+            for (prefix, assign) in prefixMap where lower.hasPrefix(prefix) {
                 let val = String(token.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
                 if !val.isEmpty {
                     assign(val)
@@ -282,7 +359,7 @@ struct SearchQueryParser {
             }
         }
 
-        return SearchQuery(
+        var query = SearchQuery(
             tagTerms: tags,
             authorTerms: authors,
             titleTerms: titles,
@@ -291,6 +368,24 @@ struct SearchQueryParser {
             fulltextPhrase: fulltext,
             plainTerms: plain
         )
+        query.excludedTagTerms = excludedTags
+        query.excludedAuthorTerms = excludedAuthors
+        query.excludedTitleTerms = excludedTitles
+        query.excludedSeriesTerms = excludedSeries
+        query.wordCountGT = wordGT
+        query.wordCountLT = wordLT
+        return query
+    }
+
+    private static func parseWordCount(_ str: String) -> Int? {
+        let lower = str.lowercased().trimmingCharacters(in: .whitespaces)
+        if lower.hasSuffix("k") {
+            let num = String(lower.dropLast())
+            if let doubleVal = Double(num) {
+                return Int(doubleVal * 1000)
+            }
+        }
+        return Int(lower)
     }
 
     /// Splits input into tokens while respecting double quotes (e.g. `tag:"Slow Burn"`).

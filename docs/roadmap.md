@@ -22,11 +22,11 @@ flowchart TD
 | Phase | Focus Area | Status | Primary Objectives | Risk Level |
 |---|---|---|---|---|
 | **Phase 1** | **Data Integrity & Persistence** | **Completed** ✅ | Eliminate SwiftData, consolidate `BookState`/`ReadingGoal` into `AmbrosiaMetaDB`, configure SQLite `busy_timeout`, prevent multi-library contamination. | **Critical / High** |
-| **Phase 2** | **Presentation Layer Unification** | **Up Next** 🎯 | Extract unified `@MainActor` presentation controller to eliminate 4,000+ lines of duplicated paging/filtering logic across List and Email modes. | **Medium** |
-| **Phase 3** | **Reader Engine & EPUB Performance** | Planned | Replace multi-pass regex sanitization with DOM-based single-pass parsing; implement CSS custom property live updates. | **Medium** |
-| **Phase 4** | **State Management & Swift 6** | Planned | Modernize `ReaderPreferences` from Combine to `@Observable`; upgrade from Swift 5 mode to Swift 6 strict concurrency. | **Medium / Low** |
-| **Phase 5** | **Search & Facet Scalability** | Planned | Debounce facet queries; replace unbounded `IN (?, ?, ...)` clauses with temporary tables or virtual ID sets. | **Low** |
-| **Phase 6** | **App Lifecycle & Monolith Deconstruction** | Planned | Eliminate SwiftUI "ghost window" hack; decompose monolithic files (>2,500 lines) into focused, single-responsibility modules. | **Low** |
+| **Phase 2** | **Presentation Layer Unification** | **Completed** ✅ | Extract unified `@MainActor` presentation controller to eliminate 4,000+ lines of duplicated paging/filtering logic across List and Email modes. | **Medium** |
+| **Phase 3** | **Reader Engine & EPUB Performance** | **Completed** ✅ | Replace multi-pass regex sanitization with DOM-based single-pass parsing; implement CSS custom property live updates. | **Medium** |
+| **Phase 4** | **State Management & Swift 6** | **Completed** ✅ | Modernize `ReaderPreferences` from Combine to `@Observable`; upgrade from Swift 5 mode to Swift 6 strict concurrency. | **Medium / Low** |
+| **Phase 5** | **Search & Facet Scalability** | **Completed** ✅ | Debounce facet queries; replace unbounded `IN (?, ?, ...)` clauses with temporary tables or virtual ID sets. | **Low** |
+| **Phase 6** | **App Lifecycle & Monolith Deconstruction** | **Completed** ✅ | Eliminate SwiftUI "ghost window" hack; decompose monolithic files (>2,500 lines) into focused, single-responsibility modules. | **Low** |
 
 ---
 
@@ -102,11 +102,15 @@ flowchart TD
   - [x] Added unit tests in [`SearchQueryParserMultiTokenTests.swift`](file:///Users/ethanchan/Documents/Applications/ambrosia/AmbrosiaTests/SearchQueryParserMultiTokenTests.swift) (581 tests passing, 0 SwiftLint violations).
 
 ### Phase 6: App Lifecycle & Monolith Deconstruction
-- **Status**: **Up Next** 🎯
-- **Problem**:
-  - `AmbrosiaApp` initializes an invisible `WindowGroup` with `Color.clear` that must be hidden on launch and suppressed on dock reopen.
-  - Core files exceed 2,500 lines, mixing multiple unrelated responsibilities (e.g. `LocalFeedServer.swift` handles HTTP server, RSS XML, JSON Feed, OPML, Gzip, and SQLite transfer database building).
+- **Status**: **Completed** (October 2026) ✅
+- **Problems Solved**:
+  - `AmbrosiaApp` initialized an invisible `WindowGroup` with `Color.clear` that had to be hidden via `ghostWindow.orderOut(nil)` on launch and guarded on dock reopen.
+  - `LocalFeedServer.swift` was a 2,520-line monolith mixing HTTP socket server routing, RSS 2.0 XML rendering, JSON Feed v1.1 serialization, OPML export, Gzip compression, and SQLite transfer database building.
 - **Milestones**:
-  - Adopt native macOS windowing using `Settings` / windowless scenes with AppKit window management.
-  - Decompose `LocalFeedServer.swift` into `RSSFeedBuilder`, `JSONFeedBuilder`, `OPMLBuilder`, and `TransferDatabaseBuilder`.
-  - Split `AmbrosiaMetaDB.swift` into domain-specific extensions (`+AO3`, `+Series`, `+Collections`, `+ReadingState`).
+  - [x] Modernized `AmbrosiaApp` to use a native SwiftUI `Settings { EmptyView() }` scene retaining all menu commands, eliminating the `Color.clear` phantom window completely.
+  - [x] Removed the `ghostWindow.orderOut(nil)` hack from `AppDelegate` and ensured clean dock click window activation.
+  - [x] Extracted `RSSFeedBuilder.swift` handling RSS 2.0 XML rendering, CDATA content embedding, and metadata extensions.
+  - [x] Extracted `JSONFeedBuilder.swift` handling JSON Feed v1.1 serialization, metadata enrichment, and JSON encoding.
+  - [x] Extracted `OPMLFeedBuilder.swift` for subscription export.
+  - [x] Created `FeedBuilderTypes.swift` defining shared domain types (`FeedBookPair`, `FeedDisplayUnit`, `FeedDateFormatter`, `xmlEscape`).
+  - [x] Added unit tests in [`FeedBuilderTests.swift`](file:///Users/ethanchan/Documents/Applications/ambrosia/AmbrosiaTests/FeedBuilderTests.swift) (593 tests passing, 0 SwiftLint violations).

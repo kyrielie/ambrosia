@@ -27,16 +27,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
 
-        // Hide the WindowGroup ghost window that SwiftUI creates for Color.clear.
-        // We must NOT close() it — closing triggers deallocation and SwiftUI will
-        // recreate a new window the next time applicationShouldHandleReopen fires
-        // (because returning true signals the scene manager to restore windows).
-        // Hiding with orderOut keeps it alive and invisible so the scene stays satisfied.
-        if let ghostWindow = NSApp.windows.first {
-            ghostWindow.isExcludedFromWindowsMenu = true
-            ghostWindow.orderOut(nil)
-        }
-
         // Tabbing the Library window together with independent Reader windows
         // doesn't make sense for this app; NSWindow.allowsAutomaticWindowTabbing
         // defaults to true, so it must be explicitly turned off.

@@ -2,20 +2,6 @@ import Foundation
 import Darwin
 import FlyingFox
 
-/// Order-preserving dedup for feed metadata arrays (fandoms, relationships,
-/// characters, warnings, categories, freeform tags). Used by
-/// `buildJSONFeedItem`, `buildGroupedJSONFeedItem`, and `transferRow` so
-/// every metadata array field goes through the same pass across all three
-/// wire formats this file emits — none of their consumers dedup on their
-/// own end, and the per-field handling used to be inconsistent (some fields
-/// relied on `SeriesGroup`'s own `Set`-based construction; `warnings` and the
-/// singleton items' fandoms/relationships/characters/warnings had no dedup
-/// pass anywhere).
-private func dedupPreservingOrder(_ values: [String]) -> [String] {
-    var seen = Set<String>()
-    return values.filter { seen.insert($0).inserted }
-}
-
 // MARK: - §9 / §4: LocalFeedServer
 //
 // Lightweight RSS 2.0 + `content:encoded` feed server backed by FlyingFox.
@@ -149,109 +135,6 @@ actor EPUBParseGovernor {
 }
 
 // MARK: - LocalFeedServer actor
-
-// JSON Feed 1.1 model types for `LocalFeedServer`'s JSON Feed route. Kept at
-// file scope (rather than nested in `LocalFeedServer`) so their `CodingKeys`
-// enums stay at one level of nesting.
-
-private struct JSONFeedAuthor: Codable {
-    var name: String?
-    var url: String?
-}
-
-private struct JSONFeedSeriesEntry: Codable {
-    var name: String
-    var index: Int
-    var ao3ID: String?
-
-    enum CodingKeys: String, CodingKey {
-        case name, index
-        case ao3ID = "ao3_id"
-    }
-}
-
-/// Ambrosia-specific metadata that has no JSON Feed 1.1 field of its own.
-/// Sent under the spec's `_`-prefixed extension convention — readers that
-/// don't recognize `_ambrosia` ignore it; ones that do get real structured
-/// data instead of the prose stats line baked into `summary`.
-private struct JSONFeedAmbrosiaExtension: Codable {
-    var wordCount: Int?
-    var chapterCurrent: Int?
-    var chapterTotal: Int?
-    var isComplete: Bool?
-    var fandoms: [String]?
-    var relationships: [String]?
-    var characters: [String]?
-    var ratings: [String]?
-    var warnings: [String]?
-    var categories: [String]?
-    var series: [JSONFeedSeriesEntry]?
-    var dateModified: String?
-    // Read-state identity fields (client-side cross-feed/re-subscription dedup;
-    // not part of JSON Feed 1.1 itself). Deliberately separate from the item's
-    // own `id`, which stays "ambrosia-book-<calibre_id>" forever: `ao3WorkID`
-    // may only become known after a later re-extraction, and an `id` that can
-    // change would look like a brand-new article to any client polling this feed.
-    var ao3WorkID: String?
-    // True only when this Calibre book's own description is a merge-plugin
-    // "Anthology containing:" comment — i.e. this book IS an entire compiled
-    // series, not a normal work that happens to belong to one. Unrelated to
-    // series_cache's own per-series-name anthology-hide display setting.
-    var isAnthology: Bool?
-    // Populated only when isAnthology is true. ao3SeriesID is preferred;
-    // seriesName is the Calibre-derived fallback when no AO3 series id exists.
-    var ao3SeriesID: String?
-    var seriesName: String?
-
-    enum CodingKeys: String, CodingKey {
-        case wordCount = "word_count"
-        case chapterCurrent = "chapter_current"
-        case chapterTotal = "chapter_total"
-        case isComplete = "is_complete"
-        case fandoms, relationships, characters, ratings, warnings, categories, series
-        case dateModified = "date_modified"
-        case ao3WorkID = "ao3_work_id"
-        case isAnthology = "is_anthology"
-        case ao3SeriesID = "ao3_series_id"
-        case seriesName = "series_name"
-    }
-}
-
-private struct JSONFeedItem: Codable {
-    var id: String
-    var url: String?
-    var title: String?
-    var contentHTML: String?
-    var summary: String?
-    var datePublished: String?
-    var authors: [JSONFeedAuthor]?
-    var tags: [String]?
-    var ambrosiaExtension: JSONFeedAmbrosiaExtension?
-
-    enum CodingKeys: String, CodingKey {
-        case id, url, title, summary, authors, tags
-        case contentHTML = "content_html"
-        case datePublished = "date_published"
-        case ambrosiaExtension = "_ambrosia"
-    }
-}
-
-private struct JSONFeedDocument: Codable {
-    var version = "https://jsonfeed.org/version/1.1"
-    var title: String
-    var description: String?
-    var homePageURL: String?
-    var feedURL: String?
-    var nextURL: String?
-    var items: [JSONFeedItem]
-
-    enum CodingKeys: String, CodingKey {
-        case version, title, description, items
-        case homePageURL = "home_page_url"
-        case feedURL = "feed_url"
-        case nextURL = "next_url"
-    }
-}
 
 actor LocalFeedServer {
 
@@ -635,13 +518,13 @@ actor LocalFeedServer {
         guard let snapshot = CurrentSearchSnapshot.load(libraryHash: libraryNamespace) else {
             switch format {
             case .rss:
-                let empty = buildEmptyFeed(title: "Current Search",
+                let empty = RSSFeedBuilder.buildEmptyFeed(title: "Current Search",
                                            message: "No search has been published yet.")
                 return HTTPResponse(statusCode: .ok,
                                     headers: [.contentType: "application/rss+xml; charset=utf-8"],
                                     body: Data(empty.utf8))
             case .json:
-                let empty = buildEmptyJSONFeed(title: "Current Search",
+                let empty = JSONFeedBuilder.buildEmptyJSONFeed(title: "Current Search",
                                                feedDescription: "No search has been published yet.",
                                                feedURL: "\(localNetworkURLSync ?? "http://localhost:\(_port)")/feed/search.json")
                 return HTTPResponse(statusCode: .ok,
@@ -703,12 +586,12 @@ actor LocalFeedServer {
             case .rss:
                 return HTTPResponse(statusCode: .ok,
                                     headers: [.contentType: "application/rss+xml; charset=utf-8"],
-                                    body: Data(buildEmptyFeed(title: "Daily Story",
+                                    body: Data(RSSFeedBuilder.buildEmptyFeed(title: "Daily Story",
                                                               message: "No books in library.").utf8))
             case .json:
-                let empty = buildEmptyJSONFeed(title: "Daily Story",
-                                               feedDescription: "No books in library.",
-                                               feedURL: "\(localNetworkURLSync ?? "http://localhost:\(_port)")/feed/random-daily.json")
+                let empty = JSONFeedBuilder.buildEmptyJSONFeed(title: "Daily Story",
+                                                               feedDescription: "No books in library.",
+                                                               feedURL: "\(localNetworkURLSync ?? "http://localhost:\(_port)")/feed/random-daily.json")
                 return HTTPResponse(statusCode: .ok,
                                     headers: [.contentType: "application/feed+json; charset=utf-8"],
                                     body: empty)
@@ -799,54 +682,14 @@ actor LocalFeedServer {
 
         let collections = ((try? await collectionStore?.collections()) ?? [])
             .filter { !excluded.contains($0.id) }
-        let now = ISO8601DateFormatter().string(from: Date())
+        let snapshot = CurrentSearchSnapshot.load(libraryHash: libraryNamespace)
 
-        var outlines = collections.map { col in
-            """
-            <outline type="rss"
-                     text="\(xmlEscape(col.name))"
-                     title="\(xmlEscape(col.name))"
-                     xmlUrl="\(xmlEscape("\(baseURL)/feed/collection/\(col.id).xml"))"/>
-            """
-        }
-
-        if dailyEnabled {
-            outlines.append("""
-            <outline type="rss"
-                     text="Daily Story"
-                     title="Daily Story"
-                     xmlUrl="\(xmlEscape("\(baseURL)/feed/random-daily.xml"))"/>
-            """)
-        }
-
-        if let snapshot = CurrentSearchSnapshot.load(libraryHash: libraryNamespace) {
-            outlines.append("""
-            <outline type="rss"
-                     text="\(xmlEscape("Search: \(snapshot.label)"))"
-                     title="\(xmlEscape("Search: \(snapshot.label)"))"
-                     xmlUrl="\(xmlEscape("\(baseURL)/feed/search.xml"))"/>
-            """)
-        }
-
-        let body = outlines.isEmpty
-            ? "<!-- No collections or search snapshot to export. -->"
-            : outlines.joined(separator: "\n    ")
-
-        let docsText = "Feed URLs are tied to this Mac's current local network address and may break if the address "
-            + "changes or the server restarts. Re-export from Ambrosia to get updated URLs."
-        return """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <opml version="2.0">
-          <head>
-            <title>Ambrosia Library Feeds</title>
-            <dateCreated>\(now)</dateCreated>
-            <docs>\(docsText)</docs>
-          </head>
-          <body>
-            \(body)
-          </body>
-        </opml>
-        """
+        return OPMLFeedBuilder.buildOPML(
+            collections: collections,
+            dailyEnabled: dailyEnabled,
+            searchSnapshot: snapshot,
+            baseURL: baseURL
+        )
     }
 
     private func handleOPML() async throws -> HTTPResponse {
@@ -873,7 +716,6 @@ actor LocalFeedServer {
     /// (a work can be a non-leading member of more than one series at once; see
     /// `AmbrosiaMetaDB.singletonNonLeadingSeriesEntries`), fetched once per feed
     /// build rather than per item.
-    private typealias FeedBookPair = (book: CalibreBook, ao3: AO3MetadataRecord?, seriesEntries: [SeriesCacheEntry])
 
     /// `context` is a short caller label (e.g. "feed:collection/<id>",
     /// "feed:search", "feed:random-daily") forwarded to
@@ -937,14 +779,6 @@ actor LocalFeedServer {
     // membership" concept worth inventing. Multi-series leadership is not
     // special-cased either — a book leading two series produces two grouped
     // feed items, matching assignSeriesItems' behavior.
-
-    /// A page-resident book, or the series group it anchors (when it leads a
-    /// >1-member series and grouping is on). Serialization-agnostic — consumed by
-    /// both the JSON Feed and RSS builders.
-    private enum FeedDisplayUnit {
-        case book(FeedBookPair)
-        case series(SeriesGroup, members: [FeedBookPair])
-    }
 
     /// Groups `pairs` into display units when `groupBySeries` is on; otherwise
     /// returns one `.book` unit per pair, unchanged.
@@ -1203,7 +1037,7 @@ actor LocalFeedServer {
                               calibreIDs: [Int],
                               ifNoneMatch: String?) async throws -> FeedBuildResult<String> {
         guard let library else {
-            return .body(etag: "\"empty\"", data: buildEmptyFeed(title: title, message: "No library open."))
+            return .body(etag: "\"empty\"", data: RSSFeedBuilder.buildEmptyFeed(title: title, message: "No library open."))
         }
 
         // RSS has no pagination protocol (unlike JSON Feed) — the full list is
@@ -1235,162 +1069,20 @@ actor LocalFeedServer {
         for unit in units {
             switch unit {
             case .book(let pair):
-                items.append(await buildRSSItem(book: pair.book, ao3: pair.ao3, seriesEntries: pair.seriesEntries, library: library))
+                let html = await cachedMergedHTML(book: pair.book, library: library)
+                items.append(RSSFeedBuilder.buildRSSItem(book: pair.book, ao3: pair.ao3, seriesEntries: pair.seriesEntries, contentEncoded: html))
             case .series(let group, let members):
-                items.append(await buildGroupedRSSItem(group: group, members: members, library: library))
+                var htmlParts: [String] = []
+                for pair in members {
+                    let html = await cachedMergedHTML(book: pair.book, library: library)
+                    htmlParts.append(html)
+                }
+                items.append(RSSFeedBuilder.buildGroupedRSSItem(group: group, members: members, memberHTMLs: htmlParts))
             }
         }
 
-        let xml = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:ambrosia="https://ambrosia.app/rss-extension">
-          <channel>
-            <title>\(xmlEscape(title))</title>
-            <description>\(xmlEscape(feedDescription))</description>
-            <generator>Ambrosia</generator>
-            <lastBuildDate>\(rfc822Date(from: Date()))</lastBuildDate>
-            \(items.joined(separator: "\n    "))
-          </channel>
-        </rss>
-        """
+        let xml = RSSFeedBuilder.buildFeed(title: title, feedDescription: feedDescription, items: items)
         return .body(etag: etag, data: xml)
-    }
-
-    private func buildEmptyFeed(title: String, message: String) -> String {
-        """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <rss version="2.0">
-          <channel>
-            <title>\(xmlEscape(title))</title>
-            <description>\(xmlEscape(message))</description>
-          </channel>
-        </rss>
-        """
-    }
-
-    private func buildRSSItem(book: CalibreBook,
-                              ao3: AO3MetadataRecord?,
-                              seriesEntries: [SeriesCacheEntry],
-                              library: CalibreLibrary) async -> String {
-        // §4 point 3: description = stripped comment + AO3 stats line
-        let strippedComment = book.comment.map { HTMLStripper.strip($0) } ?? ""
-        let statsLine = buildStatsLine(book: book, ao3: ao3)
-        let description = [strippedComment, statsLine]
-            .filter { !$0.isEmpty }
-            .joined(separator: "\n\n")
-
-        // §4 point 3: content:encoded = full merged HTML from EPUB (CDATA-wrapped)
-        // §4 point 6: cache keyed by (calibreID, epub mtime)
-        let contentEncoded = await cachedMergedHTML(book: book, library: library)
-
-        // §4 point 3: pubDate = ao3 published_date if present, else Calibre pubdate
-        let pubDateStr: String
-        if let ao3Date = ao3?.publishedDate, !ao3Date.isEmpty {
-            pubDateStr = rfc822Date(from: ao3Date)
-        } else if let calibreDate = book.publishedDate,
-                  calibreDate > Self.calibrePubdateSentinel {
-            pubDateStr = rfc822Date(from: calibreDate)
-        } else {
-            pubDateStr = ""
-        }
-
-        var xml = """
-            <item>
-              <title>\(xmlEscape(book.displayTitle))</title>
-              <guid isPermaLink="false">ambrosia-book-\(book.id)</guid>
-        """
-        if let workURL = ao3?.storyURL {
-            xml += "\n      <link>\(xmlEscape(workURL))</link>"
-        }
-        xml += "\n      <description>\(xmlEscape(description))</description>"
-        if !book.authors.isEmpty {
-            xml += "\n      <author>\(xmlEscape(book.authors.joined(separator: ", ")))</author>"
-        }
-        if !pubDateStr.isEmpty {
-            xml += "\n      <pubDate>\(pubDateStr)</pubDate>"
-        }
-        if !contentEncoded.isEmpty {
-            xml += "\n      <content:encoded><![CDATA[\(contentEncoded)]]></content:encoded>"
-        }
-        // Read-state identity for clients that need to dedup a book across feeds/
-        // re-subscriptions — never repurposes <guid> itself, since ao3.workID may
-        // only become known after a later re-extraction, and changing <guid> once
-        // set would look like a brand-new article to any client polling this feed.
-        if let workID = ao3?.workID, !workID.isEmpty {
-            xml += "\n      <ambrosia:workID>\(xmlEscape(workID))</ambrosia:workID>"
-        }
-        if let anthologyEntry = anthologySeriesEntry(for: book, seriesEntries: seriesEntries) {
-            xml += "\n      <ambrosia:isAnthology>true</ambrosia:isAnthology>"
-            if let seriesID = anthologyEntry.ao3SeriesID, !seriesID.isEmpty {
-                xml += "\n      <ambrosia:ao3SeriesID>\(xmlEscape(seriesID))</ambrosia:ao3SeriesID>"
-            } else {
-                xml += "\n      <ambrosia:seriesName>\(xmlEscape(anthologyEntry.seriesName))</ambrosia:seriesName>"
-            }
-        }
-        xml += "\n    </item>"
-        return xml
-    }
-
-    /// RSS analog of buildGroupedJSONFeedItem. Same <hr/>-joined HTML
-    /// concatenation and no-per-member-failure-handling rationale (see that
-    /// function's doc comment). RSS gets no tags field for grouped items, same
-    /// as singleton RSS items today (buildRSSItem has no tag/category concept at
-    /// all) — this is not a gap introduced by grouping, it matches existing RSS
-    /// shape and was an explicit confirmed decision (normal RSS readers won't
-    /// support tags anyway).
-    private func buildGroupedRSSItem(
-        group: SeriesGroup,
-        members: [FeedBookPair],
-        library: CalibreLibrary
-    ) async -> String {
-        var htmlParts: [String] = []
-        for pair in members {
-            let html = await cachedMergedHTML(book: pair.book, library: library)
-            if html.isEmpty {
-                #if DEBUG
-                print(
-                    "[LocalFeedServer] grouped RSS item \(group.seriesKey): member \(pair.book.id) "
-                        + "(\"\(pair.book.displayTitle)\") produced empty merged HTML"
-                )
-                #endif
-            }
-            htmlParts.append(html)
-        }
-        let contentEncoded = htmlParts.joined(separator: "\n<hr/>\n")
-
-        let description = group.allDescriptions.joined(separator: "\n\n")
-
-        var xml = """
-            <item>
-              <title>\(xmlEscape(group.seriesName))</title>
-              <guid isPermaLink="false">ambrosia-series-\(group.seriesKey)</guid>
-        """
-        let leaderAO3 = members.first?.ao3
-        // Same url fallback as the JSON Feed path: real AO3 series URL when
-        // ao3:-keyed, else the leading work's own story URL for calibre:-keyed
-        // groups (not a constructed URL, not omitted).
-        let link: String?
-        if group.seriesKey.hasPrefix("ao3:") {
-            link = "https://archiveofourown.org/series/\(group.seriesKey.dropFirst("ao3:".count))"
-        } else {
-            link = leaderAO3?.storyURL
-        }
-        if let link {
-            xml += "\n      <link>\(xmlEscape(link))</link>"
-        }
-        xml += "\n      <description>\(xmlEscape(description))</description>"
-        if !group.allAuthors.isEmpty {
-            xml += "\n      <author>\(xmlEscape(group.allAuthors.joined(separator: ", ")))</author>"
-        }
-        if let latest = group.latestUpdated {
-            xml += "\n      <pubDate>\(rfc822Date(from: latest))</pubDate>"
-        }
-        if !contentEncoded.isEmpty {
-            xml += "\n      <content:encoded><![CDATA[\(contentEncoded)]]></content:encoded>"
-        }
-        // No <ambrosia:workID> — a group has no single AO3 work id.
-        xml += "\n    </item>"
-        return xml
     }
 
     // MARK: - JSON Feed generation
@@ -1413,12 +1105,6 @@ actor LocalFeedServer {
     // in a per-item `_ambrosia` extension object (the spec's underscore-prefixed
     // convention for reader-specific data) rather than being flattened into prose
     // inside `summary`. Readers that don't recognize `_ambrosia` just ignore it.
-
-    private static let jsonFeedEncoder: JSONEncoder = {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        return encoder
-    }()
 
     /// Cap on cumulative *underlying book count* per page, not item count. A
     /// grouped item can hide an arbitrary number of member EPUB-parses (one
@@ -1776,7 +1462,7 @@ actor LocalFeedServer {
                                ifNoneMatch: String?) async throws -> FeedBuildResult<Data> {
         guard let library else {
             return .body(etag: "\"empty\"",
-                         data: buildEmptyJSONFeed(title: title, feedDescription: "No library open.", feedURL: feedURL))
+                         data: JSONFeedBuilder.buildEmptyJSONFeed(title: title, feedDescription: "No library open.", feedURL: feedURL))
         }
 
         // Cheap SQL fetch returns every matching book, title-sorted. Then, when
@@ -1837,9 +1523,15 @@ actor LocalFeedServer {
                     let item: JSONFeedItem
                     switch unit {
                     case .book(let pair):
-                        item = await self.buildJSONFeedItem(book: pair.book, ao3: pair.ao3, seriesEntries: pair.seriesEntries, library: library)
+                        let html = await self.cachedMergedHTML(book: pair.book, library: library)
+                        item = JSONFeedBuilder.buildJSONFeedItem(book: pair.book, ao3: pair.ao3, seriesEntries: pair.seriesEntries, contentHTML: html)
                     case .series(let seriesGroup, let members):
-                        item = await self.buildGroupedJSONFeedItem(group: seriesGroup, members: members, library: library)
+                        var htmlParts: [String] = []
+                        for pair in members {
+                            let html = await self.cachedMergedHTML(book: pair.book, library: library)
+                            htmlParts.append(html)
+                        }
+                        item = JSONFeedBuilder.buildGroupedJSONFeedItem(group: seriesGroup, members: members, memberHTMLs: htmlParts)
                     }
                     return (index, item)
                 }
@@ -1860,21 +1552,15 @@ actor LocalFeedServer {
             nextURL = nil
         }
 
-        let doc = JSONFeedDocument(
+        let doc = JSONFeedBuilder.buildJSONFeedDocument(
             title: title,
-            description: feedDescription,
-            homePageURL: nil,
+            feedDescription: feedDescription,
             feedURL: feedURL,
             nextURL: nextURL,
             items: items
         )
-        let data = (try? Self.jsonFeedEncoder.encode(doc)) ?? buildEmptyJSONFeed(title: title, feedDescription: feedDescription, feedURL: feedURL)
+        let data = JSONFeedBuilder.encode(doc) ?? JSONFeedBuilder.buildEmptyJSONFeed(title: title, feedDescription: feedDescription, feedURL: feedURL)
         return .body(etag: etag, data: data)
-    }
-
-    private func buildEmptyJSONFeed(title: String, feedDescription: String, feedURL: String) -> Data {
-        let doc = JSONFeedDocument(title: title, description: feedDescription, homePageURL: nil, feedURL: feedURL, items: [])
-        return (try? Self.jsonFeedEncoder.encode(doc)) ?? Data("{}".utf8)
     }
 
     // MARK: - Phase 2: SQLite transfer route (build + compress + serve)
@@ -2036,14 +1722,14 @@ actor LocalFeedServer {
 
         let datePublished: String?
         if let ao3Date = ao3?.publishedDate, !ao3Date.isEmpty {
-            datePublished = iso8601DateString(from: ao3Date)
+            datePublished = FeedDateFormatter.iso8601DateString(from: ao3Date)
         } else if let calibreDate = book.publishedDate,
                   calibreDate > Self.calibrePubdateSentinel {
-            datePublished = iso8601DateString(from: calibreDate)
+            datePublished = FeedDateFormatter.iso8601DateString(from: calibreDate)
         } else {
             datePublished = nil
         }
-        let dateModified = ao3?.updatedDate.flatMap { $0.isEmpty ? nil : iso8601DateString(from: $0) }
+        let dateModified = ao3?.updatedDate.flatMap { $0.isEmpty ? nil : FeedDateFormatter.iso8601DateString(from: $0) }
 
         let authors: [JSONFeedAuthor] = book.authors.map { name in
             let url = (book.authors.count == 1 && ao3?.authors.count == 1)
@@ -2070,7 +1756,7 @@ actor LocalFeedServer {
         let seriesEntries = ao3?.series.map { JSONFeedSeriesEntry(name: $0.name, index: $0.index, ao3ID: $0.ao3ID) } ?? []
 
         func json<T: Encodable>(_ value: T) -> String {
-            (try? String(data: Self.jsonFeedEncoder.encode(value), encoding: .utf8)) ?? "[]"
+            (try? String(data: JSONFeedBuilder.encoder.encode(value), encoding: .utf8)) ?? "[]"
         }
 
         return TransferDatabaseBuilder.Row(
@@ -2152,269 +1838,6 @@ actor LocalFeedServer {
         )
     }
 
-    private func buildJSONFeedItem(book: CalibreBook,
-                                   ao3: AO3MetadataRecord?,
-                                   seriesEntries: [SeriesCacheEntry],
-                                   library: CalibreLibrary) async -> JSONFeedItem {
-        // summary is just the stripped comment now — word count, chapters,
-        // completion, fandoms/rating/warnings/categories/series all ride as
-        // structured data in `_ambrosia` instead of a prose stats line.
-        let summary = book.comment.map { HTMLStripper.strip($0) } ?? ""
-
-        let contentHTML = await cachedMergedHTML(book: book, library: library)
-
-        let datePublished: String?
-        if let ao3Date = ao3?.publishedDate, !ao3Date.isEmpty {
-            datePublished = iso8601DateString(from: ao3Date)
-        } else if let calibreDate = book.publishedDate,
-                  calibreDate > Self.calibrePubdateSentinel {
-            datePublished = iso8601DateString(from: calibreDate)
-        } else {
-            datePublished = nil
-        }
-
-        // Real author array — one JSONFeedAuthor per author name, unlike RSS's
-        // single comma-joined <author>. Only attach an AO3 profile URL when
-        // both sides agree on exactly one author, since a Calibre author list
-        // and an AO3-extracted author list aren't guaranteed to line up
-        // one-to-one for co-authored works.
-        let authors: [JSONFeedAuthor]? = book.authors.isEmpty ? nil : book.authors.map { name in
-            let url = (book.authors.count == 1 && ao3?.authors.count == 1)
-                ? ao3?.authors.first?.profileURL : nil
-            return JSONFeedAuthor(name: name, url: url)
-        }
-
-        // Plain tag list is freeform only now: Calibre's regular tags (ratings/
-        // warnings/categories classified out via AO3TagBuckets) plus AO3's own
-        // "Additional Tags" field, which AO3 itself treats as freeform. Fandoms,
-        // relationships, characters, ratings, warnings, and categories are all
-        // structured entity types, not freeform tags, so they move to `_ambrosia`
-        // as their own typed arrays instead of being flattened into `tags`.
-        let buckets = AO3TagBuckets.from(tags: book.tags)
-        var seenTags = Set<String>()
-        var tags: [String] = []
-        for tag in buckets.regular + (ao3?.additionalTags ?? []) where seenTags.insert(tag).inserted {
-            tags.append(tag)
-        }
-
-        // Every _ambrosia metadata array field goes through the same
-        // order-preserving dedup pass — previously only `categories` did
-        // (via this now-removed local closure), while fandoms/relationships/
-        // characters/warnings had no dedup pass anywhere for singleton items.
-        let fandoms       = dedupPreservingOrder(ao3?.fandoms.compactMap { $0.isEmpty ? nil : $0 } ?? [])
-        let relationships = dedupPreservingOrder(ao3?.relationships.compactMap { $0.isEmpty ? nil : $0 } ?? [])
-        let characters    = dedupPreservingOrder(ao3?.characters.compactMap { $0.isEmpty ? nil : $0 } ?? [])
-        let categories    = dedupPreservingOrder(buckets.categories + (ao3?.categories ?? []))
-        let warnings      = dedupPreservingOrder(buckets.warnings)
-
-        let dateModified = ao3?.updatedDate.flatMap { $0.isEmpty ? nil : iso8601DateString(from: $0) }
-        let anthologyEntry = anthologySeriesEntry(for: book, seriesEntries: seriesEntries)
-
-        let ambrosiaExtensionValue = JSONFeedAmbrosiaExtension(
-            wordCount: ao3?.wordCount ?? book.wordCount,
-            chapterCurrent: ao3?.chapterCurrent,
-            chapterTotal: ao3?.chapterTotal,
-            isComplete: ao3?.isComplete,
-            fandoms: fandoms.isEmpty ? nil : fandoms,
-            relationships: relationships.isEmpty ? nil : relationships,
-            characters: characters.isEmpty ? nil : characters,
-            // A single book should only ever carry one rating tag in
-            // Calibre, but resolve through the same hierarchy-aware helper
-            // as the grouped path anyway, rather than trusting that
-            // invariant — harmless if it never triggers, and keeps both
-            // paths behaving identically if it ever doesn't hold.
-            ratings: AO3Rating.highest(among: book.tags).map { [$0.rawValue] },
-            warnings: warnings.isEmpty ? nil : warnings,
-            categories: categories.isEmpty ? nil : categories,
-            series: ao3?.series.map { JSONFeedSeriesEntry(name: $0.name, index: $0.index, ao3ID: $0.ao3ID) },
-            dateModified: dateModified,
-            ao3WorkID: ao3?.workID.flatMap { $0.isEmpty ? nil : $0 },
-            isAnthology: anthologyEntry != nil ? true : nil,
-            ao3SeriesID: anthologyEntry?.ao3SeriesID,
-            seriesName: anthologyEntry != nil && (anthologyEntry?.ao3SeriesID?.isEmpty ?? true) ? anthologyEntry?.seriesName : nil
-        )
-
-        return JSONFeedItem(
-            id: "ambrosia-book-\(book.id)",
-            url: ao3?.storyURL,
-            title: book.displayTitle,
-            contentHTML: contentHTML.isEmpty ? nil : contentHTML,
-            summary: summary.isEmpty ? nil : summary,
-            datePublished: datePublished,
-            authors: authors,
-            tags: tags.isEmpty ? nil : tags,
-            ambrosiaExtension: ambrosiaExtensionValue
-        )
-    }
-
-    /// One JSON Feed item for a whole series group. Sourced from `SeriesGroup`'s
-    /// aggregation fields (word/chapter totals, dates, isComplete) plus each
-    /// member's own `FeedBookPair` (for merged HTML and raw tags, neither of
-    /// which `SeriesGroup` itself carries).
-    private func buildGroupedJSONFeedItem(
-        group: SeriesGroup,
-        members: [FeedBookPair],
-        library: CalibreLibrary
-    ) async -> JSONFeedItem {
-        // Concatenate every member's merged HTML in group order, joined by <hr/>.
-        // No per-member failure handling: cachedMergedHTML already swallows parse
-        // errors into "" internally and never throws to its caller, so there is
-        // no per-book exception to propagate here. Log the empty-result case so a
-        // genuinely corrupt EPUB in a series is traceable instead of silently
-        // just missing from the concatenated text.
-        var htmlParts: [String] = []
-        for pair in members {
-            let html = await cachedMergedHTML(book: pair.book, library: library)
-            if html.isEmpty {
-                #if DEBUG
-                print("[LocalFeedServer] grouped item \(group.seriesKey): member \(pair.book.id) (\"\(pair.book.displayTitle)\") produced empty merged HTML")
-                #endif
-            }
-            htmlParts.append(html)
-        }
-        let contentHTML = htmlParts.joined(separator: "\n<hr/>\n")
-
-        let summary = group.allDescriptions.joined(separator: "\n\n")
-
-        // Tag buckets: recompute from the union of every member's raw Calibre
-        // tags via AO3TagBuckets.from(tags:) — the same function
-        // buildJSONFeedItem uses for singletons — rather than reusing
-        // SeriesGroup.allTags/allRatings/allWarnings/allCategories, which are
-        // classified via the UI's separate AO3TagKind.classify pipeline and are
-        // not guaranteed bucket-exclusive the same way. Reusing SeriesGroup's own
-        // fields would let ratings/warnings/categories leak into a grouped
-        // item's plain `tags` array while also appearing correctly bucketed in
-        // `_ambrosia`, inconsistent with every singleton item in the same feed.
-        let unionTags = members.flatMap { $0.book.tags }
-        let buckets = AO3TagBuckets.from(tags: unionTags)
-        var seenTags = Set<String>()
-        var tags: [String] = []
-        for tag in buckets.regular + group.allAdditionalTags where seenTags.insert(tag).inserted {
-            tags.append(tag)
-        }
-        // `group.allFandoms`/`allRelationships`/`allCharacters` are already
-        // built via `Set(...).sorted()` in `SeriesGroupBuilder.swift`, so
-        // wrapping them here is redundant today — but it removes the
-        // implicit cross-file invariant ("this is safe because the builder
-        // already deduped it") and keeps this function correct on its own
-        // terms even if `SeriesGroup`'s construction ever changes.
-        let fandoms       = dedupPreservingOrder(group.allFandoms)
-        let relationships = dedupPreservingOrder(group.allRelationships)
-        let characters    = dedupPreservingOrder(group.allCharacters)
-        let categories    = dedupPreservingOrder(buckets.categories + group.allCategories)
-        let warnings      = dedupPreservingOrder(buckets.warnings)
-
-        // One rating tag for the whole group — the highest on the hierarchy,
-        // per AO3Rating.level — never the raw per-member union. The partner
-        // app has no hierarchy of its own, so a grouped item must only ever
-        // publish one rating tag, not e.g. ["Explicit", "General Audiences"].
-        let ratings = AO3Rating.highest(among: unionTags).map { [$0.rawValue] }
-
-        let leaderAO3 = members.first?.ao3
-        let datePublished = group.earliestPublished.map { iso8601DateString(from: $0) }
-        let dateModified = group.latestUpdated.map { iso8601DateString(from: $0) }
-
-        let authors: [JSONFeedAuthor]? = group.allAuthors.isEmpty ? nil : group.allAuthors.map { name in
-            let url = (group.allAuthors.count == 1 && leaderAO3?.authors.count == 1)
-                ? leaderAO3?.authors.first?.profileURL : nil
-            return JSONFeedAuthor(name: name, url: url)
-        }
-
-        // url: the real AO3 series URL when this group is ao3:-keyed. For a
-        // calibre:-keyed group (no AO3 series id), fall back to the leading
-        // work's own story URL rather than a constructed URL or nil — per the
-        // confirmed decision, since non-AO3 books essentially don't form these
-        // groups in practice.
-        let url: String?
-        if group.seriesKey.hasPrefix("ao3:") {
-            let ao3SeriesID = String(group.seriesKey.dropFirst("ao3:".count))
-            url = "https://archiveofourown.org/series/\(ao3SeriesID)"
-        } else {
-            url = leaderAO3?.storyURL
-        }
-
-        // series: omitted entirely for grouped items. JSONFeedSeriesEntry.index
-        // is a per-work index that has no group-level meaning, and this item's
-        // own id/title/url already carry the group's series identity — a
-        // single-element series array embedding a placeholder index would be
-        // misleading rather than merely redundant, per the confirmed decision.
-        let ambrosiaExtensionValue = JSONFeedAmbrosiaExtension(
-            wordCount: group.totalWordCount,
-            chapterCurrent: group.chapterCurrentTotal,
-            chapterTotal: group.chapterTotalTotal,
-            isComplete: group.isComplete,
-            fandoms: fandoms.isEmpty ? nil : fandoms,
-            relationships: relationships.isEmpty ? nil : relationships,
-            characters: characters.isEmpty ? nil : characters,
-            ratings: ratings,
-            warnings: warnings.isEmpty ? nil : warnings,
-            categories: categories.isEmpty ? nil : categories,
-            series: nil,
-            dateModified: dateModified,
-            ao3WorkID: nil,   // a group has no single AO3 work id
-            isAnthology: nil,  // group members are already filtered clear of anthology rows
-            ao3SeriesID: group.seriesKey.hasPrefix("ao3:") ? String(group.seriesKey.dropFirst(4)) : nil,
-            seriesName: group.seriesKey.hasPrefix("ao3:") ? nil : group.seriesName
-        )
-
-        return JSONFeedItem(
-            id: "ambrosia-series-\(group.seriesKey)",
-            url: url,
-            title: group.seriesName,
-            contentHTML: contentHTML.isEmpty ? nil : contentHTML,
-            summary: summary.isEmpty ? nil : summary,
-            datePublished: datePublished,
-            authors: authors,
-            tags: tags.isEmpty ? nil : tags,
-            ambrosiaExtension: ambrosiaExtensionValue
-        )
-    }
-
-    /// The `series_cache` row to treat as "the series this book is" for read-state
-    /// identity purposes — distinct from ordinary series *membership* (a normal
-    /// standalone work that happens to be "Part 3 of Series X"), which must NOT be
-    /// used to key read-state, since different parts of a series are different
-    /// works with independent read progress.
-    ///
-    /// Only relevant when `book.isDescriptionAnthology` is true — i.e. Calibre's
-    /// EPUB-merge plugin wrote this book's own description, meaning this specific
-    /// Calibre row is an entire merged series compiled into one file with no single
-    /// AO3 work URL of its own. Do not confuse this with `SeriesCacheEntry.isAnthology`,
-    /// which is an unrelated per-series-name *display* toggle (hides individual-work
-    /// entries in list views once a merged compilation exists to replace them) and
-    /// says nothing about which book the compilation actually is.
-    ///
-    /// A merged-compilation book is expected to have exactly one meaningful series
-    /// row. If more than one somehow exists, take the first by `seriesIndex` and log
-    /// rather than silently guessing — this hasn't been observed and may indicate a
-    /// bug in how the row got created.
-    private func anthologySeriesEntry(for book: CalibreBook, seriesEntries: [SeriesCacheEntry]) -> SeriesCacheEntry? {
-        guard book.isDescriptionAnthology else { return nil }
-        let sorted = seriesEntries.sorted { $0.seriesIndex < $1.seriesIndex }
-        if sorted.count > 1 {
-            print("[LocalFeedServer] anthology book \(book.id) has \(sorted.count) series_cache rows; using \(sorted[0].seriesName)")
-        }
-        return sorted.first
-    }
-
-    private func buildStatsLine(book: CalibreBook, ao3: AO3MetadataRecord?) -> String {
-        var parts: [String] = []
-        if let wc = ao3?.wordCount ?? book.wordCount, wc > 0 {
-            parts.append(book.displayWordCount)
-        }
-        if let fandoms = ao3?.fandoms, !fandoms.isEmpty {
-            parts.append(fandoms.prefix(3).joined(separator: ", "))
-        }
-        if let ao3 {
-            // §5: use new case names
-            let status = ao3.isComplete
-                ? AO3CompletionStatus.complete.rawValue
-                : AO3CompletionStatus.workInProgress.rawValue
-            parts.append(status)
-        }
-        return parts.joined(separator: " · ")
-    }
-
     // MARK: - §4 point 6: per-item HTML cache
 
     private func cachedMergedHTML(book: CalibreBook, library: CalibreLibrary) async -> String {
@@ -2474,47 +1897,5 @@ actor LocalFeedServer {
 
     // MARK: - Helpers
 
-    private func xmlEscape(_ string: String) -> String {
-        string.replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-    }
-
     private func htmlEscape(_ string: String) -> String { xmlEscape(string) }
-
-    /// Tries ISO 8601 with fractional seconds, then without, then a bare
-    /// yyyy-MM-dd date. Shared by both the RSS (RFC 822) and JSON Feed (ISO 8601)
-    /// date formatters below so there's one parsing chain, not two.
-    private func parseFlexibleDate(_ isoString: String) -> Date? {
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = iso.date(from: isoString) { return date }
-        iso.formatOptions = [.withInternetDateTime]
-        if let date = iso.date(from: isoString) { return date }
-        let fallbackFormatter = DateFormatter()
-        fallbackFormatter.dateFormat = "yyyy-MM-dd"
-        fallbackFormatter.locale = Locale(identifier: "en_US_POSIX")
-        return fallbackFormatter.date(from: isoString)
-    }
-
-    private func rfc822Date(from isoString: String) -> String {
-        rfc822Date(from: parseFlexibleDate(isoString) ?? Date.distantPast)
-    }
-
-    private func rfc822Date(from date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        return formatter.string(from: date)
-    }
-
-    private func iso8601DateString(from isoString: String) -> String {
-        iso8601DateString(from: parseFlexibleDate(isoString) ?? Date.distantPast)
-    }
-
-    private func iso8601DateString(from date: Date) -> String {
-        ISO8601DateFormatter().string(from: date)
-    }
 }

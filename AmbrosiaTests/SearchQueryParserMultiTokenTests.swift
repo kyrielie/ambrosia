@@ -65,4 +65,45 @@ final class SearchQueryParserMultiTokenTests: XCTestCase {
         XCTAssertEqual(rules[0].op, .ratingAtMost)
         XCTAssertEqual(rules[0].value, "Explicit")
     }
+
+    func testParseMultiTokenNegationPrefixes() async {
+        let input = "tag:Fluff -tag:Angst -author:\"Bad Author\""
+        let query = SearchQueryParser.parseMultiToken(input)
+
+        XCTAssertEqual(query.tagTerms, ["Fluff"])
+        XCTAssertEqual(query.excludedTagTerms, ["Angst"])
+        XCTAssertEqual(query.excludedAuthorTerms, ["Bad Author"])
+
+        let rules = await query.asFilterRules()
+        XCTAssertEqual(rules.count, 3)
+
+        let excludedTag = rules.first(where: { $0.field == .tag && $0.op == .notEquals })
+        XCTAssertNotNil(excludedTag)
+        XCTAssertEqual(excludedTag?.value, "Angst")
+
+        let excludedAuthor = rules.first(where: { $0.field == .authorName && $0.op == .notEquals })
+        XCTAssertNotNil(excludedAuthor)
+        XCTAssertEqual(excludedAuthor?.value, "Bad Author")
+    }
+
+    func testParseMultiTokenWordCountRanges() async {
+        let gtInput = "words:>50k tag:Romance"
+        let gtQuery = SearchQueryParser.parseMultiToken(gtInput)
+        XCTAssertEqual(gtQuery.wordCountGT, 50000)
+
+        let gtRules = await gtQuery.asFilterRules()
+        let gtRule = gtRules.first(where: { $0.field == .wordCountGT })
+        XCTAssertNotNil(gtRule)
+        XCTAssertEqual(gtRule?.value, "50000")
+
+        let rangeInput = "words:10k-30k"
+        let rangeQuery = SearchQueryParser.parseMultiToken(rangeInput)
+        XCTAssertEqual(rangeQuery.wordCountGT, 10000)
+        XCTAssertEqual(rangeQuery.wordCountLT, 30000)
+
+        let rangeRules = await rangeQuery.asFilterRules()
+        XCTAssertEqual(rangeRules.count, 2)
+        XCTAssertTrue(rangeRules.contains(where: { $0.field == .wordCountGT && $0.value == "10000" }))
+        XCTAssertTrue(rangeRules.contains(where: { $0.field == .wordCountLT && $0.value == "30000" }))
+    }
 }
