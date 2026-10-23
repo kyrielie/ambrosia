@@ -47,6 +47,13 @@ final class AO3FilterPopupState {
     var crossoverState: TriState = .any
     var completionState: TriState = .any
 
+    // MARK: Word Count — authentic AO3 "From / To" bounds
+    var wordsFrom: Int?
+    var wordsTo: Int?
+
+    // MARK: Passthrough drawer rules preserved losslessly
+    var passthroughRules: [FilterRule] = []
+
     // MARK: Sort (mirrors AO3's single "Sort and Filter" button doing both jobs)
     var sortField: SortField = .title
     var ascending: Bool = true
@@ -178,6 +185,23 @@ extension AO3FilterPopupState {
     /// a one-way overwrite target for `LibraryToolbarState.filterExpression`
     /// — it does not attempt to preserve anything from whatever expression
     /// was previously active.
+    /// Preserves any unmanaged rules from an existing FilterExpression (e.g. collection, title)
+    /// so applying the AO3 filter does not erase them.
+    func syncPassthrough(from expression: FilterExpression) {
+        var unmanaged: [FilterRule] = []
+        for group in expression.groups {
+            for rule in group.rules {
+                switch rule.field {
+                case .tag, .warning, .category, .rating, .crossover, .status, .authorName, .wordCountGT, .wordCountLT:
+                    break
+                default:
+                    unmanaged.append(rule)
+                }
+            }
+        }
+        self.passthroughRules = unmanaged
+    }
+
     func buildExpression() -> FilterExpression {
         var includeGroup = FilterGroup(conjunction: .and)
         var excludeGroup = FilterGroup(conjunction: .and) // AND-of-NOTs == AO3's must_not-any semantics
@@ -215,6 +239,15 @@ extension AO3FilterPopupState {
         case .includeOnly: includeGroup.rules.append(FilterRule(field: .status, op: .equals, value: AO3CompletionStatus.complete.rawValue))
         case .excludeOnly: includeGroup.rules.append(FilterRule(field: .status, op: .equals, value: AO3CompletionStatus.workInProgress.rawValue))
         }
+
+        if let wordsFrom {
+            includeGroup.rules.append(FilterRule(field: .wordCountGT, op: .equals, value: "\(wordsFrom)"))
+        }
+        if let wordsTo {
+            includeGroup.rules.append(FilterRule(field: .wordCountLT, op: .equals, value: "\(wordsTo)"))
+        }
+
+        includeGroup.rules.append(contentsOf: passthroughRules)
 
         var expr = FilterExpression()
         expr.groups = [includeGroup, excludeGroup].filter { !$0.rules.isEmpty }

@@ -23,6 +23,9 @@ final class LibraryToolbarState {
     var groupBySeries: Bool {
         didSet { UserDefaults.standard.set(groupBySeries, forKey: "groupBySeries") }
     }
+    var showAO3FilterSidebar: Bool {
+        didSet { UserDefaults.standard.set(showAO3FilterSidebar, forKey: "showAO3FilterSidebar") }
+    }
 
     var showFilterDrawer: Bool = false
     var showCollections: Bool = false
@@ -69,6 +72,7 @@ final class LibraryToolbarState {
 
     init() {
         groupBySeries = UserDefaults.standard.bool(forKey: "groupBySeries")
+        showAO3FilterSidebar = UserDefaults.standard.bool(forKey: "showAO3FilterSidebar")
     }
 
     // MARK: - Last view (sort, direction, filter)

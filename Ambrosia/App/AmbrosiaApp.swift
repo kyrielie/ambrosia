@@ -77,23 +77,10 @@ struct AmbrosiaApp: App {
             // RebindableAction.displayName exactly — that's how the sync
             // code finds each item.
             CommandGroup(after: .toolbar) {
-                Button("Open AO3 Style Filter") {
+                Button("Toggle AO3 Style Filter") {
                     guard let libraryWindowController = AppDelegate.shared?.libraryWindowController,
-                          let toolbarState = libraryWindowController.toolbarStateForCommands,
-                          let session = AppDelegate.shared?.session,
-                          let metaDB = session.metaDB,
-                          let library = session.library
-                    else { return }
-                    guard let anchorWindow = libraryWindowController.window else { return }
-                    AO3FilterPopupWindowController.open(
-                        anchorWindow: anchorWindow,
-                        toolbarState: toolbarState,
-                        dependencies: AO3FilterPopupWindowController.LibraryDependencies(
-                            metaDB: metaDB, library: library,
-                            ftsLibrary: session.ftsLibrary, collectionStore: session.collectionStore
-                        ),
-                        membershipVersion: session.membershipVersion
-                    )
+                          let toolbarState = libraryWindowController.toolbarStateForCommands else { return }
+                    toolbarState.showAO3FilterSidebar.toggle()
                 }
 
                 Divider()

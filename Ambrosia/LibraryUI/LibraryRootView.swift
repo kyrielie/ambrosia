@@ -74,10 +74,22 @@ struct LibraryRootView: View {
     // MARK: - Body & Root Content
 
     var body: some View {
-        attachSheets(to: rootContent
+        attachSheets(to: mainLayout
             .background(libraryBGColor)
             .foregroundStyle(libraryTextColor)
             .preferredColorScheme(prefs.resolvedLibraryColorScheme))
+    }
+
+    private var mainLayout: some View {
+        HStack(spacing: 0) {
+            if toolbarState.showAO3FilterSidebar {
+                AO3FilterSidebarView()
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                Divider()
+            }
+            rootContent
+        }
+        .animation(.easeInOut(duration: 0.2), value: toolbarState.showAO3FilterSidebar)
     }
 
     private var rootContent: some View {
