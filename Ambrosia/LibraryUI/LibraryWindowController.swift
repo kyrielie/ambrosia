@@ -842,17 +842,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         case .email:
             toolbarState?.toggleEmailSidebar.toggle()
         default:
-            guard let window, let toolbarState, let session,
-                  let metaDB = session.metaDB, let library = session.library else { return }
-            AO3FilterPopupWindowController.open(
-                anchorWindow: window,
-                toolbarState: toolbarState,
-                dependencies: AO3FilterPopupWindowController.LibraryDependencies(
-                    metaDB: metaDB, library: library,
-                    ftsLibrary: session.ftsLibrary, collectionStore: session.collectionStore
-                ),
-                membershipVersion: session.membershipVersion
-            )
+            toolbarState?.showAO3FilterSidebar.toggle()
         }
     }
 

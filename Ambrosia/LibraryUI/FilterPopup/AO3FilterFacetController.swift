@@ -246,10 +246,28 @@ final class AO3FilterFacetController {
         case .excludeOnly: includeGroup.rules.append(FilterRule(field: .status, op: .equals, value: AO3CompletionStatus.workInProgress.rawValue))
         }
 
+        if let wordsFrom = state.wordsFrom {
+            includeGroup.rules.append(FilterRule(field: .wordCountGT, op: .equals, value: "\(wordsFrom)"))
+        }
+        if let wordsTo = state.wordsTo {
+            includeGroup.rules.append(FilterRule(field: .wordCountLT, op: .equals, value: "\(wordsTo)"))
+        }
+        includeGroup.rules.append(contentsOf: state.passthroughRules)
+
         var expr = FilterExpression()
         expr.groups = [includeGroup, excludeGroup].filter { !$0.rules.isEmpty }
         expr.groupConjunction = .and
         return expr
+    }
+
+    /// Contextual tag search for inline autocomplete search boxes.
+    func searchTags(
+        query: String,
+        field: AO3FacetField,
+        fandomContext: [String] = [],
+        limit: Int = 10
+    ) async -> [(name: String, count: Int)] {
+        await metaDB.searchTags(query: query, field: field, fandomContext: fandomContext, limit: limit)
     }
 
     /// Rating facet scoping: ignores only the rating fields themselves (no
@@ -278,6 +296,9 @@ final class AO3FilterFacetController {
         copy.excludedCategories = state.excludedCategories
         copy.crossoverState = state.crossoverState
         copy.completionState = state.completionState
+        copy.wordsFrom = state.wordsFrom
+        copy.wordsTo = state.wordsTo
+        copy.passthroughRules = state.passthroughRules
         // includedRating/excludedRatings intentionally left at their defaults (nil/[]).
         return copy
     }

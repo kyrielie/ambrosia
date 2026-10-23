@@ -198,6 +198,7 @@
 		F569BEF3DF17AEBB5CC056FD /* FilterEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA8DF5320A34336FE5EAA509 /* FilterEvaluator.swift */; };
 		F74AA8D4D18DE44BEE7FD4B8 /* SQLIDList.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4F7A4C6B20ED11EA53C7F1 /* SQLIDList.swift */; };
 		F8CCE80782D75C28C6FEFE32 /* LastViewStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A5029D1C187618742C1661F /* LastViewStateTests.swift */; };
+		F8F1D7C3BE699C65B9D42A2E /* AO3FilterSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAB3A0CE958D7FACB2D7E92D /* AO3FilterSidebarView.swift */; };
 		FB5542B2888646072DA8B65B /* FTSQueryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7D96B91AE470B00B82F9660 /* FTSQueryTests.swift */; };
 		FE6AB1F090025CA70A3AD068 /* MatchingSubqueryBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BF39FB2BA7B3BC873123871 /* MatchingSubqueryBuilderTests.swift */; };
 /* End PBXBuildFile section */
@@ -329,6 +330,7 @@
 		A82098B82233278A48240849 /* LibraryToolbarState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryToolbarState.swift; sourceTree = "<group>"; };
 		AA67F39689A9DF7BA33898FB /* LibraryRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryRegistry.swift; sourceTree = "<group>"; };
 		AA8DF5320A34336FE5EAA509 /* FilterEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterEvaluator.swift; sourceTree = "<group>"; };
+		AAB3A0CE958D7FACB2D7E92D /* AO3FilterSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AO3FilterSidebarView.swift; sourceTree = "<group>"; };
 		AD7CB1D59702C3A538224D77 /* AO3FilterFacetController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AO3FilterFacetController.swift; sourceTree = "<group>"; };
 		AE875729948D781B3AAF8DD2 /* LibraryDisplayControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryDisplayControllerTests.swift; sourceTree = "<group>"; };
 		AEA836E9B58CC9CF0F837BC0 /* ExportManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportManager.swift; sourceTree = "<group>"; };
@@ -776,6 +778,7 @@
 				0989BD59F5F271E0220D8E57 /* AO3FilterPopupState.swift */,
 				BDB14730ACF8294BFAEBCE40 /* AO3FilterPopupView.swift */,
 				D994F254FB5CDE8D644C5194 /* AO3FilterPopupWindowController.swift */,
+				AAB3A0CE958D7FACB2D7E92D /* AO3FilterSidebarView.swift */,
 			);
 			path = FilterPopup;
 			sourceTree = "<group>";
@@ -983,6 +986,7 @@
 				059C04492E4E650E71FEFBC1 /* AO3FilterPopupState.swift in Sources */,
 				4279E636C27B3DAF1D957C17 /* AO3FilterPopupView.swift in Sources */,
 				67DAB3CD4213F48E3AE7F1BC /* AO3FilterPopupWindowController.swift in Sources */,
+				F8F1D7C3BE699C65B9D42A2E /* AO3FilterSidebarView.swift in Sources */,
 				6BF2A94F56BF9E2FD78AAB8A /* AO3Metadata.swift in Sources */,
 				752B4DC2BD8762D798DCDA7B /* AO3MetadataExtractor+Authors.swift in Sources */,
 				D57B9D6EBE450DB606428463 /* AO3MetadataExtractor.swift in Sources */,

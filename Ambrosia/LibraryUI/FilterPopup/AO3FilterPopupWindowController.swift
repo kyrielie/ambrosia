@@ -117,10 +117,33 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
     private func installContent(state: AO3FilterPopupState, toolbarState: LibraryToolbarState,
                                 facetController: AO3FilterFacetController, membershipVersion: Int) {
         hostingController.rootView = AnyView(
-            AO3FilterPopupView(state: state, toolbarState: toolbarState, facetController: facetController,
-                               membershipVersion: membershipVersion,
-                               onApply: { [weak self] in self?.applyDidCommit(toolbarState: toolbarState) })
+            VStack(spacing: 0) {
+                HStack {
+                    Spacer()
+                    Button { [weak self] in
+                        self?.attachBackToSidebar(toolbarState: toolbarState)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.down.left.square")
+                            Text("Dock into Window")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                }
+                AO3FilterPopupView(state: state, toolbarState: toolbarState, facetController: facetController,
+                                   membershipVersion: membershipVersion,
+                                   onApply: { [weak self] in self?.applyDidCommit(toolbarState: toolbarState) })
+            }
         )
+    }
+
+    private func attachBackToSidebar(toolbarState: LibraryToolbarState) {
+        close()
+        toolbarState.showAO3FilterSidebar = true
     }
 
     // MARK: - Docking

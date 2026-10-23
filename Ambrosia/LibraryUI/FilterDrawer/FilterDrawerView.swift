@@ -9,6 +9,15 @@ struct FilterDrawerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    @State private var draftExpression: FilterExpression
+
+    init(expression: Binding<FilterExpression>, onApply: @escaping () -> Void, onClear: @escaping () -> Void) {
+        self._expression = expression
+        self.onApply = onApply
+        self.onClear = onClear
+        self._draftExpression = State(initialValue: expression.wrappedValue)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
 
@@ -28,11 +37,11 @@ struct FilterDrawerView: View {
             Divider()
 
             // Group conjunction picker (only shown when 2+ groups)
-            if expression.groups.count >= 2 {
+            if draftExpression.groups.count >= 2 {
                 HStack {
                     Text("Groups joined by")
                         .font(.caption).foregroundStyle(.secondary)
-                    Picker("", selection: $expression.groupConjunction) {
+                    Picker("", selection: $draftExpression.groupConjunction) {
                         Text("OR  (any group)").tag(FilterConjunction.or)
                         Text("AND (all groups)").tag(FilterConjunction.and)
                     }
@@ -44,25 +53,25 @@ struct FilterDrawerView: View {
 
             ScrollView {
                 VStack(spacing: 0) {
-                    if expression.groups.isEmpty {
+                    if draftExpression.groups.isEmpty {
                         Text("No filters.")
                             .font(.callout).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity).padding(20)
                     } else {
-                        ForEach($expression.groups) { $group in
+                        ForEach($draftExpression.groups) { $group in
                             GroupSection(
                                 group: $group,
-                                showGroupLabel: expression.groups.count > 1,
-                                groupIndex: expression.groups.firstIndex(where: { $0.id == group.id }) ?? 0,
+                                showGroupLabel: draftExpression.groups.count > 1,
+                                groupIndex: draftExpression.groups.firstIndex(where: { $0.id == group.id }) ?? 0,
                                 onDelete: {
-                                    expression.groups.removeAll { $0.id == group.id }
+                                    draftExpression.groups.removeAll { $0.id == group.id }
                                 }
                             )
-                            if group.id != expression.groups.last?.id {
+                            if group.id != draftExpression.groups.last?.id {
                                 // Group separator showing the between-group conjunction
                                 HStack {
                                     VStack { Divider() }
-                                    Text(expression.groupConjunction.rawValue)
+                                    Text(draftExpression.groupConjunction.rawValue)
                                         .font(.caption2.bold())
                                         .foregroundStyle(.secondary)
                                         .padding(.horizontal, 6)
@@ -81,40 +90,43 @@ struct FilterDrawerView: View {
             // Footer
             HStack {
                 Button(role: .destructive) {
-                    // Preserve any collection rules — they survive Clear All.
-                    // Only rule-based (non-collection) filters are cleared.
-                    let collectionRules = expression.groups
+                    let collectionRules = draftExpression.groups
                         .flatMap(\.rules)
                         .filter { $0.field == .collection }
                     if collectionRules.isEmpty {
-                        expression = FilterExpression()
+                        draftExpression = FilterExpression()
                     } else {
                         var fresh = FilterExpression()
                         fresh.groups[0].rules = collectionRules
-                        expression = fresh
+                        draftExpression = fresh
                     }
+                    expression = draftExpression
                     onClear()
                 } label: {
                     Label("Clear All", systemImage: "trash")
                 }
                 .buttonStyle(.borderless).foregroundStyle(.red)
-                .disabled(expression.isEmpty)
+                .disabled(draftExpression.isEmpty)
 
                 Spacer()
 
                 Button("+ Add Group") {
                     if reduceMotion {
-                        expression.groups.append(FilterGroup())
+                        draftExpression.groups.append(FilterGroup())
                     } else {
-                        withAnimation { expression.groups.append(FilterGroup()) }
+                        withAnimation { draftExpression.groups.append(FilterGroup()) }
                     }
                 }
                 .buttonStyle(.borderless)
 
-                Button("Apply") { onApply(); dismiss() }
-                    .keyboardShortcut(.return)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!expression.hasCompleteRules)
+                Button("Apply") {
+                    expression = draftExpression
+                    onApply()
+                    dismiss()
+                }
+                .keyboardShortcut(.return)
+                .buttonStyle(.borderedProminent)
+                .disabled(!draftExpression.hasCompleteRules)
             }
             .padding(20)
         }
@@ -204,9 +216,11 @@ private struct GroupSection: View {
                 .padding(.bottom, 8)
             }
         }
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal, 12).padding(.vertical, 4)
+        .padding(.vertical, 4)
+        .background(Color(NSColor.controlBackgroundColor).opacity(0.8))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(NSColor.separatorColor).opacity(0.6), lineWidth: 0.5))
+        .padding(.horizontal, 14).padding(.vertical, 4)
     }
 
     /// Returns a Binding<FilterRule> that reads and writes by UUID, never
@@ -349,7 +363,8 @@ struct FilterRuleRow: View {
                 placeholder: placeholder,
                 text: $rule.value,
                 field: rule.field,
-                library: session.library
+                library: session.library,
+                metaDB: session.metaDB
             ) { selected in
                 rule.value = selected
             }

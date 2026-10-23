@@ -9,6 +9,7 @@ struct FilterValueTextField: View {
     @Binding var text: String
     let field: FilterField
     let library: CalibreLibrary?
+    var metaDB: AmbrosiaMetaDB?
     let onSelect: (String) -> Void
 
     @State private var suggestions: [String] = []
@@ -87,15 +88,30 @@ struct FilterValueTextField: View {
 
         let capturedField = field
         let capturedLimit = Self.suggestionLimit
+        let capturedMetaDB = metaDB
 
         fetchTask = Task.detached(priority: .userInitiated) {
             guard !Task.isCancelled else { return }
             let results: [String]
             switch capturedField {
-            case .tag:        results = await library.tagSuggestions(prefix: trimmed, limit: capturedLimit)
-            case .authorName: results = await library.authorSuggestions(prefix: trimmed, limit: capturedLimit)
-            case .title:      results = await library.titleSuggestions(prefix: trimmed, limit: capturedLimit)
-            default:          results = []
+            case .tag:
+                if let capturedMetaDB {
+                    let tagsWithCount = await capturedMetaDB.searchTags(query: trimmed, field: .freeform, limit: capturedLimit)
+                    results = tagsWithCount.map(\.name)
+                } else {
+                    results = await library.tagSuggestions(prefix: trimmed, limit: capturedLimit)
+                }
+            case .authorName:
+                if let capturedMetaDB {
+                    let authorsWithCount = await capturedMetaDB.searchTags(query: trimmed, field: .author, limit: capturedLimit)
+                    results = authorsWithCount.map(\.name)
+                } else {
+                    results = await library.authorSuggestions(prefix: trimmed, limit: capturedLimit)
+                }
+            case .title:
+                results = await library.titleSuggestions(prefix: trimmed, limit: capturedLimit)
+            default:
+                results = []
             }
             guard !Task.isCancelled else { return }
             await MainActor.run {

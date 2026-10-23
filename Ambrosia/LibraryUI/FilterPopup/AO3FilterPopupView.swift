@@ -69,6 +69,7 @@ struct AO3FilterPopupView: View {
                 FilterDirectionSection(
                     title: "Include", direction: .include, state: state,
                     facets: facets, ratingFacets: ratingFacets, facetLimits: facetLimits,
+                    facetController: facetController,
                     onToggle: refreshFacets, onLoadMore: loadMoreFacets
                 )
 
@@ -77,12 +78,13 @@ struct AO3FilterPopupView: View {
                 FilterDirectionSection(
                     title: "Exclude", direction: .exclude, state: state,
                     facets: facets, ratingFacets: ratingFacets, facetLimits: facetLimits,
+                    facetController: facetController,
                     onToggle: refreshFacets, onLoadMore: loadMoreFacets
                 )
 
                 Divider()
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text("More Options").font(.headline)
                     TriStateSection(
                         title: "Crossovers", selection: $state.crossoverState, onChange: refreshFacets,
@@ -92,6 +94,23 @@ struct AO3FilterPopupView: View {
                         title: "Completion Status", selection: $state.completionState, onChange: refreshFacets,
                         anyLabel: "All works", excludeLabel: "Works in progress only", includeOnlyLabel: "Complete works only"
                     )
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Word Count").font(.subheadline.bold())
+                        HStack(spacing: 8) {
+                            Text("From:").font(.caption).foregroundStyle(.secondary)
+                            TextField("", value: $state.wordsFrom, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 80)
+                                .onChange(of: state.wordsFrom) { refreshFacets() }
+                            Text("To:").font(.caption).foregroundStyle(.secondary)
+                            TextField("", value: $state.wordsTo, format: .number)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 80)
+                                .onChange(of: state.wordsTo) { refreshFacets() }
+                        }
+                    }
+                    .padding(.top, 4)
                 }
             }
             .padding()
@@ -117,6 +136,8 @@ struct AO3FilterPopupView: View {
         state.excludedRatings = []
         state.crossoverState = .any
         state.completionState = .any
+        state.wordsFrom = nil
+        state.wordsTo = nil
         facetLimits = [:]
         refreshFacets()
     }
@@ -198,7 +219,7 @@ struct AO3FilterPopupView: View {
 
 // MARK: - FilterDirection
 
-enum FilterDirection {
+enum FilterDirection: String {
     case include
     case exclude
 }
@@ -274,6 +295,7 @@ struct FilterDirectionSection: View {
     let facets: [AO3FacetField: [(name: String, count: Int)]]
     let ratingFacets: [(name: String, count: Int)]
     let facetLimits: [AO3FacetField: Int]
+    let facetController: AO3FilterFacetController?
     let onToggle: () -> Void
     let onLoadMore: (AO3FacetField) -> Void
 
@@ -292,27 +314,27 @@ struct FilterDirectionSection: View {
             )
             DirectionalTagFacetSection(
                 field: .fandom, direction: direction, entries: facets[.fandom] ?? [],
-                limit: facetLimits[.fandom] ?? 10, state: state, onToggle: onToggle,
+                limit: facetLimits[.fandom] ?? 10, state: state, facetController: facetController, onToggle: onToggle,
                 onLoadMore: { onLoadMore(.fandom) }
             )
             DirectionalTagFacetSection(
                 field: .character, direction: direction, entries: facets[.character] ?? [],
-                limit: facetLimits[.character] ?? 10, state: state, onToggle: onToggle,
+                limit: facetLimits[.character] ?? 10, state: state, facetController: facetController, onToggle: onToggle,
                 onLoadMore: { onLoadMore(.character) }
             )
             DirectionalTagFacetSection(
                 field: .relationship, direction: direction, entries: facets[.relationship] ?? [],
-                limit: facetLimits[.relationship] ?? 10, state: state, onToggle: onToggle,
+                limit: facetLimits[.relationship] ?? 10, state: state, facetController: facetController, onToggle: onToggle,
                 onLoadMore: { onLoadMore(.relationship) }
             )
             DirectionalTagFacetSection(
                 field: .freeform, direction: direction, entries: facets[.freeform] ?? [],
-                limit: facetLimits[.freeform] ?? 10, state: state, onToggle: onToggle,
+                limit: facetLimits[.freeform] ?? 10, state: state, facetController: facetController, onToggle: onToggle,
                 onLoadMore: { onLoadMore(.freeform) }
             )
             DirectionalTagFacetSection(
                 field: .author, direction: direction, entries: facets[.author] ?? [],
-                limit: facetLimits[.author] ?? 10, state: state, onToggle: onToggle,
+                limit: facetLimits[.author] ?? 10, state: state, facetController: facetController, onToggle: onToggle,
                 onLoadMore: { onLoadMore(.author) }
             )
         }
@@ -365,9 +387,13 @@ struct DirectionalTagFacetSection: View {
     let entries: [(name: String, count: Int)]
     let limit: Int
     @Bindable var state: AO3FilterPopupState
+    let facetController: AO3FilterFacetController?
     let onToggle: () -> Void
     let onLoadMore: () -> Void
     @State private var isExpanded = false
+    @State private var searchText = ""
+    @State private var searchResults: [(name: String, count: Int)] = []
+    @State private var searchTask: Task<Void, Never>?
 
     private var stringField: AO3FilterPopupState.StringTagField {
         switch field {
@@ -398,21 +424,83 @@ struct DirectionalTagFacetSection: View {
 
     var body: some View {
         AccordionSection(title: field.sectionLabel, isExpanded: $isExpanded) {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(entries, id: \.name) { entry in
-                    Toggle(isOn: Binding(get: { isOn(entry.name) }, set: { _ in toggle(entry.name) })) {
-                        Text("\(entry.name) (\(entry.count))")
-                    }
-                    .toggleStyle(.checkbox)
-                }
-                if hasMore {
-                    Button("Load more", action: onLoadMore)
-                        .buttonStyle(.plain)
+            VStack(alignment: .leading, spacing: 3) {
+                // Authentic AO3 inline search box
+                HStack(spacing: 4) {
+                    Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
+                        .font(.caption2)
+                    TextField("Search \(field.sectionLabel.lowercased()) to \(direction.rawValue)…", text: $searchText)
+                        .textFieldStyle(.plain)
+                        .font(.caption)
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                            searchResults = []
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Color(NSColor.controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .padding(.bottom, 2)
+                .onChange(of: searchText) { _, newValue in
+                    performSearch(query: newValue)
+                }
+
+                if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                    if searchResults.isEmpty {
+                        Text("No matching tags found")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 2)
+                    } else {
+                        ForEach(searchResults, id: \.name) { result in
+                            Toggle(isOn: Binding(get: { isOn(result.name) }, set: { _ in toggle(result.name) })) {
+                                Text("\(result.name) (\(result.count))")
+                            }
+                            .toggleStyle(.checkbox)
+                        }
+                    }
+                } else {
+                    ForEach(entries, id: \.name) { entry in
+                        Toggle(isOn: Binding(get: { isOn(entry.name) }, set: { _ in toggle(entry.name) })) {
+                            Text("\(entry.name) (\(entry.count))")
+                        }
+                        .toggleStyle(.checkbox)
+                    }
+                    if hasMore {
+                        Button("Load more", action: onLoadMore)
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
         .onAppear { isExpanded = hasActiveSelection }
+    }
+
+    private func performSearch(query: String) {
+        searchTask?.cancel()
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, let facetController else {
+            searchResults = []
+            return
+        }
+        searchTask = Task { @MainActor in
+            let fandoms = Array(state.includedFandoms)
+            let results = await facetController.searchTags(
+                query: trimmed, field: field, fandomContext: fandoms, limit: 10
+            )
+            guard !Task.isCancelled else { return }
+            self.searchResults = results
+        }
     }
 }
 
