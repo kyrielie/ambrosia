@@ -33,6 +33,48 @@ Filters — two front ends, one engine:
 
 ---
 
+## Tag Synonyms and Facet Counts
+
+### 1. Synonym Resolution vs Filtering
+- **Synonym Database**: When enabled (`AO3TagSeedDatabaseConfig`), Ambrosia loads canonical tags and synonym mappings (`canonical_tags` and `tag_synonyms` in `ambrosia_meta.db`).
+- **Tag Expansion at Filter Time**: When filtering on a tag rule (e.g. `.tag == "Marvel - All Media Types"`), `TagExpansionResolver.filterTagExpansions` queries `AmbrosiaMetaDB.expandedTermsBatch` to look up all synonyms belonging to that canonical cluster.
+- **Distinct Work Matching**: `FilterBuilder.expandedTagFragment` generates a correlated subquery:
+  ```sql
+  EXISTS (
+      SELECT 1 FROM books_tags_link btl2
+      JOIN tags t2 ON t2.id = btl2.tag
+      WHERE btl2.book = b.id AND (t2.name = ? OR t2.name = ? ...)
+  )
+  ```
+  Because the check operates at the book level (`b.id`), every book containing **at least one** synonym in that cluster is matched and returned **exactly once**. If 2,000 distinct books match, the filtered view displays 2,000 works.
+
+### 2. Why Facet Counts Can Exceed Filtered Work Counts (e.g. 6,000+ vs 2,000)
+In the AO3-style filter sidebar/popup, each tag facet displays a count badge. This number can be significantly higher than the number of works returned when applying the filter:
+- **Raw Facet Query**: `AmbrosiaMetaDB.topFacets(for:scopedTo:limit:)` (and `topFacetsUnconstrained`) queries SQLite for tag frequencies across metadata JSON:
+  ```sql
+  SELECT je.value AS name, COUNT(*) AS cnt
+  FROM ao3_metadata, json_each(ao3_metadata.fandoms_json) AS je
+  GROUP BY je.value
+  ```
+  This counts how many times each individual raw tag name appears.
+- **Canonical Merging (`AmbrosiaMetaDB.canonicalize`)**: The controller groups these raw tag counts by their canonical name:
+  ```swift
+  for (name, count) in rawFacets {
+      let canonical = canonicalTerm(for: name)
+      merged[canonical, default: 0] += count
+  }
+  ```
+- **The Discrepancy**: On AO3, works frequently carry multiple related and synonymous tags on the *same work* (e.g. a single fic tagged with *"Marvel"*, *"Marvel Cinematic Universe"*, and *"The Avengers (Marvel Movies)"*).
+  - Each of those 3 raw tags appears ~2,000 times across the library.
+  - All 3 map to the single canonical root *"Marvel - All Media Types"*.
+  - `canonicalize` sums their raw counts: `2,000 + 2,000 + 2,000 = 6,000+`.
+  - The facet badge therefore reflects the **sum of tag occurrences across all synonyms**, whereas applying the filter tests book-level set membership, counting each distinct matching work once (2,000 works).
+
+### 3. Effect of Series Grouping
+When `toolbarState.groupBySeries` is enabled (active only when sorted by Title), `SeriesGroupBuilder` and `LibraryVisibilityPolicy.filter` collapse books belonging to the same series into a single representative series row (`visibleTotalCount`). While this can further reduce the visible item count on a page if multi-work series are present, the multi-thousand discrepancy between facet badge count and filtered work count is primarily the result of tag-occurrence summation in `canonicalize`.
+
+---
+
 ### Known Limitations (Filter/Search)
 
 - **Two independent SQL-generation paths** exist for the same tag/author/series matching logic: `FilterBuilder.sqlFragment(for:)` (drawer/popup path) and `CalibreLibrarySearch.whereClause(for:)` (search-bar path). A correctness or performance fix to one (e.g. the NOT EXISTS rewrite, Invariant 24) does not automatically apply to the other, so treat them as needing separate verification when either changes. As of this writing `CalibreLibrarySearch._bookCount(query:)` does not carry an outer `LEFT JOIN` — it already routes every tag/author/series condition through the same self-contained `EXISTS`/`NOT EXISTS` shape `FilterBuilder` uses (see Invariant 24); this is now pinned by `CalibreLibrarySearchTests.swift`.
