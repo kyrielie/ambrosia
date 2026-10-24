@@ -53,4 +53,20 @@ final class ReaderPreferencesTests: XCTestCase {
         XCTAssertTrue(emittedCSS.contains(".summary, .notes"), "Must style AO3 summary and author notes")
         XCTAssertTrue(emittedCSS.contains(".ao3-endmatter"), "Must style AO3 endmatter")
     }
+
+    func testAO3WorkLayoutOrderDefaultAndPersistence() {
+        let prefs = ReaderPreferences.shared
+        XCTAssertEqual(prefs.ao3WorkLayoutOrder, .ao3Web)
+
+        prefs.ao3WorkLayoutOrder = .titleFirst
+        XCTAssertEqual(prefs.ao3WorkLayoutOrder, .titleFirst)
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "rp.ao3WorkLayoutOrder"), "titleFirst")
+
+        prefs.ao3WorkLayoutOrder = .ao3EPUB
+        XCTAssertEqual(prefs.ao3WorkLayoutOrder, .ao3EPUB)
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "rp.ao3WorkLayoutOrder"), "ao3EPUB")
+
+        prefs.resetReaderToDefaults()
+        XCTAssertEqual(prefs.ao3WorkLayoutOrder, .ao3Web)
+    }
 }

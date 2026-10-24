@@ -58,6 +58,24 @@ enum PreferredReaderOption: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - AO3WorkLayoutOrder
+
+/// The order in which AO3 metadata (tags/preface), title, author, and summary/notes are presented.
+enum AO3WorkLayoutOrder: String, CaseIterable, Identifiable {
+    case ao3Web
+    case titleFirst
+    case ao3EPUB
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .ao3Web: return "Tags Before Title (AO3 Web Order)"
+        case .titleFirst: return "Title First (Title, Tags, Summary)"
+        case .ao3EPUB: return "AO3 EPUB Order (Title, Link, Tags, Title)"
+        }
+    }
+}
+
 // MARK: - LibraryColorScheme
 
 /// The colour pair applied to the library background and text.
@@ -162,6 +180,12 @@ final class ReaderPreferences: ObservableObject {
     var colsPerScreen: ColsPerScreen {
         didSet {
             UserDefaults.standard.set(colsPerScreen.rawValue, forKey: Keys.colsPerScreen)
+            preferenceChangeKind.send(.structural)
+        }
+    }
+    var ao3WorkLayoutOrder: AO3WorkLayoutOrder {
+        didSet {
+            UserDefaults.standard.set(ao3WorkLayoutOrder.rawValue, forKey: Keys.ao3WorkLayoutOrder)
             preferenceChangeKind.send(.structural)
         }
     }
@@ -475,6 +499,7 @@ final class ReaderPreferences: ObservableObject {
         ]
         static let groupBySeries               = false
         static let defaultReadingMode          = ReadingMode.scroll
+        static let ao3WorkLayoutOrder          = AO3WorkLayoutOrder.ao3Web
         static let preferredReader              = PreferredReaderOption.inbuilt
         static let customReaderAppPath          = ""
 
@@ -522,6 +547,7 @@ final class ReaderPreferences: ObservableObject {
         // not a new namespaced key. See the `groupBySeries` property comment.
         static let groupBySeries               = "groupBySeries"
         static let defaultReadingMode          = "rp.defaultReadingMode"
+        static let ao3WorkLayoutOrder          = "rp.ao3WorkLayoutOrder"
         static let preferredReader             = "rp.preferredReader"
         static let customReaderAppPath         = "rp.customReaderAppPath"
         static let keyBindings                 = "rp.keyBindings"
@@ -547,6 +573,8 @@ final class ReaderPreferences: ObservableObject {
         autoOpenFindBarForFullTextSearch = ud.object(forKey: Keys.autoOpenFindBarForFullTextSearch) != nil
             ? ud.bool(forKey: Keys.autoOpenFindBarForFullTextSearch)
             : Defaults.autoOpenFindBarForFullTextSearch
+        let rawAO3Order = ud.string(forKey: Keys.ao3WorkLayoutOrder) ?? Defaults.ao3WorkLayoutOrder.rawValue
+        ao3WorkLayoutOrder = AO3WorkLayoutOrder(rawValue: rawAO3Order) ?? Defaults.ao3WorkLayoutOrder
 
         // Migrate old "rp.backgroundColor" key if present
         let legacyBG = ud.string(forKey: "rp.backgroundColor")
@@ -1104,6 +1132,7 @@ final class ReaderPreferences: ObservableObject {
             || colsPerScreen != Defaults.colsPerScreen
             || autoOpenFindBarForFullTextSearch != Defaults.autoOpenFindBarForFullTextSearch
             || defaultReadingMode != Defaults.defaultReadingMode
+            || ao3WorkLayoutOrder != Defaults.ao3WorkLayoutOrder
             || preferredReader != Defaults.preferredReader
             || customReaderAppPath != Defaults.customReaderAppPath
             || keyBindings != Defaults.keyBindings
@@ -1139,6 +1168,7 @@ final class ReaderPreferences: ObservableObject {
         colsPerScreen          = Defaults.colsPerScreen
         autoOpenFindBarForFullTextSearch = Defaults.autoOpenFindBarForFullTextSearch
         defaultReadingMode    = Defaults.defaultReadingMode
+        ao3WorkLayoutOrder    = Defaults.ao3WorkLayoutOrder
         preferredReader       = Defaults.preferredReader
         customReaderAppPath   = Defaults.customReaderAppPath
         keyBindings           = Defaults.keyBindings

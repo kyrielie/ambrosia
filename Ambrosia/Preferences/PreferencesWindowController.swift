@@ -180,6 +180,20 @@ private struct ReaderTab: View {
                 Label("Reading Mode", systemImage: "book.pages").font(.headline)
             }
 
+            // ── AO3 Work Presentation ─────────────────────────────────────
+            Section {
+                Picker("Layout order", selection: $prefs.ao3WorkLayoutOrder) {
+                    ForEach(AO3WorkLayoutOrder.allCases) { order in
+                        Text(order.label).tag(order)
+                    }
+                }
+            } header: {
+                Label("AO3 Work Presentation", systemImage: "text.badge.star").font(.headline)
+            } footer: {
+                Text("Choose whether to display tags before title (AO3 web order), title first, or the original AO3 EPUB order.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             // ── Reader cleanup and interaction ───────────────────────────
             Section {
                 Toggle("Allow link clicks", isOn: $prefs.allowReaderLinkClicks)

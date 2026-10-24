@@ -24,15 +24,19 @@ The inbuilt Ambrosia reader is explicitly tailored for AO3 fanfiction EPUBs:
 - **Calibre Style Overrides**: `body[class]` and `!important` rules override Calibre's hardcoded `.calibre` and `margin: 0 5pt` rules, ensuring user margins and max-widths take precedence.
 - **AO3 Endmatter**: `EPUBParser.buildAO3Endmatter` generates "Read on AO3", "Comments on AO3", and series index links at the conclusion of the story.
 - **Curated Reading Themes**: Built-in presets via `ReaderTheme` include Parchment (`#FFFDF6`), Sepia (`#FBF0D9`), Paper (`#FFFFFF`), Night (`#1C1C1E`), Dark (`#16161A`), OLED (`#000000`), and Slate (`#2C2C2E`), each providing custom `--ao3-preface-*` variable palettes.
+- **AO3 Work Presentation / Layout Order**: Configurable via `ReaderPreferences.shared.ao3WorkLayoutOrder` (`AO3WorkLayoutOrder`) in Ambrosia Settings -> Reader:
+  - `.ao3Web` (Default): Tags block before title (matching AO3 website experience); strips title and "posted originally" link from the top of the tag block, followed by the replacement title page.
+  - `.titleFirst`: Renders title and author byline first at the top of the preface card, followed by the tag block, followed by summary and notes.
+  - `.ao3EPUB`: Preserves AO3's standard EPUB layout order (title, "posted originally" link, tag block, followed by title page with title, author link, summary, notes).
 
 ### Reader Toolbar & Navigation Chrome
 `ReaderWindowController` provides a modern unified toolbar (`NSToolbar`):
-- **Table of Contents (`.readerTOC`)**: Opens/toggles the floating TOC panel (`toggleTOCSidebar()`).
-- **Search in Work (`.readerSearch`)**: Toggles the in-book Find Bar (`⌘F`).
+- **Table of Contents (`.readerTOC`)**: Anchors a native `NSPopover` hosting `TOCPopupViewController`. Features real-time search filtering (`NSSearchField`), current chapter indicator dot, and full keyboard navigation (Up/Down arrow stepping, Return to jump to chapter/anchor, Escape to dismiss). Also falls back to floating sidebar mode via menu command.
+- **Search in Work (`.readerSearch`)**: Opens `SearchBarViewController`, a floating HUD overlay (12pt corner radius, blurred material background) inspired by Honeycrisp. Provides instant search query execution across all spine items, match counting ("X of Y"), next/previous match cycling (`⌘G` / `⇧⌘G`), and an expandable results drawer showing chapter titles and contextual snippets. In paginated mode, jumps smoothly scroll and column-snap (`snapFoundSelectionToColumn`).
 - **Paginated Navigation (`.readerNavigation`)**: Previous page button (`chevron.backward`), dynamic page counter text (`"p. 12 of 84"` or progress percentage), and Next page button (`chevron.forward`). Works in both paginated mode (column turns) and continuous scroll mode (page scrolling).
 - **Like Toggle (`.readerLike`)**: Direct Nectar-style quick marking toggle with heart icon (`heart` / `heart.fill` in pink tint) reflecting active work like state.
 - **Read Later Toggle (`.readerReadLater`)**: Direct quick marking toggle with bookmark icon (`bookmark` / `bookmark.fill` in orange tint) reflecting Read Later membership.
-- **Appearance Popover (`.readerAppearance`)**: `Aa` toolbar item presenting `ReaderAppearancePopoverView` in a native `NSPopover`, featuring theme swatches, font size steppers with reset, font family selector, reading mode switcher (Paged vs Scroll), line spacing and margin sliders, and column options.
+- **Appearance Popover (`.readerAppearance`)**: `Aa` toolbar item presenting `ReaderAppearancePopoverView` in a native `NSPopover`, featuring theme swatches, font size steppers with reset, font family selector, reading mode switcher (Paged vs Scroll), line spacing, and column options (margins slider removed).
 
 ### Menu Bar Integration
 The `Reader` menu in `AmbrosiaApp` provides comprehensive keyboard shortcuts:
@@ -52,9 +56,7 @@ The `Reader` menu in `AmbrosiaApp` provides comprehensive keyboard shortcuts:
 
 Scroll mode loads merged HTML normally and restores scroll offset.
 
-Paginated mode uses one visible `WKWebView` with CSS multi-column layout. One column is one page; page turns set horizontal scroll. Resize repagination is debounced.
-
-Find uses `WKFindConfiguration`.
+Paginated mode uses one visible `WKWebView` with CSS multi-column layout. One column is one page; page turns set horizontal scroll. Resize repagination is debounced. WebKit trailing padding shortfall compensation is applied directly to `document.body.style.transform` (cleared prior to offset and anchor navigations) to prevent the last column from offsetting to the right or shifting background canvases.
 
 **Table of contents panel:** `ReaderViewController.toggleTOCSidebar()` (menu action `showTOCSidebar(_:)`, sent from `AmbrosiaApp.swift`) opens or closes a floating `NSPanel` titled "Contents", 260pt wide and anchored to the left edge of the reader window. The panel hosts `TOCSidebarView` in an `NSHostingView` with `sizingOptions = []` (see `swiftui-appkit-bridging.md`) and follows the reader window on move and resize. It can be open at the same time as the annotation panel on the right. `globalTOC` flattens every work's `EPUBParser.toc` into `TOCPanelEntry` values whose `spineIndex` is already global, resolved through `SeriesSpineMap`. For a series target each entry carries its work's title, and the view groups entries under per-work section headers; for a single book `workTitle` is nil and the list is flat. `jumpToTOCEntry(_:)` navigates using that global index. In email mode, `EmailReaderSidebarView` renders the same `TOCSidebarView` inside the split-view sidebar (`showTOCInEmailSidebar`), fed by `globalTOCEntries`. `RebindableAction.showTOCSidebar` has no default key binding; this is deliberate (see the comment on `ReaderPreferences.keyBindings`). For how the entries are produced, see `epub-parsing.md`.
 

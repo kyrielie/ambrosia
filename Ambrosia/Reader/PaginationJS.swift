@@ -191,15 +191,7 @@ private let _pjsSetupAndColumnCount: String = #"""
 
     window.ambrosiaCurrentColumn = function () {
     if (!_ready || _colAndGap <= 0) return 0;
-    var floored = Math.floor((window.scrollX + 2) / _colAndGap);
-    var rounded = Math.round(window.scrollX / _colAndGap);
-    if (floored !== rounded) {
-    console.log('[ambrosiaCurrentColumn] DIAGNOSTIC floor/round disagree' +
-    ' scrollX=' + window.scrollX + ' colAndGap=' + _colAndGap +
-    ' floor(IN USE PREVIOUSLY)=' + floored + ' round(IN USE NOW)=' + rounded +
-    ' shortfall_px=' + (window.scrollX - rounded * _colAndGap));
-    }
-    return Math.max(0, rounded);
+    return Math.max(0, Math.round(window.scrollX / _colAndGap));
     };
     """#
 
@@ -217,22 +209,14 @@ private let _pjsScrollAndPaging: String = #"""
     window.scrollTo({ left: target, top: 0, behavior: 'instant' });
 
     // WebKit undercounts html's trailing padding-right in scrollWidth once
-    // content overflows (see ambrosiaColumnCount comment above), so the
-    // native scroll clamp can land short of `target` — visible only on the
-    // terminal column of a spine, where target actually reaches that edge.
-    // Measure the real shortfall (don't assume it equals marginH — a
-    // partially filled final screen at colsPerScreen > 1 can add more) and
-    // compensate visually by shifting the multicol container itself.
-    // html is the unfragmented column container (unlike body, which gets
-    // fragmented per-column) so this is a pure repaint offset, not a relayout.
+    // content overflows, so the native scroll clamp can land short of `target`
+    // — visible only on the terminal column of a spine.
+    // Compensate visually by shifting body, NOT html (html carries the themed background).
     var shortfall = target - window.scrollX;
-    document.documentElement.style.transform = shortfall > 0
+    document.documentElement.style.transform = '';
+    document.body.style.transform = shortfall > 0
     ? 'translateX(-' + shortfall + 'px)'
     : '';
-
-    console.log('[ambrosiaScrollToColumn] requested=' + n + ' clamped=' + col +
-    ' target=' + target + ' actualScrollX=' + window.scrollX +
-    ' delta=' + (window.scrollX - target) + ' shortfall=' + shortfall);
     };
 
     // ─── Progress fraction (0–1) ──────────────────────────────────────────────
@@ -294,6 +278,7 @@ private let _pjsNavigateAndHighlight: String = #"""
 
     window.ambrosiaNavigateToOffset = function (charOffset) {
     if (!_ready) return;
+    document.body.style.transform = '';
     var pos = _nodeAtChar(charOffset);
     if (!pos) return;
     var range = document.createRange();
@@ -311,6 +296,7 @@ private let _pjsNavigateAndHighlight: String = #"""
 
     window.ambrosiaScrollToAnchor = function (id) {
     if (!_ready) return;
+    document.body.style.transform = '';
     var el = document.getElementById(id)
     || document.querySelector('[name="' + id + '"]');
     if (!el) return;
