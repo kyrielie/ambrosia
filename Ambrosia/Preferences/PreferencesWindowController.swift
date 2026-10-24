@@ -136,6 +136,32 @@ private struct ReaderTab: View {
                 fontFamilyRow
                 stepperRow("Font size", int: $prefs.fontSize, range: 10...36, step: 1, unit: "pt")
                 stepperRow("Line height", dbl: $prefs.lineHeight, range: 1.0...3.0, step: 0.1)
+                Picker("Text alignment", selection: $prefs.textAlignment) {
+                    ForEach(ThemeTextAlignment.allCases) { align in
+                        Text(align.label).tag(align)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                HStack {
+                    Text("Paragraph indent")
+                    Spacer()
+                    Toggle("Book Default", isOn: Binding(
+                        get: { prefs.paragraphIndent == nil },
+                        set: { isDef in prefs.paragraphIndent = isDef ? nil : 1.5 }
+                    ))
+                    .toggleStyle(.checkbox)
+                    if let indent = prefs.paragraphIndent {
+                        Slider(value: Binding(
+                            get: { indent },
+                            set: { prefs.paragraphIndent = $0 }
+                        ), in: 0.5...3.0, step: 0.25)
+                        .frame(width: 80)
+                        Text(String(format: "%.2fem", indent))
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 stepperRow("Max line width", int: $prefs.maxWidth, range: 400...1400, step: 20, unit: "px")
                 stepperRow("Horizontal padding", int: $prefs.paddingH, range: 0...120, step: 4, unit: "px")
                 stepperRow("Vertical padding", int: $prefs.paddingV, range: 0...120, step: 4, unit: "px")
@@ -145,6 +171,12 @@ private struct ReaderTab: View {
 
             // ── Reader colours ────────────────────────────────────────────
             Section {
+                Picker("Appearance mode", selection: $prefs.appearanceMode) {
+                    ForEach(AppearanceMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
                 ColorPicker("Background", selection: $readerBgColor, supportsOpacity: false)
                     .onChange(of: readerBgColor) { _, newColor in
                         if let hex = newColor.hexString { prefs.readerBackgroundColor = hex }

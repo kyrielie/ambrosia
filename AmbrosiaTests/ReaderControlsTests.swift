@@ -42,4 +42,17 @@ final class ReaderControlsTests: XCTestCase {
         searchVC.clear()
         XCTAssertEqual(searchVC.numberOfRows(in: NSTableView()), 0)
     }
+
+    func testTOCSidebarViewInitialization() {
+        let entries: [TOCPanelEntry] = [
+            TOCPanelEntry(id: "1", title: "Chapter 1", spineIndex: 0, depth: 0, workTitle: "Work 1", fragment: nil),
+            TOCPanelEntry(id: "2", title: "Chapter 2", spineIndex: 1, depth: 0, workTitle: "Work 2", fragment: nil)
+        ]
+        var jumped = false
+        let sidebar = TOCSidebarView(entries: entries, currentSpineIndex: 0) { _ in
+            jumped = true
+        }
+        XCTAssertNotNil(sidebar.body)
+        XCTAssertFalse(jumped)
+    }
 }

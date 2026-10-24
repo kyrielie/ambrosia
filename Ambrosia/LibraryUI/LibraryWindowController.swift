@@ -25,8 +25,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     /// Shared symbol config for every toolbar glyph, including the view-mode
     /// segmented control, so all icons render at the same weight/size instead
     /// of the segmented control picking up AppKit's default (thinner/smaller)
-    /// rendering. See bug #9.
-    private static let toolbarSymbolConfig = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+    /// rendering. Sized to 13pt for standard macOS toolbar balance.
+    private static let toolbarSymbolConfig = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
 
     private weak var toolbarState: LibraryToolbarState?
 
