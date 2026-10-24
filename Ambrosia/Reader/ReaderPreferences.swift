@@ -435,7 +435,7 @@ final class ReaderPreferences: ObservableObject {
 
     // MARK: - Defaults
 
-    private enum Defaults {
+    enum Defaults {
         static let fontFamily                  = "\"Iowan Old Style\", Georgia, serif"
         static let fontSize                    = 18
         static let lineHeight                  = 1.7
@@ -667,7 +667,8 @@ final class ReaderPreferences: ObservableObject {
     /// `text-indent` left for that override to cancel out — dead code,
     /// removed. The actual fix is EPUBParser.stripLeadingIndentWhitespace.)
     var cssVariableDeclarations: String {
-        """
+        let theme = activeTheme ?? (ReaderTheme.current(bg: readerBackgroundColor, fg: readerTextColor) ?? .parchment)
+        return """
         --ambrosia-font-family: \(fontFamily);
         --ambrosia-font-size: \(fontSize)px;
         --ambrosia-line-height: \(lineHeight);
@@ -677,6 +678,10 @@ final class ReaderPreferences: ObservableObject {
         --ambrosia-padding-v: \(paddingV)px;
         --ambrosia-max-width: \(maxWidth)px;
         --ambrosia-link-pointer-events: \(allowReaderLinkClicks ? "auto" : "none");
+        --ao3-preface-border-color: \(theme.prefaceBorderColor);
+        --ao3-preface-background-color: \(theme.prefaceBackgroundColor);
+        --ao3-preface-text-color: \(readerTextColor);
+        --ao3-preface-label-color: \(theme.prefaceLabelColor);
         """
     }
 
@@ -731,49 +736,157 @@ final class ReaderPreferences: ObservableObject {
         div, section, article { float: none !important; position: static !important; }
         nav[epub\\:type="toc"], nav[epub\\:type="landmarks"] { display: none; }
 
-        /* === AO3 & Calibre tailored styling === */
+        /* === AO3 & Calibre tailored styling (Reversi style) === */
         body[class] {
             margin-left: auto;
             margin-right: auto;
         }
-        #preface {
-            margin-bottom: 2em;
-            padding-bottom: 1.5em;
-            border-bottom: 1px solid currentColor;
-            opacity: 0.95;
+
+        /* AO3 Preface Metadata Card */
+        #preface,
+        #preface.ao3-preface-card,
+        #ao3Preface,
+        #ao3SyntheticPreface {
+            display: block;
+            margin: 0 0 2em 0;
+            padding: 1.25em 1.25em 0.8em;
+            border: 1px solid var(--ao3-preface-border-color);
+            border-radius: 6px;
+            box-shadow: 1px 1px 4px rgba(0, 0, 0, 0.08);
+            background-color: var(--ao3-preface-background-color);
+            color: var(--ao3-preface-text-color);
+            font-size: 0.95em;
+            line-height: 1.5;
         }
-        #preface .message {
+
+        #preface .message,
+        #preface.ao3-preface-card .message {
+            margin: 0 0 1em 0;
+            padding-bottom: 0.75em;
+            border-bottom: 1px solid var(--ao3-preface-border-color);
             font-size: 1.05em;
-            margin-bottom: 1.2em;
-            line-height: 1.45;
+            line-height: 1.4;
         }
-        #preface dl.tags {
-            margin: 1.2em 0;
-            font-size: 0.9em;
-            line-height: 1.45;
+
+        #preface .message b,
+        #preface.ao3-preface-card .message b {
+            display: block;
+            font-size: 1.3em;
+            font-weight: 700;
+            line-height: 1.25;
+            margin-bottom: 0.3em;
         }
-        #preface dl.tags dt {
-            font-weight: 600;
-            opacity: 0.75;
-            display: inline;
-        }
-        #preface dl.tags dt::after {
-            content: " ";
-        }
-        #preface dl.tags dd {
-            display: inline;
+
+        #preface dl.tags,
+        #preface.ao3-preface-card dl.tags {
+            display: block;
             margin: 0;
+            line-height: 1.5;
         }
-        #preface dl.tags dd::after {
-            content: "\\A";
-            white-space: pre;
+
+        #preface dt,
+        #preface.ao3-preface-card dt {
+            font-weight: 700;
+            color: var(--ao3-preface-label-color);
+            display: inline;
+            margin-right: 0.35em;
         }
+
+        #preface dd,
+        #preface.ao3-preface-card dd {
+            display: inline;
+            margin: 0 1em 0 0;
+        }
+
+        #preface dd:not(.wide),
+        #preface.ao3-preface-card dd:not(.wide) {
+            display: inline-block;
+            max-width: 100%;
+            vertical-align: top;
+        }
+
+        #preface dd:not(.wide)::after,
+        #preface.ao3-preface-card dd:not(.wide)::after {
+            content: "\\200B";
+        }
+
+        #preface dt.wide,
+        #preface.ao3-preface-card dt.wide {
+            display: block;
+            margin-top: 0.7em;
+            margin-bottom: 0.15em;
+        }
+
+        #preface dd.wide,
+        #preface.ao3-preface-card dd.wide {
+            display: block;
+            margin: 0 0 0.7em 0;
+        }
+
+        #preface dl.tags > :first-child,
+        #preface.ao3-preface-card dl.tags > :first-child {
+            margin-top: 0;
+        }
+
+        /* AO3 Replacement Title Page (Spine 1) */
+        .ao3-title-page {
+            margin: 2em auto;
+            max-width: 44em;
+            padding: 0 0.5em;
+        }
+
+        .ao3-title-page .ao3-work-title {
+            font-size: 2em;
+            font-weight: 600;
+            line-height: 1.2;
+            text-align: center;
+            margin: 0.5em 0 0.25em;
+            border: none;
+        }
+
+        .ao3-title-page .ao3-work-byline {
+            font-size: 1.15em;
+            font-weight: 700;
+            text-align: center;
+            margin: 0 0 1.8em;
+            opacity: 0.9;
+        }
+
+        .ao3-title-page .ao3-work-byline a {
+            text-decoration: underline;
+            text-underline-offset: 0.15em;
+        }
+
+        .ao3-title-page .ao3-title-divider {
+            border-bottom: 1px solid var(--ao3-preface-border-color);
+            margin: 1.5em auto;
+            width: 60%;
+        }
+
+        .ao3-title-page .ao3-section-heading {
+            font-size: 1.15em;
+            font-weight: 700;
+            margin: 1.2em 0 0.4em;
+            padding-bottom: 0.25em;
+            border-bottom: 1px solid var(--ao3-preface-border-color);
+            line-height: 1.2;
+        }
+
+        .ao3-title-page blockquote.userstuff {
+            margin: 0.6em 0 1.2em;
+            padding: 0.3em 1em;
+            border-left: 3px solid var(--ao3-preface-border-color);
+            font-style: normal;
+            background-color: var(--ao3-preface-background-color);
+            border-radius: 0 4px 4px 0;
+        }
+
         blockquote, .summary, .notes {
             margin: 1.2em 0;
             padding: 0.6em 1em;
-            border-left: 3px solid currentColor;
-            opacity: 0.9;
-            background: rgba(128, 128, 128, 0.05);
+            border-left: 3px solid var(--ao3-preface-border-color);
+            opacity: 0.95;
+            background: var(--ao3-preface-background-color);
             border-radius: 0 4px 4px 0;
         }
         .ao3-endmatter {

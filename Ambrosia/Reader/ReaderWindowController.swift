@@ -1,6 +1,17 @@
 import AppKit
+import Observation
+import SwiftUI
 
-class ReaderWindowController: NSWindowController, NSWindowDelegate {
+extension NSToolbarItem.Identifier {
+    static let readerTOC        = NSToolbarItem.Identifier("ambrosia.reader.toc")
+    static let readerSearch     = NSToolbarItem.Identifier("ambrosia.reader.search")
+    static let readerNavigation = NSToolbarItem.Identifier("ambrosia.reader.navigation")
+    static let readerLike       = NSToolbarItem.Identifier("ambrosia.reader.like")
+    static let readerReadLater  = NSToolbarItem.Identifier("ambrosia.reader.readlater")
+    static let readerAppearance = NSToolbarItem.Identifier("ambrosia.reader.appearance")
+}
+
+class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate {
 
     private let target: ReadingTarget
     private let book: CalibreBook
@@ -21,6 +32,19 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
     /// by resetAllToDefaultSize(), wired to the View menu's "Reset Reader
     /// Window Size to Default" command.
     private static var sessionWindowSize: NSSize?
+
+    private static let toolbarSymbolConfig = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+
+    private(set) weak var readerViewController: ReaderViewController?
+    private var appearancePopover: NSPopover?
+
+    // Cached toolbar control views
+    private var pageLabel: NSTextField?
+    private var prevButton: NSButton?
+    private var nextButton: NSButton?
+    private var likeButton: NSButton?
+    private var readLaterButton: NSButton?
+    private var appearanceButton: NSButton?
 
     @MainActor
     static func open(book: CalibreBook) {
@@ -55,11 +79,22 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         window.title   = target.displayTitle
         window.minSize = NSSize(width: 600, height: 500)
         window.isRestorable = false
+        window.toolbarStyle = .unified
         super.init(window: window)
         window.delegate = self
 
         let vc = ReaderViewController(target: target)
+        self.readerViewController = vc
         window.contentViewController = vc
+
+        configureToolbar(window: window)
+
+        vc.onReadingProgressChanged = { [weak self] in
+            self?.updateToolbarState()
+        }
+
+        scheduleSessionObservation()
+        updateToolbarState()
 
         // Update lastOpenedDate in BookState
         let calibreID = book.id
@@ -92,6 +127,7 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
         applyDefaultWindowSizeIfNeeded()
+        updateToolbarState()
     }
 
     private func applyDefaultWindowSizeIfNeeded() {
@@ -104,10 +140,7 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
     /// window earlier in this session, every subsequently-opened book reuses
     /// that same size (Self.sessionWindowSize); otherwise this falls back to
     /// the half-screen-portrait default. Either way the result is centered
-    /// on the target screen. There is no customizable-default-size
-    /// preference — half-screen-portrait is the only default formula, and
-    /// sessionWindowSize is the only thing that overrides it, for the
-    /// current app session only (never persisted across relaunch).
+    /// on the target screen.
     private func applyDefaultWindowSize() {
         guard let window else { return }
         let screen  = window.screen ?? Self.screenUnderMouse() ?? NSScreen.main ?? NSScreen.screens[0]
@@ -151,28 +184,11 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
 
     /// Best-effort fallback for the rare case window.screen is still nil after
     /// showWindow(_:) returns (e.g. a screen was disconnected mid-launch).
-    /// Prefers the display the user's pointer is currently on, since that's a
-    /// better proxy for "where the user is working" than NSScreen.main, which
-    /// merely reflects whatever window currently has key status.
     private static func screenUnderMouse() -> NSScreen? {
         let mouseLocation = NSEvent.mouseLocation
         return NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) }
     }
 
-    /// Captures the user's manual resizes (drag or the green zoom button)
-    /// into Self.sessionWindowSize, so the next book opened in this session
-    /// reuses that size. isApplyingProgrammaticResize guards against feeding
-    /// our own applyDefaultWindowSize()/resetToDefaultSize() calls back into
-    /// this, which would otherwise immediately overwrite a real user resize
-    /// with whatever default/remembered size we just set.
-    ///
-    /// Also gated on didApplyInitialWindowSize: assigning
-    /// window.contentViewController during init() (before showWindow(_:) has
-    /// run applyDefaultWindowSizeIfNeeded) can itself trigger an incidental,
-    /// arbitrary-sized resize. At that point isApplyingProgrammaticResize is
-    /// still false, so without this guard that incidental resize would
-    /// silently stomp Self.sessionWindowSize with garbage moments before
-    /// showWindow(_:) reads it back out.
     @MainActor
     func windowDidResize(_ notification: Notification) {
         guard didApplyInitialWindowSize, !isApplyingProgrammaticResize, let window else { return }
@@ -182,6 +198,8 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
     @MainActor
     func windowWillClose(_ notification: Notification) {
         Self.openWindows.removeValue(forKey: target.windowKey)
+        appearancePopover?.performClose(nil)
+        appearancePopover = nil
 
         // Accumulate reading session time into BookState.totalReadingTimeSeconds
         let elapsed   = Date().timeIntervalSince(sessionStartDate)
@@ -189,6 +207,285 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate {
         Task {
             if let metaDB = AppDelegate.shared?.session.metaDB {
                 try? await metaDB.addReadingTime(calibreID: calibreID, seconds: elapsed)
+            }
+        }
+    }
+
+    // MARK: - Toolbar Setup
+
+    private func configureToolbar(window: NSWindow) {
+        let toolbar = NSToolbar(identifier: "ReaderWindowToolbar")
+        toolbar.delegate = self
+        toolbar.allowsUserCustomization = false
+        toolbar.displayMode = .iconOnly
+        window.toolbar = toolbar
+    }
+
+    // MARK: - NSToolbarDelegate
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [
+            .readerTOC,
+            .readerSearch,
+            .flexibleSpace,
+            .readerNavigation,
+            .flexibleSpace,
+            .readerLike,
+            .readerReadLater,
+            .readerAppearance
+        ]
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [
+            .readerTOC,
+            .readerSearch,
+            .readerNavigation,
+            .readerLike,
+            .readerReadLater,
+            .readerAppearance,
+            .flexibleSpace,
+            .space
+        ]
+    }
+
+    func toolbar(_ toolbar: NSToolbar,
+                 itemForItemIdentifier identifier: NSToolbarItem.Identifier,
+                 willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        switch identifier {
+        case .readerTOC:
+            return makeIconItem(
+                identifier,
+                label: "Table of Contents",
+                image: "list.bullet",
+                action: #selector(tocClicked)
+            )
+
+        case .readerSearch:
+            return makeIconItem(
+                identifier,
+                label: "Find",
+                image: "magnifyingglass",
+                action: #selector(searchClicked)
+            )
+
+        case .readerNavigation:
+            return makeNavigationItem(identifier)
+
+        case .readerLike:
+            return makeLikeItem(identifier)
+
+        case .readerReadLater:
+            return makeReadLaterItem(identifier)
+
+        case .readerAppearance:
+            return makeAppearanceItem(identifier)
+
+        default:
+            return nil
+        }
+    }
+
+    // MARK: - Item Builders
+
+    private func makeIconItem(_ identifier: NSToolbarItem.Identifier,
+                              label: String,
+                              image: String,
+                              action: Selector) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = label
+        item.toolTip = label
+        item.image = NSImage(systemSymbolName: image, accessibilityDescription: label)?
+            .withSymbolConfiguration(Self.toolbarSymbolConfig)
+        item.target = self
+        item.action = action
+        return item
+    }
+
+    private func makeNavigationItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = "Navigation"
+        item.toolTip = "Previous / Next Page"
+
+        let stack = NSStackView()
+        stack.orientation = .horizontal
+        stack.spacing = 3
+        stack.alignment = .centerY
+
+        let prev = NSButton(
+            image: NSImage(systemSymbolName: "chevron.backward", accessibilityDescription: "Previous Page") ?? NSImage(),
+            target: self,
+            action: #selector(prevPageClicked)
+        )
+        prev.bezelStyle = .accessoryBarAction
+        prev.isBordered = false
+        prev.toolTip = "Previous Page (Left Arrow / Shift-Space)"
+        self.prevButton = prev
+
+        let label = NSTextField(labelWithString: "1 / 1")
+        label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        label.textColor = .secondaryLabelColor
+        label.alignment = .center
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        self.pageLabel = label
+
+        let next = NSButton(
+            image: NSImage(systemSymbolName: "chevron.forward", accessibilityDescription: "Next Page") ?? NSImage(),
+            target: self,
+            action: #selector(nextPageClicked)
+        )
+        next.bezelStyle = .accessoryBarAction
+        next.isBordered = false
+        next.toolTip = "Next Page (Right Arrow / Space)"
+        self.nextButton = next
+
+        stack.addArrangedSubview(prev)
+        stack.addArrangedSubview(label)
+        stack.addArrangedSubview(next)
+
+        item.view = stack
+        return item
+    }
+
+    private func makeLikeItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = "Like"
+        item.toolTip = "Like this work"
+
+        let button = NSButton(
+            image: NSImage(systemSymbolName: "heart", accessibilityDescription: "Like") ?? NSImage(),
+            target: self,
+            action: #selector(likeClicked)
+        )
+        button.bezelStyle = .accessoryBarAction
+        button.isBordered = false
+        self.likeButton = button
+
+        item.view = button
+        return item
+    }
+
+    private func makeReadLaterItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = "Read Later"
+        item.toolTip = "Add to Read Later"
+
+        let button = NSButton(
+            image: NSImage(systemSymbolName: "bookmark", accessibilityDescription: "Read Later") ?? NSImage(),
+            target: self,
+            action: #selector(readLaterClicked)
+        )
+        button.bezelStyle = .accessoryBarAction
+        button.isBordered = false
+        self.readLaterButton = button
+
+        item.view = button
+        return item
+    }
+
+    private func makeAppearanceItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = "Appearance"
+        item.toolTip = "Appearance (Aa)"
+
+        let button = NSButton(
+            image: NSImage(systemSymbolName: "textformat.size", accessibilityDescription: "Appearance") ?? NSImage(),
+            target: self,
+            action: #selector(appearanceClicked(_:))
+        )
+        button.bezelStyle = .accessoryBarAction
+        button.isBordered = false
+        self.appearanceButton = button
+
+        item.view = button
+        return item
+    }
+
+    // MARK: - Actions
+
+    @objc private func tocClicked() {
+        readerViewController?.showTOCSidebar(nil)
+    }
+
+    @objc private func searchClicked() {
+        readerViewController?.toggleFindBarAction(nil)
+    }
+
+    @objc private func prevPageClicked() {
+        readerViewController?.goToPreviousPage()
+    }
+
+    @objc private func nextPageClicked() {
+        readerViewController?.goToNextPage()
+    }
+
+    @objc private func likeClicked() {
+        readerViewController?.toggleLikeCurrentWork(nil)
+    }
+
+    @objc private func readLaterClicked() {
+        readerViewController?.toggleReadLaterCurrentWork(nil)
+    }
+
+    @objc private func appearanceClicked(_ sender: Any?) {
+        guard let button = sender as? NSView else { return }
+        if let popover = appearancePopover, popover.isShown {
+            popover.performClose(nil)
+            return
+        }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = true
+        let popoverView = ReaderAppearancePopoverView(
+            readerVC: readerViewController,
+            onClose: { [weak popover] in popover?.performClose(nil) }
+        )
+        popover.contentViewController = NSHostingController(rootView: popoverView)
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY)
+        self.appearancePopover = popover
+    }
+
+    // MARK: - State Updates
+
+    @MainActor
+    func updateToolbarState() {
+        guard let readerVC = readerViewController else { return }
+
+        let progress = readerVC.pageProgress
+        pageLabel?.stringValue = progress.displayText
+        prevButton?.isEnabled = readerVC.canGoPrevious
+        nextButton?.isEnabled = readerVC.canGoNext
+
+        guard let session = AppDelegate.shared?.session else { return }
+        let calibreID = readerVC.activeCalibreID
+
+        let isLiked = session.cachedLikedIDs.contains(calibreID)
+        if let likeButton {
+            let symbol = isLiked ? "heart.fill" : "heart"
+            likeButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Like")?
+                .withSymbolConfiguration(Self.toolbarSymbolConfig)
+            likeButton.contentTintColor = isLiked ? .systemPink : nil
+            likeButton.toolTip = isLiked ? "Liked (Click to unlike)" : "Like this work"
+        }
+
+        let isReadLater = session.cachedReadLaterIDs.contains(calibreID)
+        if let readLaterButton {
+            let symbol = isReadLater ? "bookmark.fill" : "bookmark"
+            readLaterButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Read Later")?
+                .withSymbolConfiguration(Self.toolbarSymbolConfig)
+            readLaterButton.contentTintColor = isReadLater ? .systemOrange : nil
+            readLaterButton.toolTip = isReadLater ? "In Read Later (Click to remove)" : "Add to Read Later"
+        }
+    }
+
+    private func scheduleSessionObservation() {
+        withObservationTracking {
+            _ = AppDelegate.shared?.session.cachedLikedIDs
+            _ = AppDelegate.shared?.session.cachedReadLaterIDs
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.updateToolbarState()
+                self?.scheduleSessionObservation()
             }
         }
     }

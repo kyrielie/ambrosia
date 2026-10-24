@@ -18,11 +18,28 @@ Regardless of whether an internal or external reader is used, `AmbrosiaMetaDB.ma
 
 ### Inbuilt AO3 Reader Tailoring
 The inbuilt Ambrosia reader is explicitly tailored for AO3 fanfiction EPUBs:
-- **AO3 Preface Card**: `#preface` metadata is formatted with a distinct divider and clear typographic hierarchy. The metadata block (`dl.tags`) formats `<dt>` (Rating, Warnings, Fandoms, Relationships, Characters, Tags) with crisp semibold labels and `<dd>` with formatted inline tag runs, preventing layout blowout in multi-column paginated mode.
-- **Summaries and Author Notes**: `.summary`, `blockquote`, and `.notes` render with a 3px accent border on the leading edge and a subtle 5% background callout tint, making author notes and chapter summaries instantly recognizable.
+- **AO3 Preface Card (Reversi-styled)**: `#preface` metadata is formatted as a boxed card using simple stylings from Nectar's Reversi theme (`border`, `border-radius: 6px`, subtle shadow, and background tint driven by `--ao3-preface-*` CSS variables). The metadata block (`dl.tags`) formats `<dt>` and `<dd>` with `wide` classes on long tag lists (Fandoms, Relationships, Characters, Additional Tags, Archive Warnings), letting them span full width while short metadata rows (Rating, Category, Language, Stats) flow inline.
+- **Replacement AO3 Title Page**: AO3 EPUB exports place a raw Calibre-generated title page on the second spine item (`split_001.xhtml`). Ambrosia detects this spine and replaces it with a cleanly-structured `.ao3-title-page` layout matching Nectar/Reversi typography: centered work title (`.ao3-work-title`), author byline (`.ao3-work-byline`), elegant section divider, and structured Summary and Notes modules with left border callouts.
+- **Summaries and Author Notes**: `.summary`, `blockquote`, and `.notes` render with a 3px accent border on the leading edge and a subtle background callout tint matching the active theme, making author notes and chapter summaries instantly recognizable.
 - **Calibre Style Overrides**: `body[class]` and `!important` rules override Calibre's hardcoded `.calibre` and `margin: 0 5pt` rules, ensuring user margins and max-widths take precedence.
 - **AO3 Endmatter**: `EPUBParser.buildAO3Endmatter` generates "Read on AO3", "Comments on AO3", and series index links at the conclusion of the story.
-- **Curated Reading Themes**: Built-in presets inspired by Kudos include Parchment, Sepia (`#FBF0D9`), Paper (`#FFFFFF`), Night (`#1C1C1E`), Dark (`#16161A`), OLED (`#000000`), and Slate.
+- **Curated Reading Themes**: Built-in presets via `ReaderTheme` include Parchment (`#FFFDF6`), Sepia (`#FBF0D9`), Paper (`#FFFFFF`), Night (`#1C1C1E`), Dark (`#16161A`), OLED (`#000000`), and Slate (`#2C2C2E`), each providing custom `--ao3-preface-*` variable palettes.
+
+### Reader Toolbar & Navigation Chrome
+`ReaderWindowController` provides a modern unified toolbar (`NSToolbar`):
+- **Table of Contents (`.readerTOC`)**: Opens/toggles the floating TOC panel (`toggleTOCSidebar()`).
+- **Search in Work (`.readerSearch`)**: Toggles the in-book Find Bar (`⌘F`).
+- **Paginated Navigation (`.readerNavigation`)**: Previous page button (`chevron.backward`), dynamic page counter text (`"p. 12 of 84"` or progress percentage), and Next page button (`chevron.forward`). Works in both paginated mode (column turns) and continuous scroll mode (page scrolling).
+- **Like Toggle (`.readerLike`)**: Direct Nectar-style quick marking toggle with heart icon (`heart` / `heart.fill` in pink tint) reflecting active work like state.
+- **Read Later Toggle (`.readerReadLater`)**: Direct quick marking toggle with bookmark icon (`bookmark` / `bookmark.fill` in orange tint) reflecting Read Later membership.
+- **Appearance Popover (`.readerAppearance`)**: `Aa` toolbar item presenting `ReaderAppearancePopoverView` in a native `NSPopover`, featuring theme swatches, font size steppers with reset, font family selector, reading mode switcher (Paged vs Scroll), line spacing and margin sliders, and column options.
+
+### Menu Bar Integration
+The `Reader` menu in `AmbrosiaApp` provides comprehensive keyboard shortcuts:
+- **Navigation**: Next Page (`⌘→` / `Space`), Previous Page (`⌘←` / `⇧Space`), Next Chapter (`⌘]`), Previous Chapter (`⌘[`).
+- **Appearance**: Increase Font Size (`⌘=`), Decrease Font Size (`⌘-`), Reset Font Size (`⌘0`), Themes submenu, Columns submenu.
+- **Work Actions**: Like This Work, Add to Read Later.
+- **Find in Work**: Toggle Find Bar (`⌘F`), Find Next (`⌘G`), Find Previous (`⇧⌘G`).
 
 `ReaderViewController`:
 
