@@ -19,7 +19,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Parse and validate release version
+      - name: Parse and configure release version
         id: release
         env:
           INPUT_VERSION: ${{ inputs.version }}
@@ -35,10 +35,12 @@ jobs:
             exit 1
           fi
 
-          project_version=$(grep -E '^[[:space:]]*MARKETING_VERSION:' project.yml | awk '{print $2}' | tr -d '"'\''')
-          if [ -n "$project_version" ] && [ "$version" != "$project_version" ]; then
-            echo "::error::Input version '$version' does not match MARKETING_VERSION in project.yml ('$project_version'). Please update project.yml first." >&2
-            exit 1
+          echo "Setting MARKETING_VERSION to ${version} in project.yml and Info.plist"
+          sed -i.bak -E "s/MARKETING_VERSION:.*/MARKETING_VERSION: ${version}/" project.yml
+          rm -f project.yml.bak
+
+          if [ -f "Ambrosia/Resources/Info.plist" ]; then
+            plutil -replace CFBundleShortVersionString -string "${version}" Ambrosia/Resources/Info.plist
           fi
 
           echo "version=${version}" >> "$GITHUB_OUTPUT"
@@ -71,6 +73,7 @@ jobs:
             -configuration Release \
             -destination "platform=macOS,arch=arm64" \
             -derivedDataPath "$build_dir" \
+            MARKETING_VERSION="${{ steps.release.outputs.version }}" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -90,6 +93,9 @@ jobs:
 
           echo "APP_PATH=$app_path" >> "$GITHUB_ENV"
           echo "APP_NAME=$(basename "$app_path" .app)" >> "$GITHUB_ENV"
+
+          app_version=$(defaults read "$app_path/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "unknown")
+          echo "Built app version: $app_version"
 
       - name: Ad-hoc sign app
         shell: bash
