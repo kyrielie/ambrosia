@@ -40,6 +40,11 @@ The inbuilt Ambrosia reader is explicitly tailored for AO3 fanfiction EPUBs:
 - **Appearance Popover (`.readerAppearance`)**: `Aa` toolbar item presenting `ReaderAppearancePopoverView` in a native `NSPopover`, featuring Appearance Mode toggle (System, Light, Dark), dual-mode theme swatches, font size steppers with reset, font family selector, text alignment picker (Left, Justify, Default), paragraph indent controls, and column options.
 - **Standardized Toolbar Glyph Sizing**: All icons in both the main library window and reader window are standardized to 13pt symbol configurations for a balanced, native macOS appearance.
 
+### Reader content toggles
+Preferences -> Reader Content has two toggles that change the built HTML (both structural):
+- `removeParagraphIndents` (labelled "Trim leading whitespace used as indents"): strips a leading run of space, tab, NBSP, en space, em space and ideographic space at the start of paragraph-like elements (`EPUBParser.stripLeadingIndentWhitespaceDOM`). ASCII space and tab are already collapsed by HTML at line start, so the non-ASCII characters are what make it visible. Blank elements are skipped. This deletes text, so it shifts character offsets: highlights saved with the toggle in one state can misalign in the other.
+- `collapseSpacerParagraphs`: adds the class `ambrosia-spacer` to every `<p>` whose children are only whitespace text (including `&nbsp;`) or `<br>` (`EPUBParser.markSpacerParagraphsDOM`). `ReaderPreferences.css` collapses `p.ambrosia-spacer` to zero height. No text changes, so offsets are identical with the toggle on or off. A childless `<p>` is not tagged. The SwiftSoup-failure fallback path and the feed server (`LocalFeedServer`) do not apply it.
+
 ### Menu Bar Integration
 The `Reader` menu in `AmbrosiaApp` provides comprehensive keyboard shortcuts:
 - **Navigation**: Next Page (`⌘→` / `Space`), Previous Page (`⌘←` / `⇧Space`), Next Chapter (`⌘]`), Previous Chapter (`⌘[`).
@@ -62,7 +67,14 @@ Paginated mode uses one visible `WKWebView` with CSS multi-column layout. One co
 
 **Table of contents panel:** `ReaderViewController.toggleTOCSidebar()` (menu action `showTOCSidebar(_:)`, sent from `AmbrosiaApp.swift`) opens or closes a floating `NSPanel` titled "Contents", 260pt wide and anchored to the left edge of the reader window. The panel hosts `TOCSidebarView` in an `NSHostingView` with `sizingOptions = []` (see `swiftui-appkit-bridging.md`) and follows the reader window on move and resize. It can be open at the same time as the annotation panel on the right. `globalTOC` flattens every work's `EPUBParser.toc` into `TOCPanelEntry` values whose `spineIndex` is already global, resolved through `SeriesSpineMap`. For a series target each entry carries its work's title, and the view groups entries under per-work section headers; for a single book `workTitle` is nil and the list is flat. `jumpToTOCEntry(_:)` navigates using that global index. In email mode, `EmailReaderSidebarView` renders the same `TOCSidebarView` inside the split-view sidebar (`showTOCInEmailSidebar`), fed by `globalTOCEntries`. `RebindableAction.showTOCSidebar` defaults to `⌘T` (matching Honeycrisp and standard document TOCs). For how the entries are produced, see `epub-parsing.md`.
 
-**CSS pipeline:** `ReaderPreferences.css` is a computed `String` that interpolates Swift values directly into CSS literal property values. There are no CSS custom properties in the current pipeline. Every preference change — including font size, line height, color, and padding adjustments — triggers a full EPUB re-parse and `WKWebView` reload. Migrating style-only preferences to CSS variable injection (`var(--ambrosia-*)` in a `:root` block) would reduce this to a single `evaluateJavaScript` call for those changes; structural changes (reading mode switches, DOM layout changes) would still require a full reload.
+**CSS pipeline:** `ReaderPreferences.css(paginated:)` builds the user stylesheet, which `EPUBParser` injects into every document (`mergedHTML` in scroll mode, `sanitise` in paginated mode). Style preferences are CSS custom properties (`--ambrosia-*`) declared in `:root` by `ReaderPreferences.cssVariableDeclarations`. `ReaderPreferences.preferenceChangeKind` classifies each change:
+
+- `.cosmetic` (fonts, colors, spacing, theme, alignment, paragraph indent): `ReaderViewController.applyCosmeticCSSUpdate()` rewrites a `<style id="ambrosia-vars">` element with the current `:root` declarations. No reload.
+- `.structural` (reading mode, columns, AO3 layout order, and the content toggles `removeParagraphIndents` and `collapseSpacerParagraphs`, which change the built HTML): debounced `reloadHTML()`.
+
+Two rules are emitted only when the preference is non-default at build time: `p { text-align }` (`textAlignment != .book`) and `p { text-indent }` (`paragraphIndent != nil`). The live path can change the variables they read but cannot create a rule that was never built. `ReaderPreferences.CSSRuleGate` records which of the two rules a document was built with; `ReaderViewController.builtCSSRuleGate` stores it at each build, and the cosmetic sink schedules a reload when the current gate differs. Moving between two non-default values (indent 1.5em to 2em, Left to Justified) stays live.
+
+Known limitation (paginated mode): `paginatedColumnCSS` bakes `paddingH`, `paddingV` and `maxWidth` into literal values, so those three preferences, although classified `.cosmetic`, have no visible effect on an already-loaded paginated document until it reloads. Font size and line height do apply live but nothing re-measures the column count afterwards.
 
 ---
 
@@ -73,6 +85,6 @@ Paginated mode uses one visible `WKWebView` with CSS multi-column layout. One co
 
 6. `WKWebViewConfiguration` message handlers must be registered before `WKWebView` is initialized.
 
-7. Full HTML reload (`reloadHTML`) is required for reading mode switches and other DOM structural changes. It is not required for style-only preference changes (colors, typography, spacing); those should eventually use CSS variable injection to avoid re-parsing the EPUB on every tweak. Until that is implemented, the full reload path remains in place.
+7. Full HTML reload (`reloadHTML`) is required for reading mode switches, DOM structural changes, and any change to `ReaderPreferences.cssRuleGate`. It is not required for other style-only preference changes; those go through `applyCosmeticCSSUpdate()`.
 
 8. `evaluateJavaScript` calls that do not need a return value should pass `completionHandler: nil` to avoid retain cycles when the `WKWebView` tears down before the callback fires. Calls that capture a return value must use `[weak self]` closures and guard on `self`. The distinction is about memory safety, not style.

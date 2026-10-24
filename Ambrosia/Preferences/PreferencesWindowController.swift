@@ -229,12 +229,17 @@ private struct ReaderTab: View {
             // ── Reader cleanup and interaction ───────────────────────────
             Section {
                 Toggle("Allow link clicks", isOn: $prefs.allowReaderLinkClicks)
-                Toggle("Remove paragraph indents", isOn: $prefs.removeParagraphIndents)
+                Toggle("Trim leading whitespace used as indents", isOn: $prefs.removeParagraphIndents)
+                Toggle("Collapse empty spacer paragraphs", isOn: $prefs.collapseSpacerParagraphs)
             } header: {
                 Label("Reader Content", systemImage: "doc.text.magnifyingglass").font(.headline)
             } footer: {
-                Text("Links open in your browser. Paragraph indent cleanup overrides publisher first-line indentation without changing EPUB files.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text(
+                    "Links open in your browser. Trimming removes spaces some converters use as fake first-line indents (use Paragraph indent for the real gap). " +
+                    "Collapsing spacer paragraphs removes the blank lines some converters insert between paragraphs. " +
+                    "Neither changes EPUB files."
+                )
+                .font(.caption).foregroundStyle(.secondary)
             }
 
             // ── Find bar ──────────────────────────────────────────────────

@@ -183,4 +183,82 @@ final class EPUBParserSanitizationTests: XCTestCase {
         let epubTitlePage = EPUBParser.extractBodyContent(from: titlePageHTML, isFirstSpineItem: false, ao3Order: .ao3EPUB)
         XCTAssertTrue(epubTitlePage.contains("<h1 class=\"ao3-work-title\">Super Title</h1>"), "AO3 EPUB order has title page title")
     }
+
+    // MARK: - Spacer paragraphs
+
+    private func spacerParagraphCount(in html: String) -> Int {
+        let pattern = #"<p[^>]*class="[^"]*\bambrosia-spacer\b[^"]*""#
+        return (try? NSRegularExpression(pattern: pattern))
+            .map { $0.numberOfMatches(in: html, range: NSRange(html.startIndex..., in: html)) } ?? -1
+    }
+
+    private let spacerFixture = """
+    <html><body>
+    <p class="calibre7">&#160;</p>
+    <p>   </p>
+    <p><br/></p>
+    <p>&#160;<br/>&#160;<br/></p>
+    <p>Real text</p>
+    <p><em>styled</em></p>
+    <p><img src="x.png"/></p>
+    <p></p>
+    <div>&#160;</div>
+    </body></html>
+    """
+
+    func testSpacerParagraphsAreTaggedWhenEnabled() {
+        let result = EPUBParser.extractBodyContent(
+            from: spacerFixture, isFirstSpineItem: false, collapseSpacerParagraphs: true)
+
+        // nbsp-only (keeps its publisher class), whitespace-only, br-only, mixed nbsp and br.
+        XCTAssertEqual(spacerParagraphCount(in: result), 4)
+        XCTAssertTrue(result.contains("calibre7"), "Existing class must be kept")
+        XCTAssertTrue(result.contains("<p>Real text</p>"))
+        XCTAssertTrue(result.contains("<p><em>styled</em></p>"), "A paragraph with an inline element is not a spacer")
+        XCTAssertTrue(result.contains("<p></p>"), "A childless paragraph is not tagged")
+        XCTAssertFalse(result.contains("<div class=\"ambrosia-spacer"), "Only paragraphs are tagged")
+    }
+
+    func testSpacerParagraphsAreUntouchedWhenDisabled() {
+        let result = EPUBParser.extractBodyContent(from: spacerFixture, isFirstSpineItem: false)
+        XCTAssertEqual(spacerParagraphCount(in: result), 0)
+        XCTAssertFalse(result.contains("ambrosia-spacer"))
+    }
+
+    func testSpacerMarkingDoesNotChangeText() {
+        func text(_ html: String) -> String {
+            html.replacingOccurrences(of: #"<[^>]*>"#, with: "", options: .regularExpression)
+        }
+        let off = EPUBParser.extractBodyContent(from: spacerFixture, isFirstSpineItem: false)
+        let on = EPUBParser.extractBodyContent(
+            from: spacerFixture, isFirstSpineItem: false, collapseSpacerParagraphs: true)
+        XCTAssertEqual(text(on), text(off), "Class-only change: text, and so UTF-16 offsets, must be identical")
+    }
+
+    func testSanitiseTagsSpacersForPaginatedPath() {
+        let result = EPUBParser.sanitise(
+            spacerFixture, userCSS: "", spineIndex: 2, collapseSpacerParagraphs: true)
+        XCTAssertEqual(spacerParagraphCount(in: result), 4)
+    }
+
+    // MARK: - Trim leading whitespace
+
+    func testTrimStripsNonCollapsingIndentCharacters() {
+        let html = "<html><body><p>&#160;&#160;&#8195;Nbsp indent</p><p>\u{3000}\u{3000}Ideographic</p><p>\t Tab</p></body></html>"
+        let on = EPUBParser.extractBodyContent(from: html, isFirstSpineItem: false, removeParagraphIndents: true)
+        XCTAssertTrue(on.contains("<p>Nbsp indent</p>"))
+        XCTAssertTrue(on.contains("<p>Ideographic</p>"))
+        XCTAssertTrue(on.contains("<p>Tab</p>"))
+        let off = EPUBParser.extractBodyContent(from: html, isFirstSpineItem: false)
+        XCTAssertFalse(off.contains("<p>Nbsp indent</p>"))
+    }
+
+    func testTrimLeavesBlankParagraphsAndInnerSpacesAlone() {
+        let html = "<html><body><p>&#160;&#160;</p><p>&#160;<em>Styled</em></p><p>Keep  inner&#160;space</p></body></html>"
+        let on = EPUBParser.extractBodyContent(
+            from: html, isFirstSpineItem: false, removeParagraphIndents: true, collapseSpacerParagraphs: true)
+        XCTAssertEqual(spacerParagraphCount(in: on), 1, "Blank paragraph must survive trimming so it can still be a spacer")
+        XCTAssertTrue(on.contains("<p><em>Styled</em></p>"))
+        XCTAssertTrue(on.contains("<p>Keep  inner"), "Only the leading run is trimmed")
+    }
 }

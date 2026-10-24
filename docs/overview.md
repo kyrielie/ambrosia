@@ -13,7 +13,7 @@ replacement.
 
 Ambrosia is a native macOS EPUB reader for AO3-heavy Calibre libraries.
 
-- Target: macOS 14.0+.
+- Target: macOS 15.0+ (standardized in `project.yml`).
 - Calibre is the source of truth for book metadata and EPUB files.
 - Calibre `metadata.db` is opened read-only and never modified.
 - App-owned state is stored outside the Calibre library.
@@ -29,11 +29,11 @@ Ambrosia is a native macOS EPUB reader for AO3-heavy Calibre libraries.
 - App lifecycle/windowing: SwiftUI `App` plus AppKit `NSApplicationDelegate`, `NSWindowController`, and `NSViewController`.
 - UI: AppKit shell with SwiftUI content hosted through `NSHostingView`/`NSHostingController`.
 - Calibre DB: SQLite.swift 0.15.3, read-only.
-- App SwiftData store: `BookState` and `ReadingGoal`.
-- Per-library app DB: `AmbrosiaMetaDB` actor, writable SQLite (WAL mode), under `~/Library/Application Support/Ambrosia/libraries/<hash>/ambrosia_meta.db`.
-- EPUB parsing: ZIPFoundation 0.9.19 and `NSXMLParser`.
+- Per-library app DB: `AmbrosiaMetaDB` actor, writable SQLite (WAL mode), under `~/Library/Application Support/Ambrosia/libraries/<hash>/ambrosia_meta.db`. Stores collections, annotations, AO3 metadata, reading history, and unified `BookState`/`ReadingGoal` (legacy SwiftData store was completely eliminated in Phase 1).
+- EPUB parsing: ZIPFoundation 0.9.19, `NSXMLParser`, and single-pass `SwiftSoup` DOM transformation (Phase 3).
 - AO3 HTML parsing: SwiftSoup 2.13.5.
 - Rendering: `WKWebView`.
+- Networking: FlyingFox 0.26.2 for `LocalFeedServer`.
 - Packages: SQLite.swift, ZIPFoundation, SwiftSoup, FlyingFox 0.26.2.
 
 ---
