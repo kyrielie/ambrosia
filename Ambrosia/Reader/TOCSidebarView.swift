@@ -9,6 +9,16 @@ struct TOCPanelEntry: Identifiable, Equatable {
     let spineIndex: Int      // global
     let depth: Int
     let workTitle: String?   // nil for singleBook; section header for series
+    let fragment: String?
+
+    init(id: String, title: String, spineIndex: Int, depth: Int, workTitle: String? = nil, fragment: String? = nil) {
+        self.id = id
+        self.title = title
+        self.spineIndex = spineIndex
+        self.depth = depth
+        self.workTitle = workTitle
+        self.fragment = fragment
+    }
 }
 
 /// Structural sibling of `AnnotationSidebarView`: same header/empty-state/list

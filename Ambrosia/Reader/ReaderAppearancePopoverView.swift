@@ -147,22 +147,6 @@ struct ReaderAppearancePopoverView: View {
                         .frame(width: 24, alignment: .trailing)
                 }
 
-                HStack {
-                    Text("Margins")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Slider(value: Binding(
-                        get: { Double(prefs.paddingH) },
-                        set: { prefs.paddingH = Int($0) }
-                    ), in: 16...120, step: 4)
-                    .frame(width: 130)
-                    Text("\(prefs.paddingH)px")
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 36, alignment: .trailing)
-                }
-
                 if (readerVC?.currentMode ?? prefs.defaultReadingMode) == .paginated {
                     HStack {
                         Text("Columns")

@@ -109,7 +109,9 @@ extension EPUBParser {
                     let strippedForMatch = String(standardized.dropFirst())
                     let stripped = strippedForMatch.components(separatedBy: "#").first ?? strippedForMatch
                     guard let idx = spine.first(where: { $0.href == stripped })?.index else { continue }
-                    entries.append(TOCEntry(id: item.id, title: item.title, spineIndex: idx, depth: item.depth))
+                    let rawFrag = item.href.components(separatedBy: "#").dropFirst().first
+                    let frag = (rawFrag?.isEmpty == false) ? rawFrag : nil
+                    entries.append(TOCEntry(id: item.id, title: item.title, spineIndex: idx, depth: item.depth, fragment: frag))
                 }
                 if !entries.isEmpty { return entries }
             }
@@ -127,7 +129,9 @@ extension EPUBParser {
                 var entries: [TOCEntry] = []
                 for item in delegate.entries {
                     guard let idx = spineIndex(forHref: item.href) else { continue }
-                    entries.append(TOCEntry(id: item.id, title: item.title, spineIndex: idx, depth: item.depth))
+                    let rawFrag = item.href.components(separatedBy: "#").dropFirst().first
+                    let frag = (rawFrag?.isEmpty == false) ? rawFrag : nil
+                    entries.append(TOCEntry(id: item.id, title: item.title, spineIndex: idx, depth: item.depth, fragment: frag))
                 }
                 if !entries.isEmpty { return entries }
             }

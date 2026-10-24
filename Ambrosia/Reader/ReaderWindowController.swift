@@ -39,12 +39,17 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
     private var appearancePopover: NSPopover?
 
     // Cached toolbar control views
+    private var tocButton: NSButton?
+    private var searchButton: NSButton?
     private var pageLabel: NSTextField?
     private var prevButton: NSButton?
     private var nextButton: NSButton?
     private var likeButton: NSButton?
     private var readLaterButton: NSButton?
     private var appearanceButton: NSButton?
+
+    var tocButtonRef: NSButton? { tocButton }
+    var searchButtonRef: NSButton? { searchButton }
 
     @MainActor
     static func open(book: CalibreBook) {
@@ -254,20 +259,10 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         switch identifier {
         case .readerTOC:
-            return makeIconItem(
-                identifier,
-                label: "Table of Contents",
-                image: "list.bullet",
-                action: #selector(tocClicked)
-            )
+            return makeTOCItem(identifier)
 
         case .readerSearch:
-            return makeIconItem(
-                identifier,
-                label: "Find",
-                image: "magnifyingglass",
-                action: #selector(searchClicked)
-            )
+            return makeSearchItem(identifier)
 
         case .readerNavigation:
             return makeNavigationItem(identifier)
@@ -401,14 +396,52 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
         return item
     }
 
-    // MARK: - Actions
+    private func makeTOCItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = "Table of Contents"
+        item.toolTip = "Table of Contents (⌘T)"
 
-    @objc private func tocClicked() {
-        readerViewController?.showTOCSidebar(nil)
+        let button = NSButton(
+            image: NSImage(systemSymbolName: "list.bullet", accessibilityDescription: "Table of Contents")?
+                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
+            target: self,
+            action: #selector(tocClicked(_:))
+        )
+        button.bezelStyle = .accessoryBarAction
+        button.isBordered = false
+        self.tocButton = button
+
+        item.view = button
+        return item
     }
 
-    @objc private func searchClicked() {
-        readerViewController?.toggleFindBarAction(nil)
+    private func makeSearchItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = "Search in Book"
+        item.toolTip = "Search in Book (⌘F)"
+
+        let button = NSButton(
+            image: NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "Search in Book")?
+                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
+            target: self,
+            action: #selector(searchClicked(_:))
+        )
+        button.bezelStyle = .accessoryBarAction
+        button.isBordered = false
+        self.searchButton = button
+
+        item.view = button
+        return item
+    }
+
+    // MARK: - Actions
+
+    @objc private func tocClicked(_ sender: Any?) {
+        readerViewController?.toggleTOCPopup(sender: sender ?? tocButton)
+    }
+
+    @objc private func searchClicked(_ sender: Any?) {
+        readerViewController?.toggleSearchBar()
     }
 
     @objc private func prevPageClicked() {

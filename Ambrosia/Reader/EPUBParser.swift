@@ -67,6 +67,15 @@ struct EPUBParser {
         let title: String
         let spineIndex: Int   // local to this parser; caller offsets for global use
         let depth: Int        // 0 = top level
+        let fragment: String?
+
+        init(id: String, title: String, spineIndex: Int, depth: Int, fragment: String? = nil) {
+            self.id = id
+            self.title = title
+            self.spineIndex = spineIndex
+            self.depth = depth
+            self.fragment = fragment
+        }
     }
 
     private(set) var toc: [TOCEntry] = []

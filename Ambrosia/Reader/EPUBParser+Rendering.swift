@@ -97,7 +97,8 @@ extension EPUBParser {
         ao3Record: AO3MetadataRecord? = nil,
         spineIndexOffset: Int = 0,
         imageBaseOverride: URL? = nil,
-        removeParagraphIndents: Bool = false
+        removeParagraphIndents: Bool = false,
+        ao3Order: AO3WorkLayoutOrder = ReaderPreferences.shared.ao3WorkLayoutOrder
     ) throws -> String {
         let archive = try openArchive()
 
@@ -132,7 +133,8 @@ extension EPUBParser {
                 var bodyContent = Self.extractBodyContent(
                     from: payload.rawHTML,
                     isFirstSpineItem: payload.index == 0,
-                    removeParagraphIndents: removeParagraphIndents
+                    removeParagraphIndents: removeParagraphIndents,
+                    ao3Order: ao3Order
                 )
                 if let imageBase = imageBaseOverride {
                     bodyContent = Self.rewriteImageReferences(in: bodyContent, imageBaseURL: imageBase)
@@ -150,7 +152,8 @@ extension EPUBParser {
                 var bodyContent = Self.extractBodyContent(
                     from: payload.rawHTML,
                     isFirstSpineItem: payload.index == 0,
-                    removeParagraphIndents: removeParagraphIndents
+                    removeParagraphIndents: removeParagraphIndents,
+                    ao3Order: ao3Order
                 )
                 if let imageBase = imageBaseOverride {
                     bodyContent = Self.rewriteImageReferences(in: bodyContent, imageBaseURL: imageBase)
@@ -214,7 +217,8 @@ extension EPUBParser {
         _ xhtml: String,
         userCSS: String,
         spineIndex: Int,
-        removeParagraphIndents: Bool = false
+        removeParagraphIndents: Bool = false,
+        ao3Order: AO3WorkLayoutOrder = ReaderPreferences.shared.ao3WorkLayoutOrder
     ) -> String {
         guard let doc = parseDocument(xhtml) else {
             return fallbackSanitise(xhtml, userCSS: userCSS, spineIndex: spineIndex)
@@ -224,9 +228,9 @@ extension EPUBParser {
 
         if spineIndex == 0 {
             stripPrefaceHeadingDOM(in: doc)
-            formatAO3PrefaceCardDOM(in: doc)
+            formatAO3PrefaceCardDOM(in: doc, order: ao3Order)
         } else {
-            _ = replaceAO3TitlePageDOM(in: doc)
+            _ = replaceAO3TitlePageDOM(in: doc, order: ao3Order)
         }
 
         // Inject user CSS + spine index tracker into head
@@ -252,7 +256,8 @@ extension EPUBParser {
     static func extractBodyContent(
         from xhtml: String,
         isFirstSpineItem: Bool,
-        removeParagraphIndents: Bool = false
+        removeParagraphIndents: Bool = false,
+        ao3Order: AO3WorkLayoutOrder = ReaderPreferences.shared.ao3WorkLayoutOrder
     ) -> String {
         guard let doc = parseDocument(xhtml) else {
             return fallbackExtractBodyContent(
@@ -266,9 +271,9 @@ extension EPUBParser {
 
         if isFirstSpineItem {
             stripPrefaceHeadingDOM(in: doc)
-            formatAO3PrefaceCardDOM(in: doc)
+            formatAO3PrefaceCardDOM(in: doc, order: ao3Order)
         } else {
-            _ = replaceAO3TitlePageDOM(in: doc)
+            _ = replaceAO3TitlePageDOM(in: doc, order: ao3Order)
         }
 
         if let body = doc.body() {
@@ -361,9 +366,52 @@ extension EPUBParser {
 
     /// Styles the AO3 preface metadata block as a card, adding .ao3-preface-card to #preface
     /// and .wide to multiline/long tag categories (Fandoms, Relationships, Characters, Tags).
-    private static func formatAO3PrefaceCardDOM(in doc: Document) {
+    private static func formatAO3PrefaceCardDOM(
+        in doc: Document,
+        order: AO3WorkLayoutOrder = ReaderPreferences.shared.ao3WorkLayoutOrder
+    ) {
         guard let preface = try? doc.select("#preface").first() else { return }
         _ = try? preface.addClass("ao3-preface-card")
+
+        var extractedTitle: String?
+        var extractedBylineHTML: String?
+
+        if let titleEl = try? preface.select("h1, h2, h3, p.message b, p.message a").first() {
+            let text = (try? titleEl.text())?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let text, !text.isEmpty { extractedTitle = text }
+        }
+
+        if let bylineEl = try? preface.select("div.byline, p.byline").first() {
+            extractedBylineHTML = try? bylineEl.html()
+        } else if let msg = try? preface.select("p.message").first() {
+            let html = (try? msg.html()) ?? ""
+            if let byRange = html.range(of: "by ", options: .caseInsensitive) {
+                let rest = html[byRange.lowerBound...]
+                let bylinePart = rest.components(separatedBy: "<br>").first ?? String(rest)
+                extractedBylineHTML = bylinePart
+            }
+        }
+
+        switch order {
+        case .ao3Web:
+            removePrefaceHeaderElements(from: preface)
+
+        case .titleFirst:
+            removePrefaceHeaderElements(from: preface)
+            let titleText = extractedTitle ?? "Work"
+            let bylineHTML = extractedBylineHTML ?? ""
+            let titleBlock = """
+            <div class="ao3-title-page ao3-title-first-header">
+                <h1 class="ao3-work-title">\(titleText)</h1>
+                \(bylineHTML.isEmpty ? "" : "<div class=\"ao3-work-byline\">\(bylineHTML)</div>")
+                <div class="ao3-title-divider"></div>
+            </div>
+            """
+            _ = try? preface.before(titleBlock)
+
+        case .ao3EPUB:
+            break
+        }
 
         guard let tags = try? doc.select("#preface dl.tags").first(),
               let dtElements = try? tags.select("dt") else { return }
@@ -389,11 +437,22 @@ extension EPUBParser {
         }
     }
 
+    private static func removePrefaceHeaderElements(from preface: Element) {
+        if let elements = try? preface.select("h1, h2, h3, h4, div.byline, p.byline, p.message, p:has(a[href*='archiveofourown.org'])") {
+            for el in elements {
+                _ = try? el.remove()
+            }
+        }
+    }
+
     /// Replaces Calibre's raw second spine item (the AO3 title page) with a clean,
     /// styled title page matching the Reversi/Nectar layout (centered title, author byline,
     /// and formatted summary/notes blocks).
     @discardableResult
-    private static func replaceAO3TitlePageDOM(in doc: Document) -> Bool {
+    private static func replaceAO3TitlePageDOM(
+        in doc: Document,
+        order: AO3WorkLayoutOrder = ReaderPreferences.shared.ao3WorkLayoutOrder
+    ) -> Bool {
         guard let byline = try? doc.select("div.byline").first() else { return false }
         if (try? doc.select("dl.tags").first()) != nil { return false }
 
@@ -419,14 +478,16 @@ extension EPUBParser {
             }
         }
 
-        var replacement = """
-        <div class="ao3-title-page">
-            <h1 class="ao3-work-title">\(titleText)</h1>
-            <div class="ao3-work-byline">\(bylineHTML)</div>
-        """
+        var replacement = "<div class=\"ao3-title-page\">\n"
 
-        if summaryHTML != nil || notesHTML != nil {
-            replacement += "\n    <div class=\"ao3-title-divider\"></div>\n"
+        if order != .titleFirst {
+            replacement += """
+                <h1 class="ao3-work-title">\(titleText)</h1>
+                <div class="ao3-work-byline">\(bylineHTML)</div>
+            """
+            if summaryHTML != nil || notesHTML != nil {
+                replacement += "\n    <div class=\"ao3-title-divider\"></div>\n"
+            }
         }
 
         if let summaryHTML {

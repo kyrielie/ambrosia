@@ -131,4 +131,56 @@ final class EPUBParserSanitizationTests: XCTestCase {
         XCTAssertTrue(result.contains("class=\"ao3-work-notes\""), "Must contain notes module")
         XCTAssertTrue(result.contains("Enjoy the story!"), "Must preserve notes text")
     }
+
+    func testExtractBodyContentAO3LayoutOrderVariations() {
+        let prefaceHTML = """
+        <html><body>
+        <div id="preface">
+            <p class="message"><b>Super Title</b> by TestAuthor<br><a href="http://archiveofourown.org">Posted originally</a></p>
+            <dl class="tags">
+                <dt>Rating:</dt><dd>General</dd>
+            </dl>
+        </div>
+        </body></html>
+        """
+
+        let titlePageHTML = """
+        <html><body>
+        <div id="preface">
+            <h1>Super Title</h1>
+            <div class="byline">by TestAuthor</div>
+            <p>Summary</p>
+            <blockquote><p>Summary content.</p></blockquote>
+        </div>
+        </body></html>
+        """
+
+        // 1. .ao3Web (Default)
+        let webPreface = EPUBParser.extractBodyContent(from: prefaceHTML, isFirstSpineItem: true, ao3Order: .ao3Web)
+        XCTAssertFalse(webPreface.contains("Posted originally"), "Default AO3 web order strips title/link from top of tags")
+        XCTAssertFalse(webPreface.contains("Super Title"), "Default AO3 web order strips title from tags card")
+        XCTAssertTrue(webPreface.contains("General"), "Tags are preserved")
+
+        let webTitlePage = EPUBParser.extractBodyContent(from: titlePageHTML, isFirstSpineItem: false, ao3Order: .ao3Web)
+        XCTAssertTrue(webTitlePage.contains("<h1 class=\"ao3-work-title\">Super Title</h1>"), "Title page has title")
+        XCTAssertTrue(webTitlePage.contains("Summary content."), "Title page has summary")
+
+        // 2. .titleFirst
+        let titleFirstPreface = EPUBParser.extractBodyContent(from: prefaceHTML, isFirstSpineItem: true, ao3Order: .titleFirst)
+        XCTAssertTrue(titleFirstPreface.contains("ao3-title-first-header"), "Title-first order has title block before tags")
+        XCTAssertTrue(titleFirstPreface.contains("Super Title"), "Title is present in first spine item")
+        XCTAssertFalse(titleFirstPreface.contains("Posted originally"), "Link is removed")
+
+        let titleFirstTitlePage = EPUBParser.extractBodyContent(from: titlePageHTML, isFirstSpineItem: false, ao3Order: .titleFirst)
+        XCTAssertFalse(titleFirstTitlePage.contains("ao3-work-title"), "Title-first order does not duplicate title on second spine")
+        XCTAssertTrue(titleFirstTitlePage.contains("Summary content."), "Summary is preserved")
+
+        // 3. .ao3EPUB
+        let epubPreface = EPUBParser.extractBodyContent(from: prefaceHTML, isFirstSpineItem: true, ao3Order: .ao3EPUB)
+        XCTAssertTrue(epubPreface.contains("Posted originally"), "AO3 EPUB order preserves top link")
+        XCTAssertTrue(epubPreface.contains("Super Title"), "AO3 EPUB order preserves title above tags")
+
+        let epubTitlePage = EPUBParser.extractBodyContent(from: titlePageHTML, isFirstSpineItem: false, ao3Order: .ao3EPUB)
+        XCTAssertTrue(epubTitlePage.contains("<h1 class=\"ao3-work-title\">Super Title</h1>"), "AO3 EPUB order has title page title")
+    }
 }

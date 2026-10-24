@@ -199,6 +199,13 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     // Active popovers
     private var annotationPopover: NSPopover?
     private var notePopover: NSPopover?
+    private var tocPopover: NSPopover?
+    private var tocPopupVC: TOCPopupViewController?
+
+    // Search bar
+    private var searchBarVC: SearchBarViewController?
+    private var searchDebounceTimer: Timer?
+    private var pendingSearchTerm: String?
 
     // Preferences subscription
     private var prefsCancellables: Set<AnyCancellable> = []
@@ -321,6 +328,15 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 self.pendingLinkFragment = nil
                 self.paginationEngine?.scrollToAnchor(fragment)
             }
+            if let query = self.pendingSearchTerm, !query.isEmpty {
+                let config = WKFindConfiguration()
+                config.caseSensitive = false
+                config.wraps = true
+                config.backwards = false
+                self.webView.find(query, configuration: config) { [weak self] _ in
+                    self?.snapFoundSelectionToColumn()
+                }
+            }
             self.savePaginatedProgress()
             self.onReadingProgressChanged?()
         }
@@ -334,6 +350,18 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             webView.topAnchor.constraint(equalTo: container.topAnchor),
             webView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
+
+        let barVC = SearchBarViewController()
+        barVC.delegate = self
+        addChild(barVC)
+        container.addSubview(barVC.view)
+        NSLayoutConstraint.activate([
+            barVC.view.topAnchor.constraint(equalTo: container.topAnchor, constant: 12),
+            barVC.view.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+            barVC.view.widthAnchor.constraint(equalToConstant: 410)
+        ])
+        barVC.view.isHidden = true
+        self.searchBarVC = barVC
 
         // enclosingScrollView is nil until the WKWebView is part of a view
         // hierarchy — this must run after addSubview, never before (invariant 7).
@@ -1646,7 +1674,11 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         // was ever changed (see design-philosophy audit, Finding 2; Find/
         // Find-Next/Find-Previous were migrated into this same scheme in
         // Pass A rather than left as a separate, undocumented exception).
-        if event.keyCode == 53 && findBarHostingView != nil { hideFindBar(); return }
+        if event.keyCode == 53 {
+            if let bar = searchBarVC, !bar.view.isHidden { hideSearchBar(); return }
+            if let pop = tocPopover, pop.isShown { closeTOCPopup(); return }
+            if findBarHostingView != nil { hideFindBar(); return }
+        }
         super.keyDown(with: event)
     }
 
@@ -1663,10 +1695,22 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     @objc func addAnnotation(_ sender: Any?) { savePointAnnotationAtCurrentPosition() }
     @objc func showAnnotationSidebar(_ sender: Any?) { toggleAnnotationSidebar() }
-    @objc func showTOCSidebar(_ sender: Any?) { toggleTOCSidebar() }
-    @objc func toggleFindBarAction(_ sender: Any?) { toggleFindBar() }
-    @objc func findNextAction(_ sender: Any?) { findNext() }
-    @objc func findPreviousAction(_ sender: Any?) { findPrevious() }
+    @objc func showTOCSidebar(_ sender: Any?) { toggleTOCPopup(sender: sender) }
+    @objc func toggleFindBarAction(_ sender: Any?) { toggleSearchBar() }
+    @objc func findNextAction(_ sender: Any?) {
+        if let bar = searchBarVC, !bar.view.isHidden {
+            searchBarDidRequestNext(bar)
+        } else {
+            findNext()
+        }
+    }
+    @objc func findPreviousAction(_ sender: Any?) {
+        if let bar = searchBarVC, !bar.view.isHidden {
+            searchBarDidRequestPrevious(bar)
+        } else {
+            findPrevious()
+        }
+    }
     @objc func goToNextPageAction(_ sender: Any?) { goToNextPage() }
     @objc func goToPreviousPageAction(_ sender: Any?) { goToPreviousPage() }
     @objc func nextChapterAction(_ sender: Any?) { goToNextChapter() }
@@ -2039,38 +2083,78 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         )
     }
 
-    // MARK: - Find bar
+    // MARK: - Search in Work (Honeycrisp Search Bar)
+
+    func toggleSearchBar() {
+        if let bar = searchBarVC, !bar.view.isHidden {
+            hideSearchBar()
+        } else {
+            showSearchBar()
+        }
+    }
+
+    func showSearchBar(with text: String? = nil) {
+        guard let bar = searchBarVC else { return }
+        bar.view.isHidden = false
+        bar.beginSearch(with: text ?? (findSearchText.isEmpty ? nil : findSearchText))
+        publishLocalFindState()
+    }
+
+    func hideSearchBar() {
+        guard let bar = searchBarVC else { return }
+        bar.view.isHidden = true
+        bar.clear()
+        pendingSearchTerm = nil
+        if #available(macOS 13.0, *) {
+            webView.find("", configuration: WKFindConfiguration()) { _ in }
+        }
+        publishLocalFindState()
+    }
+
+    // MARK: - Find bar (Compatibility)
 
     private func toggleFindBar() {
-        if findBarHostingView != nil { hideFindBar() } else { showFindBar() }
+        toggleSearchBar()
     }
 
     func showLocalFind() {
-        guard findBarHostingView == nil else { return }
-        showFindBar()
+        showSearchBar()
     }
 
     func setLocalFindText(_ text: String) {
         guard findSearchText != text else { return }
         findSearchText = text
-        performFind(findSearchText)
+        if let bar = searchBarVC, !bar.view.isHidden {
+            bar.beginSearch(with: text)
+        } else {
+            performFind(findSearchText)
+        }
         publishLocalFindState()
     }
 
     func localFindNext() {
-        findNext()
+        if let bar = searchBarVC, !bar.view.isHidden {
+            searchBarDidRequestNext(bar)
+        } else {
+            findNext()
+        }
     }
 
     func localFindPrevious() {
-        findPrevious()
+        if let bar = searchBarVC, !bar.view.isHidden {
+            searchBarDidRequestPrevious(bar)
+        } else {
+            findPrevious()
+        }
     }
 
     func currentLocalFindState() -> LocalReaderFindState {
-        LocalReaderFindState(
-            query: findSearchText,
+        let isVis = (searchBarVC?.view.isHidden == false) || (findBarHostingView != nil)
+        return LocalReaderFindState(
+            query: searchBarVC?.searchFieldValue ?? findSearchText,
             matchCurrent: findMatchCurrent,
             matchTotal: findMatchTotal,
-            isVisible: findBarHostingView != nil
+            isVisible: isVis
         )
     }
 
@@ -2078,46 +2162,11 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         if openSidebar {
             onOpenSearchSidebar?()
         }
-        guard findBarHostingView == nil else {
-            publishLocalFindState()
-            return
-        }
-        let barView = FindBarView(
-            searchText: Binding(get: { self.findSearchText }, set: { self.setLocalFindText($0) }),
-            matchCurrent: findMatchCurrent,
-            matchTotal: findMatchTotal,
-            onNext: { [weak self] in self?.findNext() },
-            onPrevious: { [weak self] in self?.findPrevious() },
-            onClose: { [weak self] in self?.hideFindBar() }
-        )
-        let hosting = NSHostingView(rootView: barView)
-        hosting.translatesAutoresizingMaskIntoConstraints = false
-        // Invariant 9 — matches AnnotationSidebarView's/TOCSidebarView's own hosting:
-        // frame is fully owned by the constraints below, so SwiftUI's own
-        // intrinsic/min/max sizing must be disabled rather than fought with.
-        hosting.sizingOptions = []
-        view.addSubview(hosting)
-        NSLayoutConstraint.activate([
-            hosting.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            hosting.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            hosting.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            hosting.heightAnchor.constraint(equalToConstant: 44)
-        ])
-        findBarHostingView = hosting
-        publishLocalFindState()
+        showSearchBar()
     }
 
     private func hideFindBar() {
-        findBarHostingView?.removeFromSuperview()
-        findBarHostingView = nil
-        findSearchText    = ""
-        findMatchCurrent  = 0
-        findMatchTotal    = 0
-        if #available(macOS 13.0, *) {
-            webView.find("", configuration: WKFindConfiguration()) { _ in }
-        }
-        updateFindBar()
-        publishLocalFindState()
+        hideSearchBar()
     }
 
     private func repositionFindBar() { /* Auto Layout handles it */ }
@@ -2398,11 +2447,63 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         hosting.rootView = makeAnnotationSidebarView()
     }
 
-    // MARK: - Table of contents sidebar
+    // MARK: - Table of Contents Popup
+
+    func toggleTOCPopup(sender: Any? = nil) {
+        if let popover = tocPopover, popover.isShown {
+            closeTOCPopup()
+            return
+        }
+        showTOCPopup(sender: sender)
+    }
+
+    func showTOCPopup(sender: Any? = nil) {
+        let popupVC = TOCPopupViewController()
+        let windowHeight = view.window?.frame.height ?? 600
+        let popupHeight = min(480, max(280, windowHeight - 140))
+        popupVC.view.setFrameSize(NSSize(width: 360, height: popupHeight))
+
+        popupVC.onSelect = { [weak self] entry in
+            self?.closeTOCPopup()
+            self?.jumpToTOCEntry(entry)
+        }
+        popupVC.onDismiss = { [weak self] in
+            self?.closeTOCPopup()
+        }
+
+        popupVC.configure(entries: globalTOC, currentSpineIndex: currentSpineIndex)
+        self.tocPopupVC = popupVC
+
+        let popover = NSPopover()
+        popover.contentViewController = popupVC
+        popover.behavior = .transient
+        popover.animates = true
+        self.tocPopover = popover
+
+        if let button = sender as? NSView {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY)
+        } else if let windowController = view.window?.windowController as? ReaderWindowController,
+                  let button = windowController.tocButtonRef {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY)
+        } else {
+            popover.show(
+                relativeTo: NSRect(x: 20, y: view.bounds.height - 20, width: 1, height: 1),
+                of: view,
+                preferredEdge: .maxY
+            )
+        }
+    }
+
+    func closeTOCPopup() {
+        tocPopover?.performClose(nil)
+        tocPopover = nil
+        tocPopupVC = nil
+    }
+
+    // MARK: - Table of contents sidebar (Compatibility)
 
     func toggleTOCSidebar() {
-        if let panel = tocPanel, panel.isVisible { panel.close(); return }
-        openTOCSidebar()
+        toggleTOCPopup()
     }
 
     private func openTOCSidebar() {
@@ -2504,7 +2605,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                     title: entry.title,
                     spineIndex: globalIndex,
                     depth: entry.depth,
-                    workTitle: workTitle
+                    workTitle: workTitle,
+                    fragment: entry.fragment
                 ))
             }
         }
@@ -2525,13 +2627,23 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             guard let self else { return }
             if self.currentMode == .paginated {
                 if entry.spineIndex != self.currentSpineIndex {
+                    self.pendingLinkFragment = entry.fragment
                     self.loadSpineItem(index: entry.spineIndex, restorePosition: .start)
+                } else if let fragment = entry.fragment {
+                    self.paginationEngine?.scrollToAnchor(fragment)
+                } else {
+                    self.paginationEngine?.scrollToColumn(0)
                 }
                 return
             }
-            if entry.spineIndex != self.currentSpineIndex {
+            if let fragment = entry.fragment {
                 self.webView.evaluateJavaScript(
-                    "document.querySelector('[data-spine-index=\"\(entry.spineIndex)\"]')?.scrollIntoView({block:'start'});",
+                    "document.getElementById('\(fragment)')?.scrollIntoView({behavior:'smooth',block:'start'});",
+                    completionHandler: nil
+                )
+            } else if entry.spineIndex != self.currentSpineIndex {
+                self.webView.evaluateJavaScript(
+                    "document.querySelector('[data-spine-index=\"\(entry.spineIndex)\"]')?.scrollIntoView({behavior:'smooth',block:'start'});",
                     completionHandler: nil
                 )
             }
@@ -2761,5 +2873,121 @@ private class ReaderMenuWebView: WKWebView {
         if idx > 0 { menu.insertItem(.separator(), at: idx) }
 
         super.willOpenMenu(menu, with: event)
+    }
+}
+
+// MARK: - SearchBarDelegate
+
+extension ReaderViewController: SearchBarDelegate {
+
+    func searchBar(_ bar: SearchBarViewController, didSearch term: String) {
+        searchDebounceTimer?.invalidate()
+        let query = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        pendingSearchTerm = query
+        guard !query.isEmpty else {
+            bar.showResults([], chapterTitles: [:])
+            if #available(macOS 13.0, *) {
+                webView.find("", configuration: WKFindConfiguration()) { _ in }
+            }
+            findSearchText = ""
+            findMatchTotal = 0
+            findMatchCurrent = 0
+            publishLocalFindState()
+            return
+        }
+
+        searchDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: false) { [weak self, weak bar] _ in
+            guard let self, let bar else { return }
+            self.performAsyncWorkSearch(for: query, bar: bar)
+        }
+    }
+
+    private func performAsyncWorkSearch(for query: String, bar: SearchBarViewController) {
+        let titleMap = Dictionary(uniqueKeysWithValues: globalTOC.map { ($0.spineIndex, $0.title) })
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self, weak bar] in
+            guard let self else { return }
+            let results = self.collectWorkSearchResults(for: query, limit: 250)
+
+            DispatchQueue.main.async { [weak self, weak bar] in
+                guard let self, let bar, self.pendingSearchTerm == query else { return }
+                bar.showResults(results, chapterTitles: titleMap)
+                self.findSearchText = query
+                self.findMatchTotal = results.count
+                self.findMatchCurrent = results.isEmpty ? 0 : 1
+                self.publishLocalFindState()
+                if !results.isEmpty {
+                    self.performFindAndJump(query)
+                }
+            }
+        }
+    }
+
+    private func collectWorkSearchResults(for query: String, limit: Int) -> [BookSearchResult] {
+        var results: [BookSearchResult] = []
+        for (workIndex, parser) in workParsers.enumerated() {
+            for item in parser.spine {
+                guard let globalIdx = spineMap.globalIndex(workIndex: workIndex, localIndex: item.index),
+                      let text = try? parser.plainText(for: item) else { continue }
+                let nsText = text as NSString
+                var searchRange = NSRange(location: 0, length: nsText.length)
+                while searchRange.length > 0 && results.count < limit {
+                    let match = nsText.range(of: query, options: [.caseInsensitive, .diacriticInsensitive], range: searchRange)
+                    guard match.location != NSNotFound else { break }
+                    let nextLocation = NSMaxRange(match)
+                    searchRange = NSRange(location: nextLocation, length: nsText.length - nextLocation)
+
+                    let before = max(0, match.location - 45)
+                    let after = min(nsText.length, NSMaxRange(match) + 65)
+                    var excerpt = nsText.substring(with: NSRange(location: before, length: after - before))
+                        .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if before > 0 { excerpt = "…" + excerpt }
+                    if after < nsText.length { excerpt += "…" }
+                    results.append(BookSearchResult(spineIndex: globalIdx, characterOffset: match.location, excerpt: excerpt))
+                }
+                if results.count >= limit { break }
+            }
+            if results.count >= limit { break }
+        }
+        return results
+    }
+
+    func searchBar(_ bar: SearchBarViewController, didSelect result: BookSearchResult) {
+        let query = bar.searchFieldValue
+        if result.spineIndex != currentSpineIndex {
+            if currentMode == .paginated {
+                pendingSearchTerm = query
+                loadSpineItem(index: result.spineIndex, restorePosition: .start)
+            } else {
+                let js = "document.querySelector('[data-spine-index=\"\(result.spineIndex)\"]')?.scrollIntoView({block:'start'});"
+                webView.evaluateJavaScript(js) { [weak self] _, _ in
+                    self?.performFindAndJump(query)
+                }
+            }
+        } else {
+            performFindAndJump(query)
+            snapFoundSelectionToColumn()
+        }
+    }
+
+    func searchBarDidRequestNext(_ bar: SearchBarViewController) {
+        if bar.resultCount > 0 {
+            bar.stepResult(by: 1)
+        } else {
+            findNext()
+        }
+    }
+
+    func searchBarDidRequestPrevious(_ bar: SearchBarViewController) {
+        if bar.resultCount > 0 {
+            bar.stepResult(by: -1)
+        } else {
+            findPrevious()
+        }
+    }
+
+    func searchBarDidDismiss(_ bar: SearchBarViewController) {
+        hideSearchBar()
     }
 }
