@@ -69,4 +69,49 @@ final class ReaderPreferencesTests: XCTestCase {
         prefs.resetReaderToDefaults()
         XCTAssertEqual(prefs.ao3WorkLayoutOrder, .ao3Web)
     }
+
+    func testAppearanceModeAndThemes() {
+        let prefs = ReaderPreferences.shared
+        XCTAssertEqual(prefs.appearanceMode, .system)
+
+        prefs.appearanceMode = .light
+        XCTAssertEqual(prefs.appearanceMode, .light)
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "rp.appearanceMode"), "light")
+        XCTAssertFalse(prefs.effectiveIsDark)
+
+        prefs.appearanceMode = .dark
+        XCTAssertEqual(prefs.appearanceMode, .dark)
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "rp.appearanceMode"), "dark")
+        XCTAssertTrue(prefs.effectiveIsDark)
+
+        let theme = ReaderTheme.sepia
+        XCTAssertEqual(theme.colorSet(for: false).background, "#FBF0D9")
+        XCTAssertEqual(theme.colorSet(for: true).background, "#2B2216")
+
+        prefs.resetReaderToDefaults()
+        XCTAssertEqual(prefs.appearanceMode, .system)
+    }
+
+    func testTextAlignmentAndIndentPersistenceAndCSS() {
+        let prefs = ReaderPreferences.shared
+        XCTAssertEqual(prefs.textAlignment, .book)
+        XCTAssertNil(prefs.paragraphIndent)
+
+        prefs.textAlignment = .justify
+        XCTAssertEqual(prefs.textAlignment, .justify)
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "rp.textAlignment"), "justify")
+
+        prefs.paragraphIndent = 1.75
+        XCTAssertEqual(prefs.paragraphIndent, 1.75)
+        XCTAssertEqual(UserDefaults.standard.double(forKey: "rp.paragraphIndent"), 1.75)
+
+        let emittedCSS = prefs.css(paginated: false)
+        XCTAssertTrue(emittedCSS.contains("--ambrosia-text-align: justify"), "Must emit text-align CSS variable")
+        XCTAssertTrue(emittedCSS.contains("--ambrosia-paragraph-indent: 1.75em"), "Must emit paragraph-indent CSS variable")
+        XCTAssertTrue(emittedCSS.contains("text-indent: var(--ambrosia-paragraph-indent);"), "Must style paragraph indent")
+
+        prefs.resetReaderToDefaults()
+        XCTAssertEqual(prefs.textAlignment, .book)
+        XCTAssertNil(prefs.paragraphIndent)
+    }
 }

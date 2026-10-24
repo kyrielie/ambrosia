@@ -76,6 +76,30 @@ enum AO3WorkLayoutOrder: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - ThemeTextAlignment
+
+public enum ThemeTextAlignment: String, Codable, CaseIterable, Identifiable {
+    case book
+    case left
+    case justify
+
+    public var id: String { rawValue }
+    public var label: String {
+        switch self {
+        case .book: return "Book Default"
+        case .left: return "Left"
+        case .justify: return "Justified"
+        }
+    }
+    public var cssValue: String {
+        switch self {
+        case .book: return "inherit"
+        case .left: return "left"
+        case .justify: return "justify"
+        }
+    }
+}
+
 // MARK: - LibraryColorScheme
 
 /// The colour pair applied to the library background and text.
@@ -165,6 +189,51 @@ final class ReaderPreferences: ObservableObject {
             UserDefaults.standard.set(allowReaderLinkClicks, forKey: Keys.allowReaderLinkClicks)
             preferenceChangeKind.send(.cosmetic)
         }
+    }
+    var appearanceMode: AppearanceMode {
+        didSet {
+            UserDefaults.standard.set(appearanceMode.rawValue, forKey: Keys.appearanceMode)
+            updateEffectiveColors()
+        }
+    }
+    var selectedTheme: ReaderTheme {
+        didSet {
+            UserDefaults.standard.set(selectedTheme.rawValue, forKey: Keys.selectedTheme)
+            updateEffectiveColors()
+        }
+    }
+    var textAlignment: ThemeTextAlignment {
+        didSet {
+            UserDefaults.standard.set(textAlignment.rawValue, forKey: Keys.textAlignment)
+            preferenceChangeKind.send(.cosmetic)
+        }
+    }
+    var paragraphIndent: Double? {
+        didSet {
+            if let paragraphIndent {
+                UserDefaults.standard.set(paragraphIndent, forKey: Keys.paragraphIndent)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Keys.paragraphIndent)
+            }
+            preferenceChangeKind.send(.cosmetic)
+        }
+    }
+    public var effectiveIsDark: Bool {
+        switch appearanceMode {
+        case .system:
+            return NSApp?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        case .light:
+            return false
+        case .dark:
+            return true
+        }
+    }
+    public func updateEffectiveColors() {
+        let isDark = effectiveIsDark
+        let set = selectedTheme.colorSet(for: isDark)
+        readerBackgroundColor = set.background
+        readerTextColor = set.text
+        preferenceChangeKind.send(.cosmetic)
     }
     /// Structural, not cosmetic: indent removal is now applied by
     /// EPUBParser.stripLeadingIndentWhitespace when the HTML is built (see
@@ -500,8 +569,12 @@ final class ReaderPreferences: ObservableObject {
         static let groupBySeries               = false
         static let defaultReadingMode          = ReadingMode.scroll
         static let ao3WorkLayoutOrder          = AO3WorkLayoutOrder.ao3Web
-        static let preferredReader              = PreferredReaderOption.inbuilt
-        static let customReaderAppPath          = ""
+        static let preferredReader             = PreferredReaderOption.inbuilt
+        static let customReaderAppPath         = ""
+        static let appearanceMode              = AppearanceMode.system
+        static let selectedTheme               = ReaderTheme.parchment
+        static let textAlignment               = ThemeTextAlignment.book
+        static let paragraphIndent: Double?    = nil
 
         // showTOCSidebar is intentionally absent — see keyBindings' doc comment.
         static let keyBindings: [RebindableAction: KeyBinding] = [
@@ -550,6 +623,10 @@ final class ReaderPreferences: ObservableObject {
         static let ao3WorkLayoutOrder          = "rp.ao3WorkLayoutOrder"
         static let preferredReader             = "rp.preferredReader"
         static let customReaderAppPath         = "rp.customReaderAppPath"
+        static let appearanceMode              = "rp.appearanceMode"
+        static let selectedTheme               = "rp.selectedTheme"
+        static let textAlignment               = "rp.textAlignment"
+        static let paragraphIndent             = "rp.paragraphIndent"
         static let keyBindings                 = "rp.keyBindings"
         static let savedThemes                 = "rp.savedThemes"
     }
@@ -575,6 +652,17 @@ final class ReaderPreferences: ObservableObject {
             : Defaults.autoOpenFindBarForFullTextSearch
         let rawAO3Order = ud.string(forKey: Keys.ao3WorkLayoutOrder) ?? Defaults.ao3WorkLayoutOrder.rawValue
         ao3WorkLayoutOrder = AO3WorkLayoutOrder(rawValue: rawAO3Order) ?? Defaults.ao3WorkLayoutOrder
+
+        let rawAppearanceMode = ud.string(forKey: Keys.appearanceMode) ?? Defaults.appearanceMode.rawValue
+        appearanceMode = AppearanceMode(rawValue: rawAppearanceMode) ?? Defaults.appearanceMode
+
+        let rawSelectedTheme = ud.string(forKey: Keys.selectedTheme) ?? Defaults.selectedTheme.rawValue
+        selectedTheme = ReaderTheme(rawValue: rawSelectedTheme) ?? Defaults.selectedTheme
+
+        let rawTextAlignment = ud.string(forKey: Keys.textAlignment) ?? Defaults.textAlignment.rawValue
+        textAlignment = ThemeTextAlignment(rawValue: rawTextAlignment) ?? Defaults.textAlignment
+
+        paragraphIndent = ud.object(forKey: Keys.paragraphIndent) as? Double
 
         // Migrate old "rp.backgroundColor" key if present
         let legacyBG = ud.string(forKey: "rp.backgroundColor")
@@ -696,12 +784,15 @@ final class ReaderPreferences: ObservableObject {
     /// removed. The actual fix is EPUBParser.stripLeadingIndentWhitespace.)
     var cssVariableDeclarations: String {
         let theme = activeTheme ?? (ReaderTheme.current(bg: readerBackgroundColor, fg: readerTextColor) ?? .parchment)
+        let paragraphIndentVar = paragraphIndent.map { "--ambrosia-paragraph-indent: \($0)em;" } ?? ""
         return """
         --ambrosia-font-family: \(fontFamily);
         --ambrosia-font-size: \(fontSize)px;
         --ambrosia-line-height: \(lineHeight);
         --ambrosia-bg: \(readerBackgroundColor);
         --ambrosia-text: \(readerTextColor);
+        --ambrosia-text-align: \(textAlignment.cssValue);
+        \(paragraphIndentVar)
         --ambrosia-padding-h: \(paddingH)px;
         --ambrosia-padding-v: \(paddingV)px;
         --ambrosia-max-width: \(maxWidth)px;
@@ -730,6 +821,12 @@ final class ReaderPreferences: ObservableObject {
         // 7). Substituting it directly here keeps that reload path
         // unchanged; the cosmetic live-update path never touches this rule.
         let bodyPadding = paginated ? "0" : "var(--ambrosia-padding-v) var(--ambrosia-padding-h)"
+        let textAlignRule = textAlignment != .book
+            ? "text-align: var(--ambrosia-text-align); -webkit-text-align: var(--ambrosia-text-align); text-justify: inter-word;"
+            : ""
+        let textIndentRule = paragraphIndent != nil
+            ? "text-indent: var(--ambrosia-paragraph-indent);"
+            : ""
         return """
         /* === Ambrosia user preferences === */
         :root {
@@ -750,7 +847,11 @@ final class ReaderPreferences: ObservableObject {
             word-wrap: break-word;
         }
         img  { max-width: 100%; height: auto; display: block; margin: 1em auto; }
-        p    { margin-bottom: 0.8em; }
+        p    {
+            margin-bottom: 0.8em;
+            \(textAlignRule)
+            \(textIndentRule)
+        }
         a    { color: inherit; text-decoration: underline; pointer-events: var(--ambrosia-link-pointer-events); cursor: pointer; }
         em, i { font-style: italic; }
         strong, b { font-weight: bold; }
@@ -1135,6 +1236,10 @@ final class ReaderPreferences: ObservableObject {
             || ao3WorkLayoutOrder != Defaults.ao3WorkLayoutOrder
             || preferredReader != Defaults.preferredReader
             || customReaderAppPath != Defaults.customReaderAppPath
+            || appearanceMode != Defaults.appearanceMode
+            || selectedTheme != Defaults.selectedTheme
+            || textAlignment != Defaults.textAlignment
+            || paragraphIndent != Defaults.paragraphIndent
             || keyBindings != Defaults.keyBindings
     }
 
@@ -1171,6 +1276,10 @@ final class ReaderPreferences: ObservableObject {
         ao3WorkLayoutOrder    = Defaults.ao3WorkLayoutOrder
         preferredReader       = Defaults.preferredReader
         customReaderAppPath   = Defaults.customReaderAppPath
+        appearanceMode        = Defaults.appearanceMode
+        selectedTheme         = Defaults.selectedTheme
+        textAlignment         = Defaults.textAlignment
+        paragraphIndent       = Defaults.paragraphIndent
         keyBindings           = Defaults.keyBindings
     }
 

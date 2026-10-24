@@ -30,6 +30,22 @@ struct ReaderAppearancePopoverView: View {
 
             Divider()
 
+            // Appearance Mode (System / Light / Dark)
+            HStack {
+                Text("Mode")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("Appearance Mode", selection: $prefs.appearanceMode) {
+                    ForEach(AppearanceMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 180)
+            }
+
             // Theme swatches
             VStack(alignment: .leading, spacing: 6) {
                 Text("Theme")
@@ -39,18 +55,19 @@ struct ReaderAppearancePopoverView: View {
                 HStack(spacing: 8) {
                     ForEach(ReaderTheme.allCases) { theme in
                         let isSelected = prefs.activeTheme == theme
+                        let colors = theme.colorSet(for: prefs.effectiveIsDark)
                         Button {
                             prefs.applyTheme(theme)
                         } label: {
                             ZStack {
                                 Circle()
-                                    .fill(Color(hex: theme.bg) ?? .white)
+                                    .fill(Color(hex: colors.background) ?? .white)
                                     .frame(width: 28, height: 28)
                                     .shadow(color: .black.opacity(0.12), radius: 1, x: 0, y: 1)
 
                                 Text("A")
                                     .font(.system(size: 13, weight: .semibold, design: .serif))
-                                    .foregroundStyle(Color(hex: theme.fg) ?? .black)
+                                    .foregroundStyle(Color(hex: colors.text) ?? .black)
 
                                 if isSelected {
                                     Circle()
@@ -132,7 +149,7 @@ struct ReaderAppearancePopoverView: View {
 
             Divider()
 
-            // Spacing & Layout
+            // Spacing & Typography Layout
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text("Line Spacing")
@@ -145,6 +162,47 @@ struct ReaderAppearancePopoverView: View {
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.secondary)
                         .frame(width: 24, alignment: .trailing)
+                }
+
+                // Alignment (Left, Justify, Default)
+                HStack {
+                    Text("Alignment")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Picker("Alignment", selection: $prefs.textAlignment) {
+                        Text("Left").tag(ThemeTextAlignment.left)
+                        Text("Justified").tag(ThemeTextAlignment.justify)
+                        Text("Default").tag(ThemeTextAlignment.book)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 180)
+                }
+
+                // Paragraph Indent
+                HStack {
+                    Text("Paragraph Indent")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Toggle("Default", isOn: Binding(
+                        get: { prefs.paragraphIndent == nil },
+                        set: { isDef in prefs.paragraphIndent = isDef ? nil : 1.5 }
+                    ))
+                    .toggleStyle(.checkbox)
+                    .font(.caption)
+
+                    if let indent = prefs.paragraphIndent {
+                        Slider(value: Binding(
+                            get: { indent },
+                            set: { prefs.paragraphIndent = $0 }
+                        ), in: 0.5...3.0, step: 0.25)
+                        .frame(width: 70)
+                        Text(String(format: "%.2fem", indent))
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 if (readerVC?.currentMode ?? prefs.defaultReadingMode) == .paginated {

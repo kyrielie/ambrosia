@@ -130,7 +130,11 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     private(set) var totalColumns: Int = 1
     private var currentHTML: String = ""
 
-    private var currentSpineIndex: Int = 0
+    private var currentSpineIndex: Int = 0 {
+        didSet {
+            refreshTOCSidebarIfVisible()
+        }
+    }
     private var pendingAnnotationJump: Annotation?
     /// Set when an in-book link (TOC chapter, footnote) targets a fragment in
     /// a spine item other than the one currently loaded. Consumed once from
@@ -869,9 +873,18 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     // MARK: - Preferences subscription
 
+    private var appearanceObservation: NSKeyValueObservation?
     private let preferencesReloadDebounce = DebounceTimer(delay: 0.15)
 
     private func subscribeToPreferences() {
+        if let app = NSApp {
+            appearanceObservation = app.observe(\.effectiveAppearance, options: []) { _, _ in
+                if ReaderPreferences.shared.appearanceMode == .system {
+                    ReaderPreferences.shared.updateEffectiveColors()
+                }
+            }
+        }
+
         // Blanket `objectWillChange` sink removed — `preferenceChangeKind`
         // (sent once per `didSet`, classified `.cosmetic`/`.structural`)
         // replaces it entirely, so every change fires exactly one of the two
@@ -2447,63 +2460,36 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         hosting.rootView = makeAnnotationSidebarView()
     }
 
-    // MARK: - Table of Contents Popup
+    // MARK: - Table of Contents Popup & Floating Panel
 
     func toggleTOCPopup(sender: Any? = nil) {
-        if let popover = tocPopover, popover.isShown {
-            closeTOCPopup()
-            return
-        }
-        showTOCPopup(sender: sender)
+        toggleTOCSidebar()
     }
 
     func showTOCPopup(sender: Any? = nil) {
-        let popupVC = TOCPopupViewController()
-        let windowHeight = view.window?.frame.height ?? 600
-        let popupHeight = min(480, max(280, windowHeight - 140))
-        popupVC.view.setFrameSize(NSSize(width: 360, height: popupHeight))
-
-        popupVC.onSelect = { [weak self] entry in
-            self?.closeTOCPopup()
-            self?.jumpToTOCEntry(entry)
-        }
-        popupVC.onDismiss = { [weak self] in
-            self?.closeTOCPopup()
-        }
-
-        popupVC.configure(entries: globalTOC, currentSpineIndex: currentSpineIndex)
-        self.tocPopupVC = popupVC
-
-        let popover = NSPopover()
-        popover.contentViewController = popupVC
-        popover.behavior = .transient
-        popover.animates = true
-        self.tocPopover = popover
-
-        if let button = sender as? NSView {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY)
-        } else if let windowController = view.window?.windowController as? ReaderWindowController,
-                  let button = windowController.tocButtonRef {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY)
-        } else {
-            popover.show(
-                relativeTo: NSRect(x: 20, y: view.bounds.height - 20, width: 1, height: 1),
-                of: view,
-                preferredEdge: .maxY
-            )
-        }
+        openTOCSidebar()
     }
 
     func closeTOCPopup() {
-        tocPopover?.performClose(nil)
-        tocPopover = nil
-        tocPopupVC = nil
+        if let panel = tocPanel, panel.isVisible {
+            panel.orderOut(nil)
+            removeTOCWindowObservers()
+            tocPanel = nil
+            tocHostingView = nil
+        }
     }
 
-    // MARK: - Table of contents sidebar (Compatibility)
+    // MARK: - Table of contents floating panel
 
     func toggleTOCSidebar() {
-        toggleTOCPopup()
+        if let panel = tocPanel, panel.isVisible {
+            panel.orderOut(nil)
+            removeTOCWindowObservers()
+            tocPanel = nil
+            tocHostingView = nil
+        } else {
+            openTOCSidebar()
+        }
     }
 
     private func openTOCSidebar() {
@@ -2514,18 +2500,19 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         hosting.sizingOptions = []   // Invariant 9 — matches AnnotationSidebarView's own hosting.
         tocHostingView = hosting
 
+        let panelWidth: CGFloat = 280
         // Anchored to the left edge, independent of the annotation panel on
         // the right — both can be open simultaneously in standalone mode.
         let contentRect = CGRect(
-            x: screenRect.minX - 260,
+            x: screenRect.minX - panelWidth,
             y: screenRect.minY,
-            width: 260,
+            width: panelWidth,
             height: screenRect.height
         )
 
         let panel = NSPanel(
             contentRect: contentRect,
-            styleMask: [.titled, .closable],
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -2636,16 +2623,31 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 }
                 return
             }
+
+            // Scroll mode
+            self.currentSpineIndex = entry.spineIndex
             if let fragment = entry.fragment {
-                self.webView.evaluateJavaScript(
-                    "document.getElementById('\(fragment)')?.scrollIntoView({behavior:'smooth',block:'start'});",
-                    completionHandler: nil
-                )
-            } else if entry.spineIndex != self.currentSpineIndex {
-                self.webView.evaluateJavaScript(
-                    "document.querySelector('[data-spine-index=\"\(entry.spineIndex)\"]')?.scrollIntoView({behavior:'smooth',block:'start'});",
-                    completionHandler: nil
-                )
+                let js = """
+                (function() {
+                    var el = document.getElementById('\(fragment)') ||
+                             document.querySelector('[name=\"\(fragment)\"]') ||
+                             document.querySelector('[data-spine-index=\"\(entry.spineIndex)\"]');
+                    if (el) {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                })();
+                """
+                self.webView.evaluateJavaScript(js, completionHandler: nil)
+            } else {
+                let js = """
+                (function() {
+                    var el = document.querySelector('[data-spine-index=\"\(entry.spineIndex)\"]');
+                    if (el) {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                })();
+                """
+                self.webView.evaluateJavaScript(js, completionHandler: nil)
             }
         }
     }

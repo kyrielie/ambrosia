@@ -308,7 +308,8 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
         stack.alignment = .centerY
 
         let prev = NSButton(
-            image: NSImage(systemSymbolName: "chevron.backward", accessibilityDescription: "Previous Page") ?? NSImage(),
+            image: NSImage(systemSymbolName: "chevron.backward", accessibilityDescription: "Previous Page")?
+                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
             target: self,
             action: #selector(prevPageClicked)
         )
@@ -325,7 +326,8 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
         self.pageLabel = label
 
         let next = NSButton(
-            image: NSImage(systemSymbolName: "chevron.forward", accessibilityDescription: "Next Page") ?? NSImage(),
+            image: NSImage(systemSymbolName: "chevron.forward", accessibilityDescription: "Next Page")?
+                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
             target: self,
             action: #selector(nextPageClicked)
         )
@@ -348,7 +350,8 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
         item.toolTip = "Like this work"
 
         let button = NSButton(
-            image: NSImage(systemSymbolName: "heart", accessibilityDescription: "Like") ?? NSImage(),
+            image: NSImage(systemSymbolName: "heart", accessibilityDescription: "Like")?
+                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
             target: self,
             action: #selector(likeClicked)
         )
@@ -366,7 +369,8 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
         item.toolTip = "Add to Read Later"
 
         let button = NSButton(
-            image: NSImage(systemSymbolName: "bookmark", accessibilityDescription: "Read Later") ?? NSImage(),
+            image: NSImage(systemSymbolName: "bookmark", accessibilityDescription: "Read Later")?
+                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
             target: self,
             action: #selector(readLaterClicked)
         )
@@ -384,7 +388,8 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
         item.toolTip = "Appearance (Aa)"
 
         let button = NSButton(
-            image: NSImage(systemSymbolName: "textformat.size", accessibilityDescription: "Appearance") ?? NSImage(),
+            image: NSImage(systemSymbolName: "textformat.size", accessibilityDescription: "Appearance")?
+                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
             target: self,
             action: #selector(appearanceClicked(_:))
         )
@@ -437,7 +442,7 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
     // MARK: - Actions
 
     @objc private func tocClicked(_ sender: Any?) {
-        readerViewController?.toggleTOCPopup(sender: sender ?? tocButton)
+        readerViewController?.toggleTOCSidebar()
     }
 
     @objc private func searchClicked(_ sender: Any?) {
