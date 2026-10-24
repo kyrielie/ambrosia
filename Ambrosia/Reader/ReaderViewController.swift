@@ -59,6 +59,35 @@ final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
     }
 }
 
+struct ReaderPageProgress {
+    let mode: ReadingMode
+    let currentColumn: Int
+    let totalColumns: Int
+    let currentSpineIndex: Int
+    let totalSpineCount: Int
+    let totalPercent: Double
+
+    var displayText: String {
+        switch mode {
+        case .paginated:
+            if totalColumns > 0 {
+                return "\(currentColumn + 1) / \(totalColumns)"
+            } else if totalSpineCount > 1 {
+                return "Ch. \(currentSpineIndex + 1) / \(totalSpineCount)"
+            } else {
+                return "\(Int((totalPercent * 100).rounded()))%"
+            }
+        case .scroll:
+            let pct = Int((totalPercent * 100).rounded())
+            if totalSpineCount > 1 {
+                return "Ch. \(currentSpineIndex + 1) • \(pct)%"
+            } else {
+                return "\(pct)%"
+            }
+        }
+    }
+}
+
 class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMessageHandler {
 
     // MARK: - Dependencies
@@ -96,7 +125,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     /// parser loads. Threaded into mergedHTML for endmatter emission.
     private var ao3Record: AO3MetadataRecord?
 
-    fileprivate var currentMode: ReadingMode = .scroll
+    private(set) var currentMode: ReadingMode = .scroll
+    private(set) var currentColumn: Int = 0
+    private(set) var totalColumns: Int = 1
     private var currentHTML: String = ""
 
     private var currentSpineIndex: Int = 0
@@ -187,7 +218,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     /// The calibreID of whichever work currently owns `currentSpineIndex`.
     /// Falls back to the reading target's primary book before spineMap is
     /// populated (i.e. before loadEPUB() completes).
-    private var activeCalibreID: Int {
+    var activeCalibreID: Int {
         spineMap.workID(atGlobalIndex: currentSpineIndex) ?? book.id
     }
     /// The BookState for the currently active work. Resolved fresh from
@@ -271,11 +302,16 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         engine.spineNavigationHandler = { [weak self] forward in
             forward ? self?.loadNextSpineItem() : self?.loadPreviousSpineItem()
         }
-        engine.positionDidChange = { [weak self] _, _ in
-            self?.savePaginatedProgress()
-        }
-        engine.spineDidLoad = { [weak self] _ in
+        engine.positionDidChange = { [weak self] col, total in
             guard let self else { return }
+            self.currentColumn = col
+            self.totalColumns = total
+            self.savePaginatedProgress()
+            self.onReadingProgressChanged?()
+        }
+        engine.spineDidLoad = { [weak self] total in
+            guard let self else { return }
+            self.totalColumns = total
             // Re-inject highlights for the newly loaded spine item.
             let ranged = self.annotations
                 .filter { !$0.isPointAnnotation && self.annotationBelongsToCurrentSpineItem($0) }
@@ -286,6 +322,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 self.paginationEngine?.scrollToAnchor(fragment)
             }
             self.savePaginatedProgress()
+            self.onReadingProgressChanged?()
         }
         paginationEngine = engine
         webView.translatesAutoresizingMaskIntoConstraints = false
@@ -762,6 +799,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
 
         currentSpineIndex = index
+        currentColumn = 0
         let calibreID = spineMap.workIDs[ref.workIndex]
         var state = bookState(for: calibreID)
         state.lastSpineIndex = ref.localIndex
@@ -865,6 +903,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     }
 
     // MARK: - Mode switching
+
+    func setReadingMode(_ mode: ReadingMode) {
+        guard mode != currentMode else { return }
+        switch mode {
+        case .scroll: switchToScrollMode()
+        case .paginated: switchToPaginatedMode()
+        }
+    }
 
     func switchToScrollMode() {
         saveCurrentPositionSync { [weak self] in
@@ -1166,14 +1212,89 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         return annotationCalibreID[annotation.id] == calibreID && annotation.spineIndex == ref.localIndex
     }
 
+    func scrollPageVertically(multiplier: CGFloat) {
+        let distance = max(80, view.bounds.height * abs(multiplier))
+        let direction = multiplier < 0 ? -distance : distance
+        let js = "window.scrollBy({ top: \(Int(direction)), left: 0, behavior: 'smooth' });"
+        webView.evaluateJavaScript(js, completionHandler: nil)
+    }
+
     func goToNextPage() {
-        guard currentMode == .paginated else { return }
-        paginationEngine?.handleKeyDown(.forward)
+        if currentMode == .paginated {
+            paginationEngine?.handleKeyDown(.forward)
+        } else {
+            scrollPageVertically(multiplier: 0.85)
+        }
     }
 
     func goToPreviousPage() {
-        guard currentMode == .paginated else { return }
-        paginationEngine?.handleKeyDown(.backward)
+        if currentMode == .paginated {
+            paginationEngine?.handleKeyDown(.backward)
+        } else {
+            scrollPageVertically(multiplier: -0.85)
+        }
+    }
+
+    func goToNextChapter() {
+        if currentMode == .paginated {
+            loadNextSpineItem()
+        } else {
+            let nextIndex = currentSpineIndex + 1
+            if nextIndex < spineMap.count {
+                let js = """
+                (function() {
+                    var el = document.querySelector('section[data-spine-index="\(nextIndex)"]');
+                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                })();
+                """
+                webView.evaluateJavaScript(js, completionHandler: nil)
+            }
+        }
+    }
+
+    func goToPreviousChapter() {
+        if currentMode == .paginated {
+            loadPreviousSpineItem()
+        } else {
+            let prevIndex = max(0, currentSpineIndex - 1)
+            let js = """
+            (function() {
+                var el = document.querySelector('section[data-spine-index="\(prevIndex)"]');
+                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            })();
+            """
+            webView.evaluateJavaScript(js, completionHandler: nil)
+        }
+    }
+
+    var canGoPrevious: Bool {
+        switch currentMode {
+        case .paginated:
+            return currentColumn > 0 || currentSpineIndex > 0
+        case .scroll:
+            return true
+        }
+    }
+
+    var canGoNext: Bool {
+        switch currentMode {
+        case .paginated:
+            return currentColumn + 1 < totalColumns || currentSpineIndex + 1 < spineMap.count
+        case .scroll:
+            return true
+        }
+    }
+
+    var pageProgress: ReaderPageProgress {
+        let percent = bookState?.totalReadPercent ?? 0.0
+        return ReaderPageProgress(
+            mode: currentMode,
+            currentColumn: currentColumn,
+            totalColumns: totalColumns,
+            currentSpineIndex: currentSpineIndex,
+            totalSpineCount: spineMap.count,
+            totalPercent: percent
+        )
     }
 
     private func loadNextSpineItem() {
@@ -1546,6 +1667,13 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     @objc func toggleFindBarAction(_ sender: Any?) { toggleFindBar() }
     @objc func findNextAction(_ sender: Any?) { findNext() }
     @objc func findPreviousAction(_ sender: Any?) { findPrevious() }
+    @objc func goToNextPageAction(_ sender: Any?) { goToNextPage() }
+    @objc func goToPreviousPageAction(_ sender: Any?) { goToPreviousPage() }
+    @objc func nextChapterAction(_ sender: Any?) { goToNextChapter() }
+    @objc func previousChapterAction(_ sender: Any?) { goToPreviousChapter() }
+    @objc func increaseFontSizeAction(_ sender: Any?) { ReaderPreferences.shared.increaseFontSize() }
+    @objc func decreaseFontSizeAction(_ sender: Any?) { ReaderPreferences.shared.decreaseFontSize() }
+    @objc func resetFontSizeAction(_ sender: Any?) { ReaderPreferences.shared.resetFontSize() }
 
     /// Toggles Like on whichever work is currently on screen — `activeCalibreID`,
     /// not the reading target's primary book, so paging into a later work of a

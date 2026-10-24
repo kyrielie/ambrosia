@@ -95,6 +95,72 @@ struct AmbrosiaApp: App {
             }
 
             CommandMenu("Reader") {
+                Menu("Navigation") {
+                    Button("Next Page") {
+                        NSApp.sendAction(#selector(ReaderViewController.goToNextPageAction(_:)),
+                                         to: nil, from: nil)
+                    }
+                    .keyboardShortcut(.rightArrow, modifiers: [.command])
+
+                    Button("Previous Page") {
+                        NSApp.sendAction(#selector(ReaderViewController.goToPreviousPageAction(_:)),
+                                         to: nil, from: nil)
+                    }
+                    .keyboardShortcut(.leftArrow, modifiers: [.command])
+
+                    Divider()
+
+                    Button("Next Chapter") {
+                        NSApp.sendAction(#selector(ReaderViewController.nextChapterAction(_:)),
+                                         to: nil, from: nil)
+                    }
+                    .keyboardShortcut("]", modifiers: [.command])
+
+                    Button("Previous Chapter") {
+                        NSApp.sendAction(#selector(ReaderViewController.previousChapterAction(_:)),
+                                         to: nil, from: nil)
+                    }
+                    .keyboardShortcut("[", modifiers: [.command])
+                }
+
+                Menu("Appearance") {
+                    Button("Increase Font Size") {
+                        ReaderPreferences.shared.increaseFontSize()
+                    }
+                    .keyboardShortcut("=", modifiers: [.command])
+
+                    Button("Decrease Font Size") {
+                        ReaderPreferences.shared.decreaseFontSize()
+                    }
+                    .keyboardShortcut("-", modifiers: [.command])
+
+                    Button("Reset Font Size") {
+                        ReaderPreferences.shared.resetFontSize()
+                    }
+                    .keyboardShortcut("0", modifiers: [.command])
+
+                    Divider()
+
+                    Menu("Theme") {
+                        ForEach(ReaderTheme.allCases) { theme in
+                            Button(theme.label) {
+                                ReaderPreferences.shared.applyTheme(theme)
+                            }
+                        }
+                    }
+
+                    Menu("Columns (Paged Mode)") {
+                        Button("1 Column") {
+                            ReaderPreferences.shared.colsPerScreen = .one
+                        }
+                        Button("2 Columns") {
+                            ReaderPreferences.shared.colsPerScreen = .two
+                        }
+                    }
+                }
+
+                Divider()
+
                 Button("Toggle Reading Mode") {
                     NSApp.sendAction(#selector(ReaderViewController.toggleReadingMode(_:)),
                                      to: nil, from: nil)
@@ -139,6 +205,18 @@ struct AmbrosiaApp: App {
 
                 Button("Find Previous") {
                     NSApp.sendAction(#selector(ReaderViewController.findPreviousAction(_:)),
+                                     to: nil, from: nil)
+                }
+
+                Divider()
+
+                Button("Like This Work") {
+                    NSApp.sendAction(#selector(ReaderViewController.toggleLikeCurrentWork(_:)),
+                                     to: nil, from: nil)
+                }
+
+                Button("Add to Read Later") {
+                    NSApp.sendAction(#selector(ReaderViewController.toggleReadLaterCurrentWork(_:)),
                                      to: nil, from: nil)
                 }
             }

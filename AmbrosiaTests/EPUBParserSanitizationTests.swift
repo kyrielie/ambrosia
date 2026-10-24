@@ -87,4 +87,48 @@ final class EPUBParserSanitizationTests: XCTestCase {
         let preserved = EPUBParser.extractBodyContent(from: indentedHTML, isFirstSpineItem: false, removeParagraphIndents: false)
         XCTAssertTrue(preserved.contains("<p>   This is an indented paragraph.</p>"), "Leading whitespace should be preserved if preference is false")
     }
+
+    func testExtractBodyContentFormatsAO3PrefaceCardOnFirstSpineItem() {
+        let rawHTML = """
+        <html><body>
+        <div id="preface">
+            <p class="message"><b>Super Title</b><br>Posted on AO3</p>
+            <dl class="tags">
+                <dt>Rating:</dt><dd>General</dd>
+                <dt>Fandom:</dt><dd>Marvel</dd>
+                <dt>Character:</dt><dd>Steve Rogers</dd>
+            </dl>
+        </div>
+        </body></html>
+        """
+
+        let result = EPUBParser.extractBodyContent(from: rawHTML, isFirstSpineItem: true)
+        XCTAssertTrue(result.contains("ao3-preface-card"), "First spine item preface must receive ao3-preface-card class")
+        XCTAssertTrue(result.contains("class=\"wide\">Fandom:"), "Fandom dt must receive wide class")
+        XCTAssertTrue(result.contains("class=\"wide\">Marvel</dd>"), "Fandom dd must receive wide class")
+    }
+
+    func testExtractBodyContentReplacesAO3TitlePageOnSecondSpineItem() {
+        let titlePageHTML = """
+        <html><body>
+        <div id="preface" class="calibre1">
+            <h1 class="calibre6">My Amazing Fic</h1>
+            <div class="byline">by <a href="http://archiveofourown.org/users/test" rel="author">TestAuthor</a></div>
+            <p class="calibre7">Summary</p>
+            <blockquote class="userstuff"><p>This is the fic summary.</p></blockquote>
+            <p class="calibre7">Notes</p>
+            <blockquote class="userstuff"><p>Enjoy the story!</p></blockquote>
+        </div>
+        </body></html>
+        """
+
+        let result = EPUBParser.extractBodyContent(from: titlePageHTML, isFirstSpineItem: false)
+        XCTAssertTrue(result.contains("class=\"ao3-title-page\""), "Must contain ao3-title-page container")
+        XCTAssertTrue(result.contains("<h1 class=\"ao3-work-title\">My Amazing Fic</h1>"), "Must contain clean title")
+        XCTAssertTrue(result.contains("class=\"ao3-work-byline\""), "Must contain clean byline")
+        XCTAssertTrue(result.contains("class=\"ao3-work-summary\""), "Must contain summary module")
+        XCTAssertTrue(result.contains("This is the fic summary."), "Must preserve summary text")
+        XCTAssertTrue(result.contains("class=\"ao3-work-notes\""), "Must contain notes module")
+        XCTAssertTrue(result.contains("Enjoy the story!"), "Must preserve notes text")
+    }
 }

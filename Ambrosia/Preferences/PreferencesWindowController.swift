@@ -1149,48 +1149,6 @@ private struct RSSTab: View {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MARK: - Themes
-// ─────────────────────────────────────────────────────────────────────────────
-
-private enum ReaderTheme: String, CaseIterable, Identifiable {
-    case parchment, sepia, paper, night, dark, oled, slate
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .parchment: return "Parchment"
-        case .sepia:     return "Sepia"
-        case .paper:     return "Paper"
-        case .night:     return "Night"
-        case .dark:      return "Dark"
-        case .oled:      return "OLED"
-        case .slate:     return "Slate"
-        }
-    }
-    var bg: String {
-        switch self {
-        case .parchment: return "#FFFDF6"
-        case .sepia:     return "#FBF0D9"
-        case .paper:     return "#FFFFFF"
-        case .night:     return "#1C1C1E"
-        case .dark:      return "#16161A"
-        case .oled:      return "#000000"
-        case .slate:     return "#2C2C2E"
-        }
-    }
-    var fg: String {
-        switch self {
-        case .parchment: return "#1A1A1A"
-        case .sepia:     return "#5B4636"
-        case .paper:     return "#111111"
-        case .night:     return "#E5E5EA"
-        case .dark:      return "#CFCFD4"
-        case .oled:      return "#CFCFD4"
-        case .slate:     return "#EBEBF5"
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // MARK: - Shortcuts Tab
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -222,6 +222,13 @@ extension EPUBParser {
 
         cleanDOM(doc, removeParagraphIndents: removeParagraphIndents)
 
+        if spineIndex == 0 {
+            stripPrefaceHeadingDOM(in: doc)
+            formatAO3PrefaceCardDOM(in: doc)
+        } else {
+            _ = replaceAO3TitlePageDOM(in: doc)
+        }
+
         // Inject user CSS + spine index tracker into head
         let head = doc.head() ?? {
             let newHead = Element(Tag("head"), "")
@@ -259,6 +266,9 @@ extension EPUBParser {
 
         if isFirstSpineItem {
             stripPrefaceHeadingDOM(in: doc)
+            formatAO3PrefaceCardDOM(in: doc)
+        } else {
+            _ = replaceAO3TitlePageDOM(in: doc)
         }
 
         if let body = doc.body() {
@@ -347,6 +357,103 @@ extension EPUBParser {
                 _ = try? heading.remove()
             }
         }
+    }
+
+    /// Styles the AO3 preface metadata block as a card, adding .ao3-preface-card to #preface
+    /// and .wide to multiline/long tag categories (Fandoms, Relationships, Characters, Tags).
+    private static func formatAO3PrefaceCardDOM(in doc: Document) {
+        guard let preface = try? doc.select("#preface").first() else { return }
+        _ = try? preface.addClass("ao3-preface-card")
+
+        guard let tags = try? doc.select("#preface dl.tags").first(),
+              let dtElements = try? tags.select("dt") else { return }
+
+        let wideLabels: Set<String> = [
+            "fandom", "relationship", "relationships", "character", "characters",
+            "additional tags", "freeform", "archive warning", "archive warnings",
+            "warning", "warnings", "series", "collections", "collection"
+        ]
+
+        for dt in dtElements {
+            let text = ((try? dt.text()) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+                .lowercased()
+
+            if wideLabels.contains(text) || wideLabels.contains(where: { text.hasPrefix($0) }) {
+                _ = try? dt.addClass("wide")
+                if let next = try? dt.nextElementSibling(), next.tagName().lowercased() == "dd" {
+                    _ = try? next.addClass("wide")
+                }
+            }
+        }
+    }
+
+    /// Replaces Calibre's raw second spine item (the AO3 title page) with a clean,
+    /// styled title page matching the Reversi/Nectar layout (centered title, author byline,
+    /// and formatted summary/notes blocks).
+    @discardableResult
+    private static func replaceAO3TitlePageDOM(in doc: Document) -> Bool {
+        guard let byline = try? doc.select("div.byline").first() else { return false }
+        if (try? doc.select("dl.tags").first()) != nil { return false }
+
+        guard let titleEl = try? doc.select("h1, h2").first() else { return false }
+        let titleText = (try? titleEl.text()) ?? ""
+        let bylineHTML = (try? byline.html()) ?? ""
+
+        var summaryHTML: String?
+        var notesHTML: String?
+
+        if let paragraphs = try? doc.select("p, h2, h3, h4") {
+            for para in paragraphs {
+                let text = ((try? para.text()) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if text.caseInsensitiveCompare("Summary") == .orderedSame {
+                    if let next = try? para.nextElementSibling(), next.tagName().lowercased() == "blockquote" {
+                        summaryHTML = try? next.html()
+                    }
+                } else if text.caseInsensitiveCompare("Notes") == .orderedSame {
+                    if let next = try? para.nextElementSibling(), next.tagName().lowercased() == "blockquote" {
+                        notesHTML = try? next.html()
+                    }
+                }
+            }
+        }
+
+        var replacement = """
+        <div class="ao3-title-page">
+            <h1 class="ao3-work-title">\(titleText)</h1>
+            <div class="ao3-work-byline">\(bylineHTML)</div>
+        """
+
+        if summaryHTML != nil || notesHTML != nil {
+            replacement += "\n    <div class=\"ao3-title-divider\"></div>\n"
+        }
+
+        if let summaryHTML {
+            replacement += """
+            <div class="ao3-work-summary">
+                <h3 class="ao3-section-heading">Summary</h3>
+                <blockquote class="userstuff">\(summaryHTML)</blockquote>
+            </div>
+            """
+        }
+
+        if let notesHTML {
+            replacement += """
+            <div class="ao3-work-notes">
+                <h3 class="ao3-section-heading">Notes</h3>
+                <blockquote class="userstuff">\(notesHTML)</blockquote>
+            </div>
+            """
+        }
+
+        replacement += "\n</div>"
+
+        if let body = doc.body() {
+            _ = try? body.html(replacement)
+            return true
+        }
+        return false
     }
 
     /// Fallback sanitisation using regular expressions if SwiftSoup parsing fails on severely malformed markup.
