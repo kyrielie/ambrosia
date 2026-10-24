@@ -235,14 +235,26 @@ final class ReaderPreferences: ObservableObject {
         readerTextColor = set.text
         preferenceChangeKind.send(.cosmetic)
     }
-    /// Structural, not cosmetic: indent removal is now applied by
-    /// EPUBParser.stripLeadingIndentWhitespace when the HTML is built (see
-    /// sanitise/extractBodyContent), not by a live CSS variable, so toggling
-    /// this needs a full reloadHTML() to regenerate the document — a
-    /// cosmetic-path CSS swap has nothing left to update.
+    /// Trims leading whitespace used as fake indents (space, tab, NBSP, en/em
+    /// and ideographic space). Structural, not cosmetic: it is applied by
+    /// `EPUBParser.stripLeadingIndentWhitespaceDOM` when the HTML is built, so
+    /// toggling needs a full reloadHTML(). It deletes text, so character
+    /// offsets differ between on and off.
     var removeParagraphIndents: Bool {
         didSet {
             UserDefaults.standard.set(removeParagraphIndents, forKey: Keys.removeParagraphIndents)
+            preferenceChangeKind.send(.structural)
+        }
+    }
+    /// Collapses blank spacer paragraphs (a `<p>` holding only whitespace,
+    /// `&nbsp;` or `<br>`) to zero height. Structural, like
+    /// `removeParagraphIndents`: it changes the built HTML (an
+    /// `ambrosia-spacer` class on those `<p>` elements, see
+    /// `EPUBParser.markSpacerParagraphsDOM`). No text is removed, so
+    /// character offsets are identical with the toggle on or off.
+    var collapseSpacerParagraphs: Bool {
+        didSet {
+            UserDefaults.standard.set(collapseSpacerParagraphs, forKey: Keys.collapseSpacerParagraphs)
             preferenceChangeKind.send(.structural)
         }
     }
@@ -539,6 +551,7 @@ final class ReaderPreferences: ObservableObject {
         static let paddingV                    = 32
         static let allowReaderLinkClicks       = false
         static let removeParagraphIndents      = false
+        static let collapseSpacerParagraphs    = false
         static let colsPerScreen               = ColsPerScreen.one
         static let autoOpenFindBarForFullTextSearch = true
         static let libraryColorMode            = LibraryColorMode.systemDefault
@@ -600,6 +613,7 @@ final class ReaderPreferences: ObservableObject {
         static let paddingV                    = "rp.paddingV"
         static let allowReaderLinkClicks       = "rp.allowReaderLinkClicks"
         static let removeParagraphIndents      = "rp.removeParagraphIndents"
+        static let collapseSpacerParagraphs    = "rp.collapseSpacerParagraphs"
         static let colsPerScreen               = "rp.colsPerScreen"
         static let autoOpenFindBarForFullTextSearch = "rp.autoOpenFindBarForFullTextSearch"
         static let libraryColorMode            = "rp.libraryColorMode"
@@ -647,6 +661,9 @@ final class ReaderPreferences: ObservableObject {
         removeParagraphIndents = ud.object(forKey: Keys.removeParagraphIndents) != nil
             ? ud.bool(forKey: Keys.removeParagraphIndents)
             : Defaults.removeParagraphIndents
+        collapseSpacerParagraphs = ud.object(forKey: Keys.collapseSpacerParagraphs) != nil
+            ? ud.bool(forKey: Keys.collapseSpacerParagraphs)
+            : Defaults.collapseSpacerParagraphs
         let rawCols = ud.integer(forKey: Keys.colsPerScreen).nonZero
         colsPerScreen = rawCols.flatMap(ColsPerScreen.init(rawValue:)) ?? Defaults.colsPerScreen
         autoOpenFindBarForFullTextSearch = ud.object(forKey: Keys.autoOpenFindBarForFullTextSearch) != nil
@@ -770,6 +787,28 @@ final class ReaderPreferences: ObservableObject {
 
     // MARK: - CSS (reader only)
 
+    /// Which *optional* rules `css(paginated:)` emitted into a built document.
+    ///
+    /// `css(paginated:)` only writes the `p { text-align }` and
+    /// `p { text-indent }` rules when the preference is non-default
+    /// (`textAlignment != .book`, `paragraphIndent != nil`); the live cosmetic
+    /// path (`ReaderViewController.applyCosmeticCSSUpdate`) can only rewrite
+    /// the `:root` variables those rules read. So a value change that moves a
+    /// rule from absent to present (or back) cannot be applied live: the
+    /// variable updates but the rule does not exist. The reader records the
+    /// gate each time it builds a document and does a full reload when the
+    /// current gate differs. Changes that keep the gate unchanged (for
+    /// example indent 1.5em to 2em, or Left to Justified) stay live.
+    struct CSSRuleGate: Equatable {
+        var customAlignment: Bool
+        var customIndent: Bool
+    }
+
+    /// The gate `css(paginated:)` would emit for the current preferences.
+    var cssRuleGate: CSSRuleGate {
+        CSSRuleGate(customAlignment: textAlignment != .book, customIndent: paragraphIndent != nil)
+    }
+
     var css: String {
         css(paginated: false)
     }
@@ -781,13 +820,10 @@ final class ReaderPreferences: ObservableObject {
     /// `ReaderViewController.applyCosmeticCSSUpdate()` writes this into a
     /// standalone `<style id="ambrosia-vars">` element without needing the
     /// rest of the stylesheet reinjected.
-    /// (removeParagraphIndents is deliberately not one of these — see its
-    /// own doc comment above. It used to be expressed here as a
-    /// `--ambrosia-paragraph-indent` variable feeding a `text-indent`
-    /// override, but publisher CSS is stripped unconditionally before this
-    /// stylesheet is ever injected, so there was never any publisher
-    /// `text-indent` left for that override to cancel out — dead code,
-    /// removed. The actual fix is EPUBParser.stripLeadingIndentWhitespace.)
+    /// `textAlignment` and `paragraphIndent` appear here only as variables;
+    /// the `p` rules that read them exist only when `cssRuleGate` says so
+    /// (see `CSSRuleGate`). `removeParagraphIndents` is not a variable: it
+    /// changes the built HTML (`EPUBParser.stripLeadingIndentWhitespaceDOM`).
     var cssVariableDeclarations: String {
         let theme = activeTheme ?? (ReaderTheme.current(bg: readerBackgroundColor, fg: readerTextColor) ?? .parchment)
         let paragraphIndentVar = paragraphIndent.map { "--ambrosia-paragraph-indent: \($0)em;" } ?? ""
@@ -858,6 +894,7 @@ final class ReaderPreferences: ObservableObject {
             \(textAlignRule)
             \(textIndentRule)
         }
+        p.ambrosia-spacer { margin-top: 0 !important; margin-bottom: 0 !important; height: 0; overflow: hidden; }
         a    { color: inherit; text-decoration: underline; pointer-events: var(--ambrosia-link-pointer-events); cursor: pointer; }
         em, i { font-style: italic; }
         strong, b { font-weight: bold; }
@@ -1236,6 +1273,7 @@ final class ReaderPreferences: ObservableObject {
             || paddingV != Defaults.paddingV
             || allowReaderLinkClicks != Defaults.allowReaderLinkClicks
             || removeParagraphIndents != Defaults.removeParagraphIndents
+            || collapseSpacerParagraphs != Defaults.collapseSpacerParagraphs
             || colsPerScreen != Defaults.colsPerScreen
             || autoOpenFindBarForFullTextSearch != Defaults.autoOpenFindBarForFullTextSearch
             || defaultReadingMode != Defaults.defaultReadingMode
@@ -1276,6 +1314,7 @@ final class ReaderPreferences: ObservableObject {
         paddingV              = Defaults.paddingV
         allowReaderLinkClicks = Defaults.allowReaderLinkClicks
         removeParagraphIndents = Defaults.removeParagraphIndents
+        collapseSpacerParagraphs = Defaults.collapseSpacerParagraphs
         colsPerScreen          = Defaults.colsPerScreen
         autoOpenFindBarForFullTextSearch = Defaults.autoOpenFindBarForFullTextSearch
         defaultReadingMode    = Defaults.defaultReadingMode

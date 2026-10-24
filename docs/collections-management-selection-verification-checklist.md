@@ -9,10 +9,10 @@ gap, rather than guessing at a fix for a mechanism that may already work.
 ## §6b — Multiselect (Shift / Cmd) and arrow-key navigation
 
 - [ ] Cmd-click and Shift-click across mixed `.book` and `.series` items in
-      the same list (grouping on). `selectedItemIDs` is a flat `Set<String>`
-      of `LibraryItem.id`, so `List` itself should handle this transparently
-      — confirm the *derived* `selectedIDs` (book IDs expanded from a series
-      selection, `LibraryRootView.swift` ~line 14938) is complete and
+      the same list (grouping on). Selection resolution is now unified under
+      `LibraryDisplayController.swift` (`selectedItemID` / `selectedBook`) and
+      `EmailSidebarViewController.swift` (`selectedRowIndexes`) — confirm the derived
+      `selectedIDs` (book IDs expanded from a series selection) is complete and
       non-duplicated after a Shift-range-select spanning both book and
       series rows. A book that's both individually selected and a member of
       a selected series should be fine (`Set<Int>` dedupes), but confirm
@@ -28,9 +28,8 @@ gap, rather than guessing at a fix for a mechanism that may already work.
 
 ## §6c — "Stop selecting" (deselect to zero)
 
-- [ ] Confirm whether Escape reaches `List(items, selection: $selectedItemIDs)`
-      in `LibraryRootView.swift` (~line 16487–16490) at all. No
-      `.onExitCommand` (or equivalent) currently exists on this List (verified
+- [ ] Confirm whether Escape reaches the list view in `LibraryRootView.swift`
+      at all. No `.onExitCommand` (or equivalent) currently exists on this List (verified
       against the current source — there is no `onExitCommand`,
       `onMoveCommand`, or `onKeyPress` anywhere in `LibraryRootView.swift`).
       Two things could be intercepting or blocking it before it arrives:

@@ -63,9 +63,8 @@ type defined in a differently named file can be undercounted, and a reference
 in a test does not mean the type is well covered. Real line coverage is
 collected in CI (`-enableCodeCoverage YES`) but is not reported anywhere yet.
 
-Current size: 54 test files, 478 test functions, all `XCTestCase` (no Swift
-Testing), against 96 source files (counted 2026-10-18 by `ls` and grep, not
-re-verified per source type).
+Current size: 72 test files, 593+ test functions, all `XCTestCase` (no Swift
+Testing), against 112 source files (updated October 2026 after Phases 1–6).
 
 ### Covered by a dedicated test file
 

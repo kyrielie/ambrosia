@@ -8,7 +8,21 @@ them.
 
 ---
 
-- Local RSS feed server via FlyingFox (`LocalFeedServer`), off by default; when running, always binds `.inet` (all interfaces) so other devices on the local network can connect — there is no loopback-only mode and no authentication. Serves `GET /` (HTML index of available feeds), `GET /feed/collection/<id>.xml` (one item per collection member), `GET /feed/search.xml` (last-published current-search snapshot, persisted as `CurrentSearchSnapshot` in `UserDefaults`), `GET /feed/random-daily.xml` (one seeded-random book per UTC day, opt-in), and `GET /feeds.opml` (OPML 2.0 export of every non-excluded collection feed plus the daily and search feeds). `RSSPublishView` is the SwiftUI publish sheet (searchable collection list, current-search/single-collection target selection, Publish / Copy Feed URL / Export OPML actions) presented as a sheet from `LibraryWindowController`. All routes are GET-only and read-only; there is no write-back path from a feed reader into Ambrosia yet (see `not-yet-built.md`, and Invariant 26 below on the server's current auth posture).
+- Local feed server via FlyingFox (`LocalFeedServer`), off by default; when running, always binds `.inet` (all interfaces) so other devices on the local network can connect — there is no loopback-only mode and no authentication.
+- Serves:
+  - `GET /`: HTML index of available feeds.
+  - `GET /feed/collection/<id>.xml`, `GET /feed/search.xml`, `GET /feed/random-daily.xml`: RSS 2.0 XML feeds with CDATA content embedding and AO3 custom metadata extensions.
+  - `GET /feed/collection/<id>.json`, `GET /feed/search.json`, `GET /feed/random-daily.json`: JSON Feed v1.1 serialization.
+  - `GET /feed/collection/<id>.sqlite`, `GET /feed/search.sqlite`, `GET /feed/random-daily.sqlite`: Gzipped SQLite transfer databases built on-the-fly for large library sync via `TransferDatabaseBuilder`.
+  - `GET /feeds.opml`: OPML 2.0 export of collection and special feeds.
+- Deconstructed architecture (Phase 6):
+  - `LocalFeedServer.swift`: Lean HTTP socket server lifecycle, routing dispatch, and port binding.
+  - `RSSFeedBuilder.swift`: RSS 2.0 XML document building.
+  - `JSONFeedBuilder.swift`: JSON Feed v1.1 serialization.
+  - `OPMLFeedBuilder.swift`: OPML 2.0 subscription export.
+  - `TransferDatabaseBuilder.swift`: SQLite transfer container generation (`manifest` and `books` tables) with gzip streaming.
+  - `FeedBuilderTypes.swift`: Domain models (`FeedBookPair`, `FeedDisplayUnit`, `FeedDateFormatter`, `xmlEscape`).
+- `RSSPublishView` is the SwiftUI publish sheet (searchable collection list, target selection, Publish / Copy Feed URL / Export OPML actions) presented as a sheet from `LibraryWindowController`. All routes are GET-only and read-only; there is no write-back path from a feed reader into Ambrosia yet (see Invariant 26 below on the server's auth posture).
 
 ---
 

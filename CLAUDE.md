@@ -22,11 +22,13 @@ doc(s) relevant to your task**, not this whole index cover-to-cover.
 - **`EPUBParser` (zip/OPF/spine parsing, merged HTML, offset contract)** → `docs/epub-parsing.md`
 - **`ReaderViewController`/`ReaderWindowController`, scroll vs. paginated mode, the CSS preference pipeline** → `docs/reader.md`
 - **Highlights, point annotations, `HighlightBridge`** → `docs/annotations.md`
-- **`LocalFeedServer`, `RSSPublishView`, the served RSS/JSON-feed/OPML routes** → `docs/local-feed-server.md` (and see `docs/ambrosia-feed-transfer-phase0-findings.md` for the in-progress `.sqlite`/large-collection transfer route)
+- **`LocalFeedServer`, `RSSPublishView`, the served RSS/JSON-feed/OPML routes** → `docs/local-feed-server.md` (and see historical `docs/plans/completed/ambrosia-feed-transfer-phase0-findings.md` for the `.sqlite`/large-collection transfer route)
 - **`NSHostingView` inside AppKit, or an `async` closure that won't compile where you expect** → `docs/swiftui-appkit-bridging.md`
 - **Any Swift 6 actor/`Task`/`async let` compile error, or "why is this cached value stale"** → `docs/concurrency-invariants.md`
 - **"Does feature X exist yet?"** → `docs/not-yet-built.md`
-- **Architectural modernization roadmap and implementation plans** → `docs/roadmap.md`, `docs/plans/phase1-database-consolidation-plan.md`, and `docs/plans/phase2-presentation-unification-plan.md`
+- **Architectural modernization roadmap and implementation plans** → `docs/roadmap.md` and completed blueprints under `docs/plans/completed/`
+- **Three-app suite framework (Honeycrisp, Ambrosia, Nectar)** → `docs/three-app-suite-framework.md`
+- **Nectar and Honeycrisp feature adoption strategy** → `docs/nectar-feature-adoption.md`
 - **Adding a test file, or "why didn't my new test run"** → `docs/testing.md`
 
 If nothing above fits, grep the codebase before assuming it's
@@ -104,7 +106,7 @@ it's trusted by default. Specifically:
 | Shipping something previously listed as not-yet-built | `docs/not-yet-built.md` (remove the line) and whichever system doc now owns it |
 | `.swiftlint.yml` rules (adding/disabling a rule, changing thresholds), or a new accepted force-unwrap exception | `docs/overview.md`'s "Repo-wide engineering rules" (Invariant 12) |
 | Adding an `AmbrosiaTests/` file, or changing what CI verifies about test-file wiring | `docs/testing.md` |
-| Strategic roadmap, modernization milestones, or implementation plans | `docs/roadmap.md` and `docs/plans/phase1-database-consolidation-plan.md` |
+| Strategic roadmap, modernization milestones, or implementation plans | `docs/roadmap.md` and `docs/plans/completed/` |
 
 If a change doesn't fit any row above — new system, new cross-cutting
 concern, or something genuinely new — **add a new doc** rather than
@@ -157,7 +159,7 @@ reference to it (comments, other docs, tooling), replace it with the
 specific current topic doc from the routing table above, not with a
 reference to this section.
 
-`ambrosia_formatting_prompt_future.md` (repo root) is a forward-looking
+`docs/ambrosia_formatting_prompt_future.md` is a forward-looking
 feature brief for a not-yet-implemented theming/formatting layer, not a
 description of current behavior — it intentionally isn't folded into any
 topic doc above, since these docs describe confirmed current state, not

@@ -14,7 +14,10 @@ rendered, see `reader.md`.
 1. Opens the EPUB zip.
 2. Reads `META-INF/container.xml`.
 3. Parses OPF manifest/spine/title via SAX.
-4. Produces stripped, merged HTML with injected user CSS.
+4. Produces stripped, merged HTML with injected user CSS:
+   - Modernized in Phase 3 to execute a unified, single-pass DOM walk using `SwiftSoup` (stripping publisher CSS, style blocks, inline style attributes, and active scripts/event handlers in one pass, with regex fallback for severely malformed markup).
+   - Multi-chapter spine extraction in `mergedHTML` is parallelized across CPU cores using `DispatchQueue.concurrentPerform`, cutting load times significantly on multi-chapter works.
+   - Tags blank spacer paragraphs (when `collapseSpacerParagraphs` is on) and strips AO3 preface headings, following Honeycrisp patterns.
 5. Provides plain text for offset arithmetic.
 6. Extracts images to `/tmp/ambrosia/<calibreID>/`.
 7. Builds `toc: [TOCEntry]` via `parseTOC` (in `EPUBParser+ImagesAndTOC.swift`).

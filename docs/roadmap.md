@@ -8,15 +8,19 @@ This roadmap outlines the strategic phases to modernize Ambrosia's architecture,
 
 ```mermaid
 flowchart TD
-    P1["Phase 1: Database Consolidation & Data Integrity<br/><b>[COMPLETED]</b>"] --> P2["Phase 2: Presentation Model & View Controller Unification<br/><i>[UP NEXT]</i>"]
-    P1 --> P3["Phase 3: EPUB Engine & Reader Performance Modernization"]
-    P2 --> P4["Phase 4: State Management & Swift 6 Concurrency"]
+    P1["Phase 1: Database Consolidation & Data Integrity<br/><b>[COMPLETED]</b>"] --> P2["Phase 2: Presentation Model & View Controller Unification<br/><b>[COMPLETED]</b>"]
+    P1 --> P3["Phase 3: EPUB Engine & Reader Performance Modernization<br/><b>[COMPLETED]</b>"]
+    P2 --> P4["Phase 4: State Management & Swift Concurrency<br/><b>[COMPLETED]</b>"]
     P3 --> P4
-    P4 --> P5["Phase 5: Search & Aggregation Scalability"]
-    P4 --> P6["Phase 6: Windowing Lifecycle & Monolith Refactoring"]
+    P4 --> P5["Phase 5: Search & Aggregation Scalability<br/><b>[COMPLETED]</b>"]
+    P4 --> P6["Phase 6: Windowing Lifecycle & Monolith Refactoring<br/><b>[COMPLETED]</b>"]
 
     style P1 fill:#2e7d32,stroke:#1b5e20,stroke-width:2px,color:#ffffff
-    style P2 fill:#0277bd,stroke:#01579b,stroke-width:2px,color:#ffffff
+    style P2 fill:#2e7d32,stroke:#1b5e20,stroke-width:2px,color:#ffffff
+    style P3 fill:#2e7d32,stroke:#1b5e20,stroke-width:2px,color:#ffffff
+    style P4 fill:#2e7d32,stroke:#1b5e20,stroke-width:2px,color:#ffffff
+    style P5 fill:#2e7d32,stroke:#1b5e20,stroke-width:2px,color:#ffffff
+    style P6 fill:#2e7d32,stroke:#1b5e20,stroke-width:2px,color:#ffffff
 ```
 
 | Phase | Focus Area | Status | Primary Objectives | Risk Level |
@@ -33,7 +37,7 @@ flowchart TD
 ## Detailed Phase Breakdown
 
 ### Phase 1: Database Architecture Consolidation & Data Integrity
-*See [`docs/plans/phase1-database-consolidation-plan.md`](file:///Users/ethanchan/Documents/Applications/ambrosia/docs/plans/phase1-database-consolidation-plan.md) for the complete implementation blueprint.*
+*See [`docs/plans/completed/phase1-database-consolidation-plan.md`](file:///Users/ethanchan/Documents/Applications/ambrosia/docs/plans/completed/phase1-database-consolidation-plan.md) for the complete implementation blueprint.*
 - **Status**: **Completed** (October 2026) ✅
 - **Problems Solved**:
   1. `BookState` was stored in a global SwiftData container keyed only by integer `calibreID`, causing reading progress and ELO scores to cross-contaminate between different Calibre libraries.
@@ -51,7 +55,7 @@ flowchart TD
   - [x] Verified full build and test suite (`./test.sh`): **0 SwiftLint violations**, **all 566 unit tests passed**.
 
 ### Phase 2: UI Presentation Model & View Controller Unification
-*See [`docs/plans/phase2-presentation-unification-plan.md`](file:///Users/ethanchan/Documents/Applications/ambrosia/docs/plans/phase2-presentation-unification-plan.md) for the complete implementation blueprint.*
+*See [`docs/plans/completed/phase2-presentation-unification-plan.md`](file:///Users/ethanchan/Documents/Applications/ambrosia/docs/plans/completed/phase2-presentation-unification-plan.md) for the complete implementation blueprint.*
 - **Status**: **Completed** (October 2026) ✅
 - **Problems Solved**:
   - `LibraryRootView.swift` and `EmailLibraryViewController.swift` duplicated ~3,200 lines of query planning, 3-branch filter execution, group-aware SQL drain loops, and metadata hydration.
@@ -66,6 +70,7 @@ flowchart TD
   - [x] Verified full build and test suite (`./test.sh`): **0 SwiftLint violations**, **all 572 unit tests passed** (net -4,029 LOC reduction).
 
 ### Phase 3: EPUB Engine & Reader Performance Modernization
+*See [`docs/plans/completed/phase3-epub-reader-performance-plan.md`](file:///Users/ethanchan/Documents/Applications/ambrosia/docs/plans/completed/phase3-epub-reader-performance-plan.md) for the complete implementation blueprint.*
 - **Status**: Completed (2026-10-23)
 - **Problem**:
   - [`EPUBParser+Rendering.swift`](file:///Users/ethanchan/Documents/Applications/ambrosia/Ambrosia/Reader/EPUBParser+Rendering.swift) ran 5–6 chained `replacingOccurrences(..., options: .regularExpression)` per chapter, recompiling regexes and allocating megabytes of string buffers sequentially across large fics.
@@ -78,6 +83,7 @@ flowchart TD
   - [x] Added full test coverage in [`EPUBParserSanitizationTests.swift`](file:///Users/ethanchan/Documents/Applications/ambrosia/AmbrosiaTests/EPUBParserSanitizationTests.swift) (576 tests passing, 0 SwiftLint violations).
 
 ### Phase 4: State Management & Swift Concurrency Modernization
+*See [`docs/plans/completed/phase4-state-concurrency-plan.md`](file:///Users/ethanchan/Documents/Applications/ambrosia/docs/plans/completed/phase4-state-concurrency-plan.md) for the complete implementation blueprint.*
 - **Status**: Completed (2026-10-23)
 - **Problem**:
   - The project mixed Combine (`ReaderPreferences`, `AO3TagSeedDatabaseConfig` using `ObservableObject`, `@Published`, and `PassthroughSubject`), `@Observable` (`LibrarySession`, `LibraryDisplayController`, `LibraryToolbarState`), and untyped notifications.
@@ -90,6 +96,7 @@ flowchart TD
   - [x] Verified full build and test suite (`./test.sh`): **0 SwiftLint violations**, **all 576 unit tests passed**.
 
 ### Phase 5: Search & Facet Query Scalability
+*See [`docs/plans/completed/phase5-search-facet-scalability-plan.md`](file:///Users/ethanchan/Documents/Applications/ambrosia/docs/plans/completed/phase5-search-facet-scalability-plan.md) for the complete implementation blueprint.*
 - **Status**: Completed (2026-10-23)
 - **Problem**:
   - `AO3FilterFacetController` dispatched 7 simultaneous SQL aggregations on every checkbox toggle without debouncing.
@@ -102,6 +109,7 @@ flowchart TD
   - [x] Added unit tests in [`SearchQueryParserMultiTokenTests.swift`](file:///Users/ethanchan/Documents/Applications/ambrosia/AmbrosiaTests/SearchQueryParserMultiTokenTests.swift) (581 tests passing, 0 SwiftLint violations).
 
 ### Phase 6: App Lifecycle & Monolith Deconstruction
+*See [`docs/plans/completed/phase6-app-lifecycle-monolith-deconstruction-plan.md`](file:///Users/ethanchan/Documents/Applications/ambrosia/docs/plans/completed/phase6-app-lifecycle-monolith-deconstruction-plan.md) for the complete implementation blueprint.*
 - **Status**: **Completed** (October 2026) ✅
 - **Problems Solved**:
   - `AmbrosiaApp` initialized an invisible `WindowGroup` with `Color.clear` that had to be hidden via `ghostWindow.orderOut(nil)` on launch and guarded on dock reopen.

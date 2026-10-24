@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import Ambrosia
 
@@ -113,6 +114,78 @@ final class ReaderPreferencesTests: XCTestCase {
         prefs.resetReaderToDefaults()
         XCTAssertEqual(prefs.textAlignment, .book)
         XCTAssertNil(prefs.paragraphIndent)
+    }
+
+    /// Documents why the live cosmetic path is not enough: the `p` rules that
+    /// read `--ambrosia-text-align` / `--ambrosia-paragraph-indent` exist in the
+    /// built stylesheet only when the preference is non-default at build time.
+    func testOptionalParagraphRulesAreAbsentAtDefaults() {
+        let prefs = ReaderPreferences.shared
+        prefs.resetReaderToDefaults()
+
+        let css = prefs.css(paginated: false)
+        XCTAssertFalse(css.contains("text-indent: var(--ambrosia-paragraph-indent);"))
+        XCTAssertFalse(css.contains("text-align: var(--ambrosia-text-align);"))
+        XCTAssertEqual(prefs.cssRuleGate, ReaderPreferences.CSSRuleGate(customAlignment: false, customIndent: false))
+    }
+
+    func testCSSRuleGateTracksOptionalParagraphRules() {
+        let prefs = ReaderPreferences.shared
+        prefs.resetReaderToDefaults()
+
+        prefs.paragraphIndent = 1.5
+        XCTAssertEqual(prefs.cssRuleGate, ReaderPreferences.CSSRuleGate(customAlignment: false, customIndent: true))
+        XCTAssertTrue(prefs.css(paginated: false).contains("text-indent: var(--ambrosia-paragraph-indent);"))
+        XCTAssertTrue(prefs.css(paginated: true).contains("text-indent: var(--ambrosia-paragraph-indent);"))
+
+        // Changing the value keeps the gate unchanged: this is the live path.
+        let gateBefore = prefs.cssRuleGate
+        prefs.paragraphIndent = 2.25
+        XCTAssertEqual(prefs.cssRuleGate, gateBefore)
+        XCTAssertTrue(prefs.cssVariableDeclarations.contains("--ambrosia-paragraph-indent: 2.25em;"))
+
+        prefs.textAlignment = .left
+        XCTAssertEqual(prefs.cssRuleGate, ReaderPreferences.CSSRuleGate(customAlignment: true, customIndent: true))
+        XCTAssertTrue(prefs.css(paginated: false).contains("text-align: var(--ambrosia-text-align);"))
+
+        // Left to Justified stays on the live path.
+        let alignGate = prefs.cssRuleGate
+        prefs.textAlignment = .justify
+        XCTAssertEqual(prefs.cssRuleGate, alignGate)
+
+        prefs.paragraphIndent = nil
+        prefs.textAlignment = .book
+        XCTAssertEqual(prefs.cssRuleGate, ReaderPreferences.CSSRuleGate(customAlignment: false, customIndent: false))
+        XCTAssertFalse(prefs.cssVariableDeclarations.contains("--ambrosia-paragraph-indent"))
+    }
+
+    func testCollapseSpacerParagraphsPersistenceResetAndCSS() {
+        let prefs = ReaderPreferences.shared
+        prefs.resetReaderToDefaults()
+        XCTAssertFalse(prefs.collapseSpacerParagraphs)
+
+        prefs.collapseSpacerParagraphs = true
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: "rp.collapseSpacerParagraphs"))
+        XCTAssertTrue(prefs.isReaderCustomized)
+
+        // The collapse rule is always present; the class decides what it hits.
+        let css = prefs.css(paginated: false)
+        XCTAssertTrue(css.contains("p.ambrosia-spacer { margin-top: 0 !important; margin-bottom: 0 !important; height: 0; overflow: hidden; }"))
+        XCTAssertTrue(prefs.css(paginated: true).contains("p.ambrosia-spacer {"))
+
+        prefs.resetReaderToDefaults()
+        XCTAssertFalse(prefs.collapseSpacerParagraphs)
+        XCTAssertFalse(UserDefaults.standard.bool(forKey: "rp.collapseSpacerParagraphs"))
+    }
+
+    func testCollapseSpacerParagraphsIsStructural() {
+        let prefs = ReaderPreferences.shared
+        prefs.resetReaderToDefaults()
+        var kinds: [PreferenceChangeKind] = []
+        let cancellable = prefs.preferenceChangeKind.sink { kinds.append($0) }
+        prefs.collapseSpacerParagraphs = true
+        cancellable.cancel()
+        XCTAssertEqual(kinds, [.structural])
     }
 
     func testKeyBindingsDefaultsAndReset() {

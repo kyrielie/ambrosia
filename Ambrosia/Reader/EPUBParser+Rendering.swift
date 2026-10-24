@@ -29,11 +29,16 @@ extension EPUBParser {
     ///   rely on) has nothing left to override here — this handles the case
     ///   CSS never could: books that fake first-line indentation with literal
     ///   whitespace characters in the text itself.
+    /// - Parameter collapseSpacerParagraphs: When true, blank `<p>` elements
+    ///   (whitespace, `&nbsp;` or `<br>` only) get the `ambrosia-spacer`
+    ///   class; the user stylesheet collapses them to zero height. Text is
+    ///   not modified, so character offsets do not change.
     func html(
         for item: SpineItem,
         userCSS: String,
         globalSpineIndex: Int? = nil,
-        removeParagraphIndents: Bool = false
+        removeParagraphIndents: Bool = false,
+        collapseSpacerParagraphs: Bool = false
     ) throws -> String {
         let archive = try openArchive()
         guard let entry = archive[item.href],
@@ -47,7 +52,8 @@ extension EPUBParser {
             raw,
             userCSS: userCSS,
             spineIndex: globalSpineIndex ?? item.index,
-            removeParagraphIndents: removeParagraphIndents
+            removeParagraphIndents: removeParagraphIndents,
+            collapseSpacerParagraphs: collapseSpacerParagraphs
         )
 
         // Match mergedHTML's per-item behaviour: strip the redundant "Preface"
@@ -92,12 +98,16 @@ extension EPUBParser {
     ///   this via `mergedHTML`) respect the preference identically. Feeds
     ///   previously ignored it entirely, since it was only ever expressed as
     ///   reader CSS that never reached feed output.
+    /// - Parameter collapseSpacerParagraphs: See `html(for:collapseSpacerParagraphs:)`.
+    ///   The feed server does not pass it: feed consumers do not receive the
+    ///   reader stylesheet, so the class would have no effect there.
     func mergedHTML(
         userCSS: String,
         ao3Record: AO3MetadataRecord? = nil,
         spineIndexOffset: Int = 0,
         imageBaseOverride: URL? = nil,
         removeParagraphIndents: Bool = false,
+        collapseSpacerParagraphs: Bool = false,
         ao3Order: AO3WorkLayoutOrder = ReaderPreferences.shared.ao3WorkLayoutOrder
     ) throws -> String {
         let archive = try openArchive()
@@ -134,6 +144,7 @@ extension EPUBParser {
                     from: payload.rawHTML,
                     isFirstSpineItem: payload.index == 0,
                     removeParagraphIndents: removeParagraphIndents,
+                    collapseSpacerParagraphs: collapseSpacerParagraphs,
                     ao3Order: ao3Order
                 )
                 if let imageBase = imageBaseOverride {
@@ -153,6 +164,7 @@ extension EPUBParser {
                     from: payload.rawHTML,
                     isFirstSpineItem: payload.index == 0,
                     removeParagraphIndents: removeParagraphIndents,
+                    collapseSpacerParagraphs: collapseSpacerParagraphs,
                     ao3Order: ao3Order
                 )
                 if let imageBase = imageBaseOverride {
@@ -218,13 +230,18 @@ extension EPUBParser {
         userCSS: String,
         spineIndex: Int,
         removeParagraphIndents: Bool = false,
+        collapseSpacerParagraphs: Bool = false,
         ao3Order: AO3WorkLayoutOrder = ReaderPreferences.shared.ao3WorkLayoutOrder
     ) -> String {
         guard let doc = parseDocument(xhtml) else {
             return fallbackSanitise(xhtml, userCSS: userCSS, spineIndex: spineIndex)
         }
 
-        cleanDOM(doc, removeParagraphIndents: removeParagraphIndents)
+        cleanDOM(
+            doc,
+            removeParagraphIndents: removeParagraphIndents,
+            collapseSpacerParagraphs: collapseSpacerParagraphs
+        )
 
         if spineIndex == 0 {
             stripPrefaceHeadingDOM(in: doc)
@@ -257,6 +274,7 @@ extension EPUBParser {
         from xhtml: String,
         isFirstSpineItem: Bool,
         removeParagraphIndents: Bool = false,
+        collapseSpacerParagraphs: Bool = false,
         ao3Order: AO3WorkLayoutOrder = ReaderPreferences.shared.ao3WorkLayoutOrder
     ) -> String {
         guard let doc = parseDocument(xhtml) else {
@@ -267,7 +285,11 @@ extension EPUBParser {
             )
         }
 
-        cleanDOM(doc, removeParagraphIndents: removeParagraphIndents)
+        cleanDOM(
+            doc,
+            removeParagraphIndents: removeParagraphIndents,
+            collapseSpacerParagraphs: collapseSpacerParagraphs
+        )
 
         if isFirstSpineItem {
             stripPrefaceHeadingDOM(in: doc)
@@ -297,7 +319,7 @@ extension EPUBParser {
 
     /// Single-pass DOM cleaning: strips stylesheet links, style blocks, inline styles, scripts,
     /// and active attributes (event handlers, javascript: URLs).
-    private static func cleanDOM(_ doc: Document, removeParagraphIndents: Bool) {
+    private static func cleanDOM(_ doc: Document, removeParagraphIndents: Bool, collapseSpacerParagraphs: Bool) {
         // 1. Remove active and styling elements
         if let elementsToRemove = try? doc.select("link[rel*='stylesheet'], link[rel*='Stylesheet'], style, script, iframe, object, embed, base") {
             for el in elementsToRemove {
@@ -334,20 +356,65 @@ extension EPUBParser {
         if removeParagraphIndents {
             stripLeadingIndentWhitespaceDOM(in: doc)
         }
+
+        // 4. Tag blank spacer paragraphs (class only; no text is changed)
+        if collapseSpacerParagraphs {
+            markSpacerParagraphsDOM(in: doc)
+        }
     }
 
-    /// Strips leading whitespace runs inside paragraph-like elements.
-    private static func stripLeadingIndentWhitespaceDOM(in doc: Document) {
+    /// CSS class given to blank spacer paragraphs; the rule lives in
+    /// `ReaderPreferences.css(paginated:)`.
+    static let spacerParagraphClass = "ambrosia-spacer"
+
+    /// True when `element` has at least one child and every child is either a
+    /// whitespace-only text node (`&nbsp;` counts, it is category Zs) or a
+    /// `<br>`. An element with no children at all is not blank, matching
+    /// Honeycrisp's `ChapterTransforms.applySpacerParagraphs`.
+    static func isBlankBlock(_ element: Element) -> Bool {
+        let nodes = element.getChildNodes()
+        guard !nodes.isEmpty else { return false }
+        for node in nodes {
+            if let textNode = node as? TextNode {
+                if !textNode.getWholeText().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return false
+                }
+            } else if let child = node as? Element, child.tagName().lowercased() == "br" {
+                continue
+            } else {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Adds `spacerParagraphClass` to every blank `<p>`. Ported from
+    /// Honeycrisp `ChapterTransforms.applySpacerParagraphs`.
+    private static func markSpacerParagraphsDOM(in doc: Document) {
+        guard let paragraphs = try? doc.select("p") else { return }
+        for paragraph in paragraphs where isBlankBlock(paragraph) {
+            _ = try? paragraph.addClass(spacerParagraphClass)
+        }
+    }
+
+    /// Characters treated as faked indentation at the start of a block: ASCII
+    /// space and tab, plus the non-collapsing spaces converters use (NBSP,
+    /// en space, em space, ideographic space). HTML already collapses ASCII
+    /// space and tab at the start of a line, so the non-ASCII ones are what
+    /// make this toggle visible.
+    private static let indentWhitespace: Set<Character> = [" ", "\t", "\u{00A0}", "\u{2002}", "\u{2003}", "\u{3000}"]
+
+    /// Strips leading indentation whitespace inside paragraph-like elements.
+    /// Blank elements (whitespace and `<br>` only) are left alone so blank
+    /// lines, and the spacer paragraph toggle, keep working. This deletes
+    /// text, so it shifts character offsets (see docs/reader.md).
+    static func stripLeadingIndentWhitespaceDOM(in doc: Document) {
         guard let elements = try? doc.select("p, div, li, h1, h2, h3, h4, h5, h6, blockquote, td, th") else { return }
         for el in elements {
-            guard let firstNode = el.getChildNodes().first as? TextNode else { continue }
+            guard let firstNode = el.getChildNodes().first as? TextNode, !isBlankBlock(el) else { continue }
             let whole = firstNode.getWholeText()
-            var idx = whole.startIndex
-            while idx < whole.endIndex && (whole[idx] == " " || whole[idx] == "\t") {
-                idx = whole.index(after: idx)
-            }
-            if idx > whole.startIndex {
-                let trimmed = String(whole[idx...])
+            let trimmed = String(whole.drop(while: { indentWhitespace.contains($0) }))
+            if trimmed.count != whole.count {
                 firstNode.text(trimmed)
             }
         }

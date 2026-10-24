@@ -213,6 +213,10 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     // Preferences subscription
     private var prefsCancellables: Set<AnyCancellable> = []
+    /// Optional CSS rules present in the currently loaded document; compared
+    /// against the live preferences on every cosmetic change. See
+    /// `ReaderPreferences.CSSRuleGate`.
+    private var builtCSSRuleGate: ReaderPreferences.CSSRuleGate?
 
     // Find bar
     private var findBarHostingView: NSHostingView<FindBarView>?
@@ -708,12 +712,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     /// the whole document, so document.body is already the correct scope
     /// (see HighlightBridge's ambrosiaWorkRootFor fallback).
     private func buildScrollHTML() throws -> String {
+        builtCSSRuleGate = ReaderPreferences.shared.cssRuleGate
         guard case .series(let series) = target else {
             guard let firstParser = workParsers.first else { return "" }
             return try firstParser.mergedHTML(
                 userCSS: ReaderPreferences.shared.css,
                 ao3Record: workAO3Records.first.flatMap { $0 },
-                removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents
+                removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents,
+                collapseSpacerParagraphs: ReaderPreferences.shared.collapseSpacerParagraphs
             )
         }
 
@@ -740,7 +746,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 ao3Record: record,
                 spineIndexOffset: spineIndexOffset,
                 imageBaseOverride: workImageBase,
-                removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents
+                removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents,
+                collapseSpacerParagraphs: ReaderPreferences.shared.collapseSpacerParagraphs
             )
             let wrappedWorkHTML = """
             <div class="ambrosia-work" data-work-calibre-id="\(work.id)">
@@ -852,6 +859,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             restorePosition=\(restorePosition)
             """)
             #endif
+            builtCSSRuleGate = ReaderPreferences.shared.cssRuleGate
             let baseCSS = ReaderPreferences.shared.css(paginated: true)
             let combinedCSS = baseCSS + "\n" + colCSS
 
@@ -859,7 +867,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 for: item,
                 userCSS: combinedCSS,
                 globalSpineIndex: index,
-                removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents
+                removeParagraphIndents: ReaderPreferences.shared.removeParagraphIndents,
+                collapseSpacerParagraphs: ReaderPreferences.shared.collapseSpacerParagraphs
             )
             isReaderContentReady = false
             paginationEngine?.setColsPerScreen(ReaderPreferences.shared.colsPerScreen)
@@ -900,6 +909,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                     self.view.layer?.backgroundColor = bg.cgColor
                 }
                 self.applyCosmeticCSSUpdate()
+                // The variables above are live, but a `p` rule that was not
+                // emitted at build time (alignment or indent moving off or
+                // onto its default) can only appear via a rebuild.
+                if let built = self.builtCSSRuleGate, built != ReaderPreferences.shared.cssRuleGate {
+                    self.preferencesReloadDebounce.schedule { [weak self] in
+                        self?.reloadHTML()
+                    }
+                }
             }
             .store(in: &prefsCancellables)
 
