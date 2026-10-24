@@ -35,6 +35,29 @@ struct AmbrosiaApp: App {
             CommandGroup(replacing: .printItem) { }
             CommandGroup(replacing: .textEditing) { }
 
+            CommandGroup(after: .pasteboard) {
+                Divider()
+                Menu("Find") {
+                    Button("Find…") {
+                        NSApp.sendAction(#selector(ReaderViewController.performFindAction(_:)),
+                                         to: nil, from: nil)
+                    }
+                    .keyboardShortcut("f", modifiers: [.command])
+
+                    Button("Find Next") {
+                        NSApp.sendAction(#selector(ReaderViewController.findNextAction(_:)),
+                                         to: nil, from: nil)
+                    }
+                    .keyboardShortcut("g", modifiers: [.command])
+
+                    Button("Find Previous") {
+                        NSApp.sendAction(#selector(ReaderViewController.findPreviousAction(_:)),
+                                         to: nil, from: nil)
+                    }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                }
+            }
+
             CommandGroup(replacing: .newItem) {
                 Button("Open Calibre Library…") {
                     AppDelegate.shared?.chooseLibraryFolder()
@@ -45,43 +68,85 @@ struct AmbrosiaApp: App {
                     RecentLibrariesMenuContent(session: session)
                 }
 
+                Button("Close Library") {
+                    AppDelegate.shared?.closeCurrentLibrary()
+                }
+                .disabled(session.activePath == nil)
+
                 Divider()
 
-                // Act on whichever work the focused reader window currently has
-                // open (routed via the responder chain to
-                // ReaderViewController.toggleLikeCurrentWork/
-                // toggleReadLaterCurrentWork). No-ops if no reader window is
-                // key, same as the "Reader" menu's actions below.
-                Button("Like") {
-                    NSApp.sendAction(#selector(ReaderViewController.toggleLikeCurrentWork(_:)),
-                                     to: nil, from: nil)
+                Button("Open in External Reader") {
+                    AppDelegate.shared?.openCurrentOrSelectedInExternalReader()
                 }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
 
-                Button("Read Later") {
-                    NSApp.sendAction(#selector(ReaderViewController.toggleReadLaterCurrentWork(_:)),
-                                     to: nil, from: nil)
+                Button("Reveal in Finder") {
+                    AppDelegate.shared?.revealCurrentOrLibraryInFinder()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .option])
+
+                Divider()
+
+                Menu("Export") {
+                    Button("Export EPUBs…") {
+                        AppDelegate.shared?.libraryWindowController?.triggerEPUBExport()
+                    }
+                    Button("Export CSV…") {
+                        AppDelegate.shared?.libraryWindowController?.triggerCSVExport()
+                    }
+                    Button("Export Annotations…") {
+                        AppDelegate.shared?.libraryWindowController?.triggerAnnotationExport()
+                    }
+                    Divider()
+                    Button("RSS Feed Server…") {
+                        AppDelegate.shared?.libraryWindowController?.showRSSPanel()
+                    }
                 }
             }
 
-            // Shortcuts for every item in this menu are rebindable from
-            // Preferences → Shortcuts. Intentionally no `.keyboardShortcut(...)`
-            // modifiers here: SwiftUI's `Commands` builder is evaluated once
-            // when the Scene is built, with no reliable way for a `@Published`
-            // change deep in ReaderPreferences to force it to re-evaluate and
-            // redraw the menu bar's displayed key equivalent without a
-            // relaunch. Instead, AppDelegate.syncReaderMenuShortcuts() locates
-            // this menu by title at runtime and sets `.keyEquivalent`/
-            // `.keyEquivalentModifierMask` directly on the resulting
-            // NSMenuItems from ReaderPreferences.shared.keyBindings, live,
-            // whenever a binding changes. Item titles below must match
-            // RebindableAction.displayName exactly — that's how the sync
-            // code finds each item.
             CommandGroup(after: .toolbar) {
+                Menu("View Mode") {
+                    Button("List View") {
+                        AppDelegate.shared?.libraryWindowController?.toolbarStateForCommands?.viewMode = .list
+                    }
+                    .keyboardShortcut("1", modifiers: [.command])
+
+                    Button("Reading / Email View") {
+                        AppDelegate.shared?.libraryWindowController?.toolbarStateForCommands?.viewMode = .email
+                    }
+                    .keyboardShortcut("2", modifiers: [.command])
+
+                    Button("Ranking View") {
+                        AppDelegate.shared?.libraryWindowController?.toolbarStateForCommands?.viewMode = .ranking
+                    }
+                    .keyboardShortcut("3", modifiers: [.command])
+                }
+
+                Divider()
+
+                Button("Toggle Sidebar") {
+                    AppDelegate.shared?.libraryWindowController?.performSidebarToggleFromMenu()
+                }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+
                 Button("Toggle AO3 Style Filter") {
                     guard let libraryWindowController = AppDelegate.shared?.libraryWindowController,
                           let toolbarState = libraryWindowController.toolbarStateForCommands else { return }
                     toolbarState.showAO3FilterSidebar.toggle()
                 }
+                .keyboardShortcut("f", modifiers: [.command, .option])
+
+                Button("Toggle Advanced Filter Drawer") {
+                    guard let libraryWindowController = AppDelegate.shared?.libraryWindowController,
+                          let toolbarState = libraryWindowController.toolbarStateForCommands else { return }
+                    toolbarState.showFilterDrawer.toggle()
+                }
+                .keyboardShortcut("d", modifiers: [.command, .option])
+
+                Toggle("Group by Series", isOn: Binding(
+                    get: { ReaderPreferences.shared.groupBySeries },
+                    set: { ReaderPreferences.shared.groupBySeries = $0 }
+                ))
 
                 Divider()
 
@@ -91,6 +156,25 @@ struct AmbrosiaApp: App {
                 // ReaderWindowController.sessionWindowSize.
                 Button("Reset Reader Window Size to Default") {
                     ReaderWindowController.resetAllToDefaultSize()
+                }
+            }
+
+            CommandGroup(after: .windowArrangement) {
+                Divider()
+
+                Button("Main Library") {
+                    AppDelegate.shared?.showLibraryWindow()
+                }
+                .keyboardShortcut("0", modifiers: [.command, .option])
+
+                Button("Contents Panel") {
+                    NSApp.sendAction(#selector(ReaderViewController.showTOCSidebar(_:)),
+                                     to: nil, from: nil)
+                }
+
+                Button("Annotations Panel") {
+                    NSApp.sendAction(#selector(ReaderViewController.showAnnotationSidebar(_:)),
+                                     to: nil, from: nil)
                 }
             }
 
@@ -121,6 +205,20 @@ struct AmbrosiaApp: App {
                                          to: nil, from: nil)
                     }
                     .keyboardShortcut("[", modifiers: [.command])
+
+                    Divider()
+
+                    Button("Beginning of Work") {
+                        NSApp.sendAction(#selector(ReaderViewController.goToBeginningOfWorkAction(_:)),
+                                         to: nil, from: nil)
+                    }
+                    .keyboardShortcut("[", modifiers: [.command, .option])
+
+                    Button("End of Work") {
+                        NSApp.sendAction(#selector(ReaderViewController.goToEndOfWorkAction(_:)),
+                                         to: nil, from: nil)
+                    }
+                    .keyboardShortcut("]", modifiers: [.command, .option])
                 }
 
                 Menu("Appearance") {
@@ -141,20 +239,73 @@ struct AmbrosiaApp: App {
 
                     Divider()
 
+                    Menu("Appearance Mode") {
+                        ForEach(AppearanceMode.allCases) { mode in
+                            Button {
+                                ReaderPreferences.shared.appearanceMode = mode
+                            } label: {
+                                if ReaderPreferences.shared.appearanceMode == mode {
+                                    Label(mode.displayName, systemImage: "checkmark")
+                                } else {
+                                    Text(mode.displayName)
+                                }
+                            }
+                        }
+                    }
+
                     Menu("Theme") {
                         ForEach(ReaderTheme.allCases) { theme in
-                            Button(theme.label) {
+                            Button {
                                 ReaderPreferences.shared.applyTheme(theme)
+                            } label: {
+                                if ReaderPreferences.shared.selectedTheme == theme {
+                                    Label(theme.label, systemImage: "checkmark")
+                                } else {
+                                    Text(theme.label)
+                                }
+                            }
+                        }
+                    }
+
+                    Menu("Text Alignment") {
+                        ForEach(ThemeTextAlignment.allCases) { align in
+                            Button {
+                                ReaderPreferences.shared.textAlignment = align
+                            } label: {
+                                if ReaderPreferences.shared.textAlignment == align {
+                                    Label(align.label, systemImage: "checkmark")
+                                } else {
+                                    Text(align.label)
+                                }
                             }
                         }
                     }
 
                     Menu("Columns (Paged Mode)") {
-                        Button("1 Column") {
-                            ReaderPreferences.shared.colsPerScreen = .one
+                        ForEach(ColsPerScreen.allCases, id: \.self) { cols in
+                            Button {
+                                ReaderPreferences.shared.colsPerScreen = cols
+                            } label: {
+                                if ReaderPreferences.shared.colsPerScreen == cols {
+                                    Label(cols.label, systemImage: "checkmark")
+                                } else {
+                                    Text(cols.label)
+                                }
+                            }
                         }
-                        Button("2 Columns") {
-                            ReaderPreferences.shared.colsPerScreen = .two
+                    }
+
+                    Menu("AO3 Work Layout Order") {
+                        ForEach(AO3WorkLayoutOrder.allCases, id: \.self) { order in
+                            Button {
+                                ReaderPreferences.shared.ao3WorkLayoutOrder = order
+                            } label: {
+                                if ReaderPreferences.shared.ao3WorkLayoutOrder == order {
+                                    Label(order.label, systemImage: "checkmark")
+                                } else {
+                                    Text(order.label)
+                                }
+                            }
                         }
                     }
                 }
@@ -166,9 +317,14 @@ struct AmbrosiaApp: App {
                                      to: nil, from: nil)
                 }
 
-                Button("Add Annotation") {
-                    NSApp.sendAction(#selector(ReaderViewController.addAnnotation(_:)),
-                                     to: nil, from: nil)
+                Button("Show Table of Contents") {
+                    if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
+                       libraryWindowController.window?.isKeyWindow == true {
+                        libraryWindowController.showTOCInEmailSidebar(nil)
+                    } else {
+                        NSApp.sendAction(#selector(ReaderViewController.showTOCSidebar(_:)),
+                                         to: nil, from: nil)
+                    }
                 }
 
                 Button("Show Annotations") {
@@ -181,14 +337,9 @@ struct AmbrosiaApp: App {
                     }
                 }
 
-                Button("Show Table of Contents") {
-                    if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
-                       libraryWindowController.window?.isKeyWindow == true {
-                        libraryWindowController.showTOCInEmailSidebar(nil)
-                    } else {
-                        NSApp.sendAction(#selector(ReaderViewController.showTOCSidebar(_:)),
-                                         to: nil, from: nil)
-                    }
+                Button("Add Annotation") {
+                    NSApp.sendAction(#selector(ReaderViewController.addAnnotation(_:)),
+                                     to: nil, from: nil)
                 }
 
                 Divider()

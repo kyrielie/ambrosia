@@ -837,13 +837,28 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     /// list/ranking mode there is no such observer — previously a silent
     /// no-op (bug #7) — so this now opens the same docked AO3 filter panel
     /// the toolbar/menu "Open AO3 Style Filter" action opens.
-    @objc private func triggerSidebarToggle() {
+    @objc func triggerSidebarToggle() {
         switch toolbarState?.viewMode {
         case .email:
             toolbarState?.toggleEmailSidebar.toggle()
         default:
             toolbarState?.showAO3FilterSidebar.toggle()
         }
+    }
+
+    @objc func performSidebarToggleFromMenu() {
+        triggerSidebarToggle()
+    }
+
+    @objc func performFindAction(_ sender: Any?) {
+        focusSearchField(sender)
+    }
+
+    @objc func focusSearchField(_ sender: Any?) {
+        guard let searchField = searchToolbarItem?.searchField,
+              let window = self.window else { return }
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(searchField)
     }
 
     /// Called by the Show Annotations menu item (⌘B) when the library window is key.
@@ -858,13 +873,13 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         toolbarState?.emailReaderSidebarMode = .tableOfContents
         toolbarState?.showEmailReaderSidebar.toggle()
     }
-    @objc private func showCollections() { toolbarState?.showCollections    = true }
-    @objc private func showReadingGoal() { toolbarState?.showReadingGoal    = true }
-    @objc private func showErrorLog() { toolbarState?.showErrorLog = true }
-    @objc private func triggerCSVExport() { toolbarState?.triggerExport      = true }
-    @objc private func triggerEPUBExport() { toolbarState?.triggerEPUBExport  = true }
-    @objc private func triggerAnnotationExport() { toolbarState?.triggerAnnotationExport = true }
-    @objc private func showRSSPanel() {
+    @objc func showCollections() { toolbarState?.showCollections    = true }
+    @objc func showReadingGoal() { toolbarState?.showReadingGoal    = true }
+    @objc func showErrorLog() { toolbarState?.showErrorLog = true }
+    @objc func triggerCSVExport() { toolbarState?.triggerExport      = true }
+    @objc func triggerEPUBExport() { toolbarState?.triggerEPUBExport  = true }
+    @objc func triggerAnnotationExport() { toolbarState?.triggerAnnotationExport = true }
+    @objc func showRSSPanel() {
         guard let session else { return }
 
         if session.feedServer?.isRunning == true {

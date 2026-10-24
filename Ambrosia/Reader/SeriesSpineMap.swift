@@ -26,6 +26,9 @@ struct SeriesSpineMap {
     /// Total number of spine items across all works.
     let count: Int
 
+    // swiftlint:disable:next empty_count
+    var isEmpty: Bool { count == 0 }
+
     init(workIDs: [Int], spineCounts: [Int]) {
         self.workIDs = workIDs
         self.spineCounts = spineCounts

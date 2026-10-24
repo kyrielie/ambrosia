@@ -1724,10 +1724,27 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             findPrevious()
         }
     }
+    @objc func performFindAction(_ sender: Any?) { toggleSearchBar() }
     @objc func goToNextPageAction(_ sender: Any?) { goToNextPage() }
     @objc func goToPreviousPageAction(_ sender: Any?) { goToPreviousPage() }
     @objc func nextChapterAction(_ sender: Any?) { goToNextChapter() }
     @objc func previousChapterAction(_ sender: Any?) { goToPreviousChapter() }
+    @objc func goToBeginningOfWorkAction(_ sender: Any?) {
+        if currentMode == .paginated {
+            loadSpineItem(index: 0, restorePosition: .start)
+        } else {
+            webView.evaluateJavaScript("window.scrollTo({top: 0, behavior: 'smooth'});", completionHandler: nil)
+        }
+    }
+    @objc func goToEndOfWorkAction(_ sender: Any?) {
+        if currentMode == .paginated {
+            if !spineMap.isEmpty {
+                loadSpineItem(index: spineMap.count - 1, restorePosition: .start)
+            }
+        } else {
+            webView.evaluateJavaScript("window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'});", completionHandler: nil)
+        }
+    }
     @objc func increaseFontSizeAction(_ sender: Any?) { ReaderPreferences.shared.increaseFontSize() }
     @objc func decreaseFontSizeAction(_ sender: Any?) { ReaderPreferences.shared.decreaseFontSize() }
     @objc func resetFontSizeAction(_ sender: Any?) { ReaderPreferences.shared.resetFontSize() }
