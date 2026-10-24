@@ -67,6 +67,8 @@ enum RebindableAction: String, CaseIterable, Codable, Hashable {
     case toggleFindBar
     case findNext
     case findPrevious
+    case likeCurrentWork
+    case readLaterCurrentWork
 
     /// Must match the literal title string used for this action's
     /// `Button` in `AmbrosiaApp.swift`'s `CommandMenu("Reader")` — the
@@ -80,6 +82,8 @@ enum RebindableAction: String, CaseIterable, Codable, Hashable {
         case .toggleFindBar:         return "Toggle Find Bar"
         case .findNext:              return "Find Next"
         case .findPrevious:          return "Find Previous"
+        case .likeCurrentWork:       return "Like This Work"
+        case .readLaterCurrentWork:  return "Add to Read Later"
         }
     }
 }
@@ -122,7 +126,14 @@ private let reservedBindings: [KeyBinding] = [
     KeyBinding(character: "z", modifiers: [.command]),
     KeyBinding(character: "z", modifiers: [.command, .shift]),
     KeyBinding(character: ",", modifiers: [.command]),
-    KeyBinding(character: "o", modifiers: [.command])
+    KeyBinding(character: "o", modifiers: [.command]),
+    KeyBinding(character: "w", modifiers: [.command]),
+    KeyBinding(character: "q", modifiers: [.command]),
+    KeyBinding(character: "m", modifiers: [.command]),
+    KeyBinding(character: "0", modifiers: [.command]),
+    KeyBinding(character: "1", modifiers: [.command]),
+    KeyBinding(character: "2", modifiers: [.command]),
+    KeyBinding(character: "3", modifiers: [.command])
 ]
 
 /// Pure, UI/NSEvent-free so it's unit-testable alongside

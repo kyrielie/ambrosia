@@ -59,37 +59,126 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Reader menu shortcut sync
 
-    /// Sets `.keyEquivalent`/`.keyEquivalentModifierMask` directly on the
-    /// "Reader" `NSMenu`'s items from `ReaderPreferences.shared.keyBindings`.
+    /// Sets `.keyEquivalent`/`.keyEquivalentModifierMask` on menu items across
+    /// `NSApp.mainMenu` from `ReaderPreferences.shared.keyBindings`.
     /// Called once at launch and again whenever `keyBindings` changes, so
-    /// the menu bar's displayed shortcut updates live without a relaunch —
-    /// see the doc comment on `CommandMenu("Reader")` in AmbrosiaApp.swift
-    /// for why this can't be done via SwiftUI's `.keyboardShortcut(...)`.
-    /// An action absent from `keyBindings` (currently only possible for
-    /// `showTOCSidebar`, which ships unbound by default) gets an empty
-    /// `keyEquivalent`, which AppKit treats as "no shortcut displayed."
+    /// the menu bar's displayed shortcut updates live without a relaunch.
     func syncReaderMenuShortcuts() {
-        guard let readerMenu = NSApp.mainMenu?.item(withTitle: "Reader")?.submenu else {
+        guard let mainMenu = NSApp.mainMenu else {
             #if DEBUG
-            print("[AppDelegate] Could not locate \"Reader\" NSMenu for shortcut sync.")
+            print("[AppDelegate] Could not locate NSApp.mainMenu for shortcut sync.")
             #endif
             return
         }
         let bindings = ReaderPreferences.shared.keyBindings
+        var actionForTitle: [String: RebindableAction] = [:]
         for action in RebindableAction.allCases {
-            guard let item = readerMenu.items.first(where: { $0.title == action.displayName }) else {
-                #if DEBUG
-                print("[AppDelegate] No NSMenuItem titled \"\(action.displayName)\" found in Reader menu.")
-                #endif
-                continue
+            actionForTitle[action.displayName] = action
+        }
+        // Also map standard Edit ▸ Find item if titled "Find…"
+        actionForTitle["Find…"] = .toggleFindBar
+
+        applyBindings(actionForTitle: actionForTitle, bindings: bindings, to: mainMenu)
+    }
+
+    private func applyBindings(
+        actionForTitle: [String: RebindableAction],
+        bindings: [RebindableAction: KeyBinding],
+        to menu: NSMenu
+    ) {
+        for item in menu.items {
+            if let action = actionForTitle[item.title] {
+                if let binding = bindings[action] {
+                    item.keyEquivalent = binding.character
+                    item.keyEquivalentModifierMask = binding.keyEquivalentModifierMask
+                } else {
+                    item.keyEquivalent = ""
+                    item.keyEquivalentModifierMask = []
+                }
             }
-            if let binding = bindings[action] {
-                item.keyEquivalent = binding.character
-                item.keyEquivalentModifierMask = binding.keyEquivalentModifierMask
+            if let submenu = item.submenu {
+                applyBindings(actionForTitle: actionForTitle, bindings: bindings, to: submenu)
+            }
+        }
+    }
+
+    // MARK: - Library & Window management
+
+    func closeCurrentLibrary() {
+        session?.close()
+        LibraryRegistry.shared.activePath = nil
+        libraryWindowController?.window?.close()
+        libraryWindowController = nil
+    }
+
+    func showLibraryWindow() {
+        if libraryWindowController == nil, let session {
+            libraryWindowController = LibraryWindowController(session: session)
+        }
+        libraryWindowController?.showWindow(nil)
+        libraryWindowController?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    func openCurrentOrSelectedInExternalReader() {
+        if let readerWindow = NSApp.keyWindow?.windowController as? ReaderWindowController,
+           let readerVC = readerWindow.readerViewController {
+            let calibreID = readerVC.activeCalibreID
+            openExternalReader(forCalibreID: calibreID)
+            return
+        }
+        Task { [weak self] in
+            guard let self, let library = self.session?.library else { return }
+            let allIDs = await library.allBookIDs()
+            if let firstID = allIDs.first {
+                await MainActor.run {
+                    self.openExternalReader(forCalibreID: firstID)
+                }
+            }
+        }
+    }
+
+    private func openExternalReader(forCalibreID calibreID: Int) {
+        Task { [weak self] in
+            guard let self, let library = self.session?.library else { return }
+            guard let epubURL = await library.epubURL(calibreID: calibreID),
+                  FileManager.default.fileExists(atPath: epubURL.path) else { return }
+
+            let appPath = ReaderPreferences.shared.customReaderAppPath
+            if !appPath.isEmpty && FileManager.default.fileExists(atPath: appPath) {
+                let appURL = URL(fileURLWithPath: appPath)
+                NSWorkspace.shared.open(
+                    [epubURL],
+                    withApplicationAt: appURL,
+                    configuration: NSWorkspace.OpenConfiguration(),
+                    completionHandler: nil
+                )
             } else {
-                item.keyEquivalent = ""
-                item.keyEquivalentModifierMask = []
+                NSWorkspace.shared.open(epubURL)
             }
+        }
+    }
+
+    func revealCurrentOrLibraryInFinder() {
+        if let readerWindow = NSApp.keyWindow?.windowController as? ReaderWindowController,
+           let readerVC = readerWindow.readerViewController {
+            let calibreID = readerVC.activeCalibreID
+            Task { [weak self] in
+                guard let self, let library = self.session?.library else { return }
+                if let epubURL = await library.epubURL(calibreID: calibreID),
+                   FileManager.default.fileExists(atPath: epubURL.path) {
+                    NSWorkspace.shared.activateFileViewerSelecting([epubURL])
+                    return
+                }
+                if let pathStr = LibraryRegistry.shared.activePath {
+                    let url = URL(fileURLWithPath: pathStr)
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                }
+            }
+            return
+        }
+        if let pathStr = LibraryRegistry.shared.activePath {
+            let url = URL(fileURLWithPath: pathStr)
+            NSWorkspace.shared.activateFileViewerSelecting([url])
         }
     }
 

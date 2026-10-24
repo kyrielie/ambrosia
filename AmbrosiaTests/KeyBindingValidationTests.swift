@@ -34,6 +34,22 @@ final class KeyBindingValidationTests: XCTestCase {
         XCTAssertFalse(validate(binding, for: .showTOCSidebar, against: [:]).isValid)
     }
 
+    func test_reservedCommandWAndQ_areRejected() {
+        let bindingW = KeyBinding(character: "w", modifiers: [.command])
+        XCTAssertFalse(validate(bindingW, for: .likeCurrentWork, against: [:]).isValid)
+
+        let bindingQ = KeyBinding(character: "q", modifiers: [.command])
+        XCTAssertFalse(validate(bindingQ, for: .readLaterCurrentWork, against: [:]).isValid)
+    }
+
+    func test_defaultBindings_allValidAndDoNotCollide() {
+        let defaults = ReaderPreferences.defaultKeyBindingsForReset
+        for (action, binding) in defaults {
+            let result = validate(binding, for: action, against: defaults)
+            XCTAssertTrue(result.isValid, "Action \(action) binding \(binding.displayString) was invalid: \(result)")
+        }
+    }
+
     // MARK: - Collisions with an existing binding
 
     func test_collisionWithDifferentAction_isRejected() {

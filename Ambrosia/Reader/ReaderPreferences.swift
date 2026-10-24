@@ -576,14 +576,16 @@ final class ReaderPreferences: ObservableObject {
         static let textAlignment               = ThemeTextAlignment.book
         static let paragraphIndent: Double?    = nil
 
-        // showTOCSidebar is intentionally absent — see keyBindings' doc comment.
         static let keyBindings: [RebindableAction: KeyBinding] = [
             .toggleReadingMode: KeyBinding(character: "m", modifiers: [.command, .shift]),
             .addAnnotation: KeyBinding(character: "d", modifiers: [.command]),
             .showAnnotationSidebar: KeyBinding(character: "b", modifiers: [.command]),
+            .showTOCSidebar: KeyBinding(character: "t", modifiers: [.command]),
             .toggleFindBar: KeyBinding(character: "f", modifiers: [.command]),
             .findNext: KeyBinding(character: "g", modifiers: [.command]),
-            .findPrevious: KeyBinding(character: "g", modifiers: [.command, .shift])
+            .findPrevious: KeyBinding(character: "g", modifiers: [.command, .shift]),
+            .likeCurrentWork: KeyBinding(character: "l", modifiers: [.command, .option]),
+            .readLaterCurrentWork: KeyBinding(character: "r", modifiers: [.command, .option])
         ]
     }
 
@@ -749,7 +751,11 @@ final class ReaderPreferences: ObservableObject {
 
         if let data = ud.data(forKey: Keys.keyBindings),
            let decoded = try? JSONDecoder().decode([RebindableAction: KeyBinding].self, from: data) {
-            keyBindings = decoded
+            var merged = Defaults.keyBindings
+            for (key, val) in decoded {
+                merged[key] = val
+            }
+            keyBindings = merged
         } else {
             keyBindings = Defaults.keyBindings
         }

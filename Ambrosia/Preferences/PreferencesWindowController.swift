@@ -1211,7 +1211,10 @@ private struct ShortcutsTab: View {
             } header: {
                 Label("Reader Shortcuts", systemImage: "keyboard").font(.headline)
             } footer: {
-                Text("Click a shortcut to record a new one. Cmd+C/V/X/Z, Cmd+Shift+Z, Cmd+, and Cmd+O are reserved and can't be reassigned.")
+                Text(
+                    "Click a shortcut to record a new one. Standard system and menu shortcuts "
+                    + "(Cmd+C/V/X/Z, Cmd+Shift+Z, Cmd+,, Cmd+O, Cmd+W, Cmd+Q, Cmd+M, Cmd+0-3) are reserved and can't be reassigned."
+                )
                     .font(.caption).foregroundStyle(.secondary)
             }
 

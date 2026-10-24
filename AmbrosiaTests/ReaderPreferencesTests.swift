@@ -114,4 +114,19 @@ final class ReaderPreferencesTests: XCTestCase {
         XCTAssertEqual(prefs.textAlignment, .book)
         XCTAssertNil(prefs.paragraphIndent)
     }
+
+    func testKeyBindingsDefaultsAndReset() {
+        let prefs = ReaderPreferences.shared
+        let defaults = ReaderPreferences.defaultKeyBindingsForReset
+
+        XCTAssertEqual(defaults[.showTOCSidebar]?.character, "t")
+        XCTAssertEqual(defaults[.likeCurrentWork]?.character, "l")
+        XCTAssertEqual(defaults[.readLaterCurrentWork]?.character, "r")
+
+        prefs.keyBindings[.showTOCSidebar] = KeyBinding(character: "u", modifiers: [.control])
+        XCTAssertEqual(prefs.keyBindings[.showTOCSidebar]?.character, "u")
+
+        prefs.resetReaderShortcutsToDefaults()
+        XCTAssertEqual(prefs.keyBindings[.showTOCSidebar]?.character, "t")
+    }
 }
