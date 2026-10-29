@@ -38,10 +38,15 @@ books_fts JOIN books_text bt ON bt.id = books_fts.rowid WHERE books_fts MATCH ?`
   included (D21).
 - `stemmed: true` queries throw `.tokenizerUnavailable` until stemming exists (M6).
 
-Phase 2, `snippets(bookID:query:token:snippetTokens:)`: one query per book, `snippet()`
-with `\u{1D}` as both highlight markers and the token count clamped to 1...64, ordered by
-`rank`. Native mode only. Built and tested, wired to no view yet. `FTSSnippet.textRowID` is
-`books_text.id` and is session-local (D22).
+Phase 2, `snippets(bookID:query:token:snippetTokens:)` and
+`multiSnippets(bookID:query:token:maxSnippets:snippetTokens:)`:
+- `snippets`: one query per book, SQLite FTS5 `snippet()` with `\u{1D}` as highlight markers,
+  returning at most one snippet per matching format document ordered by `rank`.
+- `multiSnippets`: extracts up to `maxSnippets` (default 5) occurrence snippets across the
+  entire book using `FTSOccurrenceExtractor` over `searchable_text`, calculating approximate
+  reading percentages and reporting the true total match count across the book.
+Native mode only. `FTSSnippet.textRowID` and `FTSMultiSnippetResult.textRowID` are
+`books_text.id` and are session-local (D22).
 
 `indexProgress()` counts `books_text` and `dirtied_formats`. Ambrosia's own derivation:
 Calibre keeps its counters in memory.

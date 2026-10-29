@@ -244,6 +244,82 @@ actor CalibreFTSLibrary {
         }
     }
 
+    // MARK: - Phase 2: multi-snippets for one book
+
+    /// Up to `maxSnippets` highlighted occurrence snippets for a book's matching document(s),
+    /// along with the total occurrences count across the book.
+    func multiSnippets(
+        bookID: Int,
+        query: FTSQuery,
+        token: SearchToken,
+        maxSnippets: Int = 5,
+        snippetTokens: Int = 32
+    ) throws -> [FTSMultiSnippetResult] {
+        guard control.isCurrent(token) else { throw FTSSearchError.cancelled }
+        guard !query.stemmed else { throw FTSSearchError.tokenizerUnavailable }
+        try refreshIfFileChanged()
+        guard mode == .native else { return [] }
+
+        func run(_ expression: String) throws -> [FTSMultiSnippetResult] {
+            var sql = """
+                SELECT bt.id, bt.book, bt.format, bt.searchable_text
+                FROM books_fts
+                JOIN books_text AS bt ON bt.id = books_fts.rowid
+                WHERE bt.book = ? AND books_fts MATCH ?
+                """
+            var bindings: [Binding?] = [Int64(bookID), expression]
+            if let formats = query.formats {
+                if formats.isEmpty { return [] }
+                let sorted = formats.map { $0.uppercased() }.sorted()
+                sql += " AND bt.format IN (" + sorted.map { _ in "?" }.joined(separator: ",") + ")"
+                bindings.append(contentsOf: sorted.map { $0 as Binding? })
+            }
+            sql += " ORDER BY books_fts.rank"
+            let rows = try drain(sql, bindings, token: token)
+            return rows.compactMap { row -> FTSMultiSnippetResult? in
+                guard let id = (row[0] as? Int64).map(Int.init),
+                      let book = (row[1] as? Int64).map(Int.init),
+                      let format = row[2] as? String,
+                      let text = row[3] as? String else { return nil }
+                var result = FTSOccurrenceExtractor.extract(
+                    text: text,
+                    textRowID: id,
+                    bookID: book,
+                    format: format,
+                    query: query,
+                    maxSnippets: maxSnippets,
+                    radiusCharacters: max(30, snippetTokens * 4)
+                )
+                if result.snippets.isEmpty,
+                   let fallback = try? snippets(
+                       bookID: bookID, query: query, token: token, snippetTokens: snippetTokens * 2
+                   ).first(where: { $0.format == format }) {
+                    result = FTSMultiSnippetResult(
+                        textRowID: id,
+                        bookID: book,
+                        format: format,
+                        totalOccurrences: 1,
+                        snippets: [
+                            FTSOccurrenceSnippet(
+                                id: 0,
+                                charOffset: 0,
+                                text: fallback.text,
+                                approximatePercent: 0.0
+                            )
+                        ]
+                    )
+                }
+                return result
+            }
+        }
+
+        do {
+            return try run(query.rawMatchExpression)
+        } catch FTSSearchError.syntax(_) {
+            return try run(query.sanitizedMatchExpression)
+        }
+    }
+
     // MARK: - Index progress
 
     /// Ambrosia's own derivation: Calibre keeps its left/total counters in memory.
