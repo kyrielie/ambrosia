@@ -227,7 +227,10 @@ final class EPUBParserSanitizationTests: XCTestCase {
 
     func testSpacerMarkingDoesNotChangeText() {
         func text(_ html: String) -> String {
-            html.replacingOccurrences(of: #"<[^>]*>"#, with: "", options: .regularExpression)
+            html
+                .replacingOccurrences(of: "&#160;", with: "\u{00A0}")
+                .replacingOccurrences(of: "&nbsp;", with: "\u{00A0}")
+                .replacingOccurrences(of: #"<[^>]*>"#, with: "", options: .regularExpression)
         }
         let off = EPUBParser.extractBodyContent(from: spacerFixture, isFirstSpineItem: false)
         let on = EPUBParser.extractBodyContent(

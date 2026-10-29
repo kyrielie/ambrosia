@@ -235,7 +235,8 @@ private struct ReaderTab: View {
                 Label("Reader Content", systemImage: "doc.text.magnifyingglass").font(.headline)
             } footer: {
                 Text(
-                    "Links open in your browser. Trimming removes spaces some converters use as fake first-line indents (use Paragraph indent for the real gap). " +
+                    "Links open in your browser. " +
+                    "Trimming removes spaces some converters use as fake first-line indents (use Paragraph indent for the real gap). " +
                     "Collapsing spacer paragraphs removes the blank lines some converters insert between paragraphs. " +
                     "Neither changes EPUB files."
                 )
