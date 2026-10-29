@@ -113,6 +113,9 @@ struct BookListRow: View, Equatable {
             Button("Open") {
                 onOpen()
             }
+            Button("Reveal in Finder") {
+                AppDelegate.shared?.revealInFinder(book: book)
+            }
             Divider()
             Button(isLiked ? "Unlike" : "Like") { onLikeToggle() }
             Button("Read Later") { onReadLater() }

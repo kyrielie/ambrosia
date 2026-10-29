@@ -158,6 +158,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func revealInFinder(book: CalibreBook) {
+        revealInFinder(books: [book])
+    }
+
+    func revealInFinder(books: [CalibreBook]) {
+        guard let pathStr = LibraryRegistry.shared.activePath else { return }
+        let libraryRoot = URL(fileURLWithPath: pathStr)
+        let urls = books.compactMap { $0.epubURL(libraryRoot: libraryRoot) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !urls.isEmpty else {
+            NSWorkspace.shared.activateFileViewerSelecting([libraryRoot])
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting(urls)
+    }
+
     func revealCurrentOrLibraryInFinder() {
         if let readerWindow = NSApp.keyWindow?.windowController as? ReaderWindowController,
            let readerVC = readerWindow.readerViewController {
@@ -220,7 +236,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Opens a reader window for the given book.
     /// Deduplication (one window per book.id) is handled by ReaderWindowController.open.
     /// EPUB path validation happens here so we can show a user-facing error early.
-    func openReaderWindow(book: CalibreBook) {
+    func openReaderWindow(
+        book: CalibreBook,
+        jumpToSnippet: FTSOccurrenceSnippet? = nil,
+        searchQuery: String? = nil
+    ) {
         guard let pathStr = LibraryRegistry.shared.activePath else {
             showOpenError("No library open.")
             return
@@ -245,7 +265,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case .inbuilt:
             // ReaderWindowController.open is the single source of truth for
             // deduplication (keyed by book.id) and window lifecycle.
-            ReaderWindowController.open(book: book)
+            ReaderWindowController.open(book: book, jumpToSnippet: jumpToSnippet, searchQuery: searchQuery)
         case .systemDefault:
             NSWorkspace.shared.open(epubURL)
         case .customApp:
@@ -266,10 +286,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func openReaderWindow(target: ReadingTarget) {
+    func openReaderWindow(
+        target: ReadingTarget,
+        jumpToSnippet: FTSOccurrenceSnippet? = nil,
+        searchQuery: String? = nil
+    ) {
         switch target {
         case .singleBook(let book):
-            openReaderWindow(book: book)
+            openReaderWindow(book: book, jumpToSnippet: jumpToSnippet, searchQuery: searchQuery)
         case .series(let series):
             guard let pathStr = LibraryRegistry.shared.activePath else {
                 showOpenError("No library open.")

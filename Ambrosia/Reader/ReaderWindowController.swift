@@ -52,23 +52,45 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
     var searchButtonRef: NSButton? { searchButton }
 
     @MainActor
-    static func open(book: CalibreBook) {
-        open(target: .singleBook(book))
+    static func open(
+        book: CalibreBook,
+        jumpToSnippet: FTSOccurrenceSnippet? = nil,
+        searchQuery: String? = nil
+    ) {
+        open(target: .singleBook(book), jumpToSnippet: jumpToSnippet, searchQuery: searchQuery)
     }
 
     @MainActor
-    static func open(target: ReadingTarget) {
+    static func open(
+        target: ReadingTarget,
+        jumpToSnippet: FTSOccurrenceSnippet? = nil,
+        searchQuery: String? = nil
+    ) {
         if let existing = openWindows[target.windowKey] {
             existing.showWindow(nil)
             existing.window?.makeKeyAndOrderFront(nil)
+            if let snippet = jumpToSnippet {
+                existing.readerViewController?.jumpToSnippet(snippet, query: searchQuery)
+            } else if let query = searchQuery, !query.isEmpty {
+                existing.readerViewController?.showLocalFind()
+                existing.readerViewController?.setLocalFindText(query)
+            }
             return
         }
-        let wc = ReaderWindowController(target: target)
+        let wc = ReaderWindowController(
+            target: target,
+            initialJumpSnippet: jumpToSnippet,
+            initialSearchQuery: searchQuery
+        )
         openWindows[target.windowKey] = wc
         wc.showWindow(nil)
     }
 
-    private init(target: ReadingTarget) {
+    private init(
+        target: ReadingTarget,
+        initialJumpSnippet: FTSOccurrenceSnippet? = nil,
+        initialSearchQuery: String? = nil
+    ) {
         self.target = target
         self.book   = target.primaryBook
 
@@ -88,7 +110,11 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
         super.init(window: window)
         window.delegate = self
 
-        let vc = ReaderViewController(target: target)
+        let vc = ReaderViewController(
+            target: target,
+            initialJumpSnippet: initialJumpSnippet,
+            initialSearchQuery: initialSearchQuery
+        )
         self.readerViewController = vc
         window.contentViewController = vc
 
