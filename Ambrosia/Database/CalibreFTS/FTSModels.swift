@@ -44,6 +44,25 @@ struct FTSSnippet: Sendable, Equatable {
     let text: String
 }
 
+/// An individual occurrence snippet within a book's text.
+struct FTSOccurrenceSnippet: Identifiable, Sendable, Equatable {
+    let id: Int
+    let charOffset: Int
+    /// Contains `\u{1D}` around highlighted terms.
+    let text: String
+    /// Approximate progress in the text (0.0 to 1.0).
+    let approximatePercent: Double
+}
+
+/// Multi-snippet result for one book across all occurrences.
+struct FTSMultiSnippetResult: Sendable, Equatable {
+    let textRowID: Int
+    let bookID: Int
+    let format: String
+    let totalOccurrences: Int
+    let snippets: [FTSOccurrenceSnippet]
+}
+
 /// Ambrosia's own derivation of indexing progress. Calibre keeps its left/total counters
 /// in memory, so nothing is stored in the database to read back.
 struct FTSIndexProgress: Sendable, Equatable {

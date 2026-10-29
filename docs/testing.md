@@ -118,6 +118,7 @@ Testing), against 112 source files (updated October 2026 after Phases 1–6).
 | `SearchControl` generation and cancel semantics | `SearchControlTests` |
 | `SQLIDList` single-binding id sets (40,000 ids) | `SQLIDListTests` |
 | `CalibreFTSLibrary` against a Calibre-shaped fixture | `CalibreFTSLibraryTests` |
+| `FTSOccurrenceExtractor` and `CalibreFTSLibrary.multiSnippets` | `FTSMultiSnippetTests` |
 | `LibrarySession` fulltext cache rules, via the `FulltextSearching` seam | `LibrarySessionFulltextTests` |
 | Real-library FTS timings (skipped unless `AMBROSIA_FTS_BENCH_LIBRARY` is set to a library folder) | `CalibreFTSBenchmarkTests` |
 | `CalibreTokenizer` (C port of Calibre's FTS5 tokenizer, `Database/CalibreFTS`) | `CalibreTokenizerTests`; the golden-corpus test skips until `AmbrosiaTests/calibre_tokenizer_golden.json` is generated (see `calibre-fts.md`) |
