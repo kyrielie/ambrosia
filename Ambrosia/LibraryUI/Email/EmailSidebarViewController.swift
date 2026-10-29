@@ -272,6 +272,13 @@ final class EmailSidebarViewController: NSViewController,
         openItem.representedObject = selectedBooks
         menu.addItem(openItem)
 
+        // Reveal in Finder
+        let revealTitle = isBulk ? "Reveal Selected in Finder" : "Reveal in Finder"
+        let revealItem = NSMenuItem(title: revealTitle, action: #selector(contextRevealInFinder(_:)), keyEquivalent: "")
+        revealItem.target = self
+        revealItem.representedObject = selectedBooks
+        menu.addItem(revealItem)
+
         menu.addItem(.separator())
 
         // Like / Unlike
@@ -332,6 +339,11 @@ final class EmailSidebarViewController: NSViewController,
     @objc private func contextOpen(_ sender: NSMenuItem) {
         guard let books = sender.representedObject as? [CalibreBook] else { return }
         onContextMenuOpen?(books)
+    }
+
+    @objc private func contextRevealInFinder(_ sender: NSMenuItem) {
+        guard let books = sender.representedObject as? [CalibreBook] else { return }
+        AppDelegate.shared?.revealInFinder(books: books)
     }
 
     @objc private func contextLike(_ sender: NSMenuItem) {

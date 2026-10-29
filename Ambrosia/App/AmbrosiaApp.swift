@@ -44,6 +44,11 @@ struct AmbrosiaApp: App {
                     }
                     .keyboardShortcut("f", modifiers: [.command])
 
+                    Button("Search Library Body Text…") {
+                        FTSSearchResultsWindowController.show()
+                    }
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
+
                     Button("Find Next") {
                         NSApp.sendAction(#selector(ReaderViewController.findNextAction(_:)),
                                          to: nil, from: nil)

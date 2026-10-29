@@ -264,6 +264,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     var onAnnotationsChanged: (([Annotation]) -> Void)?
     var onLocalFindStateChanged: ((LocalReaderFindState) -> Void)?
     var onOpenSearchSidebar: (() -> Void)?
+    private var pendingFTSJump: (snippet: FTSOccurrenceSnippet, query: String?)?
 
     // MARK: - Init
 
@@ -273,9 +274,12 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         super.init(nibName: nil, bundle: nil)
     }
 
-    init(target: ReadingTarget) {
+    init(target: ReadingTarget, initialJumpSnippet: FTSOccurrenceSnippet? = nil, initialSearchQuery: String? = nil) {
         self.target = target
         self.book   = target.primaryBook
+        if let initialJumpSnippet {
+            self.pendingFTSJump = (initialJumpSnippet, initialSearchQuery)
+        }
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -1026,6 +1030,10 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
         startAutoSave()
         isReaderContentReady = true
+        if let pending = pendingFTSJump {
+            pendingFTSJump = nil
+            jumpToSnippet(pending.snippet, query: pending.query)
+        }
         onReaderContentReady?()
     }
 
@@ -2047,6 +2055,48 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     func currentAnnotationsForSidebar() -> [Annotation] {
         annotations
+    }
+
+    // MARK: - Jump to FTS snippet
+
+    func jumpToSnippet(_ snippet: FTSOccurrenceSnippet, query: String? = nil) {
+        guard isReaderContentReady else {
+            pendingFTSJump = (snippet, query)
+            return
+        }
+
+        let cleanSnippet = snippet.text.replacingOccurrences(of: "\u{1D}", with: "")
+        let components = snippet.text.components(separatedBy: "\u{1D}")
+        let matchedTerm = components.count >= 3 ? components[1] : ""
+        let term = !matchedTerm.isEmpty ? matchedTerm : (query ?? cleanSnippet)
+
+        if ReaderPreferences.shared.autoOpenFindBarForFullTextSearch && !term.isEmpty {
+            showLocalFind()
+            setLocalFindText(term)
+        }
+
+        let fraction = min(max(snippet.approximatePercent / 100.0, 0.0), 1.0)
+        if currentMode == .paginated {
+            let totalSpines = max(1, spineMap.count)
+            let targetSpine = min(totalSpines - 1, max(0, Int((Double(totalSpines) * fraction).rounded(.down))))
+            if targetSpine != currentSpineIndex {
+                loadSpineItem(index: targetSpine, restorePosition: .start)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                    if !term.isEmpty {
+                        self?.performFindAndJump(term)
+                    }
+                }
+            } else if !term.isEmpty {
+                performFindAndJump(term)
+                snapFoundSelectionToColumn()
+            }
+        } else {
+            if !term.isEmpty {
+                performFindAndJump(term)
+            }
+            let js = "window.scrollTo(0, document.body.scrollHeight * \(fraction));"
+            webView.evaluateJavaScript(js, completionHandler: nil)
+        }
     }
 
     // MARK: - Jump to annotation

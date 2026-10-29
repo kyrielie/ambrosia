@@ -91,6 +91,9 @@ struct SeriesListRow: View, Equatable {
         .contextMenu {
             Button("Open Series", action: onOpen)
             Button("Show Individual Works") { showIndex = true }
+            Button("Reveal in Finder") {
+                AppDelegate.shared?.revealInFinder(books: series.works)
+            }
             Divider()
             Button(isLiked ? "Unlike Series" : "Like Series", action: onLikeToggle)
             Button(isInReadLater ? "Remove Series from Read Later" : "Add Series to Read Later",
