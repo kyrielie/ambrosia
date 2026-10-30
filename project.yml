@@ -69,7 +69,9 @@ targets:
           - Resources/Info.plist
     info:
       path: Ambrosia/Resources/Info.plist
-      properties: {}
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
     entitlements:
       path: Ambrosia/Ambrosia.entitlements
       properties:
@@ -96,10 +98,10 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Ambrosia/Ambrosia.entitlements
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Automatic
-        CURRENT_PROJECT_VERSION: 1
+        CURRENT_PROJECT_VERSION: 7
         DEVELOPMENT_TEAM: S35M3D45Z9
         GENERATE_INFOPLIST_FILE: NO
-        MARKETING_VERSION: 0.1.1
+        MARKETING_VERSION: 0.1.7
         PRODUCT_BUNDLE_IDENTIFIER: com.kyrielie.ambrosia
         PRODUCT_NAME: "$(TARGET_NAME)"
         SWIFT_VERSION: 5.0
