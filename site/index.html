@@ -6,8 +6,7 @@
 	<title>Ambrosia: A native macOS Calibre library reader for AO3 fics</title>
 	<meta name="description" content="Ambrosia is a native macOS EPUB library reader for AO3-heavy Calibre libraries with list, email, and ranking modes, full-text search, and reader themes.">
 	<link rel="canonical" href="https://kyrielie.github.io/ambrosia/">
-	<meta name="theme-color" content="#fffdf8" media="(prefers-color-scheme: light)">
-	<meta name="theme-color" content="#211f1c" media="(prefers-color-scheme: dark)">
+	<meta name="theme-color" content="#333">
 	<meta property="og:type" content="website">
 	<meta property="og:url" content="https://kyrielie.github.io/ambrosia/">
 	<meta property="og:title" content="Ambrosia">
@@ -27,6 +26,7 @@
 <header>
 	<nav>
 		<ul>
+			<li class="brand"><a href="#top">Ambrosia</a></li>
 			<li><a href="#install">Install</a></li>
 			<li><a href="#features">Features</a></li>
 			<li><a href="https://github.com/kyrielie/ambrosia">GitHub</a></li>
@@ -37,13 +37,21 @@
 <main id="main">
 	<section id="top">
 		<img src="img/icon.png" width="256" height="256" alt="Ambrosia app icon">
-		<h1>Ambrosia</h1>
-		<p>A native Calibre library reader for AO3 fanfiction</p>
-		<p class="actions">
-			<a class="button" href="https://github.com/kyrielie/ambrosia/releases/latest">Download</a>
-			<a class="button secondary" href="#install">Install with Homebrew</a>
-		</p>
-		<p class="note">Free and open source. Requires macOS 14 or later. Releases are not notarized, so see <a href="#first-launch">first launch</a>.</p>
+		<div>
+			<h1>Ambrosia</h1>
+			<p class="tagline">A native Calibre library reader for AO3 fanfiction</p>
+			<dl class="tags">
+				<dt>Platform:</dt><dd>macOS 14 or later</dd>
+				<dt>Built with:</dt><dd>Swift, AppKit, SwiftUI</dd>
+				<dt>Cost:</dt><dd>Free and open source</dd>
+				<dt>License:</dt><dd>GPL-3.0</dd>
+			</dl>
+			<p class="actions">
+				<a class="button" href="https://github.com/kyrielie/ambrosia/releases/latest">Download</a>
+				<a class="button secondary" href="#install">Install with Homebrew</a>
+			</p>
+			<p class="note">Releases are not notarized, so see <a href="#first-launch">first launch</a>.</p>
+		</div>
 	</section>
 
 	<section id="screenshots">
@@ -68,8 +76,6 @@
 			<button type="button" aria-label="Show screenshot 8"></button>
 		</div>
 	</section>
-
-	<p id="lead">swift native calibre reader tailored for ao3 fanfiction</p>
 
 	<section id="highlights">
 		<section>
