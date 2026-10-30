@@ -24,23 +24,56 @@ Check out https://github.com/kyrielie/nectar, its iOS companion reader, and http
 
 <p align="center">
   <img src="screenshots/rowview.png" alt="Ambrosia main library list view" width="900">
+  <br>
+  <em>Main library list view with AO3 tags, stats, and series clustering</em>
 </p>
 
+### Reading & Search
+
 <table>
-<tr>
-<td width="33%" align="center"><img src="screenshots/reader.png" alt="Standalone reader view"><br><em>Custom reader with themes & paginated columns</em></td>
-<td width="33%" align="center"><img src="screenshots/emailview.png" alt="Email split view"><br><em>Split-view email mode with live reader</em></td>
-<td width="33%" align="center"><img src="screenshots/fts.png" alt="Full-text search view"><br><em>Full-text body search with snippets</em></td>
+<tr valign="top">
+  <td width="33%" align="center">
+    <img src="screenshots/reader.png" alt="Standalone reader view" height="230"><br>
+    <sub><strong>Reader View</strong><br>Curated themes & paginated columns</sub>
+  </td>
+  <td width="33%" align="center">
+    <img src="screenshots/emailview.png" alt="Email split view" height="230"><br>
+    <sub><strong>Email Mode</strong><br>Two-pane library with live reading pane</sub>
+  </td>
+  <td width="33%" align="center">
+    <img src="screenshots/fts.png" alt="Full-text search view" height="230"><br>
+    <sub><strong>Full-Text Search</strong><br>Inverted-index body search with snippets</sub>
+  </td>
 </tr>
-<tr>
-<td width="33%" align="center"><img src="screenshots/rowview2.png" alt="Filtered list view"><br><em>Faceted search & filter drawer</em></td>
-<td width="33%" align="center"><img src="screenshots/activity.png" alt="Reading goals and activity"><br><em>Activity feed & reading goals</em></td>
-<td width="33%" align="center"><img src="screenshots/settings.png" alt="Library settings"><br><em>Appearance & library preferences</em></td>
+</table>
+
+### Filtering & Reading Activity
+
+<table>
+<tr valign="top">
+  <td width="50%" align="center">
+    <img src="screenshots/rowview2.png" alt="Filtered list view"><br>
+    <sub><strong>Faceted Filter Drawer</strong><br>Filter by fandom, pairing, rating, status, or tag</sub>
+  </td>
+  <td width="50%" align="center">
+    <img src="screenshots/activity.png" alt="Reading goals and activity"><br>
+    <sub><strong>Reading Goals & Activity Feed</strong><br>Track reading targets, history, and milestones</sub>
+  </td>
 </tr>
-<tr>
-<td width="33%" align="center"><img src="screenshots/settings2.png" alt="Reader settings"><br><em>Reader typography & shortcuts</em></td>
-<td width="33%" align="center"></td>
-<td width="33%" align="center"></td>
+</table>
+
+### Preferences & Customization
+
+<table>
+<tr valign="top">
+  <td width="50%" align="center">
+    <img src="screenshots/settings.png" alt="Library settings" width="360"><br>
+    <sub><strong>Library Preferences</strong><br>Appearance modes, sort orders, and Calibre configuration</sub>
+  </td>
+  <td width="50%" align="center">
+    <img src="screenshots/settings2.png" alt="Reader settings" width="360"><br>
+    <sub><strong>Reader & Shortcuts</strong><br>Typography, keybindings, and reading themes</sub>
+  </td>
 </tr>
 </table>
 
