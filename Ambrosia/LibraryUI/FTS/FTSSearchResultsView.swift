@@ -26,7 +26,7 @@ struct FTSResultItem: Identifiable {
 @MainActor
 final class FTSSearchViewModel {
     var queryText: String = ""
-    var scope: FTSSearchScope = .allBooks
+    var scope: FTSSearchScope = .filtered
     private(set) var isSearching: Bool = false
     private(set) var isStreamingSnippets: Bool = false
     private(set) var results: [FTSResultItem] = []
@@ -85,8 +85,9 @@ final class FTSSearchViewModel {
                 var matchedIDs = bookSet.bookIDs
 
                 if self.scope == .filtered {
-                    let activeIDs = self.currentFilterIDs()
-                    matchedIDs = matchedIDs.filter { activeIDs.contains($0) }
+                    if let activeIDs = await self.currentFilterIDs() {
+                        matchedIDs = matchedIDs.filter { activeIDs.contains($0) }
+                    }
                 }
 
                 guard !Task.isCancelled else { return }
@@ -155,15 +156,35 @@ final class FTSSearchViewModel {
         }
     }
 
-    private func currentFilterIDs() -> Set<Int> {
-        if let lwc = AppDelegate.shared?.libraryWindowController,
-           let lvc = lwc.contentViewController as? LibraryViewController {
-            if let activeResult = lvc.toolbarState.activeFilterResult {
-                return Set(activeResult.calibreIDs)
-            }
-            return Set(lvc.displayController.books.map(\.id))
+    private func currentFilterIDs() async -> Set<Int>? {
+        guard let lwc = AppDelegate.shared?.libraryWindowController,
+              let lvc = lwc.contentViewController as? LibraryViewController else {
+            return nil
         }
-        return []
+        if let activeResult = lvc.toolbarState.activeFilterResult, !activeResult.calibreIDs.isEmpty {
+            return Set(activeResult.calibreIDs)
+        }
+        if let activeResult = lvc.toolbarState.activeFilterResult, activeResult.isSQLBacked {
+            let searchQuery = !lvc.toolbarState.searchText.isEmpty
+                ? SearchQueryParser.parse(lvc.toolbarState.searchText)
+                : SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+            let ids = await AppDelegate.shared?.session.library?.fetchAllMatchingIDs(
+                query: searchQuery,
+                filter: lvc.toolbarState.filterExpression,
+                restrictIDs: nil
+            ) ?? []
+            return Set(ids)
+        }
+        if !lvc.toolbarState.searchText.isEmpty {
+            let searchQuery = SearchQueryParser.parse(lvc.toolbarState.searchText)
+            let ids = await AppDelegate.shared?.session.library?.fetchAllMatchingIDs(
+                query: searchQuery,
+                filter: nil,
+                restrictIDs: nil
+            ) ?? []
+            return Set(ids)
+        }
+        return nil
     }
 }
 
@@ -224,7 +245,9 @@ struct FTSSearchResultsView: View {
                 }
             }
             .pickerStyle(.segmented)
-            .frame(width: 200)
+            .labelsHidden()
+            .fixedSize()
+            .help("Search scope")
             .onChange(of: viewModel.scope) { _, _ in
                 if viewModel.hasSearched {
                     viewModel.performSearch()

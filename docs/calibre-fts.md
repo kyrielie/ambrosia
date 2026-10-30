@@ -48,19 +48,35 @@ Phase 2, `snippets(bookID:query:token:snippetTokens:)` and
 Native mode only. `FTSSnippet.textRowID` and `FTSMultiSnippetResult.textRowID` are
 `books_text.id` and are session-local (D22).
 
+## Query syntax & Matching Semantics
+
+The search box runs against SQLite FTS5 using Calibre's custom tokenization engine:
+
+- **Not Regex**: FTS5 is an inverted-index token search engine, not regular expression matching.
+- **Case Insensitive**: Queries undergo Unicode/ICU case folding at index and query time. Searching `Magic`, `magic`, or `MAGIC` matches the exact same passages.
+- **Diacritics**: Accents are stripped by default during tokenization; `resume` matches documents containing either `resume` or `résumé`.
+- **Implicit AND**: Multi-word input without operators (e.g. `dark stormy night`) searches for documents containing all words anywhere in the body text.
+- **Exact Phrases via Quotes (`"..."`)**: Wrapping words in double quotes (e.g. `"dark and stormy night"`) forces exact adjacent word matching in that specific sequence. Special characters inside quotes are treated as literal text.
+- **Boolean Operators**: Supports uppercase `AND`, `OR`, and `NOT` (e.g. `dragon OR wyvern NOT smaug`).
+- **Prefix Wildcards (`*`)**: A trailing asterisk matches token prefixes (e.g. `run*` matches `running`, `runner`, `runs`).
+- **Proximity Search (`NEAR`)**: Matches words within N tokens of each other (e.g. `NEAR(wand spell, 5)`).
+- **Syntax Error Sanitization**: If the user enters invalid FTS syntax (e.g. dangling quotes or invalid operators), Ambrosia automatically falls back to `sanitizedMatchExpression`, quoting each term and joining them with implicit AND.
+
 ## UI Surfaces & In-Reader Passage Jumping
 
 1. **Dedicated FTS Search Surface (`FTSSearchResultsWindowController`, `FTSSearchResultsView`)**:
    - Shortcut `⇧⌘F` opens the dedicated Calibre Full-Text Search panel.
-   - Supports Scoped search ("All Books" vs "Current Filter").
+   - Also accessible via **Edit ▸ Search Library Body Text…**, **Edit ▸ Find ▸ Search Library Body Text…**, and the dedicated toolbar button (`doc.text.magnifyingglass`).
+   - **Default Scope**: Defaults to **Current Filter**, scoping results to active drawer filters, sidebar facets, or search queries, with toggle to **All Books**.
    - Two-phase asynchronous execution: Phase 1 rapidly resolves matching book IDs, displays typographic cards immediately;
      Phase 2 asynchronously streams multi-snippets into each card with total occurrence counts.
 2. **Typographic Search Cards (`FTSTypographicCardView`)**:
-   - Pure typographic card layout (Option B) prioritizing reading room over cover columns.
-   - Header with `AO3Rating` badge (`[E]`, `[M]`, `[T]`, `[G]`, `[?]`), title, author byline, and series.
-   - High-signal AO3 badges: primary fandom (first 1–2), primary ship (italicized), word count, completion status, match count.
-   - Snippets list: up to 5 occurrences rendered with `AttributedString`, highlighting matched terms with `\u{1D}`, progress percentage `[12%]`, and individual `Jump ↗` buttons.
-   - Action footer: `Open Reader`, `Select in Library (⌘J)`, and `Copy Excerpts`.
+   - Pure typographic card layout prioritizing reading room.
+   - Single-line header: `Title (Series) by Author` with the total match count badge on the right.
+   - High-signal AO3 badges row: Rating pill (`Explicit`, `Mature`, `Teen And Up`, `General Audiences`, `Not Rated`) inline with primary fandom (first 1–2), primary ship (italicized), word count, and completion status.
+   - Enclosed snippet boxes: Each passage occurrence is enclosed in its own distinct bordered card box with clear boundaries, bold term highlights, and an individual `Jump ↗` button.
+   - Double-click to open: Double-clicking anywhere on a card opens the book in the Reader.
+   - Clean card footer (action buttons like Open Reader, Select in Library, and Copy Excerpts are hidden from UI to reduce clutter, but their handler methods are preserved in code for future use).
 3. **In-Reader Jump Handover (`ReaderViewController.jumpToSnippet`)**:
    - Opens reader directly at the selected passage.
    - Paginated mode: translates reading percentage into spine chapter index, scrolls, and highlights the term.

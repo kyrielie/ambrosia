@@ -30,6 +30,8 @@ struct FilterDrawerView: View {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
                 .buttonStyle(.borderless)
+                .keyboardShortcut(.cancelAction)
+                .help("Close (Esc)")
             }
             .padding([.horizontal, .top], 20)
             .padding(.bottom, 12)
@@ -119,6 +121,13 @@ struct FilterDrawerView: View {
                 }
                 .buttonStyle(.borderless)
 
+                Button("Cancel") {
+                    dismiss()
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+
                 Button("Apply") {
                     expression = draftExpression
                     onApply()
@@ -131,6 +140,7 @@ struct FilterDrawerView: View {
             .padding(20)
         }
         .frame(width: 540)
+        .onExitCommand { dismiss() }
     }
 }
 

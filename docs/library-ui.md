@@ -45,7 +45,34 @@ List-mode rows are self-sizing `List` rows, so unbounded content makes row heigh
 - The list is no longer a `List`: `itemList` is `ScrollViewReader { ScrollView { VStack { ForEach(items) { row; Divider() } } } }`. All rows of a page (at most 25) are built once and kept, avoiding NSTableView row recycling and re-measurement on scroll-up. Rows carry their own 16/10 point padding (formerly `listRowInsets`), and `BookListRow`/`SeriesListRow` extend their frame to full width so the double-click hit area is unchanged. When the first item id changes and the view identity (library, page, sort, direction, grouping, search text, filter, visibility signature; `scrollResetKey`) differs from the one last scrolled for, the list scrolls to the top. The same identity with new rows, which is what a silent revalidation produces, keeps the scroll position. Side effect: reloading the same page after a local change (for example skipping the first book) no longer scrolls to the top. The scroll view draws `controlBackgroundColor` behind the rows to match the surface `List` used to provide (uncolored tag pills fill with the same color). `LazyVStack` was not used because its row retention was not verified.
 - Known residual: `bookStates` is still assigned synchronously before the swap and drives the "% read" chip. If the list surface is torn down while a rebuild is in flight, `items` is not assigned; this was already true for grouped mode and now applies to ungrouped mode too.
 
-## Collections
+## Toolbar Controls
+
+`LibraryWindowController` configures the native `NSToolbar` (`LibraryToolbar6`), which includes:
+- Sidebar toggle (`librarySidebarToggle`)
+- Library title (`libraryTitle`)
+- Search bar item (`librarySearch` - titles, tags, scoped search)
+- Full-Text Search button (`libraryFTSSearch` - `doc.text.magnifyingglass` icon, opens `FTSSearchResultsWindowController`)
+- Filter drawer toggle (`libraryFilter`)
+- Sort menu (`librarySort`)
+- Collections sheet toggle (`libraryCollections`)
+- Reading goal sheet (`libraryReadingGoal`)
+- Export menu (`libraryExport`)
+- View mode switcher (`libraryViewMode` - List, Email, Ranking)
+
+## Row Context Menus
+
+Book and series rows support macOS right-click / secondary-click context menus across all library modes (`BookListRow`, `SeriesListRow`, and `EmailSidebarViewController`):
+- **Reveal in Finder**: Resolves the book's EPUB file URL via `CalibreLibrary.epubURL(for:)` and highlights it in macOS Finder (`AppDelegate.revealInFinder`).
+- Collection assignments (Read Later, Liked, Skipped, Finished, In Progress, custom collections).
+- Open in Reader / Open in External Reader.
+
+## Filter Drawer Dismissal
+
+The filter drawer sheet (`FilterDrawerView`) supports seamless cancellation and dismissal:
+- Close button in header with `.help("Close (Esc)")` and `.keyboardShortcut(.cancelAction)`.
+- Dedicated **Cancel** button in the footer alongside Apply and Clear All.
+- Container-level `.onExitCommand` to guarantee Esc dismisses the sheet reliably.
+- Explicit `toolbarState.showFilterDrawer = false` synchronization on apply/clear to prevent stuck drawer presentation.
 
 - System collections live in `ambrosia_meta.db`.
 - `Series or Merged` is system-maintained from `series_cache` and anthology detection.

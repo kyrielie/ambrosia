@@ -19,7 +19,6 @@ struct FTSTypographicCardView: View {
             headerSection
             metadataBadgesSection
             snippetsSection
-            footerSection
         }
         .padding(14)
         .background(
@@ -31,35 +30,32 @@ struct FTSTypographicCardView: View {
                 .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 1)
         )
         .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            onOpen()
+        }
     }
 
     // MARK: - Header Section
 
     private var headerSection: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            ratingBadge
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(book.displayTitle)
+                .font(.headline)
+                .fontWeight(.semibold)
+                .lineLimit(1)
+                .onTapGesture(perform: onOpen)
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(book.displayTitle)
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                        .lineLimit(2)
-                        .onTapGesture(perform: onOpen)
-
-                    if let series = book.displaySeries {
-                        Text("(\(series))")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-
-                Text("by \(book.displayAuthors)")
-                    .font(.subheadline)
+            if let series = book.displaySeries {
+                Text("(\(series))")
+                    .font(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(1)
             }
+
+            Text("by \(book.displayAuthors)")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
 
             Spacer(minLength: 8)
 
@@ -77,13 +73,14 @@ struct FTSTypographicCardView: View {
     private var ratingBadge: some View {
         let (ratingLabel, ratingColor) = resolvedRating
         return Text(ratingLabel)
-            .font(.system(size: 11, weight: .bold, design: .rounded))
-            .foregroundColor(.white)
-            .frame(width: 22, height: 22)
+            .font(.caption2.weight(.medium))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
             .background(
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(ratingColor)
+                    .fill(ratingColor.opacity(0.12))
             )
+            .foregroundColor(ratingColor)
     }
 
     private var resolvedRating: (String, Color) {
@@ -92,20 +89,20 @@ struct FTSTypographicCardView: View {
             ?? AO3Rating.highest(among: book.tags)
 
         guard let rating else {
-            return ("?", Color.secondary.opacity(0.7))
+            return ("Not Rated", Color.secondary.opacity(0.7))
         }
 
         switch rating {
         case .explicit:
-            return ("E", Color.red)
+            return ("Explicit", Color.red)
         case .mature:
-            return ("M", Color.orange)
+            return ("Mature", Color.orange)
         case .teenAndUp:
-            return ("T", Color.yellow)
+            return ("Teen And Up", Color.yellow)
         case .generalAudiences:
-            return ("G", Color.green)
+            return ("General Audiences", Color.green)
         case .notRated:
-            return ("?", Color.secondary.opacity(0.7))
+            return ("Not Rated", Color.secondary.opacity(0.7))
         }
     }
 
@@ -128,6 +125,9 @@ struct FTSTypographicCardView: View {
 
     private var metadataBadgesSection: some View {
         HStack(spacing: 6) {
+            // Rating pill inline with high-signal tags
+            ratingBadge
+
             // High-signal AO3 badges: Fandoms (first 1-2)
             let fandoms = ao3Metadata?.fandoms ?? []
             ForEach(fandoms.prefix(2), id: \.self) { fandom in
@@ -195,7 +195,7 @@ struct FTSTypographicCardView: View {
             }
             .padding(.vertical, 4)
         } else if let result, !result.snippets.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 ForEach(result.snippets) { snippet in
                     snippetRow(snippet)
                 }
@@ -210,19 +210,11 @@ struct FTSTypographicCardView: View {
     }
 
     private func snippetRow(_ snippet: FTSOccurrenceSnippet) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            // Position percentage badge
-            let percentInt = Int(snippet.approximatePercent.rounded())
-            Text("[\(percentInt)%]")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundColor(.secondary)
-                .frame(width: 44, alignment: .trailing)
-                .padding(.top, 2)
-
+        HStack(alignment: .top, spacing: 10) {
             // Snippet text with highlighted terms
             Text(Self.makeAttributedString(from: snippet.text))
                 .font(.system(size: 12))
-                .lineSpacing(2)
+                .lineSpacing(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
 
@@ -230,7 +222,7 @@ struct FTSTypographicCardView: View {
             Button {
                 onJumpToSnippet(snippet)
             } label: {
-                HStack(spacing: 2) {
+                HStack(spacing: 3) {
                     Text("Jump")
                     Image(systemName: "arrow.up.forward.app")
                 }
@@ -238,45 +230,18 @@ struct FTSTypographicCardView: View {
             }
             .buttonStyle(.borderless)
             .foregroundColor(.accentColor)
-            .padding(.top, 2)
+            .padding(.top, 1)
         }
-        .padding(.vertical, 3)
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 4)
-                .fill(Color(nsColor: .textBackgroundColor).opacity(0.4))
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color(nsColor: .textBackgroundColor).opacity(0.6))
         )
-    }
-
-    // MARK: - Footer Section
-
-    private var footerSection: some View {
-        HStack(spacing: 12) {
-            Button(action: onOpen) {
-                Label("Open Reader", systemImage: "book")
-                    .font(.caption)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-
-            Button(action: onSelectInLibrary) {
-                Label("Select in Library", systemImage: "list.bullet")
-                    .font(.caption)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-
-            Spacer()
-
-            Button(action: copyExcerpts) {
-                Label("Copy Excerpts", systemImage: "doc.on.doc")
-                    .font(.caption)
-            }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
-            .foregroundColor(.secondary)
-        }
-        .padding(.top, 2)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 1)
+        )
     }
 
     // MARK: - Helpers
