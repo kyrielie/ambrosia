@@ -28,54 +28,31 @@ Check out https://github.com/kyrielie/nectar, its iOS companion reader, and http
   <em>Main library list view with AO3 tags, stats, and series clustering</em>
 </p>
 
-### Reading & Search
+<p align="center">
+  <img src="screenshots/reader.png" alt="Standalone reader view" height="260">
+  &nbsp;&nbsp;
+  <img src="screenshots/emailview.png" alt="Email split view" height="260">
+  &nbsp;&nbsp;
+  <img src="screenshots/fts.png" alt="Full-text search view" height="260">
+  <br>
+  <em>Reader view with curated themes &middot; Split email mode with live reading pane &middot; Full-text body search</em>
+</p>
 
-<table>
-<tr valign="top">
-  <td width="33%" align="center">
-    <img src="screenshots/reader.png" alt="Standalone reader view" height="230"><br>
-    <sub><strong>Reader View</strong><br>Curated themes & paginated columns</sub>
-  </td>
-  <td width="33%" align="center">
-    <img src="screenshots/emailview.png" alt="Email split view" height="230"><br>
-    <sub><strong>Email Mode</strong><br>Two-pane library with live reading pane</sub>
-  </td>
-  <td width="33%" align="center">
-    <img src="screenshots/fts.png" alt="Full-text search view" height="230"><br>
-    <sub><strong>Full-Text Search</strong><br>Inverted-index body search with snippets</sub>
-  </td>
-</tr>
-</table>
+<p align="center">
+  <img src="screenshots/rowview2.png" alt="Filtered list view" height="260">
+  &nbsp;&nbsp;
+  <img src="screenshots/activity.png" alt="Reading goals and activity" height="260">
+  <br>
+  <em>Faceted filter drawer &middot; Reading goals & activity feed</em>
+</p>
 
-### Filtering & Reading Activity
-
-<table>
-<tr valign="top">
-  <td width="50%" align="center">
-    <img src="screenshots/rowview2.png" alt="Filtered list view"><br>
-    <sub><strong>Faceted Filter Drawer</strong><br>Filter by fandom, pairing, rating, status, or tag</sub>
-  </td>
-  <td width="50%" align="center">
-    <img src="screenshots/activity.png" alt="Reading goals and activity"><br>
-    <sub><strong>Reading Goals & Activity Feed</strong><br>Track reading targets, history, and milestones</sub>
-  </td>
-</tr>
-</table>
-
-### Preferences & Customization
-
-<table>
-<tr valign="top">
-  <td width="50%" align="center">
-    <img src="screenshots/settings.png" alt="Library settings" width="360"><br>
-    <sub><strong>Library Preferences</strong><br>Appearance modes, sort orders, and Calibre configuration</sub>
-  </td>
-  <td width="50%" align="center">
-    <img src="screenshots/settings2.png" alt="Reader settings" width="360"><br>
-    <sub><strong>Reader & Shortcuts</strong><br>Typography, keybindings, and reading themes</sub>
-  </td>
-</tr>
-</table>
+<p align="center">
+  <img src="screenshots/settings.png" alt="Library settings" height="260">
+  &nbsp;&nbsp;
+  <img src="screenshots/settings2.png" alt="Reader settings" height="260">
+  <br>
+  <em>Library preferences &middot; Reader typography & shortcuts</em>
+</p>
 
 ## Installation
 
