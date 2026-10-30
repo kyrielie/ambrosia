@@ -97,7 +97,7 @@ and move it to Applications.
 ### First launch
 
 Releases are ad-hoc signed and not notarized, so macOS Gatekeeper will block the first launch.
-Either open **System Settings > Privacy & Security** and choose **Open Anyway**, or remove the
+Either approve it in [System Settings > Privacy & Security](https://support.apple.com/en-us/102445) (choose **Open Anyway**), or remove the
 quarantine attribute:
 
 ```bash
