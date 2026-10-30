@@ -588,9 +588,11 @@ struct LibraryRootView: View {
                         set: { toolbarState.filterExpression = $0 }
                     ),
                     onApply: {
+                        toolbarState.showFilterDrawer = false
                         displayController.applyFilterRules()
                     },
                     onClear: {
+                        toolbarState.showFilterDrawer = false
                         toolbarState.filterExpression = FilterExpression()
                         toolbarState.activeFilterResult = nil
                         toolbarState.cancelLibraryFilterApplication()
@@ -605,6 +607,7 @@ struct LibraryRootView: View {
             )) {
                 CollectionsView(onSelectCollection: { collection in
                     displayController.addOrReplaceRule(FilterRule(field: .collection, op: .equals, value: collection.name))
+                    toolbarState.showCollections = false
                 })
                 .preferredColorScheme(prefs.resolvedLibraryColorScheme)
             }

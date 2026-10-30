@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 
 extension NSToolbarItem.Identifier {
     static let librarySearch        = NSToolbarItem.Identifier("ambrosia.library.search")
+    static let libraryFTSSearch     = NSToolbarItem.Identifier("ambrosia.library.ftsSearch")
     static let libraryFilter        = NSToolbarItem.Identifier("ambrosia.library.filter")
     static let librarySort          = NSToolbarItem.Identifier("ambrosia.library.sort")
     static let libraryCollections   = NSToolbarItem.Identifier("ambrosia.library.collections")
@@ -135,7 +136,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     // MARK: - Toolbar setup
 
     private func configureToolbar(window: NSWindow) {
-        let toolbar = NSToolbar(identifier: "LibraryToolbar5")
+        let toolbar = NSToolbar(identifier: "LibraryToolbar6")
         toolbar.delegate = self
         toolbar.allowsUserCustomization = true
         toolbar.autosavesConfiguration  = true
@@ -148,14 +149,14 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.librarySidebarToggle, .libraryTitle, .librarySearch, .libraryFilter, .librarySort,
+        [.librarySidebarToggle, .libraryTitle, .librarySearch, .libraryFTSSearch, .libraryFilter, .librarySort,
          .flexibleSpace,
          .libraryCollections, .libraryReadingGoal, .libraryExport, .libraryViewMode
         ]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.librarySidebarToggle, .librarySearch, .libraryFilter, .librarySort,
+        [.librarySidebarToggle, .librarySearch, .libraryFTSSearch, .libraryFilter, .librarySort,
          .libraryCollections, .libraryReadingGoal, .libraryExport,
          .libraryViewMode, .libraryTitle,
          .space, .flexibleSpace]
@@ -178,6 +179,11 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             searchToolbarItem = item
             DispatchQueue.main.async { [weak self] in self?.repositionSuggestionPanelIfNeeded() }
             return item
+
+        case .libraryFTSSearch:
+            return makeIconItem(identifier, label: "Search Body Text",
+                                image: "doc.text.magnifyingglass",
+                                action: #selector(openFTSSearch))
 
         case .librarySidebarToggle:
             return makeIconItem(identifier, label: "Sidebar",
@@ -828,6 +834,10 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     }
 
     // MARK: - Other toolbar actions
+
+    @objc private func openFTSSearch() {
+        FTSSearchResultsWindowController.show()
+    }
 
     @objc private func toggleFilter() {
         toolbarState?.showFilterDrawer = true

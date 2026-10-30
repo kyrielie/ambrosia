@@ -37,6 +37,12 @@ struct AmbrosiaApp: App {
 
             CommandGroup(after: .pasteboard) {
                 Divider()
+
+                Button("Search Library Body Text…") {
+                    FTSSearchResultsWindowController.show()
+                }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+
                 Menu("Find") {
                     Button("Find…") {
                         NSApp.sendAction(#selector(ReaderViewController.performFindAction(_:)),
