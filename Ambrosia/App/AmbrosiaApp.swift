@@ -167,7 +167,7 @@ struct AmbrosiaApp: App {
                 Button("Clear All Filters") {
                     AppDelegate.shared?.libraryWindowController?.clearAllFilters()
                 }
-                .disabled(AppDelegate.shared?.libraryWindowController?.toolbarState?.hasActiveFilter != true)
+                .disabled(AppDelegate.shared?.libraryWindowController?.toolbarStateForCommands?.hasActiveFilter != true)
 
                 Divider()
 
