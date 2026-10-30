@@ -842,6 +842,15 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     @objc private func toggleFilter() {
         toolbarState?.showFilterDrawer = true
     }
+
+    @objc func clearAllFilters() {
+        toolbarState?.filterExpression = FilterExpression()
+        toolbarState?.activeFilterResult = nil
+        toolbarState?.cancelLibraryFilterApplication()
+        if let lvc = contentViewController as? LibraryViewController {
+            lvc.displayController.scheduleLoadPage()
+        }
+    }
     /// In email mode this collapses/expands the split-view sidebar via
     /// `toggleEmailSidebar`, observed by `EmailLibraryViewController`. In
     /// list/ranking mode there is no such observer — previously a silent
