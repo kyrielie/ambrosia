@@ -53,3 +53,15 @@ See `overview.md`'s Invariant 12 for the repo-wide force-unwrap ban. (`ReadingTa
 ### Library fingerprint and chunked series scan
 
 `CalibreLibrary.libraryFingerprint()` runs `SELECT COUNT(*), MAX(id), MAX(last_modified) FROM books` and reads `metadata.db`'s mtime and size. Whether Calibre bumps `last_modified` on every kind of edit is an assumption, not verified. `calibreSeriesEntries(bookIDsAfter:through:)` is the windowed form of `allCalibreSeriesEntries()`, ordered by book id, series name, then series index.
+
+---
+
+## Standalone EPUB folder support & in-place indexing
+
+When opening a directory that does not contain a pre-existing Calibre library (`metadata.db`), Ambrosia scans the folder for loose `.epub` files via `EPUBFolderScanner`. If EPUB files are found:
+1. The user is prompted with an alert to initialize the folder as an Ambrosia-compatible Calibre library.
+2. `CalibreLibraryCreator` initializes a standard Calibre `user_version = 26` `metadata.db` with triggers, views, and custom functions (`title_sort`, `uuid4`).
+3. `CalibreLibraryWriter` ingests EPUB metadata (`EPUBParser`), extracts AO3 metadata/tags (`AO3MetadataExtractor`), writes extracted covers to `.covers/<book_id>.jpg`, and tracks relative file paths directly in `books.path` (in-place zero mutation).
+4. `CalibreFTSWriter` indexes book chapter text into `full-text-search.db` (`user_version = 1`) with the `calibre` tokenizer.
+5. Path resolution (`CalibreBook.epubURL` and `CalibreLibrary.epubURL`) checks if `books.path` is an existing `.epub` file directly before falling back to Calibre's standard `<Author>/<Title>` directory scanning.
+6. Rescanning for new books is available via **File ▸ Scan Library for New Books…** (`⌘⇧R`).

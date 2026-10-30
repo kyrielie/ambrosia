@@ -1461,17 +1461,37 @@ actor CalibreLibrary {
 
 extension CalibreLibrary {
     /// Returns the absolute URL of the EPUB file for the given Calibre book ID,
-    /// or nil if the book is not found or has no .epub file in its folder.
-    /// Uses a lightweight single-column query — does not fetch authors/tags/comments.
-    /// Mirrors the FileManager scan in CalibreBook.epubURL(libraryRoot:).
+    /// or nil if the book is not found or has no .epub file.
+    /// Handles both direct relative file paths and standard Calibre directories via data table / folder scans.
     func epubURL(calibreID: Int) -> URL? {
-        let sql = "SELECT path FROM books WHERE id = ? LIMIT 1"
+        let sql = """
+            SELECT b.path, d.name, d.format
+            FROM books b
+            LEFT JOIN data d ON d.book = b.id AND d.format = 'EPUB'
+            WHERE b.id = ?
+            LIMIT 1
+        """
         guard let rows = try? db.prepare(sql, [calibreID as Binding?]).map({ $0 }),
               let row = rows.first,
               let relativePath = row[0] as? String else { return nil }
-        let folder = root.appendingPathComponent(relativePath)
+
+        let itemURL = root.appendingPathComponent(relativePath)
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: itemURL.path, isDirectory: &isDir) {
+            if !isDir.boolValue && itemURL.pathExtension.lowercased() == "epub" {
+                return itemURL
+            }
+        }
+
+        if let name = row[1] as? String, let format = row[2] as? String {
+            let candidate = itemURL.appendingPathComponent("\(name).\(format.lowercased())")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+
         let contents = (try? FileManager.default.contentsOfDirectory(
-                            at: folder, includingPropertiesForKeys: nil)) ?? []
+                            at: itemURL, includingPropertiesForKeys: nil)) ?? []
         return contents.first { $0.pathExtension.lowercased() == "epub" }
     }
 }

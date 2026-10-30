@@ -73,10 +73,16 @@ struct AmbrosiaApp: App {
             }
 
             CommandGroup(replacing: .newItem) {
-                Button("Open Calibre Library…") {
+                Button("Open Library…") {
                     AppDelegate.shared?.chooseLibraryFolder()
                 }
                 .keyboardShortcut("o", modifiers: [.command])
+
+                Button("Scan Library for New Books…") {
+                    AppDelegate.shared?.scanLibraryForNewBooks()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(session.activePath == nil)
 
                 Menu("Recent Libraries") {
                     RecentLibrariesMenuContent(session: session)
