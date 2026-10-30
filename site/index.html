@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Ambrosia: A native macOS Calibre library reader for AO3 fics</title>
+	<meta name="description" content="Ambrosia is a native macOS EPUB library reader for AO3-heavy Calibre libraries with list, email, and ranking modes, full-text search, and reader themes.">
+	<link rel="canonical" href="https://kyrielie.github.io/ambrosia/">
+	<meta name="theme-color" content="#fffdf8" media="(prefers-color-scheme: light)">
+	<meta name="theme-color" content="#211f1c" media="(prefers-color-scheme: dark)">
+	<meta property="og:type" content="website">
+	<meta property="og:url" content="https://kyrielie.github.io/ambrosia/">
+	<meta property="og:title" content="Ambrosia">
+	<meta property="og:description" content="A native macOS Calibre library reader for AO3 fanfiction.">
+	<meta property="og:image" content="https://kyrielie.github.io/ambrosia/img/icon.png">
+	<meta property="og:image:alt" content="Ambrosia app icon">
+	<meta name="twitter:card" content="summary">
+	<link rel="icon" href="favicon.png" type="image/png">
+	<link rel="apple-touch-icon" href="apple-touch-icon.png">
+	<link rel="stylesheet" href="css/site.css">
+	<script src="js/site.js" defer></script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header>
+	<nav>
+		<ul>
+			<li><a href="#install">Install</a></li>
+			<li><a href="#features">Features</a></li>
+			<li><a href="https://github.com/kyrielie/ambrosia">GitHub</a></li>
+		</ul>
+	</nav>
+</header>
+
+<main id="main">
+	<section id="top">
+		<img src="img/icon.png" width="256" height="256" alt="Ambrosia app icon">
+		<h1>Ambrosia</h1>
+		<p>A native Calibre library reader for AO3 fanfiction</p>
+		<p class="actions">
+			<a class="button" href="https://github.com/kyrielie/ambrosia/releases/latest">Download</a>
+			<a class="button secondary" href="#install">Install with Homebrew</a>
+		</p>
+		<p class="note">Free and open source. Requires macOS 14 or later. Releases are not notarized, so see <a href="#first-launch">first launch</a>.</p>
+	</section>
+
+	<section id="screenshots">
+		<div class="strip" tabindex="0" role="region" aria-label="Screenshots">
+			<figure><img src="img/screenshots/rowview.png" alt="Ambrosia main library list view"><figcaption>Library list view with AO3 tags, stats, and series clustering</figcaption></figure>
+			<figure><img src="img/screenshots/emailview.png" alt="Ambrosia email split view with reading pane" loading="lazy"><figcaption>Split-view email mode with live embedded reader</figcaption></figure>
+			<figure><img src="img/screenshots/rowview2.png" alt="Ambrosia filtered list view" loading="lazy"><figcaption>Fast faceted drawer filter and tag search</figcaption></figure>
+			<figure><img src="img/screenshots/activity.png" alt="Ambrosia reading goals and activity feed" loading="lazy"><figcaption>Reading goals and recent activity feed</figcaption></figure>
+			<figure><img src="img/screenshots/settings.png" alt="Ambrosia library settings" loading="lazy"><figcaption>Customizable library appearance and options</figcaption></figure>
+			<figure><img src="img/screenshots/settings2.png" alt="Ambrosia reader settings" loading="lazy"><figcaption>Reader typography, themes, and keybindings</figcaption></figure>
+		</div>
+		<div class="dots" hidden>
+			<button type="button" aria-label="Show screenshot 1"></button>
+			<button type="button" aria-label="Show screenshot 2"></button>
+			<button type="button" aria-label="Show screenshot 3"></button>
+			<button type="button" aria-label="Show screenshot 4"></button>
+			<button type="button" aria-label="Show screenshot 5"></button>
+			<button type="button" aria-label="Show screenshot 6"></button>
+		</div>
+	</section>
+
+	<p id="lead">swift native calibre reader tailored for ao3 fanfiction</p>
+
+	<section id="highlights">
+		<section>
+			<h3>Runs on macOS 14 and later</h3>
+			<p>Native Swift and AppKit/SwiftUI interface with high performance and zero web bloat.</p>
+		</section>
+		<section>
+			<h3>Read-only Calibre integration</h3>
+			<p>Safely reads your <code>metadata.db</code> without altering Calibre's database or files.</p>
+		</section>
+		<section>
+			<h3>Tailored for AO3 metadata</h3>
+			<p>Extracts preface metadata, fandoms, pairings, characters, and word counts into a fast local index.</p>
+		</section>
+	</section>
+
+	<section id="install">
+		<h2>Install</h2>
+
+		<h3>Homebrew</h3>
+		<pre><code>brew tap kyrielie/yggdrasil && brew install --cask ambrosia</code></pre>
+
+		<h3>Manual download</h3>
+		<p>Get the latest build from <a href="https://github.com/kyrielie/ambrosia/releases/latest">Releases</a> and move it to Applications.</p>
+
+		<h3 id="first-launch">First launch</h3>
+		<p>Releases are ad-hoc signed and not notarized, so Gatekeeper blocks the first launch. Open <strong>System Settings &gt; Privacy &amp; Security</strong> and choose <strong>Open Anyway</strong>, or run:</p>
+		<pre><code>xattr -dr com.apple.quarantine /Applications/Ambrosia.app</code></pre>
+	</section>
+
+	<section id="features">
+		<h2>Features</h2>
+		<div>
+			<section>
+				<h3>Three library modes</h3>
+				<p>Browse your library in full AO3 list card mode, two-pane email mode with a live reader, or the activity and reading feed.</p>
+			</section>
+			<section>
+				<h3>Full-text body search</h3>
+				<p>Inverted-index search across EPUB text with score ranking, token highlighting, and instant snippet navigation.</p>
+			</section>
+			<section>
+				<h3>Custom EPUB reader</h3>
+				<p>Read in paginated columns or continuous scrolling, with font scaling and table-of-contents navigation.</p>
+			</section>
+			<section>
+				<h3>Tailored reader themes</h3>
+				<p>Switch between Parchment, Sepia, Paper, Night, Slate, and Dark/Light appearance modes.</p>
+			</section>
+			<section>
+				<h3>Series grouping</h3>
+				<p>Automatically group multi-work series into sequence with seamless multi-chapter and multi-book navigation.</p>
+			</section>
+			<section>
+				<h3>Faceted filter drawer</h3>
+				<p>Filter by fandom, pairing, rating, status, language, or custom rules with real-time result counts.</p>
+			</section>
+			<section>
+				<h3>Tag synonyms and expansion</h3>
+				<p>Optionally seed canonical AO3 tags to enable intelligent tag autocomplete and synonym searches.</p>
+			</section>
+			<section>
+				<h3>Collections and shelves</h3>
+				<p>Keep track of Read Later, Liked, Skipped, and Finished fics, or create your own custom collections.</p>
+			</section>
+			<section>
+				<h3>Highlights and notes</h3>
+				<p>Annotate passages and export notes, saved safely in your per-library metadata database.</p>
+			</section>
+			<section>
+				<h3>Reading goals and activity</h3>
+				<p>Set daily or monthly reading targets, visualize reading streaks, and inspect reading milestones.</p>
+			</section>
+			<section>
+				<h3>Local RSS and OPML server</h3>
+				<p>Embedded local read-only feed server to publish reading lists or export metadata in OPML and CSV formats.</p>
+			</section>
+			<section>
+				<h3>Keyboard shortcuts</h3>
+				<p>Navigate chapters, toggle views, search, and jump to works entirely via keyboard shortcuts.</p>
+			</section>
+		</div>
+	</section>
+</main>
+
+<footer>
+	<p><a href="https://github.com/kyrielie/ambrosia/issues">Issues</a> &middot; <a href="https://github.com/kyrielie/ambrosia">Source on GitHub</a></p>
+	<p class="copyright"><a href="https://github.com/kyrielie/ambrosia/blob/main/LICENSE">MIT License</a></p>
+</footer>
+
+</body>
+</html>

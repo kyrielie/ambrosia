@@ -4,17 +4,16 @@ Ambrosia is a native macOS EPUB library reader for AO3-heavy Calibre libraries. 
 
 ## Screenshots
 
-<details>
-  <summary>📸 Click to expand screenshot gallery (7 Images)</summary>
+<details open>
+  <summary>📸 Click to collapse/expand screenshot gallery (6 Images)</summary>
   <br>
   <p align="center">
-    <img src="./screenshots/screenshot1.jpg" width="48%" alt="Screenshot 1">
-    <img src="./screenshots/screenshot2.jpg" width="48%" alt="Screenshot 2">
-    <img src="./screenshots/screenshot3.jpg" width="48%" alt="Screenshot 3">
-    <img src="./screenshots/screenshot4.jpg" width="48%" alt="Screenshot 4">
-    <img src="./screenshots/screenshot5.jpg" width="48%" alt="Screenshot 5">
-    <img src="./screenshots/screenshot6.jpg" width="48%" alt="Screenshot 6">
-    <img src="./screenshots/screenshot7.jpg" width="48%" alt="Screenshot 7">
+    <img src="./screenshots/rowview.png" width="48%" alt="Library List View">
+    <img src="./screenshots/emailview.png" width="48%" alt="Email Split View">
+    <img src="./screenshots/rowview2.png" width="48%" alt="Filtered List View">
+    <img src="./screenshots/activity.png" width="48%" alt="Activity and Reading Goals">
+    <img src="./screenshots/settings.png" width="48%" alt="Library Settings">
+    <img src="./screenshots/settings2.png" width="48%" alt="Reader Settings">
   </p>
 </details>
 
