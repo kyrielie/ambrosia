@@ -75,19 +75,42 @@ struct CalibreBook: Identifiable, Hashable {
     }
 
     /// Absolute EPUB URL — requires the library root URL from LibrarySession.
+    /// Supports both standard Calibre directory paths and direct in-place relative file paths.
     func epubURL(libraryRoot: URL) -> URL? {
-        let folder = libraryRoot.appendingPathComponent(relativePath)
-        let contents = (try? FileManager.default.contentsOfDirectory(
-                            at: folder, includingPropertiesForKeys: nil)) ?? []
-        return contents.first { $0.pathExtension.lowercased() == "epub" }
+        let itemURL = libraryRoot.appendingPathComponent(relativePath)
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: itemURL.path, isDirectory: &isDir) {
+            if !isDir.boolValue && itemURL.pathExtension.lowercased() == "epub" {
+                return itemURL
+            }
+            if isDir.boolValue {
+                let contents = (try? FileManager.default.contentsOfDirectory(
+                                    at: itemURL, includingPropertiesForKeys: nil)) ?? []
+                return contents.first { $0.pathExtension.lowercased() == "epub" }
+            }
+        }
+        return nil
     }
 
-    /// Absolute cover URL if Calibre has generated a cover.jpg beside the book files.
+    /// Absolute cover URL if Calibre or Ambrosia has a cover image beside the book files or in .covers/.
     func coverURL(libraryRoot: URL) -> URL? {
-        let url = libraryRoot
-            .appendingPathComponent(relativePath)
-            .appendingPathComponent("cover.jpg")
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        let hiddenCover = libraryRoot
+            .appendingPathComponent(".covers")
+            .appendingPathComponent("\(id).jpg")
+        if FileManager.default.fileExists(atPath: hiddenCover.path) {
+            return hiddenCover
+        }
+        let pathURL = libraryRoot.appendingPathComponent(relativePath)
+        let dirURL = pathURL.pathExtension.lowercased() == "epub" ? pathURL.deletingLastPathComponent() : pathURL
+        let directCover = dirURL.appendingPathComponent("cover.jpg")
+        if FileManager.default.fileExists(atPath: directCover.path) {
+            return directCover
+        }
+        let namedCover = pathURL.deletingPathExtension().appendingPathExtension("jpg")
+        if FileManager.default.fileExists(atPath: namedCover.path) {
+            return namedCover
+        }
+        return nil
     }
 
     // MARK: - Hashable

@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import SQLite
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -7,6 +8,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     var libraryWindowController: LibraryWindowController?
     var session: LibrarySession!
+    var importProgressController: ImportProgressWindowController?
 
     private var keyBindingsSubscription: AnyCancellable?
 
@@ -369,21 +371,94 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.prompt = "Open Library"
-        panel.message = "Choose a Calibre library folder (must contain metadata.db)."
+        panel.message = "Choose a Calibre library folder or a folder of EPUB files."
 
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
-            // Validate before opening
             let dbPath = url.appendingPathComponent("metadata.db").path
-            guard FileManager.default.isReadableFile(atPath: dbPath) else {
+            if FileManager.default.isReadableFile(atPath: dbPath) {
+                Task { await self.session.open(url: url) }
+                return
+            }
+
+            // Check for loose EPUB files in selected folder
+            let epubs = EPUBFolderScanner.scan(rootURL: url)
+            guard !epubs.isEmpty else {
                 let alert = NSAlert()
                 alert.messageText = "Not a Calibre Library"
-                alert.informativeText = "No readable metadata.db found in \(url.lastPathComponent)."
+                alert.informativeText = "No readable metadata.db or EPUB files found in \(url.lastPathComponent)."
                 alert.alertStyle = .warning
                 alert.runModal()
                 return
             }
-            Task { await self.session.open(url: url) }
+
+            let count = epubs.count
+            let sfx = count == 1 ? "" : "s"
+            let alert = NSAlert()
+            alert.messageText = "Set Up Ambrosia Library"
+            alert.informativeText = "Ambrosia found \(count) EPUB file\(sfx) in \"\(url.lastPathComponent)\". "
+                + "Would you like to set up a library here?"
+            alert.addButton(withTitle: "Set Up Library")
+            alert.addButton(withTitle: "Cancel")
+            alert.alertStyle = .informational
+
+            if alert.runModal() == .alertFirstButtonReturn {
+                let progressController = ImportProgressWindowController()
+                self.importProgressController = progressController
+                progressController.startIngestion(folderURL: url, epubs: epubs, createDB: true) { [weak self] success in
+                    self?.importProgressController = nil
+                    if success {
+                        Task { await self?.session.open(url: url) }
+                    }
+                }
+            }
+        }
+    }
+
+    func scanLibraryForNewBooks() {
+        guard let rootURL = session.activePath.map(URL.init(fileURLWithPath:)) else { return }
+        let epubs = EPUBFolderScanner.scan(rootURL: rootURL)
+
+        let dbPath = rootURL.appendingPathComponent("metadata.db").path
+        guard let conn = try? Connection(dbPath, readonly: true) else { return }
+        var existingPaths = Set<String>()
+        if let rows = try? conn.prepare("SELECT path FROM books") {
+            for row in rows {
+                if let path = row[0] as? String {
+                    existingPaths.insert(path)
+                }
+            }
+        }
+
+        let newEPUBs = epubs.filter { !existingPaths.contains($0.relativePath) }
+        guard !newEPUBs.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "Library Up to Date"
+            alert.informativeText = "No new EPUB files were found in \"\(rootURL.lastPathComponent)\"."
+            alert.alertStyle = .informational
+            alert.runModal()
+            return
+        }
+
+        let newCount = newEPUBs.count
+        let sfx = newCount == 1 ? "" : "s"
+        let alert = NSAlert()
+        alert.messageText = "New Books Found"
+        alert.informativeText = "Ambrosia found \(newCount) new EPUB file\(sfx) in \"\(rootURL.lastPathComponent)\". "
+            + "Would you like to add them to this library?"
+        alert.addButton(withTitle: "Import Books")
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .informational
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            let progressController = ImportProgressWindowController()
+            self.importProgressController = progressController
+            progressController.startIngestion(folderURL: rootURL, epubs: newEPUBs, createDB: false) { [weak self] success in
+                self?.importProgressController = nil
+                if success {
+                    Task { await self?.session.open(url: rootURL) }
+                }
+            }
         }
     }
 }

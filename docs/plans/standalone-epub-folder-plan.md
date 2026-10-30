@@ -109,49 +109,49 @@ flowchart TD
 ## 5. Detailed Task Breakdown
 
 ### Phase 1: Database Generation & SQLite Primitives
-- [ ] Create `Ambrosia/Database/Standalone/CalibreFunctions.swift` implementing `title_sort`, `author_sort`, `uuid4`, and `filenameSafe`.
-- [ ] Create `Ambrosia/Database/Standalone/CalibreSchema.swift` with Calibre `user_version = 26` DDL.
-- [ ] Create `Ambrosia/Database/Standalone/CalibreLibraryCreator.swift`:
+- [x] Create `Ambrosia/Database/Standalone/CalibreFunctions.swift` implementing `title_sort`, `author_sort`, `uuid4`, and `filenameSafe`.
+- [x] Create `Ambrosia/Database/Standalone/CalibreSchema.swift` with Calibre `user_version = 26` DDL.
+- [x] Create `Ambrosia/Database/Standalone/CalibreLibraryCreator.swift`:
   - Opens/creates `metadata.db`.
   - Registers `title_sort` and `uuid4`.
   - Executes DDL via `sqlite3_exec`.
   - Seeds `library_id` and initial preferences.
 
 ### Phase 2: Path Resolution & In-Place File Support
-- [ ] Extend `CalibreBook.epubURL(libraryRoot:)`:
+- [x] Extend `CalibreBook.epubURL(libraryRoot:)`:
   - Check if `relativePath` points directly to an `.epub` file.
   - Fallback to scanning folder if `relativePath` is a directory.
-- [ ] Extend `CalibreLibrary.epubURL(calibreID:)`:
+- [x] Extend `CalibreLibrary.epubURL(calibreID:)`:
   - Handle direct relative file paths and query `data` table (`format = 'EPUB'`).
 
 ### Phase 3: Loose EPUB Scanner & Importer
-- [ ] Create `Ambrosia/Database/Standalone/EPUBFolderScanner.swift`:
+- [x] Create `Ambrosia/Database/Standalone/EPUBFolderScanner.swift`:
   - Discovers all `.epub` files recursively under the given root URL.
   - Skips hidden files (`.`, `.ambrosia`, trash).
-- [ ] Create `Ambrosia/Database/Standalone/CalibreLibraryWriter.swift`:
+- [x] Create `Ambrosia/Database/Standalone/CalibreLibraryWriter.swift`:
   - Extracts metadata using `EPUBParser`.
   - Extracts AO3 metadata and tags.
   - Inserts authors, series, tags, publishers, and books into `metadata.db`.
   - Extracts and saves cover image if present.
-- [ ] Create `Ambrosia/Database/Standalone/CalibreFTSWriter.swift`:
+- [x] Create `Ambrosia/Database/Standalone/CalibreFTSWriter.swift`:
   - Initializes `full-text-search.db` (`user_version = 1`).
   - Registers `calibre` tokenizer.
   - Extracts text from spine HTML items and inserts into `books_text` (triggers auto-populate `books_fts`).
 
 ### Phase 4: UI Integration & Rescan Workflow
-- [ ] Update `AppDelegate.chooseLibraryFolder()`:
+- [x] Update `AppDelegate.chooseLibraryFolder()`:
   - If selected folder lacks `metadata.db` but contains `.epub` files:
     - Display alert: *"Set Up Ambrosia Library: Ambrosia found [N] EPUB files in this folder. Would you like to set up a library here?"*
     - Options: "Set Up Library" or "Cancel".
-- [ ] Create `ImportProgressWindowController`:
+- [x] Create `ImportProgressWindowController`:
   - Progress bar showing "Scanning EPUBs...", "Extracting metadata...", "Building full-text search...".
-- [ ] Add Menu Action **File ▸ Scan Library for New Books…** (`⌘R` or custom shortcut):
+- [x] Add Menu Action **File ▸ Scan Library for New Books…** (`⌘R` or custom shortcut):
   - Diffs files on disk against `metadata.db` `data`/`books` records.
   - Ingests newly added EPUBs and appends to FTS index.
   - Notifies `LibrarySession` to refresh.
 
 ### Phase 5: Verification & Tests
-- [ ] Unit tests for `CalibreFunctions` (`title_sort`, `uuid4`, `authorSort`, `filenameSafe`).
-- [ ] Integration test: Generate `metadata.db` from a folder with sample EPUBs, open via `CalibreLibrary`, verify book counts, authors, tags, and spine text.
-- [ ] Integration test: Verify generated `full-text-search.db` responds to `CalibreFTSLibrary.searchBooks` and multi-snippets.
-- [ ] Run full test suite: `rtk ./test.sh`.
+- [x] Unit tests for `CalibreFunctions` (`title_sort`, `uuid4`, `authorSort`, `filenameSafe`).
+- [x] Integration test: Generate `metadata.db` from a folder with sample EPUBs, open via `CalibreLibrary`, verify book counts, authors, tags, and spine text.
+- [x] Integration test: Verify generated `full-text-search.db` responds to `CalibreFTSLibrary.searchBooks` and multi-snippets.
+- [x] Run full test suite: `rtk ./test.sh`.
