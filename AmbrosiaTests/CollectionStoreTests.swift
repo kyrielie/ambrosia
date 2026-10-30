@@ -76,4 +76,13 @@ final class CollectionStoreTests: XCTestCase {
         XCTAssertEqual(membershipState(for: [1], selected: [1, 2, 3]), .partial)
         XCTAssertEqual(membershipState(for: [1, 2, 3], selected: [1, 2, 3]), .all)
     }
+
+    func testBootstrapSystemCollectionsIncludesFailedExtraction() async throws {
+        let cols = try await store.collections()
+        let failedExtraction = cols.first { $0.id == SystemCollectionID.failedExtraction }
+        XCTAssertNotNil(failedExtraction)
+        XCTAssertEqual(failedExtraction?.name, SystemCollectionID.failedExtractionName)
+        XCTAssertEqual(failedExtraction?.isSystem, true)
+        XCTAssertEqual(failedExtraction?.kind, "automated")
+    }
 }

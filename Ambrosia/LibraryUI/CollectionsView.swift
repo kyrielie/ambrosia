@@ -108,6 +108,9 @@ struct CollectionsView: View {
             if collection.id == SystemCollectionID.skipped {
                 return prefs.showSkippedCollection
             }
+            if collection.id == SystemCollectionID.failedExtraction {
+                return (membership[collection.id]?.count ?? 0) > 0 && selectedCalibreIDs.isEmpty
+            }
             return !collection.isSystem || selectedCalibreIDs.isEmpty
         }
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -275,7 +278,12 @@ struct CollectionsView: View {
 
     private func reload() async {
         collections = (try? await session.collectionStore?.collections()) ?? []
-        membership = (try? await session.collectionStore?.membershipByCollectionID()) ?? [:]
+        var mem = (try? await session.collectionStore?.membershipByCollectionID()) ?? [:]
+        if let metaDB = session.metaDB {
+            let failedIDs = Set((try? await metaDB.allAO3Diagnostics(failedOnly: false).map(\.calibreID)) ?? [])
+            mem[SystemCollectionID.failedExtraction] = failedIDs
+        }
+        membership = mem
     }
 
     private func commitCreate() {
@@ -444,7 +452,12 @@ struct CollectionSearchPickerView: View {
 
     private func reload() async {
         collections = (try? await session.collectionStore?.collections()) ?? []
-        membership = (try? await session.collectionStore?.membershipByCollectionID()) ?? [:]
+        var mem = (try? await session.collectionStore?.membershipByCollectionID()) ?? [:]
+        if let metaDB = session.metaDB {
+            let failedIDs = Set((try? await metaDB.allAO3Diagnostics(failedOnly: false).map(\.calibreID)) ?? [])
+            mem[SystemCollectionID.failedExtraction] = failedIDs
+        }
+        membership = mem
     }
 
     private func toggleMembership(_ collection: CollectionRow) {

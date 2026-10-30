@@ -75,6 +75,18 @@ final class LibraryToolbarState {
         showAO3FilterSidebar = UserDefaults.standard.bool(forKey: "showAO3FilterSidebar")
     }
 
+    /// Resets all ephemeral search, filter, and count state when switching libraries.
+    func resetForNewLibrary() {
+        stopRecordingLastView()
+        searchText = ""
+        filterExpression = FilterExpression()
+        activeFilterResult = nil
+        pendingFullTextSearch = nil
+        isApplyingLibraryFilter = false
+        libraryFilterApplicationToken = nil
+        lastViewDidChange()
+    }
+
     // MARK: - Last view (sort, direction, filter)
     //
     // Lives here, not in LibraryRootView, because this state is shared with the

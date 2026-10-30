@@ -185,6 +185,52 @@ public enum CalibreFTSWriter {
             batchIndex = chunkEnd
         }
 
+        if indexedCount > 0 {
+            _ = try? ftsConn.run("INSERT INTO books_fts(books_fts) VALUES('optimize');")
+            _ = try? ftsConn.run("INSERT INTO books_fts_stemmed(books_fts_stemmed) VALUES('optimize');")
+            _ = try? ftsConn.run("PRAGMA wal_checkpoint(TRUNCATE);")
+        }
+
         return indexedCount
+    }
+
+    /// Compresses and merges FTS5 segment trees, truncates WAL logs, and vacuums the database.
+    /// Returns the number of bytes reclaimed on disk and the resulting total FTS file size.
+    @discardableResult
+    public static func compactAndVacuum(libraryURL: URL) throws -> (bytesReclaimed: Int64, ftsAfter: Int64) {
+        let ftsURL = libraryURL.appendingPathComponent("full-text-search.db")
+        guard FileManager.default.fileExists(atPath: ftsURL.path) else {
+            return (0, 0)
+        }
+        let ftsBefore = databaseFilesSize(baseFileURL: ftsURL)
+        let ftsConn = try Connection(ftsURL.path)
+        try CalibreTokenizerRegistration.register(on: ftsConn)
+
+        _ = try? ftsConn.run("INSERT INTO books_fts(books_fts) VALUES('optimize');")
+        _ = try? ftsConn.run("INSERT INTO books_fts_stemmed(books_fts_stemmed) VALUES('optimize');")
+        _ = try? ftsConn.run("PRAGMA wal_checkpoint(TRUNCATE);")
+        _ = try? ftsConn.run("VACUUM;")
+        _ = try? ftsConn.run("PRAGMA wal_checkpoint(TRUNCATE);")
+
+        let ftsAfter = databaseFilesSize(baseFileURL: ftsURL)
+        let reclaimed = max(0, ftsBefore - ftsAfter)
+        return (bytesReclaimed: reclaimed, ftsAfter: ftsAfter)
+    }
+
+    private static func databaseFilesSize(baseFileURL: URL) -> Int64 {
+        var total: Int64 = 0
+        let paths = [
+            baseFileURL,
+            baseFileURL.deletingPathExtension().appendingPathExtension("db-wal"),
+            baseFileURL.deletingPathExtension().appendingPathExtension("db-shm")
+        ]
+        let fm = FileManager.default
+        for path in paths {
+            if let attrs = try? fm.attributesOfItem(atPath: path.path),
+               let size = attrs[.size] as? NSNumber {
+                total += size.int64Value
+            }
+        }
+        return total
     }
 }

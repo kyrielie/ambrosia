@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Library Root View
 //
@@ -109,7 +110,11 @@ struct LibraryRootView: View {
                     countPending: toolbarState.isFilterCountPending
                 )
             }
-            if !session.isOpen {
+            if session.isVolumeDisconnected {
+                disconnectedVolumeState
+            } else if session.isLibraryMissing {
+                missingLibraryState
+            } else if !session.isOpen {
                 emptyLibraryState
             } else if displayController.books.isEmpty && toolbarState.searchText.isEmpty && !toolbarState.hasActiveFilter {
                 if displayController.didFinishFirstLoad { emptyBooksState } else { loadingState }
@@ -530,13 +535,144 @@ struct LibraryRootView: View {
     // MARK: - Empty States
 
     private var emptyLibraryState: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 16) {
             Spacer()
-            Image(systemName: "books.vertical").font(.system(size: 48)).foregroundStyle(.quaternary)
-            Text("No library open").font(.title3).foregroundStyle(.secondary)
-            Button("Open Calibre Library…") { AppDelegate.shared?.chooseLibraryFolder() }
+            Image(systemName: "books.vertical")
+                .font(.system(size: 56))
+                .foregroundStyle(.tertiary)
+            Text("No Library Open")
+                .font(.title2.weight(.semibold))
+            Text("Open an existing Calibre library or select a folder of EPUB files to get started.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+            Button("Open Library…") {
+                AppDelegate.shared?.chooseLibraryFolder()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .padding(.top, 4)
+
+            let recents = LibraryRegistry.shared.knownPaths.filter { LibraryRegistry.shared.isValid($0) }
+            if !recents.isEmpty {
+                VStack(spacing: 8) {
+                    Text("Recent Libraries")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+                        .padding(.top, 16)
+
+                    ForEach(recents.prefix(3), id: \.self) { path in
+                        Button {
+                            AppDelegate.shared?.openLibraryAtURL(URL(fileURLWithPath: path))
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "folder")
+                                Text(LibraryRegistry.shared.displayName(for: path))
+                            }
+                            .font(.callout)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+            }
+
             Spacer()
-        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: NSURL.self) { item, _ in
+                guard let url = item as? URL else { return }
+                Task { @MainActor in
+                    var isDir: ObjCBool = false
+                    if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                        AppDelegate.shared?.openLibraryAtURL(url)
+                    }
+                }
+            }
+            return true
+        }
+    }
+
+    private var disconnectedVolumeState: some View {
+        let volName = session.disconnectedVolumeName ?? "External Drive"
+        return VStack(spacing: 16) {
+            Spacer()
+            Image(systemName: "externaldrive.badge.xmark")
+                .font(.system(size: 56))
+                .foregroundStyle(.orange)
+            Text("Drive Disconnected")
+                .font(.title2.weight(.semibold))
+            Text("The library is located on \"\(volName)\" which is currently disconnected. Reconnect the drive to resume reading.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 440)
+            HStack(spacing: 12) {
+                Button("Open Another Library…") {
+                    AppDelegate.shared?.chooseLibraryFolder()
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button("Locate Library…") {
+                    locateMissingLibrary()
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.top, 4)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var missingLibraryState: some View {
+        let libName = session.missingLibraryName ?? "Library"
+        let path = session.activePath ?? ""
+        return VStack(spacing: 16) {
+            Spacer()
+            Image(systemName: "folder.badge.questionmark")
+                .font(.system(size: 56))
+                .foregroundStyle(.orange)
+            Text("Library Not Found")
+                .font(.title2.weight(.semibold))
+            Text("Ambrosia could not find \"\(libName)\" at:\n\(path)\n\nThe folder may have been moved, renamed, or deleted.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 460)
+            HStack(spacing: 12) {
+                Button("Locate Library…") {
+                    locateMissingLibrary()
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button("Choose Another Library…") {
+                    AppDelegate.shared?.chooseLibraryFolder()
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.top, 4)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func locateMissingLibrary() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Select Library"
+        panel.message = "Locate the moved or renamed library folder."
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if let currentPath = session.activePath {
+            let oldHash = Ambrosia.libraryHash(for: URL(fileURLWithPath: currentPath))
+            try? LibraryIndexManager.shared.relink(oldHash: oldHash, newLibraryURL: url)
+        }
+        AppDelegate.shared?.openLibraryAtURL(url)
     }
 
     private var loadingState: some View {

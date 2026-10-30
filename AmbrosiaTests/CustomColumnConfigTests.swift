@@ -99,4 +99,20 @@ final class CustomColumnConfigTests: XCTestCase {
         XCTAssertEqual(CustomColumnConfig.shared.wordCountLabel, "already_configured")
         XCTAssertEqual(CustomColumnConfig.shared.kudosLabel, "already_configured")
     }
+
+    func testAutoDetectOnLibraryWithoutCustomColumnsLeavesLabelsNil() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CustomColumnConfigTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        // Create empty calibre metadata.db without custom columns
+        _ = try CalibreLibraryCreator.createEmptyLibrary(at: tempDir)
+        let library = try CalibreLibrary(root: tempDir)
+
+        await CustomColumnConfig.shared.autoDetect(using: library)
+
+        XCTAssertNil(CustomColumnConfig.shared.wordCountLabel)
+        XCTAssertNil(CustomColumnConfig.shared.kudosLabel)
+    }
 }

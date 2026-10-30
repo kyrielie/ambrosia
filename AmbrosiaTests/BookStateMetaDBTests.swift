@@ -198,4 +198,35 @@ final class BookStateMetaDBTests: XCTestCase {
         XCTAssertEqual(stateB.lastSpineIndex, 8)
         XCTAssertEqual(stateB.totalReadPercent, 0.95)
     }
+
+    func testAllAO3DiagnosticsAndFiltering() async throws {
+        let diag1 = AO3ExtractionDiagnostic(
+            calibreID: 10,
+            status: "failed",
+            reason: "XML parse error",
+            epubPath: "/path/to/10.epub",
+            epubFilename: "10.epub",
+            spineItemsChecked: 1,
+            attemptedAt: "2026-01-01T00:00:00Z"
+        )
+        let diag2 = AO3ExtractionDiagnostic(
+            calibreID: 20,
+            status: "skipped",
+            reason: "no dl.tags AO3 preface metadata in first 5 spine items",
+            epubPath: "/path/to/20.epub",
+            epubFilename: "20.epub",
+            spineItemsChecked: 5,
+            attemptedAt: "2026-01-01T00:01:00Z"
+        )
+
+        try await metaDB.insert(diag1)
+        try await metaDB.insert(diag2)
+
+        let all = try await metaDB.allAO3Diagnostics(failedOnly: false)
+        XCTAssertEqual(all.count, 2)
+
+        let failures = try await metaDB.allAO3Diagnostics(failedOnly: true)
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertEqual(failures.first?.calibreID, 10)
+    }
 }

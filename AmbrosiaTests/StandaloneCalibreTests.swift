@@ -204,6 +204,15 @@ final class StandaloneCalibreTests: XCTestCase {
         let snippets2 = try await fts.snippets(bookID: secondBook.id, query: query2, token: token2)
         XCTAssertFalse(snippets2.isEmpty)
         XCTAssertTrue(snippets2[0].text.contains("Muse"))
+
+        // 6. Compact & vacuum FTS database, verifying integrity and searchability afterwards
+        let (reclaimed, ftsAfter) = try CalibreFTSWriter.compactAndVacuum(libraryURL: tempDir)
+        XCTAssertGreaterThanOrEqual(reclaimed, 0)
+        XCTAssertGreaterThan(ftsAfter, 0)
+
+        let token3 = fts.beginSearch()
+        let searchResult3 = try await fts.searchBooks(query1, token: token3)
+        XCTAssertEqual(searchResult3.bookIDs, [firstBook.id])
     }
 
     // MARK: - Synthetic EPUB Helper

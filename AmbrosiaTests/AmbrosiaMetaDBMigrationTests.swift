@@ -67,4 +67,33 @@ final class AmbrosiaMetaDBMigrationTests: XCTestCase {
         let count = (try? db.scalar("SELECT COUNT(*) FROM schema_migrations")) as? Int64 ?? -1
         XCTAssertEqual(count, 4, "Expected exactly the four known migrations recorded, with no duplicates")
     }
+
+    func testLegacyTagSeedTablesArePurgedOnMigration() throws {
+        let db = try Connection(.inMemory)
+        try db.execute("""
+            CREATE TABLE canonical_tags (id INTEGER PRIMARY KEY, name TEXT);
+            CREATE TABLE tag_synonyms (synonym TEXT, canonical_id INTEGER);
+            CREATE TABLE tag_parent_links (child_id INTEGER, parent_id INTEGER);
+            CREATE TABLE tag_subtag_sections (child_id INTEGER, parent_id INTEGER, section TEXT);
+            """)
+
+        try AmbrosiaMetaDB.runMigrations(db: db)
+
+        let tables = try tableNames(db)
+        XCTAssertFalse(tables.contains("canonical_tags"), "canonical_tags must be purged")
+        XCTAssertFalse(tables.contains("tag_synonyms"), "tag_synonyms must be purged")
+        XCTAssertFalse(tables.contains("tag_parent_links"), "tag_parent_links must be purged")
+        XCTAssertFalse(tables.contains("tag_subtag_sections"), "tag_subtag_sections must be purged")
+    }
+
+    func testVacuumAndCheckpointOnMetaDB() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AmbrosiaMetaDB-vacuum-\(UUID().uuidString)")
+        let metaDB = try AmbrosiaMetaDB(libraryURL: tempDir)
+        try await metaDB.vacuumAndCheckpoint()
+        // Ensure database remains fully operational after vacuum and checkpoint
+        let rows = try await metaDB.prepare("SELECT 1")
+        XCTAssertEqual(rows.count, 1)
+        try? FileManager.default.removeItem(at: tempDir)
+    }
 }

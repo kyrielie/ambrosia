@@ -222,3 +222,40 @@ A failed `fulltext:` search is shown, not cached, and not retried until the user
 - Cancellations are not failures and are not recorded.
 - The list shows a banner with Retry. Email applies the same loop fix but does not yet show a banner.
 - Search and count failures from `CalibreLibrary` live in `LibrarySession.lastSearchError`, separate from the library-open `lastError`.
+
+---
+
+## Standalone library FTS index generation (`CalibreFTSWriter`)
+
+For arbitrary folders of EPUBs indexed directly in-place without Calibre Desktop:
+- `CalibreFTSWriter` initializes `full-text-search.db` (`PRAGMA user_version = 1`).
+- Registers the native `calibre` tokenizer on the writable connection before creating tables and triggers.
+- Extracts spine HTML items via `EPUBParser`, converts to plain text with `HTMLStripper`, and writes to `books_text (book, format, searchable_text, ...)`.
+- Triggers `books_fts_insert_trg` automatically populate the FTS5 tables (`books_fts` and `books_fts_stemmed`).
+- Supports incremental indexing: only unindexed books in `metadata.db` are processed.
+
+---
+
+## Index Maintenance & Storage Footprint (`CalibreFTSWriter`)
+
+Full-text search databases in Calibre libraries store uncompressed plain text for every spine document in `books_text`, alongside dual FTS5 virtual tables (`books_fts` and `books_fts_stemmed`). Because of this, `full-text-search.db` typically consumes 2–3× the disk space of compressed EPUBs.
+
+To help users manage disk consumption and database health, Ambrosia provides three primary actions under **Settings ▸ Data ▸ Storage Footprint**:
+
+### 1. "Index Unindexed Works"
+- **Behavior**: Scans `metadata.db` for EPUB files whose text has not yet been extracted into `books_text`, and indexes them sequentially in batches of 10 inside background tasks.
+- **Calibre Compatibility**: Identical to Calibre's own full-text indexing behavior. Newly indexed works immediately become searchable via `⇧⌘F`.
+- **Post-Indexing Optimization**: Automatically merges FTS5 segment trees (`INSERT INTO books_fts(books_fts) VALUES('optimize')`) and truncates the WAL log (`PRAGMA wal_checkpoint(TRUNCATE)`).
+
+### 2. "Compact & Vacuum"
+- **Behavior**:
+  1. Issues `INSERT INTO books_fts(books_fts) VALUES('optimize')` and `INSERT INTO books_fts_stemmed(books_fts_stemmed) VALUES('optimize')`, which tells SQLite's FTS5 engine to merge fragmented B-tree segment tiers into a single monolithic segment tree.
+  2. Runs `PRAGMA wal_checkpoint(TRUNCATE)` to flush and truncate SQLite write-ahead log (`-wal`) files down to zero bytes.
+  3. Executes `VACUUM` on `full-text-search.db` and `ambrosia_meta.db` to defragment pages and return unallocated disk space to the macOS filesystem.
+- **Safe & Non-Destructive**: Does not modify book text, tokens, or indexes; simply optimizes internal layout.
+
+### 3. "Clear Search Index"
+- **Behavior**: Permanently removes `full-text-search.db`, `full-text-search.db-wal`, and `full-text-search.db-shm` from the Calibre library directory.
+- **Why use it**: Full-text search databases can take multiple gigabytes of storage on large libraries. If a user needs to reclaim disk space immediately or wants to reset search indexing from scratch, clearing the index frees up that disk space immediately.
+- **Safety**: Safe and non-destructive. Ambrosia and Calibre treat `full-text-search.db` as a derived cache. The source of truth for books is `metadata.db` and the EPUB files, which are untouched.
+- **Rebuilding**: Full-text search can be rebuilt at any time simply by clicking **"Index Unindexed Works"** in Settings or running Calibre's indexer.
