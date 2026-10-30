@@ -28,13 +28,18 @@ Check out https://github.com/kyrielie/nectar, its iOS companion reader, and http
 
 <table>
 <tr>
+<td width="33%" align="center"><img src="screenshots/reader.png" alt="Standalone reader view"><br><em>Custom reader with themes & paginated columns</em></td>
 <td width="33%" align="center"><img src="screenshots/emailview.png" alt="Email split view"><br><em>Split-view email mode with live reader</em></td>
-<td width="33%" align="center"><img src="screenshots/rowview2.png" alt="Filtered list view"><br><em>Faceted search & filter drawer</em></td>
-<td width="33%" align="center"><img src="screenshots/activity.png" alt="Reading goals and activity"><br><em>Activity feed & reading goals</em></td>
+<td width="33%" align="center"><img src="screenshots/fts.png" alt="Full-text search view"><br><em>Full-text body search with snippets</em></td>
 </tr>
 <tr>
+<td width="33%" align="center"><img src="screenshots/rowview2.png" alt="Filtered list view"><br><em>Faceted search & filter drawer</em></td>
+<td width="33%" align="center"><img src="screenshots/activity.png" alt="Reading goals and activity"><br><em>Activity feed & reading goals</em></td>
 <td width="33%" align="center"><img src="screenshots/settings.png" alt="Library settings"><br><em>Appearance & library preferences</em></td>
+</tr>
+<tr>
 <td width="33%" align="center"><img src="screenshots/settings2.png" alt="Reader settings"><br><em>Reader typography & shortcuts</em></td>
+<td width="33%" align="center"></td>
 <td width="33%" align="center"></td>
 </tr>
 </table>
