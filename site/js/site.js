@@ -5,7 +5,16 @@
 	if (!strip || !dots || !('IntersectionObserver' in window)) return;
 
 	var figures = Array.prototype.slice.call(strip.querySelectorAll('figure'));
-	var buttons = Array.prototype.slice.call(dots.querySelectorAll('button'));
+	if (!figures.length) return;
+
+	dots.innerHTML = '';
+	var buttons = figures.map(function (figure, i) {
+		var btn = document.createElement('button');
+		btn.type = 'button';
+		btn.setAttribute('aria-label', 'Show screenshot ' + (i + 1));
+		dots.appendChild(btn);
+		return btn;
+	});
 	var reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
 
 	function select(index) {

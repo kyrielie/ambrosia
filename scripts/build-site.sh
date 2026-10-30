@@ -11,10 +11,7 @@ out="${1:-_site}"
 rm -rf "$out"
 mkdir -p "$out/img/screenshots"
 cp -R site/. "$out/"
-
-for name in rowview emailview rowview2 activity settings settings2; do
-  cp "screenshots/$name.png" "$out/img/screenshots/$name.png"
-done
+cp screenshots/*.png "$out/img/screenshots/"
 
 cp Ambrosia/Assets.xcassets/AppIcon.appiconset/icon_512x512.png "$out/img/icon.png"
 cp Ambrosia/Assets.xcassets/AppIcon.appiconset/icon_32x32@2x.png "$out/favicon.png"
