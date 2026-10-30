@@ -117,9 +117,7 @@ main > section > h2 { font-size: 28px; padding-block-end: 0.25em; margin-block-e
 	max-width: none !important;
 	margin-block: 2em;
 	margin-inline: calc(var(--page-pad) * -1) !important;
-	padding-block: 28px 20px;
-	background: var(--surface);
-	border-block: 1px solid var(--separator);
+	padding-block: 16px;
 }
 .strip {
 	display: flex;
@@ -147,7 +145,6 @@ main > section > h2 { font-size: 28px; padding-block-end: 0.25em; margin-block-e
 	max-height: min(480px, 60vh);
 	max-width: min(720px, 86vw);
 	object-fit: contain;
-	box-shadow: 0 2px 10px #000;
 }
 .strip figcaption { font-size: 14px; margin-block-start: 0.7em; color: var(--secondary-text); }
 
