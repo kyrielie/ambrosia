@@ -20,6 +20,10 @@ class LibraryViewController: NSViewController {
     private var rankingVC: NSViewController?
     private var appearanceCancellable: AnyCancellable?
 
+    var hasEmbeddedReader: Bool {
+        emailVC?.currentReaderVC != nil
+    }
+
     init(session: LibrarySession) {
         self.session = session
         let ts = LibraryToolbarState()

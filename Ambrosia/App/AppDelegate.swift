@@ -104,6 +104,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Library & Window management
 
+    var hasActiveReader: Bool {
+        if ReaderWindowController.hasOpenWindows { return true }
+        if let lwc = libraryWindowController,
+           let lvc = lwc.contentViewController as? LibraryViewController,
+           lvc.toolbarState.viewMode == .email {
+            return lvc.hasEmbeddedReader
+        }
+        return false
+    }
+
+    func reloadCurrentLibrary() {
+        if let lvc = libraryWindowController?.contentViewController as? LibraryViewController {
+            Task { @MainActor in
+                await lvc.displayController.refreshVisibilitySnapshots(resetPage: false)
+            }
+        }
+    }
+
     func closeCurrentLibrary() {
         session?.close()
         LibraryRegistry.shared.activePath = nil

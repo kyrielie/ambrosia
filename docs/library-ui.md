@@ -59,6 +59,15 @@ List-mode rows are self-sizing `List` rows, so unbounded content makes row heigh
 - Export menu (`libraryExport`)
 - View mode switcher (`libraryViewMode` - List, Email, Ranking)
 
+## Menu Bar Integrations
+
+The macOS menu bar adapts to whether the user is browsing the library or reading:
+- **Edit ▸ Find (`⌘F`)**: Dynamically routes to the library search bar (`focusSearchField`) when in the library window, or activates the reader find bar when a reader window is focused.
+- **View ▸ Appearance**: Configures library window theme (`Follow System`, `Always Light`, `Always Dark`) via `ReaderPreferences.libraryAppearanceMode` and provides a quick `Toggle Dark/Light Mode` shortcut (`^⌘T`).
+- **View ▸ Reload Library (`⌘R`)**: Manually triggers a snapshot refresh of the library list and email views via `AppDelegate.reloadCurrentLibrary()`.
+- **View ▸ Clear All Filters**: Quickly resets active facet and text filters when a filter is applied.
+- **Reader Menu Gating**: Navigation (`⌘←`/`⌘→`, `⌘[`/`⌘]`), annotations, table of contents, and window sizing actions are dynamically disabled when no reader window or embedded reader is active (`AppDelegate.hasActiveReader`). In-reader formatting and theme settings are grouped under `Reader Text & Themes`.
+
 ## Row Context Menus
 
 Book and series rows support macOS right-click / secondary-click context menus across all library modes (`BookListRow`, `SeriesListRow`, and `EmailSidebarViewController`):

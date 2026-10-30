@@ -47,7 +47,7 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Reader State
 
     private var selectedBook: CalibreBook?
-    private weak var currentReaderVC: ReaderViewController?
+    private(set) weak var currentReaderVC: ReaderViewController?
     private var readerLocalFindState = LocalReaderFindState()
     private var lastAppliedFullTextPhrase = ""
     private weak var lastAppliedFullTextReader: ReaderViewController?

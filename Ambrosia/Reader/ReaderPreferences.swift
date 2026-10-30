@@ -476,6 +476,18 @@ final class ReaderPreferences: ObservableObject {
         }
     }
 
+    func toggleLibraryAppearance() {
+        switch libraryAppearanceMode {
+        case .system:
+            let isSystemDark = NSApp?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            libraryAppearanceMode = isSystemDark ? .light : .dark
+        case .light:
+            libraryAppearanceMode = .dark
+        case .dark:
+            libraryAppearanceMode = .light
+        }
+    }
+
     // MARK: - Reading mode
 
     var defaultReadingMode: ReadingMode {
