@@ -810,6 +810,13 @@ private enum AO3ExtractionStatus {
     case partial(extracted: Int, total: Int, pending: Int)
 }
 
+private enum StorageScope: String, CaseIterable, Identifiable {
+    case active
+    case all
+
+    var id: String { rawValue }
+}
+
 private struct DataTab: View {
     @Environment(LibrarySession.self) private var session
     @Bindable private var prefs = ReaderPreferences.shared
@@ -820,6 +827,27 @@ private struct DataTab: View {
     @State private var kudosLabel: String = CustomColumnConfig.shared.kudosLabel ?? "(none)"
     @State private var availableColumns: [String] = []
     @State private var ao3ExtractionStatus: AO3ExtractionStatus = .noLibrary
+    @State private var storageBreakdown: LibraryStorageBreakdown?
+    @State private var isCalculatingStorage: Bool = false
+    @State private var ftsActionMessage: String?
+    @State private var libraryFootprints: [String: LibraryStorageBreakdown] = [:]
+    @State private var showDiagnosticsSheet: Bool = false
+    @State private var storageScope: StorageScope = .active
+
+    private var totalAllLibrariesFootprint: LibraryStorageBreakdown? {
+        guard !libraryFootprints.isEmpty else { return nil }
+        return LibraryStorageBreakdown.combining(Array(libraryFootprints.values))
+    }
+
+    private var activeScopeLabel: String {
+        let activeHash = session.activeURL.map { Ambrosia.libraryHash(for: $0) }
+        if let entry = knownLibraries.first(where: {
+            $0.lastKnownPath == session.activePath || (activeHash != nil && $0.hash == activeHash)
+        }) {
+            return "Active (\(entry.displayName))"
+        }
+        return "Active Library"
+    }
 
     var body: some View {
         Form {
@@ -832,8 +860,85 @@ private struct DataTab: View {
                         libraryIndexRow(entry)
                     }
                 }
+
+                HStack {
+                    Button {
+                        AppDelegate.shared?.chooseLibraryFolder()
+                    } label: {
+                        Label("Open Library…", systemImage: "folder.badge.plus")
+                    }
+
+                    if knownLibraries.contains(where: { !FileManager.default.fileExists(atPath: $0.lastKnownPath) }) {
+                        Spacer()
+                        Button("Remove Missing…") {
+                            removeMissingLibraries()
+                        }
+                        .controlSize(.small)
+                    }
+                }
             } header: {
                 Label("Libraries", systemImage: "externaldrive").font(.headline)
+            }
+
+            Section {
+                if knownLibraries.count > 1 {
+                    Picker("Scope", selection: $storageScope) {
+                        Text(activeScopeLabel).tag(StorageScope.active)
+                        Text("All Libraries (\(knownLibraries.count))").tag(StorageScope.all)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .padding(.bottom, 2)
+                }
+
+                switch storageScope {
+                case .active:
+                    if let breakdown = storageBreakdown {
+                        storageBreakdownView(breakdown, scope: .active)
+                    } else if isCalculatingStorage {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Calculating storage footprint…")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text("No library open to calculate storage.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                case .all:
+                    if let breakdown = totalAllLibrariesFootprint {
+                        storageBreakdownView(breakdown, scope: .all)
+                    } else if knownLibraries.isEmpty {
+                        Text("No known libraries to calculate storage.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Calculating total storage across libraries…")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                if let ftsActionMessage {
+                    Text(ftsActionMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Label("Storage Footprint", systemImage: "internaldrive").font(.headline)
+            } footer: {
+                Text(
+                    "Full-text search indexes every chapter word for typographic search cards and multi-snippets, " +
+                    "which commonly exceeds the compressed EPUB file size."
+                )
+                .font(.caption).foregroundStyle(.secondary)
             }
 
             Section {
@@ -888,7 +993,14 @@ private struct DataTab: View {
                         confirmReextract()
                     }
                     .disabled(AppDelegate.shared?.session?.isOpen != true)
+
                     Spacer()
+
+                    Button("View Diagnostics…") {
+                        showDiagnosticsSheet = true
+                    }
+                    .disabled(AppDelegate.shared?.session?.isOpen != true)
+                    .controlSize(.small)
                 }
                 ao3ExtractionStatusView
             } header: {
@@ -899,9 +1011,16 @@ private struct DataTab: View {
             }
 
             Section {
-                if availableColumns.isEmpty {
-                    Text("Open a Calibre library to see available custom columns.")
+                if AppDelegate.shared?.session?.isOpen != true {
+                    Text("Open a library to configure custom columns.")
                         .font(.callout).foregroundStyle(.secondary)
+                } else if availableColumns.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("No custom columns found in this library.")
+                            .font(.callout)
+                        Text("Ambrosia calculates word counts and extracts AO3 kudos directly from EPUB files, so Calibre custom columns are optional.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 } else {
                     let opts = ["(none)"] + availableColumns
                     Picker("Word count column", selection: $wordCountLabel) {
@@ -941,11 +1060,29 @@ private struct DataTab: View {
         .formStyle(.grouped)
         .padding(.bottom, 8)
         .onAppear {
+            if session.activeURL == nil && !knownLibraries.isEmpty {
+                storageScope = .all
+            }
             reloadKnownLibraries()
             tagSeedConfig.refreshValidation()
             Task { await loadAvailableColumns() }
             Task { await reloadAO3ExtractionStatus() }
+            Task { await reloadStorageBreakdown() }
             scheduleObservingExtraction()
+        }
+        .onChange(of: session.activePath) { _, newPath in
+            if newPath != nil {
+                storageScope = .active
+            }
+            reloadKnownLibraries()
+            Task {
+                await loadAvailableColumns()
+                await reloadAO3ExtractionStatus()
+                await reloadStorageBreakdown()
+            }
+        }
+        .sheet(isPresented: $showDiagnosticsSheet) {
+            AO3ExtractionDiagnosticsSheet(session: session)
         }
     }
 
@@ -990,14 +1127,216 @@ private struct DataTab: View {
     }
 
     @ViewBuilder
+    private func storageBreakdownView(_ breakdown: LibraryStorageBreakdown, scope: StorageScope) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Proportional stacked bar
+            GeometryReader { geo in
+                let totalWidth = geo.size.width
+                let props = breakdown.proportions
+                HStack(spacing: 2) {
+                    if props.epubs > 0 {
+                        Rectangle()
+                            .fill(Color.blue)
+                            .frame(width: max(totalWidth * props.epubs, 4))
+                    }
+                    if props.fts > 0 {
+                        Rectangle()
+                            .fill(Color.orange)
+                            .frame(width: max(totalWidth * props.fts, 4))
+                    }
+                    if props.calibre > 0 {
+                        Rectangle()
+                            .fill(Color.purple)
+                            .frame(width: max(totalWidth * props.calibre, 4))
+                    }
+                    if props.ambrosia > 0 {
+                        Rectangle()
+                            .fill(Color.gray)
+                            .frame(width: max(totalWidth * props.ambrosia, 4))
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
+            .frame(height: 12)
+            .padding(.vertical, 4)
+
+            // Storage component rows
+            storageRow(
+                label: "EPUB Books",
+                size: breakdown.formattedEpubsSize,
+                color: .blue,
+                icon: "books.vertical.fill"
+            )
+            storageRow(
+                label: scope == .active ? "Full-Text Search Index" : "Full-Text Search Indexes",
+                size: breakdown.formattedFTSDBSize,
+                color: .orange,
+                icon: "text.magnifyingglass"
+            )
+            storageRow(
+                label: scope == .active ? "Calibre Database (metadata.db)" : "Calibre Databases",
+                size: breakdown.formattedCalibreDBSize,
+                color: .purple,
+                icon: "cylinder.split.1x2"
+            )
+            storageRow(
+                label: scope == .active ? "Ambrosia Metadata (ambrosia_meta.db)" : "Ambrosia Metadata",
+                size: breakdown.formattedAmbrosiaMetaDBSize,
+                color: .gray,
+                icon: "gearshape"
+            )
+
+            Divider()
+
+            HStack {
+                Text(scope == .active ? "Total Active Storage" : "Total Combined Storage")
+                    .font(.callout.weight(.semibold))
+                Spacer()
+                Text(breakdown.formattedTotal)
+                    .font(.callout.weight(.bold))
+            }
+
+            if scope == .active, knownLibraries.count > 1, let total = totalAllLibrariesFootprint, total.totalSizeBytes > 0 {
+                let pct = percentageOfTotal(activeBytes: breakdown.totalSizeBytes, totalBytes: total.totalSizeBytes)
+                Text("Represents \(pct) of \(total.formattedTotal) total across \(knownLibraries.count) libraries.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if scope == .all {
+                Text("Combined footprint across \(knownLibraries.count) libraries.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if scope == .active {
+                HStack(spacing: 12) {
+                    Button("Index Unindexed Works") {
+                        indexUnindexedBooks()
+                    }
+                    .controlSize(.small)
+                    .help("Scans for unindexed EPUBs in this library and indexes their text in the background, matching Calibre's behavior.")
+
+                    Button("Compact & Vacuum") {
+                        compactAndVacuumDatabases()
+                    }
+                    .controlSize(.small)
+                    .help("Optimizes search index segment trees, flushes WAL logs, and vacuums databases to reclaim unused disk space.")
+
+                    Button("Clear Search Index") {
+                        clearFTSIndex()
+                    }
+                    .controlSize(.small)
+                    .help("Deletes full-text-search.db to reclaim disk space.")
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+
+    private func percentageOfTotal(activeBytes: Int64, totalBytes: Int64) -> String {
+        guard totalBytes > 0 else { return "0%" }
+        let pct = (Double(activeBytes) / Double(totalBytes)) * 100.0
+        return String(format: "%.0f%%", pct)
+    }
+
+    private func storageRow(label: String, size: String, color: Color, icon: String) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+            Label(label, systemImage: icon)
+                .font(.callout)
+            Spacer()
+            Text(size)
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func reloadStorageBreakdown() async {
+        guard let url = session.activeURL else {
+            storageBreakdown = nil
+            return
+        }
+        isCalculatingStorage = true
+        let result = await LibraryStorageCalculator.calculate(libraryURL: url)
+        await MainActor.run {
+            self.storageBreakdown = result
+            self.isCalculatingStorage = false
+        }
+    }
+
+    private func indexUnindexedBooks() {
+        guard let url = session.activeURL else { return }
+        ftsActionMessage = "Indexing unindexed works in background…"
+        Task.detached(priority: .userInitiated) { [weak session] in
+            _ = try? CalibreFTSWriter.indexLibrary(at: url)
+            await MainActor.run {
+                if let url = session?.activeURL {
+                    Task { await session?.open(url: url) }
+                }
+            }
+        }
+    }
+
+    private func compactAndVacuumDatabases() {
+        guard let url = session.activeURL else { return }
+        ftsActionMessage = "Compacting and vacuuming databases…"
+        Task {
+            let beforeBreakdown = await LibraryStorageCalculator.calculate(libraryURL: url)
+            _ = try? await Task.detached(priority: .userInitiated) {
+                try CalibreFTSWriter.compactAndVacuum(libraryURL: url)
+            }.value
+            if let metaDB = session.metaDB {
+                try? await metaDB.vacuumAndCheckpoint()
+            }
+            let afterBreakdown = await LibraryStorageCalculator.calculate(libraryURL: url)
+            let reclaimed = max(0, beforeBreakdown.totalSizeBytes - afterBreakdown.totalSizeBytes)
+            let formattedReclaimed = ByteCountFormatter.string(fromByteCount: reclaimed, countStyle: .file)
+            ftsActionMessage = reclaimed > 0
+                ? "Compaction complete. Reclaimed \(formattedReclaimed) of disk space."
+                : "Compaction complete. Databases are already fully compacted."
+            await reloadStorageBreakdown()
+            reloadKnownLibraries()
+        }
+    }
+
+    private func clearFTSIndex() {
+        guard let url = session.activeURL else { return }
+        let ftsFile = url.appendingPathComponent("full-text-search.db")
+        let walFile = url.appendingPathComponent("full-text-search.db-wal")
+        let shmFile = url.appendingPathComponent("full-text-search.db-shm")
+        try? FileManager.default.removeItem(at: ftsFile)
+        try? FileManager.default.removeItem(at: walFile)
+        try? FileManager.default.removeItem(at: shmFile)
+        ftsActionMessage = "Full-text search index cleared."
+        Task {
+            await session.open(url: url)
+            await reloadStorageBreakdown()
+        }
+    }
+
+    @ViewBuilder
     private func libraryIndexRow(_ entry: LibraryIndexEntry) -> some View {
         let reachable = FileManager.default.fileExists(atPath: entry.lastKnownPath)
+        let isActive = (entry.lastKnownPath == session.activePath)
+            || (session.activeURL.map { Ambrosia.libraryHash(for: $0) } == entry.hash)
         HStack(alignment: .center, spacing: 10) {
-            Image(systemName: reachable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(reachable ? Color.green : Color.orange)
+            Image(systemName: reachable ? (isActive ? "checkmark.circle.fill" : "circle") : "exclamationmark.triangle.fill")
+                .foregroundStyle(reachable ? (isActive ? Color.green : Color.secondary) : Color.orange)
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.displayName)
-                    .font(.callout.weight(.medium))
+                HStack(spacing: 6) {
+                    Text(entry.displayName)
+                        .font(.callout.weight(.medium))
+                    if isActive {
+                        Text("Active")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.green)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Color.green.opacity(0.15))
+                            .clipShape(Capsule())
+                    }
+                }
                 Text(entry.lastKnownPath)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1006,19 +1345,137 @@ private struct DataTab: View {
                 Text("Last opened \(entry.lastOpened)")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+                if let footprint = libraryFootprints[entry.hash] {
+                    Text(
+                        "\(footprint.formattedTotal) (EPUBs: \(footprint.formattedEpubsSize) · " +
+                        "Search: \(footprint.formattedFTSDBSize) · Calibre: \(footprint.formattedCalibreDBSize))"
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
             }
             Spacer()
-            if !reachable {
-                Button("Re-link…") {
+            HStack(spacing: 8) {
+                if reachable {
+                    if !isActive {
+                        Button("Switch") {
+                            AppDelegate.shared?.openLibraryAtURL(URL(fileURLWithPath: entry.lastKnownPath))
+                            reloadKnownLibraries()
+                        }
+                        .controlSize(.small)
+                    }
+                } else {
+                    Button("Locate…") {
+                        relink(entry)
+                    }
+                    .controlSize(.small)
+                }
+
+                Button {
+                    confirmRemoval(of: entry)
+                } label: {
+                    Image(systemName: "trash")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("Remove library from list")
+            }
+        }
+        .contextMenu {
+            if reachable {
+                Button("Show in Finder") {
+                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: entry.lastKnownPath)
+                }
+                if !isActive {
+                    Button("Switch to Library") {
+                        AppDelegate.shared?.openLibraryAtURL(URL(fileURLWithPath: entry.lastKnownPath))
+                        reloadKnownLibraries()
+                    }
+                }
+                Divider()
+            } else {
+                Button("Locate Library…") {
                     relink(entry)
                 }
-                .controlSize(.small)
+                Divider()
+            }
+
+            Button("Remove from List…") {
+                confirmRemoval(of: entry)
             }
         }
     }
 
+    private func confirmRemoval(of entry: LibraryIndexEntry) {
+        let isActive = (entry.lastKnownPath == session.activePath)
+            || (session.activeURL.map { Ambrosia.libraryHash(for: $0) } == entry.hash)
+
+        let alert = NSAlert()
+        alert.messageText = "Remove \"\(entry.displayName)\"?"
+        var message = "This will remove the library from Ambrosia's list of known libraries and recent menus."
+        if isActive {
+            message += "\n\nBecause this library is currently open, closing it will return to the empty library screen."
+        }
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Remove from List")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Remove & Delete Cached Data")
+
+        let response = alert.runModal()
+        switch response {
+        case .alertFirstButtonReturn:
+            removeLibrary(entry, deleteMetadata: false, closeIfActive: isActive)
+        case .alertThirdButtonReturn:
+            removeLibrary(entry, deleteMetadata: true, closeIfActive: isActive)
+        default:
+            break
+        }
+    }
+
+    private func removeMissingLibraries() {
+        let missing = knownLibraries.filter { !FileManager.default.fileExists(atPath: $0.lastKnownPath) }
+        guard !missing.isEmpty else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Remove \(missing.count) Missing " + (missing.count == 1 ? "Library?" : "Libraries?")
+        alert.informativeText = "This will remove all missing or unreachable libraries from Ambrosia's list and delete their cached metadata."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Remove Missing")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        for entry in missing {
+            let isActive = (entry.lastKnownPath == session.activePath)
+                || (session.activeURL.map { Ambrosia.libraryHash(for: $0) } == entry.hash)
+            removeLibrary(entry, deleteMetadata: true, closeIfActive: isActive)
+        }
+    }
+
+    private func removeLibrary(_ entry: LibraryIndexEntry, deleteMetadata: Bool, closeIfActive: Bool) {
+        if closeIfActive {
+            AppDelegate.shared?.closeCurrentLibrary()
+        }
+        LibraryIndexManager.shared.remove(hash: entry.hash, deleteAppSupportMetadata: deleteMetadata)
+        LibraryRegistry.shared.remove(entry.lastKnownPath)
+        reloadKnownLibraries()
+    }
+
     private func reloadKnownLibraries() {
         knownLibraries = LibraryIndexManager.shared.entries()
+        for entry in knownLibraries {
+            let path = entry.lastKnownPath
+            let entryHash = entry.hash
+            if FileManager.default.fileExists(atPath: path) {
+                let url = URL(fileURLWithPath: path)
+                Task {
+                    let footprint = await LibraryStorageCalculator.calculate(libraryURL: url)
+                    await MainActor.run {
+                        self.libraryFootprints[entryHash] = footprint
+                    }
+                }
+            }
+        }
     }
 
     private func relink(_ entry: LibraryIndexEntry) {
@@ -1065,10 +1522,34 @@ private struct DataTab: View {
     }
 
     private func loadAvailableColumns() async {
-        guard let library = AppDelegate.shared?.session?.library else { return }
-        availableColumns = await library.customColumns().map(\.label).sorted()
-        wordCountLabel = CustomColumnConfig.shared.wordCountLabel ?? "(none)"
-        kudosLabel = CustomColumnConfig.shared.kudosLabel ?? "(none)"
+        guard let library = AppDelegate.shared?.session?.library else {
+            availableColumns = []
+            wordCountLabel = "(none)"
+            kudosLabel = "(none)"
+            return
+        }
+        let cols = await library.customColumns().map(\.label).sorted()
+        availableColumns = cols
+        if cols.isEmpty {
+            wordCountLabel = "(none)"
+            kudosLabel = "(none)"
+            CustomColumnConfig.shared.wordCountLabel = nil
+            CustomColumnConfig.shared.kudosLabel = nil
+            return
+        }
+        await CustomColumnConfig.shared.autoDetect(using: library)
+        if let currentWC = CustomColumnConfig.shared.wordCountLabel, cols.contains(currentWC) {
+            wordCountLabel = currentWC
+        } else {
+            wordCountLabel = "(none)"
+            CustomColumnConfig.shared.wordCountLabel = nil
+        }
+        if let currentKudos = CustomColumnConfig.shared.kudosLabel, cols.contains(currentKudos) {
+            kudosLabel = currentKudos
+        } else {
+            kudosLabel = "(none)"
+            CustomColumnConfig.shared.kudosLabel = nil
+        }
     }
 
     /// Recomputes the persistent extracted/total/pending counts. Called once
@@ -1125,6 +1606,217 @@ private struct DataTab: View {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         AppDelegate.shared?.session?.reextractAO3Metadata()
+    }
+}
+
+// MARK: - AO3 Extraction Diagnostics Sheet
+
+private struct AO3ExtractionDiagnosticsSheet: View {
+    let session: LibrarySession
+    @Environment(\.dismiss) private var dismiss
+    @State private var diagnostics: [AO3ExtractionDiagnostic] = []
+    @State private var bookDetails: [Int: (title: String, authors: String)] = [:]
+    @State private var filterFailuresOnly = false
+    @State private var isLoading = true
+
+    var filteredDiagnostics: [AO3ExtractionDiagnostic] {
+        if filterFailuresOnly {
+            return diagnostics.filter { $0.status == "failed" || $0.reason.localizedCaseInsensitiveContains("error") }
+        }
+        return diagnostics
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("AO3 Extraction Diagnostics")
+                        .font(.headline)
+                    let failureCount = diagnostics.filter {
+                        $0.status == "failed" || $0.reason.localizedCaseInsensitiveContains("error")
+                    }.count
+                    let nonAO3Count = diagnostics.count - failureCount
+                    Text("\(diagnostics.count) total books without AO3 metadata (\(failureCount) errors, \(nonAO3Count) non-AO3/skipped)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("View in Library") {
+                    AppDelegate.shared?.showLibraryWindow()
+                    AppDelegate.shared?.libraryWindowController?.showFailedExtractions()
+                    dismiss()
+                }
+                .controlSize(.small)
+                .disabled(filteredDiagnostics.isEmpty)
+
+                Toggle("Show failures only", isOn: $filterFailuresOnly)
+                    .toggleStyle(.checkbox)
+                Button("Done") {
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+
+            Divider()
+
+            if isLoading {
+                Spacer()
+                ProgressView("Loading diagnostics…")
+                Spacer()
+            } else if filteredDiagnostics.isEmpty {
+                Spacer()
+                Text(filterFailuresOnly ? "No hard parsing errors found." : "All books in this library have AO3 metadata.")
+                    .foregroundStyle(.secondary)
+                Spacer()
+            } else {
+                List(filteredDiagnostics) { item in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 1) {
+                                if let info = bookDetails[item.calibreID] {
+                                    Text(info.title)
+                                        .font(.callout.weight(.medium))
+                                    if !info.authors.isEmpty {
+                                        Text("by \(info.authors)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                } else {
+                                    Text(item.epubFilename ?? "Calibre ID \(item.calibreID)")
+                                        .font(.callout.weight(.medium))
+                                }
+                            }
+                            Spacer()
+                            let isFailed = item.status == "failed" || item.reason.localizedCaseInsensitiveContains("error")
+                            let badgeText: String = {
+                                if isFailed { return "Failed" }
+                                if item.reason.localizedCaseInsensitiveContains("no epub") { return "No EPUB" }
+                                if item.reason.localizedCaseInsensitiveContains("preface") { return "No AO3 Preface" }
+                                return item.status.capitalized
+                            }()
+                            Text(badgeText)
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(isFailed ? Color.red.opacity(0.15) : Color.orange.opacity(0.15))
+                                .foregroundStyle(isFailed ? Color.red : Color.orange)
+                                .clipShape(Capsule())
+                        }
+
+                        Text("Reason: \(item.reason)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        if let filename = item.epubFilename,
+                           let info = bookDetails[item.calibreID],
+                           filename != info.title {
+                            Text("File: \(filename)")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+
+                        if let path = item.epubPath {
+                            Text(path)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+
+                        HStack(spacing: 8) {
+                            Text("Calibre ID: \(item.calibreID)")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                            if let checked = item.spineItemsChecked {
+                                Text("· Spine items scanned: \(checked)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            Spacer()
+                            Button("Open in Reader") {
+                                Task {
+                                    if let book = await session.library?.booksForIDs([item.calibreID]).first {
+                                        await MainActor.run {
+                                            AppDelegate.shared?.openReaderWindow(book: book)
+                                        }
+                                    }
+                                }
+                            }
+                            .controlSize(.mini)
+                            Button("Show in Finder") {
+                                Task {
+                                    var resolved = item.epubPath
+                                    if resolved == nil {
+                                        resolved = await session.library?.epubURL(calibreID: item.calibreID)?.path
+                                    }
+                                    if let resolved, FileManager.default.fileExists(atPath: resolved) {
+                                        await MainActor.run {
+                                            _ = NSWorkspace.shared.selectFile(resolved, inFileViewerRootedAtPath: "")
+                                        }
+                                    }
+                                }
+                            }
+                            .controlSize(.mini)
+                            Button("Copy Details") {
+                                let details = """
+                                Calibre ID: \(item.calibreID)
+                                Status: \(item.status)
+                                Reason: \(item.reason)
+                                File: \(item.epubPath ?? item.epubFilename ?? "none")
+                                Date: \(item.attemptedAt)
+                                """
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(details, forType: .string)
+                            }
+                            .controlSize(.mini)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .frame(minWidth: 620, minHeight: 440)
+        .task {
+            var items: [AO3ExtractionDiagnostic] = []
+            if let metaDB = session.metaDB {
+                items = (try? await metaDB.allAO3Diagnostics(failedOnly: false)) ?? []
+            }
+            if let library = session.library, let metaDB = session.metaDB {
+                let allIDs = await library.allBookIDs()
+                let extractedIDs = (try? await metaDB.existingAO3MetadataIDs()) ?? []
+                let diagnosticIDs = Set(items.map(\.calibreID))
+                let missingIDs = allIDs.filter { !extractedIDs.contains($0) && !diagnosticIDs.contains($0) }
+                if !missingIDs.isEmpty {
+                    let missingBooks = await library.booksForIDs(missingIDs)
+                    let now = ISO8601DateFormatter().string(from: Date())
+                    for book in missingBooks {
+                        let epub = await library.epubURL(calibreID: book.id)
+                        let diag = AO3ExtractionDiagnostic(
+                            calibreID: book.id,
+                            status: "skipped",
+                            reason: epub == nil ? "No EPUB file found in library" : "No AO3 preface metadata (dl.tags) found in EPUB",
+                            epubPath: epub?.path,
+                            epubFilename: epub?.lastPathComponent ?? book.title,
+                            spineItemsChecked: epub == nil ? 0 : 5,
+                            attemptedAt: now
+                        )
+                        items.append(diag)
+                        try? await metaDB.insert(diag)
+                    }
+                }
+            }
+            diagnostics = items.sorted { $0.calibreID < $1.calibreID }
+            if let library = session.library {
+                let books = await library.booksForIDs(diagnostics.map(\.calibreID))
+                var map: [Int: (title: String, authors: String)] = [:]
+                for book in books {
+                    map[book.id] = (title: book.title, authors: book.authors.joined(separator: ", "))
+                }
+                bookDetails = map
+            }
+            isLoading = false
+        }
     }
 }
 

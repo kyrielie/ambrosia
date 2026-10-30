@@ -1,3 +1,4 @@
+import SQLite
 import XCTest
 @testable import Ambrosia
 
@@ -188,5 +189,108 @@ final class LibraryIndexManagerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: newDir.appendingPathComponent("stale.txt").path),
                         "a pre-existing destination directory must be replaced, not merged into")
         XCTAssertTrue(FileManager.default.fileExists(atPath: newDir.path))
+    }
+
+    // MARK: - remove(hash:deleteAppSupportMetadata:)
+
+    func testRemoveRemovesEntryFromIndex() {
+        let libURL1 = makeLibraryURL("Library1")
+        let libURL2 = makeLibraryURL("Library2")
+        manager.record(url: libURL1)
+        manager.record(url: libURL2)
+
+        XCTAssertEqual(manager.entries().count, 2)
+        let hash1 = libraryHash(for: libURL1)
+        manager.remove(hash: hash1, deleteAppSupportMetadata: false)
+
+        let remaining = manager.entries()
+        XCTAssertEqual(remaining.count, 1)
+        XCTAssertEqual(remaining.first?.displayName, "Library2")
+    }
+
+    func testRemoveDeletesMetadataDirectoryWhenRequested() throws {
+        let libURL = makeLibraryURL("LibraryWithMeta")
+        let hash = libraryHash(for: libURL)
+        manager.record(url: libURL)
+
+        let metaDir = tempDir.appendingPathComponent(hash)
+        try FileManager.default.createDirectory(at: metaDir, withIntermediateDirectories: true)
+        let file = metaDir.appendingPathComponent("ambrosia_meta.db")
+        try "dummy".write(to: file, atomically: true, encoding: .utf8)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        manager.remove(hash: hash, deleteAppSupportMetadata: true)
+
+        XCTAssertEqual(manager.entries().count, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: metaDir.path))
+    }
+
+    // MARK: - Bookmarks & Calibre UUID
+
+    func testRecordStoresBookmarkData() {
+        let libURL = makeLibraryURL("LibraryBookmarkTest")
+        try? FileManager.default.createDirectory(at: libURL, withIntermediateDirectories: true)
+
+        manager.record(url: libURL)
+        let entries = manager.entries()
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertNotNil(entries.first?.bookmarkData)
+    }
+
+    func testResolveURLWithValidBookmark() throws {
+        let libURL = makeLibraryURL("LibraryResolveTest")
+        try FileManager.default.createDirectory(at: libURL, withIntermediateDirectories: true)
+        let dbURL = libURL.appendingPathComponent("metadata.db")
+        try Data("mock".utf8).write(to: dbURL)
+
+        manager.record(url: libURL)
+        let entry = try XCTUnwrap(manager.entries().first)
+
+        let resolved = manager.resolveURL(for: entry)
+        XCTAssertNotNil(resolved)
+        XCTAssertEqual(resolved?.standardizedFileURL, libURL.standardizedFileURL)
+    }
+
+    func testResolveURLWhenMoved() throws {
+        let libURL = makeLibraryURL("LibraryMoveInitial")
+        try FileManager.default.createDirectory(at: libURL, withIntermediateDirectories: true)
+        let dbURL = libURL.appendingPathComponent("metadata.db")
+        try Data("mock".utf8).write(to: dbURL)
+
+        manager.record(url: libURL)
+        let entry = try XCTUnwrap(manager.entries().first)
+
+        let movedURL = makeLibraryURL("LibraryMoveDestination")
+        try FileManager.default.moveItem(at: libURL, to: movedURL)
+
+        let resolved = manager.resolveURL(for: entry)
+        XCTAssertNotNil(resolved)
+        XCTAssertEqual(resolved?.standardizedFileURL, movedURL.standardizedFileURL)
+    }
+
+    func testRecordExtractsCalibreUUID() throws {
+        let libURL = makeLibraryURL("LibraryUUIDTest")
+        try FileManager.default.createDirectory(at: libURL, withIntermediateDirectories: true)
+        let dbURL = libURL.appendingPathComponent("metadata.db")
+        let db = try Connection(dbURL.path)
+        try db.run("CREATE TABLE library_id (id INTEGER PRIMARY KEY, uuid TEXT NOT NULL);")
+        try db.run("INSERT INTO library_id (uuid) VALUES ('test-uuid-12345');")
+
+        manager.record(url: libURL)
+        let entry = try XCTUnwrap(manager.entries().first)
+        XCTAssertEqual(entry.calibreUUID, "test-uuid-12345")
+    }
+
+    func testResolveMissingLibraryWithUUID() throws {
+        let searchDir = tempDir.appendingPathComponent("SearchDir")
+        let targetLib = searchDir.appendingPathComponent("FoundLibrary")
+        try FileManager.default.createDirectory(at: targetLib, withIntermediateDirectories: true)
+        let dbURL = targetLib.appendingPathComponent("metadata.db")
+        let db = try Connection(dbURL.path)
+        try db.run("CREATE TABLE library_id (id INTEGER PRIMARY KEY, uuid TEXT NOT NULL);")
+        try db.run("INSERT INTO library_id (uuid) VALUES ('target-uuid-999');")
+
+        let found = manager.findLibrary(withUUID: "target-uuid-999", inSearchDirectories: [searchDir])
+        XCTAssertEqual(found?.standardizedFileURL, targetLib.standardizedFileURL)
     }
 }

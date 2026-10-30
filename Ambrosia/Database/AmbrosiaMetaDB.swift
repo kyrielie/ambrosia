@@ -98,7 +98,7 @@ actor AmbrosiaMetaDB {
         return dir
     }
 
-    private static func databaseDirectory(for hash: String) throws -> URL {
+    static func databaseDirectory(for hash: String) throws -> URL {
         let dir = try librariesBaseDirectory().appendingPathComponent(hash)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
@@ -123,8 +123,9 @@ actor AmbrosiaMetaDB {
         try dedupeSeriesCacheIfNeeded(db: db)
         try dropAO3AuthorUsernameIfNeeded(db: db)
         try migrateLegacySwiftDataIfNeeded(db: db)
-        try createAO3TagSynonyms(db: db)
+        purgeLegacyTagSeedTablesIfPresent(db: db)
         try bootstrapSystemCollections(db: db)
+        backfillMissingDiagnosticsIfNeeded(db: db)
     }
 
     // MARK: - Migration tracking (Finding 13)
@@ -709,43 +710,30 @@ actor AmbrosiaMetaDB {
         }
     }
 
-    private static func createAO3TagSynonyms(db: Connection) throws {
-        try db.execute("""
-        CREATE TABLE IF NOT EXISTS canonical_tags (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            tag_type TEXT NOT NULL,
-            last_fetched TEXT
-        );
+    private static func purgeLegacyTagSeedTablesIfPresent(db: Connection) {
+        let legacyTables = ["tag_subtag_sections", "tag_parent_links", "tag_synonyms", "canonical_tags"]
+        var purgedAny = false
+        for table in legacyTables
+        where (try? db.scalar("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", table)) != nil {
+            try? db.execute("DROP TABLE IF EXISTS \(table);")
+            purgedAny = true
+        }
+        if purgedAny {
+            try? db.execute("VACUUM;")
+        }
+    }
 
-        CREATE TABLE IF NOT EXISTS tag_synonyms (
-            synonym TEXT NOT NULL,
-            canonical_id INTEGER NOT NULL REFERENCES canonical_tags(id) ON DELETE CASCADE,
-            PRIMARY KEY (synonym)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_tag_synonyms_canonical
-            ON tag_synonyms(canonical_id);
-
-        CREATE TABLE IF NOT EXISTS tag_parent_links (
-            child_id INTEGER NOT NULL REFERENCES canonical_tags(id),
-            parent_id INTEGER NOT NULL REFERENCES canonical_tags(id),
-            PRIMARY KEY (child_id, parent_id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_tag_parent_links_child
-            ON tag_parent_links(child_id);
-
-        CREATE INDEX IF NOT EXISTS idx_tag_parent_links_parent
-            ON tag_parent_links(parent_id);
-
-        CREATE TABLE IF NOT EXISTS tag_subtag_sections (
-            child_id INTEGER NOT NULL REFERENCES canonical_tags(id),
-            parent_id INTEGER NOT NULL REFERENCES canonical_tags(id),
-            section TEXT,
-            PRIMARY KEY (child_id, parent_id)
-        );
-        """)
+    private static func backfillMissingDiagnosticsIfNeeded(db: Connection) {
+        let backfillSQL = """
+        INSERT OR IGNORE INTO ao3_extraction_diagnostics
+        (calibre_id, status, reason, epub_path, epub_filename, spine_items_checked, attempted_at)
+        SELECT b.calibre_id, 'skipped', 'No AO3 preface metadata (dl.tags) found in EPUB', NULL, b.title, 5, b.indexed_at
+        FROM book_index b
+        LEFT JOIN ao3_metadata m ON b.calibre_id = m.calibre_id
+        LEFT JOIN ao3_extraction_diagnostics d ON b.calibre_id = d.calibre_id
+        WHERE m.calibre_id IS NULL AND d.calibre_id IS NULL;
+        """
+        _ = try? db.run(backfillSQL)
     }
 
     private var tagSeedLoadedKey: String {
@@ -753,87 +741,32 @@ actor AmbrosiaMetaDB {
     }
 
     func importConfiguredAO3TagSeedsIfNeeded() throws {
-        guard let seedURL = AO3TagSeedDatabaseConfig.shared.validDatabaseURLIfEnabled() else { return }
-        let sourceIdentity = try AO3TagSeedDatabaseConfig.identity(for: seedURL)
-        let previousIdentity = UserDefaults.standard.string(forKey: tagSeedLoadedKey)
-        guard previousIdentity != sourceIdentity else { return }
-        if let previousIdentity, previousIdentity != sourceIdentity {
-            try clearAO3TagSynonymCache()
-        }
-        try AO3TagSeedDatabaseConfig.validate(url: seedURL)
-
-        var seedComponents = URLComponents(url: seedURL, resolvingAgainstBaseURL: false)
-        seedComponents?.queryItems = [
-            URLQueryItem(name: "mode", value: "ro"),
-            URLQueryItem(name: "immutable", value: "1")
-        ]
-        let seedURI = seedComponents?.url?.absoluteString ?? seedURL.absoluteString
-        let escapedURI = seedURI.replacingOccurrences(of: "'", with: "''")
-        try db.transaction(.deferred) {
-            try db.execute("ATTACH DATABASE '\(escapedURI)' AS ao3_seed")
-            defer { try? db.execute("DETACH DATABASE ao3_seed") }
-
-            try db.execute("""
-            INSERT OR IGNORE INTO canonical_tags(name, tag_type, last_fetched)
-            SELECT name, tag_type, NULL
-            FROM ao3_seed.canonical_tags;
-
-            INSERT OR IGNORE INTO tag_synonyms(synonym, canonical_id)
-            SELECT s.synonym, c.id
-            FROM ao3_seed.tag_synonyms s
-            JOIN ao3_seed.canonical_tags sc ON sc.id = s.canonical_id
-            JOIN canonical_tags c ON c.name = sc.name;
-
-            INSERT OR IGNORE INTO tag_parent_links(child_id, parent_id)
-            SELECT child.id, parent.id
-            FROM ao3_seed.tag_parent_links l
-            JOIN ao3_seed.canonical_tags seed_child ON seed_child.id = l.child_id
-            JOIN ao3_seed.canonical_tags seed_parent ON seed_parent.id = l.parent_id
-            JOIN canonical_tags child ON child.name = seed_child.name
-            JOIN canonical_tags parent ON parent.name = seed_parent.name;
-
-            INSERT OR IGNORE INTO tag_subtag_sections(child_id, parent_id, section)
-            SELECT child.id, parent.id, s.section
-            FROM ao3_seed.tag_subtag_sections s
-            JOIN ao3_seed.canonical_tags seed_child ON seed_child.id = s.child_id
-            JOIN ao3_seed.canonical_tags seed_parent ON seed_parent.id = s.parent_id
-            JOIN canonical_tags child ON child.name = seed_child.name
-            JOIN canonical_tags parent ON parent.name = seed_parent.name;
-            """)
-        }
-        UserDefaults.standard.set(sourceIdentity, forKey: tagSeedLoadedKey)
+        // Tag seeds are now queried directly from the configured external
+        // ao3_tag_seeds.db without duplicating 1.74M rows into ambrosia_meta.db.
+        Self.purgeLegacyTagSeedTablesIfPresent(db: db)
     }
 
     func clearAO3TagSynonymCache() throws {
-        try db.transaction(.deferred) {
-            try db.execute("""
-            DELETE FROM tag_subtag_sections;
-            DELETE FROM tag_parent_links;
-            DELETE FROM tag_synonyms;
-            DELETE FROM canonical_tags;
-            """)
-        }
+        Self.purgeLegacyTagSeedTablesIfPresent(db: db)
         UserDefaults.standard.removeObject(forKey: tagSeedLoadedKey)
     }
 
     func clearAO3TagSynonymCacheAndReloadSeeds() throws {
         try clearAO3TagSynonymCache()
-        try importConfiguredAO3TagSeedsIfNeeded()
+        AO3TagSeedDatabaseConfig.shared.refreshValidation()
     }
 
     func ao3TagSeedCounts() throws -> AO3TagSeedDatabaseConfig.Counts {
-        func count(_ table: String) throws -> Int {
-            let value = try db.scalar("SELECT COUNT(*) FROM \(table)")
-            if let int64 = value as? Int64 { return Int(int64) }
-            if let int = value as? Int { return int }
-            return 0
+        if let url = AO3TagSeedDatabaseConfig.shared.validDatabaseURLIfEnabled() {
+            return try AO3TagSeedDatabaseConfig.counts(url: url)
         }
-        return AO3TagSeedDatabaseConfig.Counts(
-            canonicalTags: try count("canonical_tags"),
-            synonyms: try count("tag_synonyms"),
-            hierarchyEdges: try count("tag_parent_links"),
-            subtagSections: try count("tag_subtag_sections")
-        )
+        return AO3TagSeedDatabaseConfig.Counts(canonicalTags: 0, synonyms: 0, hierarchyEdges: 0, subtagSections: 0)
+    }
+
+    func vacuumAndCheckpoint() throws {
+        try run("PRAGMA wal_checkpoint(TRUNCATE);")
+        try run("VACUUM;")
+        try run("PRAGMA wal_checkpoint(TRUNCATE);")
     }
 
     func run(_ sql: String, _ bindings: [Binding?] = []) throws {
@@ -1526,6 +1459,35 @@ actor AmbrosiaMetaDB {
                 spineItemsChecked: row.int(at: 5),
                 attemptedAt: attemptedAt
             )
+        }
+        return result
+    }
+
+    /// Fetches all stored extraction diagnostics, optionally filtering to failures only.
+    func allAO3Diagnostics(failedOnly: Bool = false) throws -> [AO3ExtractionDiagnostic] {
+        Self.backfillMissingDiagnosticsIfNeeded(db: db)
+        let condition = failedOnly ? "WHERE status = 'failed' OR reason LIKE '%error%'" : ""
+        let sql = """
+        SELECT calibre_id, status, reason, epub_path, epub_filename, spine_items_checked, attempted_at
+        FROM ao3_extraction_diagnostics
+        \(condition)
+        ORDER BY calibre_id ASC
+        """
+        var result: [AO3ExtractionDiagnostic] = []
+        for row in try prepare(sql) {
+            guard let id = row.int(at: 0),
+                  let status = row[safe: 1] as? String,
+                  let reason = row[safe: 2] as? String,
+                  let attemptedAt = row[safe: 6] as? String else { continue }
+            result.append(AO3ExtractionDiagnostic(
+                calibreID: id,
+                status: status,
+                reason: reason,
+                epubPath: row[safe: 3] as? String,
+                epubFilename: row[safe: 4] as? String,
+                spineItemsChecked: row.int(at: 5),
+                attemptedAt: attemptedAt
+            ))
         }
         return result
     }
@@ -2627,138 +2589,24 @@ actor AmbrosiaMetaDB {
     // pre-resolve terms with `await` before building the query.
 
     /// Returns the canonical tag name for `term` if a synonym mapping exists,
-    /// otherwise returns `term` unchanged.
+    /// otherwise returns `term` unchanged. Delegated directly to the shared
+    /// `AO3TagSeedDatabaseConfig` read-only connection without duplicating seeds per library.
     func canonicalTerm(for term: String) -> String {
-        guard AO3TagSeedDatabaseConfig.shared.isEnabled,
-              AO3TagSeedDatabaseConfig.shared.validDatabaseURLIfEnabled() != nil else { return term }
-        let sql = """
-            SELECT c.name
-            FROM tag_synonyms s
-            JOIN canonical_tags c ON c.id = s.canonical_id
-            WHERE LOWER(s.synonym) = LOWER(?)
-            LIMIT 1
-            """
-        if let row = (try? readDB.prepare(sql, [term as Binding?]).map { $0 })?.first,
-           let canonical = row[0] as? String {
-            return canonical
-        }
-        return term
+        AO3TagSeedDatabaseConfig.shared.canonicalTag(for: term)
     }
 
     /// Returns `term` plus all known synonyms. Returns `[term]` when no mapping exists
-    /// or when AO3 tag seeds are disabled.
+    /// or when AO3 tag seeds are disabled. Delegated directly to the shared
+    /// `AO3TagSeedDatabaseConfig` read-only connection.
     func expandedTerms(for term: String) -> [String] {
-        guard AO3TagSeedDatabaseConfig.shared.isEnabled,
-              AO3TagSeedDatabaseConfig.shared.validDatabaseURLIfEnabled() != nil else { return [term] }
-        let sql = """
-            WITH root(id, name) AS (
-                SELECT id, name FROM canonical_tags WHERE LOWER(name) = LOWER(?)
-                UNION
-                SELECT c.id, c.name
-                FROM tag_synonyms s
-                JOIN canonical_tags c ON c.id = s.canonical_id
-                WHERE LOWER(s.synonym) = LOWER(?)
-            )
-            SELECT name FROM root
-            UNION
-            SELECT synonym
-            FROM tag_synonyms
-            WHERE canonical_id IN (SELECT id FROM root)
-            """
-        guard let rows = try? readDB.prepare(sql, [term as Binding?, term as Binding?]).map({ $0 }) else {
-            return [term]
-        }
-        var seen = Set<String>()
-        var terms: [String] = []
-        for row in rows {
-            guard let value = row[0] as? String else { continue }
-            if seen.insert(value.lowercased()).inserted { terms.append(value) }
-        }
-        return terms.isEmpty ? [term] : terms
+        AO3TagSeedDatabaseConfig.shared.expandedTerms(for: term)
     }
 
     /// Batched form of `expandedTerms(for:)`. Returns a dictionary keyed by each
-    /// input term (lowercase-preserving the original casing as given) mapping to
-    /// its expanded term list, using the same root/synonym join shape as the
-    /// single-term version but resolved in two queries total instead of one
-    /// query per tag. Falls back to `[term]` per-term when no mapping exists or
-    /// when AO3 tag seeds are disabled, matching `expandedTerms(for:)`.
+    /// input term mapping to its expanded term list. Delegated directly to the shared
+    /// `AO3TagSeedDatabaseConfig` read-only connection.
     func expandedTermsBatch(for tags: [String]) -> [String: [String]] {
-        guard !tags.isEmpty else { return [:] }
-        guard AO3TagSeedDatabaseConfig.shared.isEnabled,
-              AO3TagSeedDatabaseConfig.shared.validDatabaseURLIfEnabled() != nil else {
-            return LibraryQueryHelpers.indexed(tags.map { ($0, [$0]) })
-        }
-
-        let placeholders = tags.map { _ in "?" }.joined(separator: ", ")
-        let lowerBindings: [Binding?] = tags.map { $0.lowercased() as Binding? }
-
-        // Step 1: find each input term's root canonical id, either because the
-        // term IS a canonical name, or because it's a known synonym of one.
-        let rootSQL = """
-            SELECT LOWER(name) AS matched_term, id, name
-            FROM canonical_tags
-            WHERE LOWER(name) IN (\(placeholders))
-            UNION ALL
-            SELECT LOWER(s.synonym) AS matched_term, c.id, c.name
-            FROM tag_synonyms s
-            JOIN canonical_tags c ON c.id = s.canonical_id
-            WHERE LOWER(s.synonym) IN (\(placeholders))
-            """
-        guard let rootRows = try? readDB.prepare(rootSQL, lowerBindings + lowerBindings).map({ $0 }) else {
-            return LibraryQueryHelpers.indexed(tags.map { ($0, [$0]) })
-        }
-
-        // matched_term (lowercased input) -> set of root canonical ids
-        var rootIDsByMatchedTerm: [String: Set<Int64>] = [:]
-        // root canonical id -> canonical name
-        var canonicalNameByRootID: [Int64: String] = [:]
-        for row in rootRows {
-            guard let matchedTerm = row[0] as? String,
-                  let rootID = row.int64(at: 1),
-                  let canonicalName = row[2] as? String else { continue }
-            rootIDsByMatchedTerm[matchedTerm, default: []].insert(rootID)
-            canonicalNameByRootID[rootID] = canonicalName
-        }
-
-        let allRootIDs = Array(Set(canonicalNameByRootID.keys))
-        var synonymsByRootID: [Int64: [String]] = [:]
-        if !allRootIDs.isEmpty {
-            let idPlaceholders = allRootIDs.map { _ in "?" }.joined(separator: ", ")
-            let synonymSQL = """
-                SELECT canonical_id, synonym
-                FROM tag_synonyms
-                WHERE canonical_id IN (\(idPlaceholders))
-                """
-            let idBindings: [Binding?] = allRootIDs.map { $0 as Binding? }
-            if let synonymRows = try? readDB.prepare(synonymSQL, idBindings).map({ $0 }) {
-                for row in synonymRows {
-                    guard let rootID = row.int64(at: 0), let synonym = row[1] as? String else { continue }
-                    synonymsByRootID[rootID, default: []].append(synonym)
-                }
-            }
-        }
-
-        var result: [String: [String]] = [:]
-        for tag in tags {
-            let matchedTerm = tag.lowercased()
-            guard let rootIDs = rootIDsByMatchedTerm[matchedTerm], !rootIDs.isEmpty else {
-                result[tag] = [tag]
-                continue
-            }
-            var seen = Set<String>()
-            var terms: [String] = []
-            for rootID in rootIDs {
-                if let name = canonicalNameByRootID[rootID], seen.insert(name.lowercased()).inserted {
-                    terms.append(name)
-                }
-                for synonym in synonymsByRootID[rootID] ?? [] where seen.insert(synonym.lowercased()).inserted {
-                    terms.append(synonym)
-                }
-            }
-            result[tag] = terms.isEmpty ? [tag] : terms
-        }
-        return result
+        AO3TagSeedDatabaseConfig.shared.expandedTermsBatch(for: tags)
     }
 
     // MARK: - Book State (Reading Progress & Position)

@@ -58,7 +58,8 @@ enum AO3AuthorSource: String, Codable, Sendable {
     case calibre
 }
 
-struct AO3ExtractionDiagnostic: Codable, Equatable, Sendable {
+struct AO3ExtractionDiagnostic: Identifiable, Codable, Equatable, Sendable {
+    var id: Int { calibreID }
     let calibreID: Int
     let status: String
     let reason: String

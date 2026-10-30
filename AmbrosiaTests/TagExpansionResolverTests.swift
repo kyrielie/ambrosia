@@ -28,6 +28,7 @@ final class TagExpansionResolverTests: XCTestCase {
     private var metaDB: AmbrosiaMetaDB!
     private var savedIsEnabled: Bool!
     private var savedDatabasePath: String!
+    private var seedDBPath: String?
 
     override func setUpWithError() throws {
         libraryURL = FileManager.default.temporaryDirectory
@@ -41,21 +42,23 @@ final class TagExpansionResolverTests: XCTestCase {
     override func tearDownWithError() throws {
         AO3TagSeedDatabaseConfig.shared.isEnabled = savedIsEnabled
         AO3TagSeedDatabaseConfig.shared.databasePath = savedDatabasePath
+        if let seedDBPath {
+            try? FileManager.default.removeItem(atPath: seedDBPath)
+        }
+        seedDBPath = nil
         libraryURL = nil
         metaDB = nil
     }
 
     /// Enables the singleton and points it at a real, valid (but otherwise
-    /// unused) AO3 seed database, so `expandedTermsBatch`'s
-    /// `validDatabaseURLIfEnabled() != nil` gate passes and the populated
-    /// `canonical_tags`/`tag_synonyms` rows seeded directly into `metaDB`
-    /// below are actually queried instead of short-circuited.
+    /// unused) AO3 seed database, so `expandedTermsBatch` queries it directly.
     private func enableAO3TagSeeds() async throws {
         let seedRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("TagExpansionResolverTests-seed-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: seedRoot, withIntermediateDirectories: true)
-        let seedDBPath = seedRoot.appendingPathComponent("seed.db").path
-        let seedDB = try Connection(seedDBPath)
+        let dbPath = seedRoot.appendingPathComponent("seed.db").path
+        seedDBPath = dbPath
+        let seedDB = try Connection(dbPath)
         try seedDB.execute("""
             CREATE TABLE canonical_tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, tag_type TEXT NOT NULL DEFAULT 'unknown', last_fetched TEXT);
             CREATE TABLE tag_synonyms (synonym TEXT NOT NULL, canonical_id INTEGER NOT NULL, PRIMARY KEY (synonym));
@@ -68,25 +71,29 @@ final class TagExpansionResolverTests: XCTestCase {
         // explicitly rather than writing to the singleton from whatever
         // thread the test happens to be on.
         await MainActor.run {
-            AO3TagSeedDatabaseConfig.shared.databasePath = seedDBPath
+            AO3TagSeedDatabaseConfig.shared.databasePath = dbPath
             AO3TagSeedDatabaseConfig.shared.isEnabled = true
         }
     }
 
-    /// Seeds a canonical tag with two synonyms directly into `metaDB`'s own
-    /// tables, bypassing the AO3-seed-import path.
+    /// Seeds a canonical tag with two synonyms directly into the configured AO3 seed database.
     private func seedCanonicalWithSynonyms(canonical: String, synonyms: [String]) async throws {
-        try await metaDB.run(
+        guard let path = seedDBPath else {
+            XCTFail("seedDBPath is nil; call enableAO3TagSeeds() first")
+            return
+        }
+        let seedDB = try Connection(path)
+        try seedDB.run(
             "INSERT INTO canonical_tags(name, tag_type, last_fetched) VALUES (?, 'fandom', NULL)",
             [canonical as Binding?]
         )
-        let idRow = try await metaDB.prepare("SELECT id FROM canonical_tags WHERE name = ?", [canonical as Binding?])
-        guard let canonicalID = idRow.first?.first as? Int64 else {
+        let idRow = try seedDB.prepare("SELECT id FROM canonical_tags WHERE name = ?", [canonical as Binding?]).map { $0 }
+        guard let canonicalID = (idRow.first?[0] as? Int64) ?? (idRow.first?[0] as? Int).map(Int64.init) else {
             XCTFail("failed to read back inserted canonical_tags.id for \(canonical)")
             return
         }
         for synonym in synonyms {
-            try await metaDB.run(
+            try seedDB.run(
                 "INSERT INTO tag_synonyms(synonym, canonical_id) VALUES (?, ?)",
                 [synonym as Binding?, canonicalID as Binding?]
             )

@@ -111,6 +111,13 @@ final class EmailLibraryViewController: NSViewController {
         startObservingToolbarToggles()
         startObservingDisplayController()
         syncSidebarFromDisplayController()
+
+        NotificationCenter.default.publisher(for: .librarySnapshotsDidBecomeReady)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.setSelectedBook(nil)
+            }
+            .store(in: &preferenceCancellables)
     }
 
     // MARK: - Split-View Setup

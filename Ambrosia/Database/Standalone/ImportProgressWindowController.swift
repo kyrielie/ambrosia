@@ -95,6 +95,17 @@ final class ImportProgressWindowController: NSWindowController {
         statusLabel.stringValue = "Cancelling…"
     }
 
+    /// Shows scanning state while evaluating loose EPUBs.
+    public func showScanningState(folderURL: URL) {
+        titleLabel.stringValue = "Scanning Folder…"
+        statusLabel.stringValue = "Looking for EPUB files in \"\(folderURL.lastPathComponent)\"…"
+        progressBar.isIndeterminate = true
+        progressBar.startAnimation(nil)
+        self.showWindow(nil)
+        self.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     /// Starts the ingestion workflow for a folder of EPUBs.
     public func startIngestion(
         folderURL: URL,

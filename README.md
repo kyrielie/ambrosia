@@ -89,14 +89,24 @@ xattr -dr com.apple.quarantine /Applications/Ambrosia.app
 - Faceted filter drawer: filter by fandom, relationship, character, rating, status, language, or custom rule with live match counts.
 - Search prefixes: filter directly using `tag:`, `author:`, `series:`, `title:`, or `fandom:`.
 
-**AO3-First Metadata**
+**AO3-First Metadata & Extraction**
 - Calibre's `metadata.db` remains **strictly read-only**.
 - Automatically parses EPUB preface metadata into a local `ambrosia_meta.db`, extracting fandoms, pairings, characters, freeform tags, categories, warnings, word counts, and chapter counts.
-- Seed canonical AO3 tag databases for intelligent tag autocomplete and synonym expansion.
+- **Extraction Diagnostics & Failed Works Inspector**: View exact counts of extracted vs. failed works with a dedicated viewer in Settings to inspect and debug books that failed preface extraction.
+- **External Tag Seed Database**: Directly queries canonical AO3 tag seed databases in read-only mode for intelligent tag autocomplete and synonym expansion without duplicating 1.7M+ rows into each library.
 
-**Full-Text Search (FTS)**
+**Full-Text Search (FTS) & Maintenance**
 - Fast inverted-index search across EPUB text (`⇧⌘F`) using Calibre's full-text search database.
 - Multi-token ranking, match count indicators, token highlights, and instant jump to matching snippets.
+- **Index Unindexed Works**: Background scanner that indexes text for newly added EPUBs, maintaining 100% Calibre FTS compatibility.
+- **Compact & Vacuum**: Optimizes SQLite FTS5 segment trees, flushes and truncates WAL logs, and reclaims deleted disk space.
+- **Clear Search Index**: Completely deletes `full-text-search.db` (and companion `-wal` / `-shm` files) from the library folder to reclaim massive amounts of disk space (hundreds of megabytes to gigabytes). Can be safely rebuilt at any time via "Index Unindexed Works".
+
+**Multi-Library Management & Storage Footprint**
+- Seamlessly switch between multiple Calibre libraries in **Settings ▸ Data**.
+- **Volume & Removable Drive Monitoring**: Automatically detects unmounted external volumes and missing drives with clear visual indicators and a one-click **Locate…** relinking picker.
+- **Detailed Storage Footprint**: Scope toggle to view the active library or all known libraries combined, showing exact sizes and proportional footprints for EPUBs, `metadata.db`, `full-text-search.db`, and `ambrosia_meta.db`.
+- **Library Creator**: Turn any folder of EPUBs into a fully compliant Calibre library with standard directory structure and metadata (`File ▸ Create Calibre Library from Folder…`).
 
 **Built-in Reader**
 - Custom reader engine supporting paginated multi-column layouts and continuous scrolling.
@@ -143,6 +153,19 @@ On first launch, Ambrosia registers the library and creates its own isolated sup
 ```
 
 Ambrosia never writes to Calibre's `metadata.db` or alters your EPUB files.
+
+### Storage Footprint & Database Maintenance
+
+In **Settings ▸ Data**, Ambrosia provides a complete breakdown of disk space consumed by your books and databases:
+- **EPUB Files**: Your original book files stored in the Calibre library.
+- **Calibre Metadata (`metadata.db`)**: Calibre's core database (read-only).
+- **Full-Text Search (`full-text-search.db`)**: Calibre's FTS5 search index. Because FTS stores uncompressed body text alongside dual token indexes (`books_fts` and `books_fts_stemmed`), this file can grow to 2–3× the size of compressed EPUBs.
+- **Ambrosia Metadata (`ambrosia_meta.db`)**: Ambrosia's local database storing extracted AO3 metadata, reading history, collections, and bookmarks (~3–5 MB per library).
+
+Ambrosia provides three database management tools directly in Settings:
+- **Compact & Vacuum**: Merges fragmented FTS5 B-tree index segments (`INSERT INTO books_fts(books_fts) VALUES('optimize')`), truncates SQLite write-ahead logs (WAL), and executes `VACUUM` across both `full-text-search.db` and `ambrosia_meta.db` to reclaim unused disk space without altering any data.
+- **Index Unindexed Works**: Matches Calibre's indexing workflow by scanning for newly added EPUBs that lack body text in `full-text-search.db` and indexes them in the background.
+- **Clear Search Index**: Deletes `full-text-search.db` and its companion WAL/SHM files to instantly reclaim disk space (often several hundred megabytes to gigabytes for large libraries). This is completely safe and non-destructive: your EPUBs, reading progress, and metadata remain untouched. You can rebuild the search index at any time using "Index Unindexed Works" or Calibre.
 
 ## Privacy
 

@@ -851,6 +851,14 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             lvc.displayController.scheduleLoadPage()
         }
     }
+
+    @objc func showFailedExtractions() {
+        if let lvc = contentViewController as? LibraryViewController {
+            lvc.displayController.addOrReplaceRule(
+                FilterRule(field: .collection, op: .equals, value: SystemCollectionID.failedExtractionName)
+            )
+        }
+    }
     /// In email mode this collapses/expands the split-view sidebar via
     /// `toggleEmailSidebar`, observed by `EmailLibraryViewController`. In
     /// list/ranking mode there is no such observer — previously a silent

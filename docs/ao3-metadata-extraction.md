@@ -19,9 +19,15 @@ Extracted fields include story URL, work ID, author username, kudos, word count,
 
 Series metadata is cached in `series_cache`; Calibre series data is inserted as fallback.
 
-Configured AO3 tag seed databases can be imported into `canonical_tags`, `tag_synonyms`, `tag_parent_links`, and `tag_subtag_sections`. Synonym expansion is present at the storage layer but UI coverage is incomplete.
+### Tag Seeds & Synonym Resolution
+Configured AO3 tag seed databases (`ao3_tag_seeds.db`) are queried **directly in read-only mode** via `AO3TagSeedDatabaseConfig.shared`. Tag seed rows are no longer duplicated into each library's `ambrosia_meta.db`, saving ~117 MB per library and eliminating duplicate tables (`canonical_tags`, `tag_synonyms`, `tag_parent_links`, `tag_subtag_sections`). Any legacy copies of these tables in existing `ambrosia_meta.db` files are automatically dropped and vacuumed on library open.
 
-**Fixed.** `AO3TagSearchResolver` has been removed. `canonicalTerm(for:)` and `expandedTerms(for:)` are now actor-isolated methods on `AmbrosiaMetaDB` itself, called through `LibrarySession.metaDB` from the search and filter pipeline. No code path opens an independent connection to `ambrosia_meta.db` for tag resolution anymore.
+`canonicalTerm(for:)` and `expandedTerms(for:)` on `AmbrosiaMetaDB` delegate directly to `AO3TagSeedDatabaseConfig.shared`, providing canonicalization and synonym expansion across search and filter pipelines without redundant disk copies.
+
+### Extraction Diagnostics & Debugging Failed Works
+When extraction encounters a non-AO3 EPUB or malformed preface structure, the failure reason is recorded in `ao3_extraction_diagnostics (calibre_id, story_url, reason, attempted_at)`.
+
+In **Settings ▸ Data**, users can view extraction progress (Extracted vs. Failed vs. Total) and click **"View Failed Works"** to open a diagnostic inspection sheet. The sheet displays the book title, author, and specific parsing error message (e.g. missing preface elements, malformed HTML, or unparseable metadata), with a button to open each failed book directly in the reader for inspection.
 
 ---
 

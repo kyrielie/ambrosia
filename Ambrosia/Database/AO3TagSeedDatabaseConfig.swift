@@ -36,8 +36,14 @@ final class AO3TagSeedDatabaseConfig {
         static let path = "ao3TagSeedDatabase.path"
     }
 
+    private let readLock = NSRecursiveLock()
+    private var cachedReadDB: (path: String, conn: Connection)?
+
     var isEnabled: Bool = false {
         didSet {
+            readLock.lock()
+            cachedReadDB = nil
+            readLock.unlock()
             UserDefaults.standard.set(isEnabled, forKey: Keys.enabled)
             refreshValidation()
         }
@@ -45,6 +51,9 @@ final class AO3TagSeedDatabaseConfig {
 
     var databasePath: String? {
         didSet {
+            readLock.lock()
+            cachedReadDB = nil
+            readLock.unlock()
             if let databasePath, !databasePath.isEmpty {
                 UserDefaults.standard.set(databasePath, forKey: Keys.path)
             } else {
@@ -178,5 +187,150 @@ final class AO3TagSeedDatabaseConfig {
         if let int64 = value as? Int64 { return Int(int64) }
         if let int = value as? Int { return int }
         return 0
+    }
+
+    // MARK: - Direct Read-Only Queries (Zero Data Duplication)
+
+    private func readConnection() -> Connection? {
+        readLock.lock()
+        defer { readLock.unlock() }
+        guard let url = validDatabaseURLIfEnabled() else {
+            cachedReadDB = nil
+            return nil
+        }
+        if let cached = cachedReadDB, cached.path == url.path {
+            return cached.conn
+        }
+        guard let conn = try? Connection(url.path, readonly: true) else {
+            cachedReadDB = nil
+            return nil
+        }
+        cachedReadDB = (url.path, conn)
+        return conn
+    }
+
+    func canonicalTag(for term: String) -> String {
+        readLock.lock()
+        defer { readLock.unlock() }
+        guard let db = readConnection() else { return term }
+        let sql = """
+            SELECT c.name
+            FROM tag_synonyms s
+            JOIN canonical_tags c ON c.id = s.canonical_id
+            WHERE LOWER(s.synonym) = LOWER(?)
+            LIMIT 1
+            """
+        if let row = (try? db.prepare(sql, [term as Binding?]).map { $0 })?.first,
+           let canonical = row[0] as? String {
+            return canonical
+        }
+        return term
+    }
+
+    func expandedTerms(for term: String) -> [String] {
+        readLock.lock()
+        defer { readLock.unlock() }
+        guard let db = readConnection() else { return [term] }
+        let sql = """
+            WITH root(id, name) AS (
+                SELECT id, name FROM canonical_tags WHERE LOWER(name) = LOWER(?)
+                UNION
+                SELECT c.id, c.name
+                FROM tag_synonyms s
+                JOIN canonical_tags c ON c.id = s.canonical_id
+                WHERE LOWER(s.synonym) = LOWER(?)
+            )
+            SELECT name FROM root
+            UNION
+            SELECT synonym
+            FROM tag_synonyms
+            WHERE canonical_id IN (SELECT id FROM root)
+            """
+        guard let rows = try? db.prepare(sql, [term as Binding?, term as Binding?]).map({ $0 }) else {
+            return [term]
+        }
+        var seen = Set<String>()
+        var terms: [String] = []
+        for row in rows {
+            guard let value = row[0] as? String else { continue }
+            if seen.insert(value.lowercased()).inserted { terms.append(value) }
+        }
+        return terms.isEmpty ? [term] : terms
+    }
+
+    func expandedTermsBatch(for tags: [String]) -> [String: [String]] {
+        guard !tags.isEmpty else { return [:] }
+        readLock.lock()
+        defer { readLock.unlock() }
+        guard let db = readConnection() else {
+            return LibraryQueryHelpers.indexed(tags.map { ($0, [$0]) })
+        }
+
+        let placeholders = tags.map { _ in "?" }.joined(separator: ", ")
+        let lowerBindings: [Binding?] = tags.map { $0.lowercased() as Binding? }
+
+        let rootSQL = """
+            SELECT LOWER(name) AS matched_term, id, name
+            FROM canonical_tags
+            WHERE LOWER(name) IN (\(placeholders))
+            UNION ALL
+            SELECT LOWER(s.synonym) AS matched_term, c.id, c.name
+            FROM tag_synonyms s
+            JOIN canonical_tags c ON c.id = s.canonical_id
+            WHERE LOWER(s.synonym) IN (\(placeholders))
+            """
+        guard let rootRows = try? db.prepare(rootSQL, lowerBindings + lowerBindings).map({ $0 }) else {
+            return LibraryQueryHelpers.indexed(tags.map { ($0, [$0]) })
+        }
+
+        var rootIDsByMatchedTerm: [String: Set<Int64>] = [:]
+        var canonicalNameByRootID: [Int64: String] = [:]
+        for row in rootRows {
+            guard let matchedTerm = row[0] as? String,
+                  let rootID = (row[1] as? Int64) ?? (row[1] as? Int).map(Int64.init),
+                  let canonicalName = row[2] as? String else { continue }
+            rootIDsByMatchedTerm[matchedTerm, default: []].insert(rootID)
+            canonicalNameByRootID[rootID] = canonicalName
+        }
+
+        let allRootIDs = Array(Set(canonicalNameByRootID.keys))
+        var synonymsByRootID: [Int64: [String]] = [:]
+        if !allRootIDs.isEmpty {
+            let idPlaceholders = allRootIDs.map { _ in "?" }.joined(separator: ", ")
+            let synonymSQL = """
+                SELECT canonical_id, synonym
+                FROM tag_synonyms
+                WHERE canonical_id IN (\(idPlaceholders))
+                """
+            let idBindings: [Binding?] = allRootIDs.map { $0 as Binding? }
+            if let synonymRows = try? db.prepare(synonymSQL, idBindings).map({ $0 }) {
+                for row in synonymRows {
+                    guard let rootID = (row[0] as? Int64) ?? (row[0] as? Int).map(Int64.init),
+                          let synonym = row[1] as? String else { continue }
+                    synonymsByRootID[rootID, default: []].append(synonym)
+                }
+            }
+        }
+
+        var result: [String: [String]] = [:]
+        for tag in tags {
+            let matchedTerm = tag.lowercased()
+            guard let rootIDs = rootIDsByMatchedTerm[matchedTerm], !rootIDs.isEmpty else {
+                result[tag] = [tag]
+                continue
+            }
+            var seen = Set<String>()
+            var terms: [String] = []
+            for rootID in rootIDs {
+                if let name = canonicalNameByRootID[rootID], seen.insert(name.lowercased()).inserted {
+                    terms.append(name)
+                }
+                for synonym in synonymsByRootID[rootID] ?? [] where seen.insert(synonym.lowercased()).inserted {
+                    terms.append(synonym)
+                }
+            }
+            result[tag] = terms.isEmpty ? [tag] : terms
+        }
+        return result
     }
 }

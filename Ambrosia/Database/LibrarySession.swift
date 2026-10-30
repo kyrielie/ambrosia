@@ -14,6 +14,8 @@ extension Notification.Name {
     /// filter caches; list surfaces revalidate the current view without
     /// resetting scroll or selection. Not posted for a file-only change.
     static let libraryContentsDidChange = Notification.Name("Ambrosia.libraryContentsDidChange")
+    static let libraryVolumeDidDisconnect = Notification.Name("Ambrosia.libraryVolumeDidDisconnect")
+    static let libraryVolumeDidReconnect = Notification.Name("Ambrosia.libraryVolumeDidReconnect")
 }
 
 /// Holds the active CalibreLibrary connection for the current session.
@@ -27,6 +29,12 @@ final class LibrarySession {
 
     /// The open library connection. Nil until the user picks a folder.
     private(set) var library: CalibreLibrary?
+
+    /// State flags for removable volume disconnects and relocated libraries
+    private(set) var isVolumeDisconnected: Bool = false
+    private(set) var disconnectedVolumeName: String?
+    private(set) var isLibraryMissing: Bool = false
+    private(set) var missingLibraryName: String?
 
     /// Optional full-text-search connection. Nil if full-text-search.db doesn't exist.
     private(set) var ftsLibrary: CalibreFTSLibrary?
@@ -69,6 +77,10 @@ final class LibrarySession {
 
     /// The path of the currently open library.
     private(set) var activePath: String?
+
+    var activeURL: URL? {
+        activePath.map { URL(fileURLWithPath: $0) }
+    }
 
     /// Name-keyed collection membership, mirroring what each view used to
     /// build itself from `collectionStore.collections()` +
@@ -339,6 +351,10 @@ final class LibrarySession {
         let openSignpost = LaunchSignposts.begin("LibrarySession.open")
         defer { LaunchSignposts.end("LibrarySession.open", openSignpost) }
         lastError = nil
+        isVolumeDisconnected = false
+        disconnectedVolumeName = nil
+        isLibraryMissing = false
+        missingLibraryName = nil
         // Must flip before `library` is assigned below: `isOpen` becoming true is
         // what makes the list schedule its first load, and that load has to see
         // `snapshotsReady == false` and wait.
@@ -497,6 +513,10 @@ final class LibrarySession {
         extractionProgress.isRunning = false
         extractionProgress.completed = 0
         extractionProgress.total = 0
+        isVolumeDisconnected = false
+        disconnectedVolumeName = nil
+        isLibraryMissing = false
+        missingLibraryName = nil
         library    = nil
         ftsLibrary = nil
         metaDB = nil
@@ -808,13 +828,62 @@ final class LibrarySession {
               let path = LibraryRegistry.shared.activePath,
               !path.isEmpty else { return }
         let url = URL(fileURLWithPath: path)
-        guard LibraryRegistry.shared.isValid(path) else {
-            #if DEBUG
-            print("[LibrarySession] Saved path no longer valid: \(path)")
-            #endif
+        if LibraryRegistry.shared.isValid(path) {
+            await open(url: url)
             return
         }
-        await open(url: url)
+
+        // Try resolving via persistent URL bookmark in index.json
+        let entries = LibraryIndexManager.shared.entries()
+        if let entry = entries.first(where: { $0.lastKnownPath == path || $0.hash == Ambrosia.libraryHash(for: url) }),
+           let resolved = LibraryIndexManager.shared.resolveURL(for: entry) {
+            LibraryRegistry.shared.register(resolved)
+            await open(url: resolved)
+            return
+        }
+
+        // Path is not valid; check if on a disconnected volume
+        let comps = path.components(separatedBy: "/")
+        if comps.count > 2 && comps[1] == "Volumes" {
+            let volName = comps[2]
+            let volURL = URL(fileURLWithPath: "/Volumes/\(volName)")
+            if !FileManager.default.fileExists(atPath: volURL.path) {
+                isVolumeDisconnected = true
+                disconnectedVolumeName = volName
+                return
+            }
+        }
+
+        isLibraryMissing = true
+        missingLibraryName = url.lastPathComponent
+    }
+
+    #if DEBUG
+    func setActivePathForTesting(_ path: String?) {
+        activePath = path
+    }
+    #endif
+
+    func handleActiveVolumeDisconnected(volumeURL: URL) {
+        guard let path = activePath, path.hasPrefix(volumeURL.path) else { return }
+        isVolumeDisconnected = true
+        disconnectedVolumeName = volumeURL.lastPathComponent
+        extractionTask?.cancel()
+        extractionTask = nil
+        library = nil
+        ftsLibrary = nil
+        metaDB = nil
+        snapshotsReady = false
+        NotificationCenter.default.post(name: .libraryVolumeDidDisconnect, object: nil)
+    }
+
+    func handleVolumeReconnected(libraryURL: URL) async {
+        isVolumeDisconnected = false
+        disconnectedVolumeName = nil
+        isLibraryMissing = false
+        missingLibraryName = nil
+        await open(url: libraryURL)
+        NotificationCenter.default.post(name: .libraryVolumeDidReconnect, object: nil)
     }
 
     func reextractAO3Metadata() {
@@ -957,7 +1026,7 @@ final class LibrarySession {
             // serial loop body — only the fan-out changed, not what each book does.
             enum ExtractionOutcome {
                 case success(AO3MetadataRecord, BookIndexRecord, Int)
-                case indexed(BookIndexRecord, Int)     // parsed fine, no AO3 preface found
+                case indexed(BookIndexRecord, AO3ExtractionDiagnostic)     // parsed fine, no AO3 preface found
                 case failure(AO3ExtractionDiagnostic)
             }
 
@@ -1082,18 +1151,21 @@ final class LibrarySession {
                         ))
                     }
                     return .success(metadata, indexedRecord, id)
-                } else if let indexedRecord {
-                    return .indexed(indexedRecord, id)
                 } else {
-                    return .failure(AO3ExtractionDiagnostic(
+                    let diagnostic = AO3ExtractionDiagnostic(
                         calibreID: id,
                         status: failureStatus,
-                        reason: failureReason ?? "unknown reason",
+                        reason: failureReason ?? "no dl.tags AO3 preface metadata found",
                         epubPath: diagnosticEPUB?.path,
                         epubFilename: diagnosticEPUB?.lastPathComponent,
                         spineItemsChecked: spineItemsChecked,
                         attemptedAt: ISO8601DateFormatter().string(from: Date())
-                    ))
+                    )
+                    if let indexedRecord {
+                        return .indexed(indexedRecord, diagnostic)
+                    } else {
+                        return .failure(diagnostic)
+                    }
                 }
             }
 
@@ -1112,10 +1184,19 @@ final class LibrarySession {
                     case .success(let metadata, let indexRecord, let id):
                         pendingSuccess.append((metadata, id))
                         pendingIndexed.append((indexRecord, id))
-                    case .indexed(let record, let id):
-                        pendingIndexed.append((record, id))
+                    case .indexed(let record, let diagnostic):
+                        pendingIndexed.append((record, diagnostic.calibreID))
+                        pendingFailure.append(diagnostic)
                     case .failure(let diagnostic):
                         pendingFailure.append(diagnostic)
+                        if diagnostic.status == "failed" {
+                            try? await metaDB.logError(
+                                subsystem: "AO3MetadataExtractor",
+                                operation: "extractOneBook",
+                                message: "calibreID \(diagnostic.calibreID): \(diagnostic.reason)",
+                                calibreID: diagnostic.calibreID
+                            )
+                        }
                         #if DEBUG
                         print("[LibrarySession] AO3 extraction skipped calibreID=\(diagnostic.calibreID): \(diagnostic.reason)")
                         #endif

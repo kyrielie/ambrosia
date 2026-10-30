@@ -93,6 +93,10 @@ struct FilterEvaluator {
             if needsCollection && expression.referencesSeriesOrMergedCollection {
                 collectionMap[SystemCollectionID.seriesOrMergedName] = (try? await metaDB.leadsAtLeastOneSeriesIDs()) ?? []
             }
+            if needsCollection {
+                let failedIDs = Set((try? await metaDB.allAO3Diagnostics(failedOnly: false).map(\.calibreID)) ?? [])
+                collectionMap[SystemCollectionID.failedExtractionName] = failedIDs
+            }
         }
         guard !Task.isCancelled else { return nil }
 

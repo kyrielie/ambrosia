@@ -175,6 +175,12 @@ struct AmbrosiaApp: App {
                 }
                 .disabled(AppDelegate.shared?.libraryWindowController?.toolbarStateForCommands?.hasActiveFilter != true)
 
+                Button("Show Failed Metadata Extractions") {
+                    AppDelegate.shared?.showLibraryWindow()
+                    AppDelegate.shared?.libraryWindowController?.showFailedExtractions()
+                }
+                .disabled(session.activePath == nil)
+
                 Divider()
 
                 Button("Toggle Sidebar") {
@@ -466,7 +472,7 @@ struct RecentLibrariesMenuContent: View {
                 let valid   = LibraryRegistry.shared.isValid(path)
                 Button {
                     guard !isActive else { return }
-                    Task { await session.open(url: URL(fileURLWithPath: path)) }
+                    AppDelegate.shared?.openLibraryAtURL(URL(fileURLWithPath: path))
                 } label: {
                     if isActive {
                         Label(name, systemImage: "checkmark")

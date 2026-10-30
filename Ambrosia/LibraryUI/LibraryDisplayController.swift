@@ -86,6 +86,7 @@ final class LibraryDisplayController {
     private var lastObservedGroupBySeries: Bool = false
     private var lastObservedFilterExpression: FilterExpression = FilterExpression()
     private var lastObservedReloadToken: String?
+    private var lastObservedLibraryHash: String?
 
     // MARK: - Initialization
 
@@ -335,8 +336,17 @@ final class LibraryDisplayController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self else { return }
+                let currentHash = self.session.activeLibraryHash
+                let isNewLibrary = (currentHash != self.lastObservedLibraryHash)
+                self.lastObservedLibraryHash = currentHash
+
+                if isNewLibrary {
+                    self.toolbarState.resetForNewLibrary()
+                    self.offsetState.resetForNewFilter()
+                }
+
                 if !self.applyRestoredLastViewIfNeeded() {
-                    Task { await self.refreshVisibilitySnapshots(resetPage: false) }
+                    Task { await self.refreshVisibilitySnapshots(resetPage: isNewLibrary) }
                 }
             }
             .store(in: &cancellables)
@@ -345,12 +355,16 @@ final class LibraryDisplayController {
     // MARK: - Computed Visibility Policy
 
     var currentVisibilityPolicy: LibraryVisibilityPolicy {
-        LibraryVisibilityPolicy(
-            showSkippedCollection: ReaderPreferences.shared.showSkippedCollection,
-            shouldGroupSeriesRows: shouldGroupSeriesRows,
-            hideNonAO3PublisherBooks: ReaderPreferences.shared.hideNonAO3PublisherBooks,
-            hideAnthologyBooks: ReaderPreferences.shared.hideAnthologyBooks,
-            hideDuplicateBooks: ReaderPreferences.shared.hideDuplicateBooks,
+        let isViewingFailedExtractions = toolbarState.filterExpression.groups
+            .flatMap(\.rules)
+            .contains { $0.field == .collection && $0.value == SystemCollectionID.failedExtractionName }
+
+        return LibraryVisibilityPolicy(
+            showSkippedCollection: ReaderPreferences.shared.showSkippedCollection || isViewingFailedExtractions,
+            shouldGroupSeriesRows: shouldGroupSeriesRows && !isViewingFailedExtractions,
+            hideNonAO3PublisherBooks: ReaderPreferences.shared.hideNonAO3PublisherBooks && !isViewingFailedExtractions,
+            hideAnthologyBooks: ReaderPreferences.shared.hideAnthologyBooks && !isViewingFailedExtractions,
+            hideDuplicateBooks: ReaderPreferences.shared.hideDuplicateBooks && !isViewingFailedExtractions,
             skippedIDs: session.cachedSkippedIDs,
             seriesOrMergedIDs: session.cachedSeriesOrMergedIDs,
             ao3PublisherIDs: session.cachedAO3PublisherIDs,
