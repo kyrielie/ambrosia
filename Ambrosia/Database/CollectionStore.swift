@@ -185,6 +185,19 @@ actor CollectionStore {
         }
     }
 
+    func memberAddedDates(for collectionID: String) async throws -> [Int: Date] {
+        let iso = ISO8601DateFormatter()
+        let rows = try await db.prepare(
+            "SELECT calibre_id, added_at FROM collection_members WHERE collection_id = ?",
+            [collectionID]
+        )
+        return rows.reduce(into: [Int: Date]()) { dict, row in
+            guard let id = (row[safe: 0] as? Int64).map(Int.init) ?? (row[safe: 0] as? Int),
+                  let dateStr = row[safe: 1] as? String else { return }
+            dict[id] = iso.date(from: dateStr)
+        }
+    }
+
     func collections() async throws -> [CollectionRow] {
         let rows = try await db.prepare(
             """

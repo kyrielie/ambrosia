@@ -152,6 +152,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             openExternalReader(forCalibreID: calibreID)
             return
         }
+        if let libraryWindow = NSApp.keyWindow?.windowController as? LibraryWindowController,
+           let book = libraryWindow.currentSelectedBook {
+            openExternalReader(forCalibreID: book.id)
+            return
+        }
         Task { [weak self] in
             guard let self, let library = self.session?.library else { return }
             let allIDs = await library.allBookIDs()
@@ -216,6 +221,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     NSWorkspace.shared.activateFileViewerSelecting([url])
                 }
             }
+            return
+        }
+        if let libraryWindow = NSApp.keyWindow?.windowController as? LibraryWindowController,
+           let book = libraryWindow.currentSelectedBook {
+            revealInFinder(book: book)
             return
         }
         if let pathStr = LibraryRegistry.shared.activePath {

@@ -24,6 +24,14 @@ class LibraryViewController: NSViewController {
         emailVC?.currentReaderVC != nil
     }
 
+    var currentReaderVC: ReaderViewController? {
+        emailVC?.currentReaderVC
+    }
+
+    var activeEmailVC: EmailLibraryViewController? {
+        emailVC
+    }
+
     init(session: LibrarySession) {
         self.session = session
         let ts = LibraryToolbarState()

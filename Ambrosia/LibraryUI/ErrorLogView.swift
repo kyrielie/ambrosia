@@ -11,6 +11,7 @@ struct ErrorLogView: View {
     @Environment(LibrarySession.self) private var session
     @Environment(\.dismiss) private var dismiss
 
+    var onDismiss: (() -> Void)?
     @State private var entries: [ErrorLogEntry] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
@@ -39,7 +40,13 @@ struct ErrorLogView: View {
             Spacer()
             Button("Clear") { Task { await clear() } }
                 .disabled(entries.isEmpty)
-            Button("Done") { dismiss() }
+            Button("Done") {
+                if let onDismiss {
+                    onDismiss()
+                } else {
+                    dismiss()
+                }
+            }
                 .keyboardShortcut(.defaultAction)
         }
         .padding()

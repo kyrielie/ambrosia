@@ -524,6 +524,10 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         showBookInfoSheet()
     }
 
+    @objc func showBookInfoAction(_ sender: Any?) {
+        showBookInfoSheet()
+    }
+
     func showBookInfoSheet() {
         guard let window = self.window else { return }
         let currentBook = readerViewController?.activeBook ?? book

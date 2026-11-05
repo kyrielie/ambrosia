@@ -384,42 +384,25 @@ struct LibraryRootView: View {
     }
 
     private func toggleLike(for book: CalibreBook) {
-        Task {
-            try? await session.collectionStore?.toggleLiked(calibreID: book.id)
-            session.bumpMembershipVersion()
+        CollectionAssignment.toggleLiked(calibreIDs: [book.id], session: session) {
             await displayController.refreshVisibilitySnapshots(resetPage: false)
         }
     }
 
     private func toggleLike(for series: SeriesGroup) {
-        let ids = series.works.map(\.id)
-        let shouldLike = !series.works.allSatisfy { session.cachedLikedIDs.contains($0.id) }
-        Task {
-            try? await session.collectionStore?.setLiked(calibreIDs: ids, liked: shouldLike)
-            session.bumpMembershipVersion()
+        CollectionAssignment.toggleLiked(calibreIDs: series.works.map(\.id), session: session) {
             await displayController.refreshVisibilitySnapshots(resetPage: false)
         }
     }
 
     private func toggleReadLater(for book: CalibreBook) {
-        let isCurrentlyInReadLater = session.cachedReadLaterIDs.contains(book.id)
-        Task {
-            if isCurrentlyInReadLater {
-                try? await session.collectionStore?.remove(calibreID: book.id, from: SystemCollectionID.readLater)
-            } else {
-                try? await session.collectionStore?.bulkAdd(calibreIDs: [book.id], to: SystemCollectionID.readLater)
-            }
-            session.bumpMembershipVersion()
+        CollectionAssignment.toggleReadLater(calibreIDs: [book.id], session: session) {
             await displayController.refreshVisibilitySnapshots(resetPage: false)
         }
     }
 
     private func toggleReadLater(for series: SeriesGroup) {
-        let ids = series.works.map(\.id)
-        let shouldAdd = !series.works.allSatisfy { session.cachedReadLaterIDs.contains($0.id) }
-        Task {
-            try? await session.collectionStore?.setReadLater(calibreIDs: ids, inReadLater: shouldAdd)
-            session.bumpMembershipVersion()
+        CollectionAssignment.toggleReadLater(calibreIDs: series.works.map(\.id), session: session) {
             await displayController.refreshVisibilitySnapshots(resetPage: false)
         }
     }
@@ -736,30 +719,6 @@ struct LibraryRootView: View {
                     }
                 )
                 .preferredColorScheme(prefs.resolvedLibraryColorScheme)
-            }
-            .sheet(isPresented: Binding(
-                get: { toolbarState.showCollections },
-                set: { toolbarState.showCollections = $0 }
-            )) {
-                CollectionsView(onSelectCollection: { collection in
-                    displayController.addOrReplaceRule(FilterRule(field: .collection, op: .equals, value: collection.name))
-                    toolbarState.showCollections = false
-                })
-                .preferredColorScheme(prefs.resolvedLibraryColorScheme)
-            }
-            .sheet(isPresented: Binding(
-                get: { toolbarState.showReadingGoal },
-                set: { toolbarState.showReadingGoal = $0 }
-            )) {
-                ReadingGoalView()
-                    .preferredColorScheme(prefs.resolvedLibraryColorScheme)
-            }
-            .sheet(isPresented: Binding(
-                get: { toolbarState.showErrorLog },
-                set: { toolbarState.showErrorLog = $0 }
-            )) {
-                ErrorLogView()
-                    .preferredColorScheme(prefs.resolvedLibraryColorScheme)
             }
             .onChange(of: toolbarState.triggerExport) {
                 if toolbarState.triggerExport {

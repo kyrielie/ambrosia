@@ -112,16 +112,33 @@ final class LibrarySession {
         let currentAnthologyIDs = await library?.anthologyBookIDs() ?? []
         let currentDuplicateLoserIDs = await library?.duplicateLoserBookIDs() ?? []
 
-        let changed = cachedLikedIDs != currentLiked
-            || cachedReadLaterIDs != currentReadLater
+        var resolvedLiked = currentLiked
+        var resolvedReadLater = currentReadLater
+        for pendingID in CollectionAssignment.inFlightLikedIDs {
+            if cachedLikedIDs.contains(pendingID) {
+                resolvedLiked.insert(pendingID)
+            } else {
+                resolvedLiked.remove(pendingID)
+            }
+        }
+        for pendingID in CollectionAssignment.inFlightReadLaterIDs {
+            if cachedReadLaterIDs.contains(pendingID) {
+                resolvedReadLater.insert(pendingID)
+            } else {
+                resolvedReadLater.remove(pendingID)
+            }
+        }
+
+        let changed = cachedLikedIDs != resolvedLiked
+            || cachedReadLaterIDs != resolvedReadLater
             || cachedSkippedIDs != currentSkipped
             || cachedSeriesOrMergedIDs != currentSeriesOrMerged
             || cachedAO3PublisherIDs != currentAO3PublisherIDs
             || cachedAnthologyIDs != currentAnthologyIDs
             || cachedDuplicateLoserIDs != currentDuplicateLoserIDs
 
-        cachedLikedIDs = currentLiked
-        cachedReadLaterIDs = currentReadLater
+        cachedLikedIDs = resolvedLiked
+        cachedReadLaterIDs = resolvedReadLater
         cachedSkippedIDs = currentSkipped
         cachedSeriesOrMergedIDs = currentSeriesOrMerged
         cachedAO3PublisherIDs = currentAO3PublisherIDs

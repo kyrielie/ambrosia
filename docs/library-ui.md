@@ -62,20 +62,25 @@ List-mode rows are self-sizing `List` rows, so unbounded content makes row heigh
 ## Menu Bar Integrations
 
 The macOS menu bar adapts to whether the user is browsing the library or reading:
-- **File ▸ Get Info… (`⌘I`)**: Opens the modal "Get Info" sheet (`BookInfoViewController`) for the currently selected book in the library or active reader window.
+- **Reader ▸ Get Info… (`⌘I`)**: Opens the modal "Get Info" sheet (`BookInfoViewController`) for the currently active book in the reader window or email view. Automatically disabled when browsing the library in list view where rows are non-selectable.
 - **Edit ▸ Find (`⌘F`)**: Dynamically routes to the library search bar (`focusSearchField`) when in the library window, or activates the reader find bar when a reader window is focused.
 - **View ▸ Appearance**: Configures library window theme (`Follow System`, `Always Light`, `Always Dark`) via `ReaderPreferences.libraryAppearanceMode` and provides a quick `Toggle Dark/Light Mode` shortcut (`^⌘T`).
 - **View ▸ Reload Library (`⌘R`)**: Manually triggers a snapshot refresh of the library list and email views via `AppDelegate.reloadCurrentLibrary()`.
 - **View ▸ Clear All Filters**: Quickly resets active facet and text filters when a filter is applied.
 - **Reader Menu Gating**: Navigation (`⌘←`/`⌘→`, `⌘[`/`⌘]`), annotations, table of contents, and window sizing actions are dynamically disabled when no reader window or embedded reader is active (`AppDelegate.hasActiveReader`). In-reader formatting and theme settings are grouped under `Reader Text & Themes`.
 
-## Row Context Menus
+## Row Context Menus & Row Selection
+
+In List View, rows (`BookListRow`, `SeriesListRow`) are intentionally **non-selectable** to allow frictionless scrolling and single-click interaction with tags, authors, and bookmark/star toggles without row highlight artifacts. Selection is supported only in Email View's sidebar table.
 
 Book and series rows support macOS right-click / secondary-click context menus across all library modes (`BookListRow`, `SeriesListRow`, and `EmailSidebarViewController`):
-- **Get Info (`⌘I`)**: Presents `BookInfoViewController` modal sheet with AO3 tags, metadata, story link, Reveal in Finder, and Share sheet.
 - **Reveal in Finder**: Resolves the book's EPUB file URL via `CalibreLibrary.epubURL(for:)` and highlights it in macOS Finder (`AppDelegate.revealInFinder`).
 - Collection assignments (Read Later, Liked, Skipped, Finished, In Progress, custom collections).
 - Open in Reader / Open in External Reader.
+
+## Modal Sheets Architecture
+
+All modal library dialogs (`CollectionsView`, `ReadingGoalView`, `ErrorLogView`, `RSSPublishWarningView`, `ManageFeedsView`) are managed and presented centrally as AppKit modal sheets on `LibraryWindowController` (`window.beginSheet`), rather than via multiple SwiftUI `.sheet(isPresented:)` modifiers. This guarantees clean, single-animation presentation and deterministic dismissal without bouncing or re-opening.
 
 ## Filter Drawer Dismissal
 

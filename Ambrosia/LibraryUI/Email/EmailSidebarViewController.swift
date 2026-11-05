@@ -504,6 +504,8 @@ final class EmailBookCellView: NSTableCellView {
     private let likeButton = NSButton()
     private let readLaterButton = NSButton()
     private var representedContextBooks: [CalibreBook] = []
+    private var isLocallyLiked: Bool = false
+    private var isLocallyReadLater: Bool = false
     private var onToggleLiked: (([CalibreBook]) -> Void)?
     private var onToggleReadLater: (([CalibreBook]) -> Void)?
 
@@ -662,15 +664,10 @@ final class EmailBookCellView: NSTableCellView {
         representedContextBooks = item.contextBooks
         self.onToggleLiked = onToggleLiked
         self.onToggleReadLater = onToggleReadLater
-        likeButton.image = NSImage(systemSymbolName: isLiked ? "star.fill" : "star", accessibilityDescription: isLiked ? "Unlike" : "Like")?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 16, weight: .regular))
-        likeButton.contentTintColor = isLiked ? .systemYellow : .secondaryLabelColor
-        readLaterButton.image = NSImage(
-            systemSymbolName: isInReadLater ? "bookmark.fill" : "bookmark",
-            accessibilityDescription: isInReadLater ? "Remove from Read Later" : "Add to Read Later"
-        )?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 16, weight: .regular))
-        readLaterButton.contentTintColor = isInReadLater ? .controlAccentColor : .secondaryLabelColor
+        self.isLocallyLiked = isLiked
+        self.isLocallyReadLater = isInReadLater
+        updateLikeButtonVisuals(liked: isLiked)
+        updateReadLaterButtonVisuals(readLater: isInReadLater)
         switch item {
         case .book(let book):
             titleLabel.stringValue = book.displayTitle
@@ -723,13 +720,32 @@ final class EmailBookCellView: NSTableCellView {
         }
     }
 
+    private func updateLikeButtonVisuals(liked: Bool) {
+        likeButton.image = NSImage(systemSymbolName: liked ? "star.fill" : "star", accessibilityDescription: liked ? "Unlike" : "Like")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 16, weight: .regular))
+        likeButton.contentTintColor = liked ? .systemYellow : .secondaryLabelColor
+    }
+
+    private func updateReadLaterButtonVisuals(readLater: Bool) {
+        readLaterButton.image = NSImage(
+            systemSymbolName: readLater ? "bookmark.fill" : "bookmark",
+            accessibilityDescription: readLater ? "Remove from Read Later" : "Add to Read Later"
+        )?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 16, weight: .regular))
+        readLaterButton.contentTintColor = readLater ? .controlAccentColor : .secondaryLabelColor
+    }
+
     @objc private func toggleLiked() {
         guard !representedContextBooks.isEmpty else { return }
+        isLocallyLiked.toggle()
+        updateLikeButtonVisuals(liked: isLocallyLiked)
         onToggleLiked?(representedContextBooks)
     }
 
     @objc private func toggleReadLaterAction() {
         guard !representedContextBooks.isEmpty else { return }
+        isLocallyReadLater.toggle()
+        updateReadLaterButtonVisuals(readLater: isLocallyReadLater)
         onToggleReadLater?(representedContextBooks)
     }
 

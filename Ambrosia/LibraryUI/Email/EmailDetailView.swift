@@ -58,7 +58,9 @@ private struct BookDetailContent: View {
             VStack(alignment: .leading, spacing: 12) {
                 // Cover + title block
                 HStack(alignment: .top, spacing: 14) {
-                    coverThumbnail
+                    if hasRealCoverImage {
+                        coverThumbnail
+                    }
                     VStack(alignment: .leading, spacing: 5) {
                         Text(book.displayTitle)
                             .font(.title2).bold()
@@ -111,6 +113,11 @@ private struct BookDetailContent: View {
 
     // MARK: - Subviews
 
+    private var hasRealCoverImage: Bool {
+        guard let root = libraryRoot, let url = book.coverURL(libraryRoot: root) else { return false }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
     @ViewBuilder
     private var coverThumbnail: some View {
         if let root = libraryRoot, let url = book.coverURL(libraryRoot: root) {
@@ -123,23 +130,10 @@ private struct BookDetailContent: View {
                         .clipShape(RoundedRectangle(cornerRadius: 5))
                         .shadow(radius: 3)
                 default:
-                    coverPlaceholder
+                    EmptyView()
                 }
             }
-        } else {
-            coverPlaceholder
         }
-    }
-
-    private var coverPlaceholder: some View {
-        RoundedRectangle(cornerRadius: 5)
-            .fill(Color.accentColor.opacity(0.15))
-            .frame(width: 80, height: 110)
-            .overlay(
-                Text(book.displayTitle.prefix(2).uppercased())
-                    .font(.title2.bold())
-                    .foregroundStyle(Color.accentColor)
-            )
     }
 
     private var metaLine: some View {
