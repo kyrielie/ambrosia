@@ -160,11 +160,13 @@ final class PaginationEngine: NSObject {
         case .forward:  webView?.evaluateJavaScript("window.ambrosiaNextPage();", completionHandler: nil)
         case .backward: webView?.evaluateJavaScript("window.ambrosiaPrevPage();", completionHandler: nil)
         }
+        queryProgress { _, _, _ in }
     }
 
     func scrollToColumn(_ column: Int) {
         guard isReady else { return }
         webView?.evaluateJavaScript("window.ambrosiaScrollToColumn(\(column));", completionHandler: nil)
+        queryProgress { _, _, _ in }
     }
 
     func scrollToFraction(_ fraction: Double) {
@@ -195,12 +197,16 @@ final class PaginationEngine: NSObject {
             t: window.ambrosiaColumnCount()
         });
         """
-        webViewRef.evaluateJavaScript(progressJS) { result, _ in
+        webViewRef.evaluateJavaScript(progressJS) { [weak self] result, _ in
             guard let str = result as? String,
                   let data = str.data(using: .utf8),
                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Double]
             else { completion(0, 0, 1); return }
-            completion(dict["f"] ?? 0, Int(dict["c"] ?? 0), Int(dict["t"] ?? 1))
+            let fraction = dict["f"] ?? 0
+            let col = Int(dict["c"] ?? 0)
+            let total = Int(dict["t"] ?? 1)
+            self?.positionDidChange?(col, total)
+            completion(fraction, col, total)
         }
     }
 }

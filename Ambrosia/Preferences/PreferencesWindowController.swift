@@ -134,8 +134,8 @@ private struct ReaderTab: View {
             // ── Typography ────────────────────────────────────────────────
             Section {
                 fontFamilyRow
-                stepperRow("Font size", int: $prefs.fontSize, range: 10...36, step: 1, unit: "pt")
-                stepperRow("Line height", dbl: $prefs.lineHeight, range: 1.0...3.0, step: 0.1)
+                sliderRow("Font size", int: $prefs.fontSize, range: 10...36, step: 1, unit: "pt")
+                sliderRow("Line height", dbl: $prefs.lineHeight, range: 1.0...3.0, step: 0.1)
                 Picker("Text alignment", selection: $prefs.textAlignment) {
                     ForEach(ThemeTextAlignment.allCases) { align in
                         Text(align.label).tag(align)
@@ -162,9 +162,23 @@ private struct ReaderTab: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                stepperRow("Max line width", int: $prefs.maxWidth, range: 400...1400, step: 20, unit: "px")
-                stepperRow("Horizontal padding", int: $prefs.paddingH, range: 0...120, step: 4, unit: "px")
-                stepperRow("Vertical padding", int: $prefs.paddingV, range: 0...120, step: 4, unit: "px")
+                sliderRow("Max line width", int: $prefs.maxWidth, range: 400...1400, step: 20, unit: "px")
+                sliderRow("Horizontal padding", int: $prefs.paddingH, range: 0...120, step: 4, unit: "px")
+                sliderRow("Vertical padding", int: $prefs.paddingV, range: 0...120, step: 4, unit: "px")
+
+                // Live typography preview placed below controls
+                Text("The quick brown fox jumps over the lazy dog.")
+                    .font(.custom(prefs.displayFontFamily, size: CGFloat(prefs.fontSize)))
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(Color(hex: prefs.readerBackgroundColor) ?? Color(nsColor: .textBackgroundColor))
+                    .foregroundStyle(Color(hex: prefs.readerTextColor) ?? Color(nsColor: .labelColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    )
             } header: {
                 Label("Typography", systemImage: "textformat").font(.headline)
             }
@@ -370,20 +384,6 @@ private struct ReaderTab: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
-
-            // Live preview
-            Text("The quick brown fox jumps over the lazy dog.")
-                .font(.custom(prefs.displayFontFamily, size: CGFloat(prefs.fontSize)))
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .background(Color(hex: prefs.readerBackgroundColor) ?? Color(nsColor: .textBackgroundColor))
-                .foregroundStyle(Color(hex: prefs.readerTextColor) ?? Color(nsColor: .labelColor))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
-                )
         }
     }
 
@@ -473,25 +473,38 @@ private struct ReaderTab: View {
     }
 
     @ViewBuilder
-    private func stepperRow(_ label: String, int value: Binding<Int>,
-                            range: ClosedRange<Int>, step: Int, unit: String) -> some View {
+    private func sliderRow(_ label: String, int value: Binding<Int>,
+                           range: ClosedRange<Int>, step: Int, unit: String) -> some View {
         HStack {
             Text(label)
                 .accessibilityLabeledPair(role: .label, id: label, in: a11y)
             Spacer()
-            Stepper("\(value.wrappedValue) \(unit)", value: value, in: range, step: step)
+            Slider(value: Binding(
+                get: { Double(value.wrappedValue) },
+                set: { value.wrappedValue = Int($0) }
+            ), in: Double(range.lowerBound)...Double(range.upperBound), step: Double(step))
+            .frame(width: 140)
+            Text("\(value.wrappedValue) \(unit)")
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 55, alignment: .trailing)
                 .accessibilityLabeledPair(role: .content, id: label, in: a11y)
         }
     }
 
     @ViewBuilder
-    private func stepperRow(_ label: String, dbl value: Binding<Double>,
-                            range: ClosedRange<Double>, step: Double) -> some View {
+    private func sliderRow(_ label: String, dbl value: Binding<Double>,
+                           range: ClosedRange<Double>, step: Double) -> some View {
         HStack {
             Text(label)
                 .accessibilityLabeledPair(role: .label, id: label, in: a11y)
             Spacer()
-            Stepper(String(format: "%.1f", value.wrappedValue), value: value, in: range, step: step)
+            Slider(value: value, in: range, step: step)
+                .frame(width: 140)
+            Text(String(format: "%.1f", value.wrappedValue))
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 35, alignment: .trailing)
                 .accessibilityLabeledPair(role: .content, id: label, in: a11y)
         }
     }

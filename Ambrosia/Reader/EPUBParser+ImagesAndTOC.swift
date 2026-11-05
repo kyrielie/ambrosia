@@ -137,9 +137,20 @@ extension EPUBParser {
             }
         }
 
-        // Fallback: one entry per spine item
+        // Fallback: one entry per spine item, classifying preface/afterword
+        let total = spine.count
         return spine.enumerated().map { index, item in
-            TOCEntry(id: item.id, title: "Chapter \(index + 1)", spineIndex: item.index, depth: 0)
+            let hrefLower = item.href.lowercased()
+            let title: String
+            if index == 0 && (hrefLower.contains("split_000") || hrefLower.contains("preface") || hrefLower.contains("title")) {
+                title = "Preface"
+            } else if index == total - 1 && (hrefLower.contains("afterword") || hrefLower.contains("notes")) {
+                title = "Afterword"
+            } else {
+                let chapterNum = (index > 0 && spine.first?.href.lowercased().contains("split_000") == true) ? index : index + 1
+                title = "Chapter \(chapterNum)"
+            }
+            return TOCEntry(id: item.id, title: title, spineIndex: item.index, depth: 0)
         }
     }
 }

@@ -25,7 +25,12 @@ struct BookListRow: View, Equatable {
     let onCollectionChanged: () -> Void
     let activeCollectionID: String?
     let onRemoveFromCollection: (String) -> Void
+    @State private var optimisticLiked: Bool?
+    @State private var optimisticReadLater: Bool?
     @State private var showCollectionPicker = false
+
+    private var effectiveLiked: Bool { optimisticLiked ?? isLiked }
+    private var effectiveReadLater: Bool { optimisticReadLater ?? isInReadLater }
 
     static func == (lhs: BookListRow, rhs: BookListRow) -> Bool {
         lhs.book.id                       == rhs.book.id
@@ -97,10 +102,16 @@ struct BookListRow: View, Equatable {
         VStack(alignment: .leading, spacing: 5) {
             titleRow
             authorsRow
-            LibraryStatsRow(stats: libraryStats)
+            LibraryStatsRow(stats: libraryStats, readPercent: bookState?.totalReadPercent)
             tagsRow
             statsRow
             descriptionRow
+        }
+        .onChange(of: isLiked) { _, newLiked in
+            optimisticLiked = newLiked
+        }
+        .onChange(of: isInReadLater) { _, newReadLater in
+            optimisticReadLater = newReadLater
         }
         // Outside a List the row no longer stretches to the row width, so
         // extend the frame to keep the double-click hit area full width.
@@ -155,18 +166,32 @@ struct BookListRow: View, Equatable {
             }
             Spacer()
             singletonSeriesWarningButton
-            Button(action: onReadLaterToggle) {
-                Image(systemName: isInReadLater ? "bookmark.fill" : "bookmark")
-                    .foregroundStyle(isInReadLater ? Color.accentColor : Color.secondary)
-            }
+            Button(action: {
+                let next = !effectiveReadLater
+                optimisticReadLater = next
+                onReadLaterToggle()
+            }, label: {
+                Image(systemName: effectiveReadLater ? "bookmark.fill" : "bookmark")
+                    .font(.system(size: 14))
+                    .foregroundStyle(effectiveReadLater ? Color.accentColor : Color.secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            })
             .buttonStyle(.borderless)
-            .help(isInReadLater ? "Remove from Read Later" : "Add to Read Later")
-            Button(action: onLikeToggle) {
-                Image(systemName: isLiked ? "star.fill" : "star")
-                    .foregroundStyle(isLiked ? Color.yellow : Color.secondary)
-            }
+            .help(effectiveReadLater ? "Remove from Read Later" : "Add to Read Later")
+            Button(action: {
+                let next = !effectiveLiked
+                optimisticLiked = next
+                onLikeToggle()
+            }, label: {
+                Image(systemName: effectiveLiked ? "star.fill" : "star")
+                    .font(.system(size: 14))
+                    .foregroundStyle(effectiveLiked ? Color.yellow : Color.secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            })
             .buttonStyle(.borderless)
-            .help(isLiked ? "Unlike" : "Like")
+            .help(effectiveLiked ? "Unlike" : "Like")
         }
     }
 
@@ -225,14 +250,10 @@ struct BookListRow: View, Equatable {
     private var statsRow: some View {
         let kudosText  = book.displayKudos
         let ao3Kudos = book.kudos == nil ? ao3Metadata?.kudosCount : nil
-        let pct = bookState.map { $0.totalReadPercent }
-        if !kudosText.isEmpty || ao3Kudos != nil || (pct ?? 0) > 0 {
+        if !kudosText.isEmpty || ao3Kudos != nil {
             HStack(spacing: 14) {
                 if !kudosText.isEmpty { statChip(kudosText, icon: "heart") }
                 if let ao3Kudos { statChip(Self.formatKudos(ao3Kudos), icon: "heart") }
-                if let readPercent = pct, readPercent > 0 {
-                    statChip(String(format: "%.0f%% read", min(readPercent, 1.0) * 100), icon: "book.pages")
-                }
                 Spacer()
             }
         }
@@ -340,9 +361,11 @@ struct LibraryStats: Equatable {
 
 struct LibraryStatsRow: View {
     let stats: LibraryStats
+    var readPercent: Double?
 
     var body: some View {
-        if !stats.isEmpty {
+        let hasPercent = (readPercent ?? 0) > 0
+        if !stats.isEmpty || hasPercent {
             HStack(spacing: 14) {
                 if let chapterText = stats.chapterText {
                     statChip(chapterText, icon: stats.isComplete ? "checkmark.circle" : "clock")
@@ -355,6 +378,9 @@ struct LibraryStatsRow: View {
                 }
                 if let updatedText = stats.normalizedUpdatedText {
                     statChip("Upd \(updatedText)", icon: "arrow.triangle.2.circlepath")
+                }
+                if let pct = readPercent, pct > 0 {
+                    statChip(String(format: "%.0f%% read", min(pct, 1.0) * 100), icon: "book.pages")
                 }
                 Spacer()
             }

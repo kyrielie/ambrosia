@@ -345,6 +345,19 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         }
     }
 
+    // MARK: - Book Info Sheet
+
+    func showSelectedBookInfo() {
+        guard let lvc = contentViewController as? LibraryViewController else { return }
+        guard let book = lvc.displayController.selectedBook else { return }
+        let ao3 = lvc.displayController.ao3Metadata[book.id]
+        let libraryRoot = session?.activePath.map(URL.init(fileURLWithPath:))
+        let epubURL = libraryRoot.flatMap { book.epubURL(libraryRoot: $0) }
+
+        let infoVC = BookInfoViewController(book: book, ao3: ao3, epubURL: epubURL)
+        window?.contentViewController?.presentAsSheet(infoVC)
+    }
+
     // MARK: - NSMenuItemValidation
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {

@@ -73,6 +73,15 @@ struct AmbrosiaApp: App {
             }
 
             CommandGroup(replacing: .newItem) {
+                Button("Get Info…") {
+                    if let readerWindow = NSApp.keyWindow?.windowController as? ReaderWindowController {
+                        readerWindow.showBookInfoSheet()
+                    } else if let libraryWindow = AppDelegate.shared?.libraryWindowController {
+                        libraryWindow.showSelectedBookInfo()
+                    }
+                }
+                .keyboardShortcut("i", modifiers: [.command])
+
                 Button("Open Library…") {
                     AppDelegate.shared?.chooseLibraryFolder()
                 }

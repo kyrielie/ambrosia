@@ -91,44 +91,21 @@ struct ReaderAppearancePopoverView: View {
 
             // Font size & Font family
             VStack(alignment: .leading, spacing: 10) {
-                // Font size stepper
+                // Font size slider
                 HStack {
                     Text("Size")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    HStack(spacing: 8) {
-                        Button {
-                            prefs.decreaseFontSize()
-                        } label: {
-                            Image(systemName: "textformat.size.smaller")
-                                .frame(width: 24, height: 20)
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(prefs.fontSize <= 10)
-
-                        Text("\(prefs.fontSize) pt")
-                            .font(.system(size: 12, weight: .medium).monospacedDigit())
-                            .frame(minWidth: 44, alignment: .center)
-
-                        Button {
-                            prefs.increaseFontSize()
-                        } label: {
-                            Image(systemName: "textformat.size.larger")
-                                .frame(width: 24, height: 20)
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(prefs.fontSize >= 36)
-
-                        if prefs.fontSize != ReaderPreferences.Defaults.fontSize {
-                            Button("Reset") {
-                                prefs.resetFontSize()
-                            }
-                            .font(.caption)
-                            .buttonStyle(.link)
-                            .padding(.leading, 2)
-                        }
-                    }
+                    Slider(value: Binding(
+                        get: { Double(prefs.fontSize) },
+                        set: { prefs.fontSize = Int($0) }
+                    ), in: 10...36, step: 1)
+                    .frame(width: 130)
+                    Text("\(prefs.fontSize) pt")
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 38, alignment: .trailing)
                 }
 
                 // Font family picker

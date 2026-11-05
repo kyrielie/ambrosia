@@ -236,6 +236,25 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     var activeCalibreID: Int {
         spineMap.workID(atGlobalIndex: currentSpineIndex) ?? book.id
     }
+
+    var activeBook: CalibreBook {
+        if case .series(let series) = target {
+            if let work = series.works.first(where: { $0.id == activeCalibreID }) {
+                return work
+            }
+        }
+        return book
+    }
+
+    var activeAO3Metadata: AO3MetadataRecord? {
+        if case .series(let series) = target {
+            if let idx = series.works.firstIndex(where: { $0.id == activeCalibreID }),
+               workAO3Records.indices.contains(idx) {
+                return workAO3Records[idx]
+            }
+        }
+        return ao3Record
+    }
     /// The BookState for the currently active work. Resolved fresh from
     /// `bookStates` on every access (not cached in a single stored property)
     /// so that crossing a work boundary in a series transparently retargets
@@ -369,7 +388,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         container.addSubview(barVC.view)
         NSLayoutConstraint.activate([
             barVC.view.topAnchor.constraint(equalTo: container.topAnchor, constant: 12),
-            barVC.view.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+            barVC.view.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             barVC.view.widthAnchor.constraint(equalToConstant: 410)
         ])
         barVC.view.isHidden = true
@@ -1634,6 +1653,12 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                   let data = body.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { return }
+
+            if let col = json["column"] as? Int, let total = json["totalColumns"] as? Int {
+                self.currentColumn = col
+                self.totalColumns = max(1, total)
+                self.onReadingProgressChanged?()
+            }
 
             // Paginated mode's own progress tracking posts "fraction" as a
             // whole-book value historically; keep that path untouched. Scroll
