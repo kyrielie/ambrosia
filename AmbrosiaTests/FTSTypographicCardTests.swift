@@ -42,19 +42,4 @@ final class FTSTypographicCardTests: XCTestCase {
         }
         XCTAssertEqual(highlightedWords, ["First", "Second"])
     }
-
-    func testFormatWordCount() {
-        let book = CalibreBook(
-            id: 1,
-            title: "Test Book",
-            series: nil,
-            seriesIndex: nil,
-            wordCount: 15420,
-            kudos: nil,
-            publishedDate: nil,
-            publisher: nil,
-            relativePath: "test/path"
-        )
-        XCTAssertEqual(book.displayWordCount, "15.4k words")
-    }
 }

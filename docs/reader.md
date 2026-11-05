@@ -31,14 +31,28 @@ The inbuilt Ambrosia reader is explicitly tailored for AO3 fanfiction EPUBs:
   - `.ao3EPUB`: Preserves AO3's standard EPUB layout order (title, "posted originally" link, tag block, followed by title page with title, author link, summary, notes).
 
 ### Reader Toolbar & Navigation Chrome
-`ReaderWindowController` provides a modern unified toolbar (`NSToolbar`):
-- **Table of Contents (`.readerTOC`)**: Opens/toggles a separate floating utility window titled "Contents" (`NSPanel`), anchored and synchronized to the left edge of the reader window (mirroring the Annotations panel on the right). Features real-time search filtering, collapsible per-work dropdowns (`DisclosureGroup`) for series/grouped works, current-chapter indicator dot, and immediate single-click chapter navigation.
-- **Search in Work (`.readerSearch`)**: Opens `SearchBarViewController`, a floating HUD overlay (12pt corner radius, blurred material background) inspired by Honeycrisp. Provides instant search query execution across all spine items, match counting ("X of Y"), next/previous match cycling (`⌘G` / `⇧⌘G`), and an expandable results drawer showing chapter titles and contextual snippets. In paginated mode, jumps smoothly scroll and column-snap (`snapFoundSelectionToColumn`).
-- **Paginated Navigation (`.readerNavigation`)**: Previous page button (`chevron.backward`), dynamic page counter text (`"p. 12 of 84"` or progress percentage), and Next page button (`chevron.forward`). Works in both paginated mode (column turns) and continuous scroll mode (page scrolling).
+`ReaderWindowController` provides a modern unified toolbar (`NSToolbar`) with user customization enabled (`allowsUserCustomization = true`, `autosavesConfiguration = true`):
+- **Table of Contents (`.readerTOC`)**: Opens/toggles a separate floating utility window titled "Contents" (`NSPanel`), anchored and synchronized to the left edge of the reader window (mirroring the Annotations panel on the right). Features real-time search filtering, collapsible per-work dropdowns (`DisclosureGroup`) for series/grouped works, current-chapter indicator dot, and immediate single-click chapter navigation. Suppresses initial focus rings on open.
+- **Search in Work (`.readerSearch`)**: Opens `SearchBarViewController`, a floating HUD overlay (12pt corner radius, blurred material background) inspired by Honeycrisp. Horizontally centered over the reader window viewport. Provides instant search query execution across all spine items, match counting ("X of Y"), next/previous match cycling (`⌘G` / `⇧⌘G`), and an expandable results drawer showing chapter titles and contextual snippets. In paginated mode, jumps smoothly scroll and column-snap (`snapFoundSelectionToColumn`).
+- **Paginated Navigation (`.readerNavigation`)**: Previous page button (`chevron.backward`), dynamic page counter text (`"p. 12 of 84"` or progress percentage), and Next page button (`chevron.forward`). Works in both paginated mode (column turns) and continuous scroll mode (page scrolling). Synchronizes reading progress continuously on column-snap and arrow turns.
+- **Book Info (`.readerInfo`)**: Opens the modal "Get Info" sheet (`BookInfoViewController`), presenting comprehensive preface metadata, interactive AO3 tag links, source URL button, "Show in Finder", and the macOS native share sheet.
 - **Like Toggle (`.readerLike`)**: Direct Nectar-style quick marking toggle with heart icon (`heart` / `heart.fill` in pink tint) reflecting active work like state.
 - **Read Later Toggle (`.readerReadLater`)**: Direct quick marking toggle with bookmark icon (`bookmark` / `bookmark.fill` in orange tint) reflecting Read Later membership.
-- **Appearance Popover (`.readerAppearance`)**: `Aa` toolbar item presenting `ReaderAppearancePopoverView` in a native `NSPopover`, featuring Appearance Mode toggle (System, Light, Dark), dual-mode theme swatches, font size steppers with reset, font family selector, text alignment picker (Left, Justify, Default), paragraph indent controls, and column options.
+- **Appearance Popover (`.readerAppearance`)**: `Aa` toolbar item presenting `ReaderAppearancePopoverView` in a native `NSPopover`, featuring Appearance Mode toggle (System, Light, Dark), dual-mode theme swatches, continuous typography sliders (font size, line height, margins) with reset, font family selector, text alignment picker (Left, Justify, Default), paragraph indent controls, column options, and a live typography preview pinned below the controls.
 - **Standardized Toolbar Glyph Sizing**: All icons in both the main library window and reader window are standardized to 13pt symbol configurations for a balanced, native macOS appearance.
+
+### Preface and Afterword Chapter Classification
+`EPUBParser` classifies spine elements when building the Table of Contents:
+- Frontmatter / Preface pages (`split_000`, `preface`, `titlepage`) are explicitly identified as `Preface` rather than misattributed as "Chapter 1".
+- Story endmatter and notes (`afterword`, `notes`) are classified as `Afterword` rather than trailing numbered chapters, ensuring chapter numbering accurately matches the author's work layout.
+
+### "Get Info" Modal Sheet (`BookInfoViewController`)
+Triggered via `⌘I`, the Reader toolbar info button, or the Library context menu:
+- Displays an authentic AO3-styled preface card with full metadata (`dl.tags` styling).
+- Interactive tag chips and URLs link directly to canonical AO3 tag pages (`https://archiveofourown.org/tags/...`).
+- "Open Story on AO3" button opens the work in default web browser.
+- "Show in Finder" reveals the underlying EPUB file in macOS Finder.
+- Native macOS Share sheet button (`NSSharingServicePicker`) allows sharing the EPUB file via AirDrop, Messages, Mail, or other system share targets.
 
 ### Reader content toggles
 Preferences -> Reader Content has two toggles that change the built HTML (both structural):

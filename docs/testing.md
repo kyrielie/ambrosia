@@ -71,7 +71,7 @@ Testing), against 112 source files (updated October 2026 after Phases 1–6).
 | Source | Test file(s) |
 | --- | --- |
 | `SearchQueryParser` | `SearchQueryParserTests` |
-| `AO3MetadataExtractor`, `+Authors` | `AO3MetadataExtractorTests`, `AO3MetadataExtractorAuthorsTests`, `AO3RatingHighestTests` |
+| `AO3MetadataExtractor`, `+Authors` | `AO3MetadataExtractorTests`, `AO3MetadataExtractorAuthorsTests`, `AO3RatingHighestTests`, `ExternalAO3MetadataExtractorTests` |
 | `LRUCache` (`CacheTypes.swift`) | `LRUCacheTests`, `SortedIDsCacheKeyTests` (`get` recency) |
 | `SortedIDsCacheKey` and its relation to `PageCacheKey` | `SortedIDsCacheKeyTests` |
 | `GroupAwareSorter` ordering | `GroupAwareSortOrderTests` |
