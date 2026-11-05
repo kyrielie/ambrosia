@@ -25,6 +25,14 @@ struct AmbrosiaApp: App {
                 .keyboardShortcut(",", modifiers: [.command])
             }
 
+            CommandGroup(replacing: .help) {
+                Button("Ambrosia Help") {
+                    if let url = URL(string: "https://github.com/kyrielie/ambrosia") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
+
             // Dead menu items: no NSDocument (no Save/Save As/Revert target),
             // no NSPrintOperation usage anywhere (no Print target), and the
             // app's real find is a hand-rolled WKWebView.find(...) under

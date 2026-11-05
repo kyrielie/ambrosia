@@ -11,28 +11,33 @@ enum SortField: String, CaseIterable, Identifiable {
     case author
     case wordCount
     case kudos
-    case published      // Calibre pubdate column
-    case series
-    case ao3Published   // §6: ao3_metadata.published_date
-    case ao3Updated     // §6: ao3_metadata.updated_date
-    case random         // §6: seeded random order
+    case published      // Unified published date (archive metadata -> Calibre pubdate)
+    case updated        // Unified updated date (archive updated -> archive published -> Calibre pubdate)
+    case series         // Legacy case kept for enum stability; retired from user-facing UI
+    case ao3Published   // Legacy case kept for enum stability
+    case ao3Updated     // Legacy case kept for enum stability
+    case random         // Seeded random order
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .title:        return "Title"
-        case .author:       return "Author"
-        case .wordCount:    return "Word Count"
-        case .kudos:        return "Kudos"
-        case .published:    return "Published (Calibre)"
-        case .series:       return "Series"
-        case .ao3Published: return "AO3 Published"
-        case .ao3Updated:   return "AO3 Updated"
-        case .random:       return "Random"
+        case .title:                    return "Title"
+        case .author:                   return "Author"
+        case .wordCount:                return "Word Count"
+        case .kudos:                    return "Kudos"
+        case .published, .ao3Published: return "Date Published"
+        case .updated, .ao3Updated:     return "Date Updated"
+        case .series:                   return "Series"
+        case .random:                   return "Random"
         }
     }
 
+    /// User-facing active cases presented in UI sort pickers and menus.
+    /// Retires `.series` (redundant with Title series grouping) and legacy duplicate date cases.
+    static var userFacingCases: [SortField] {
+        [.title, .author, .wordCount, .kudos, .published, .updated, .random]
+    }
 }
 
 // MARK: - CalibreLibrary
@@ -402,20 +407,23 @@ actor CalibreLibrary {
             return "b.title \(direction), b.id ASC"
         case .kudos:
             return "COALESCE(k.value, 0) \(direction), b.id ASC"
-        case .published:
+        case .published, .updated, .ao3Published, .ao3Updated:
             return "b.pubdate \(direction), b.id ASC"
         case .series:
             return "s.name \(direction), b.series_index ASC, b.id ASC"
-        case .ao3Published:
-            // In-memory sort via sortedByAO3Date; SQL baseline only.
-            return "b.title ASC, b.id ASC"
-        case .ao3Updated:
-            // In-memory sort via sortedByAO3Date; SQL baseline only.
-            return "b.title ASC, b.id ASC"
         case .random:
             // Seeded random is handled post-fetch in the caller (sortedRandomly).
             return "b.title ASC, b.id ASC"
         }
+    }
+
+    /// Returns whether this library has any kudos custom column or cached kudos counts.
+    var hasKudosData: Bool {
+        if let label = CustomColumnConfig.shared.kudosLabel,
+           customColumnTableName(label: label) != nil {
+            return true
+        }
+        return !ao3KudosCache.isEmpty
     }
 
     // MARK: - §6: Shared AO3 metadata sort helper
@@ -456,6 +464,34 @@ actor CalibreLibrary {
         guard !ids.isEmpty else { return [:] }
         let idSet = Set(ids)
         return ao3DateCache.filter { idSet.contains($0.key) }
+    }
+
+    /// Sort books by unified date (archive metadata dates with fallback to Calibre pubdate).
+    /// Books with no date in either system sort last in both directions.
+    func sortedByDate(
+        books: [CalibreBook],
+        field: SortField,
+        ascending: Bool
+    ) -> [CalibreBook] {
+        let dates = ao3Dates(ids: books.map(\.id))
+        let iso = ISO8601DateFormatter()
+        return books.sorted { bookA, bookB in
+            let dateA: String?
+            let dateB: String?
+            if field == .updated || field == .ao3Updated {
+                dateA = dates[bookA.id]?.updated ?? dates[bookA.id]?.published ?? bookA.publishedDate.map { iso.string(from: $0) }
+                dateB = dates[bookB.id]?.updated ?? dates[bookB.id]?.published ?? bookB.publishedDate.map { iso.string(from: $0) }
+            } else {
+                dateA = dates[bookA.id]?.published ?? bookA.publishedDate.map { iso.string(from: $0) }
+                dateB = dates[bookB.id]?.published ?? bookB.publishedDate.map { iso.string(from: $0) }
+            }
+            switch (dateA, dateB) {
+            case (nil, nil): return bookA.title < bookB.title
+            case (nil, _):   return false
+            case (_, nil):   return true
+            case let (x?, y?): return ascending ? x < y : x > y
+            }
+        }
     }
 
     /// Sort books by an AO3 date field (ISO-8601 string, lexicographic order).
@@ -1125,10 +1161,8 @@ actor CalibreLibrary {
                 return enrichedBook
             }
             switch sort {
-            case .ao3Published:
-                result = sortedByAO3Date(books: result, keyPath: \.published, ascending: ascending)
-            case .ao3Updated:
-                result = sortedByAO3Date(books: result, keyPath: \.updated, ascending: ascending)
+            case .published, .updated, .ao3Published, .ao3Updated:
+                result = sortedByDate(books: result, field: sort, ascending: ascending)
             default:
                 break
             }
@@ -1275,10 +1309,8 @@ actor CalibreLibrary {
                 return enrichedBook
             }
             switch sort {
-            case .ao3Published:
-                books = sortedByAO3Date(books: books, keyPath: \.published, ascending: ascending)
-            case .ao3Updated:
-                books = sortedByAO3Date(books: books, keyPath: \.updated, ascending: ascending)
+            case .published, .updated, .ao3Published, .ao3Updated:
+                books = sortedByDate(books: books, field: sort, ascending: ascending)
             default:
                 break
             }

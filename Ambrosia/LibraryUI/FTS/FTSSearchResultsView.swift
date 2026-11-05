@@ -192,6 +192,7 @@ final class FTSSearchViewModel {
 
 struct FTSSearchResultsView: View {
     @State private var viewModel = FTSSearchViewModel()
+    @State private var readLaterIDs: Set<Int> = AppDelegate.shared?.session.cachedReadLaterIDs ?? []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -202,6 +203,11 @@ struct FTSSearchResultsView: View {
             contentArea
         }
         .frame(minWidth: 550, minHeight: 450)
+        .onAppear {
+            if let session = AppDelegate.shared?.session {
+                readLaterIDs = session.cachedReadLaterIDs
+            }
+        }
     }
 
     // MARK: - Top Control Bar
@@ -336,6 +342,10 @@ struct FTSSearchResultsView: View {
                             ao3Metadata: item.ao3Metadata,
                             result: item.snippetsResult,
                             isLoadingSnippets: item.isLoadingSnippets,
+                            isReadLater: readLaterIDs.contains(item.book.id),
+                            onToggleReadLater: {
+                                toggleReadLater(for: item.book)
+                            },
                             onOpen: {
                                 openBook(item.book, snippet: item.snippetsResult?.snippets.first)
                             },
@@ -388,5 +398,13 @@ struct FTSSearchResultsView: View {
         if let lvc = lwc.contentViewController as? LibraryViewController {
             lvc.displayController.selectedItemID = "book-\(book.id)"
         }
+    }
+
+    private func toggleReadLater(for book: CalibreBook) {
+        guard let session = AppDelegate.shared?.session else { return }
+        CollectionAssignment.toggleReadLater(calibreIDs: [book.id], session: session) {
+            self.readLaterIDs = session.cachedReadLaterIDs
+        }
+        self.readLaterIDs = session.cachedReadLaterIDs
     }
 }

@@ -24,7 +24,15 @@ struct LastViewState: Codable, Equatable {
         self.filterExpression = filterExpression
     }
 
-    var sortField: SortField { SortField(rawValue: sortFieldRaw) ?? .title }
+    var sortField: SortField {
+        let field = SortField(rawValue: sortFieldRaw) ?? .title
+        switch field {
+        case .series: return .title
+        case .ao3Published: return .published
+        case .ao3Updated: return .updated
+        default: return field
+        }
+    }
 
     static let defaultView = LastViewState(sortField: .title, ascending: true, filterExpression: nil)
 

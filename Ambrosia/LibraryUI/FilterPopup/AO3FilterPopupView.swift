@@ -682,13 +682,23 @@ struct TriStateSection: View {
 struct SortSection: View {
     @Binding var sortField: SortField
     @Binding var ascending: Bool
+    @Environment(LibrarySession.self) private var session: LibrarySession?
+
+    private var hasKudos: Bool {
+        session?.hasKudosData ?? AppDelegate.shared?.session.hasKudosData ?? false
+    }
 
     var body: some View {
         HStack {
             Text("Sort by")
             Picker("Sort by", selection: $sortField) {
-                ForEach(SortField.allCases) { field in
-                    Text(field.rawValue.capitalized).tag(field)
+                ForEach(SortField.userFacingCases) { field in
+                    if field == .kudos && !hasKudos {
+                        Text("\(field.label) (unavailable)")
+                            .tag(field)
+                    } else {
+                        Text(field.label).tag(field)
+                    }
                 }
             }
             .labelsHidden()
