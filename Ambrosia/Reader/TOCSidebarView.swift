@@ -157,6 +157,7 @@ struct TOCSidebarView: View {
                                                 isCurrent: entry.spineIndex == currentSpineIndex,
                                                 onJump: onJump
                                             )
+                                            .focusable(false)
                                         }
                                     }
                                     .padding(.leading, 6)
@@ -179,6 +180,7 @@ struct TOCSidebarView: View {
                                 }
                                 .padding(.horizontal, 12)
                                 .padding(.top, 6)
+                                .focusable(false)
                             }
                         } else {
                             ForEach(filteredEntries) { entry in
@@ -188,6 +190,7 @@ struct TOCSidebarView: View {
                                     onJump: onJump
                                 )
                                 .padding(.horizontal, 10)
+                                .focusable(false)
                             }
                         }
                     }

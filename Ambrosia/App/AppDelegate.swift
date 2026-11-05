@@ -108,6 +108,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Library & Window management
 
     var hasActiveReader: Bool {
+        if let keyWindow = NSApp.keyWindow,
+           let rwc = keyWindow.windowController as? ReaderWindowController,
+           rwc.readerViewController != nil {
+            return true
+        }
         if ReaderWindowController.hasOpenWindows { return true }
         if let lwc = libraryWindowController,
            let lvc = lwc.contentViewController as? LibraryViewController,

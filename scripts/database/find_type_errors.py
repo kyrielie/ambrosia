@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""
+find_type_errors.py
+===================
+Identifies canonical_tags rows whose tag_type='fandom' is likely wrong —
+set by an input-file hint rather than confirmed by AO3's page content.
+
+The two pollution signals, either of which flags a tag:
+
+  1. No Fandom parent — AO3 wranglers put additional/character/relationship
+     tags under "No Fandom" as a catch-all.  Real fandom tags are never
+     children of "No Fandom" (they ARE fandoms; No Fandom is the bucket for
+     tag types that don't belong to a specific fandom).
+
+  2. No children as a parent in tag_parent_links — every real fandom tag
+     has at least some subtags (characters, ships, works).  An additional
+     tag like "Hurt/Comfort" has none.
+
+Tags that triggered NEITHER signal are left alone — they look like legitimate
+fandom tags that happened to share a URL file with non-fandom seeds.
+
+Output:
+  stdout          — summary table of flagged tags
+  additional_rescrape.txt — AO3 URLs to feed back to ao3_seed_scraper.py
+                            with -i additional_rescrape.txt
+                            (filename tells the scraper: type hint = 'additional')
+
+Usage:
+    python3 find_type_errors.py [--db ./output/ao3_tag_seeds.db] [--dry-run]
+
+    --dry-run   Print findings but don't write additional_rescrape.txt
+"""
+
+import argparse
+import sqlite3
+from pathlib import Path
+from urllib.parse import quote
+
+AO3_ENCODE = {"/": "*s*", "&": "*a*", ".": "*d*", "?": "*q*", "#": "*h*"}
+
+def tag_to_url(name: str) -> str:
+    encoded = name
+    for dec, enc in AO3_ENCODE.items():
+        encoded = encoded.replace(dec, enc)
+    return f"https://archiveofourown.org/tags/{quote(encoded)}"
+
+
+def find_polluted(conn: sqlite3.Connection) -> list[tuple[int, str, list[str]]]:
+    """
+    Return list of (id, name, [reasons]) for every fandom-typed tag that
+    shows at least one pollution signal.
+    """
+    # All fandom-typed canonicals
+    all_fandom = conn.execute(
+        "SELECT id, name FROM canonical_tags WHERE tag_type = 'fandom' ORDER BY name"
+    ).fetchall()
+
+    # IDs that are children of "No Fandom"
+    no_fandom_row = conn.execute(
+        "SELECT id FROM canonical_tags WHERE name = 'No Fandom'"
+    ).fetchone()
+    no_fandom_children: set[int] = set()
+    if no_fandom_row:
+        no_fandom_id = no_fandom_row[0]
+        rows = conn.execute(
+            "SELECT child_id FROM tag_parent_links WHERE parent_id = ?",
+            (no_fandom_id,)
+        ).fetchall()
+        no_fandom_children = {r[0] for r in rows}
+
+    # IDs that have at least one child (i.e. are a parent of something)
+    has_children: set[int] = {
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT parent_id FROM tag_parent_links"
+        ).fetchall()
+    }
+
+    results = []
+    for tag_id, name in all_fandom:
+        reasons = []
+        if tag_id in no_fandom_children:
+            reasons.append("child of 'No Fandom'")
+        if tag_id not in has_children:
+            reasons.append("no subtags (leaf node)")
+        if reasons:
+            results.append((tag_id, name, reasons))
+
+    return results
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Find fandom-typed tags that were likely mis-typed by input-file hint"
+    )
+    parser.add_argument("--db", default="./output/ao3_tag_seeds.db", metavar="PATH")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print findings but don't write the output file")
+    parser.add_argument("--output", default="additional_rescrape.txt", metavar="FILE",
+                        help="Output file for re-scrape URLs (default: additional_rescrape.txt)")
+    args = parser.parse_args()
+
+    db_path = Path(args.db)
+    if not db_path.exists():
+        print(f"Error: database not found at {db_path}")
+        raise SystemExit(1)
+
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA query_only=ON")
+
+    polluted = find_polluted(conn)
+    conn.close()
+
+    if not polluted:
+        print("No suspicious fandom-typed tags found. Nothing to re-scrape.")
+        return
+
+    print(f"Found {len(polluted)} tag(s) with suspect tag_type='fandom':\n")
+    print(f"  {'ID':<8} {'Tag name':<45} Reason(s)")
+    print(f"  {'-'*8} {'-'*45} {'-'*35}")
+    for tag_id, name, reasons in polluted:
+        print(f"  {tag_id:<8} {name:<45} {', '.join(reasons)}")
+
+    urls = [tag_to_url(name) for _, name, _ in polluted]
+
+    if args.dry_run:
+        print(f"\nDry run — would write {len(urls)} URLs to {args.output!r}")
+        print("\nSample URLs:")
+        for u in urls[:5]:
+            print(f"  {u}")
+        if len(urls) > 5:
+            print(f"  … and {len(urls) - 5} more")
+        return
+
+    out_path = Path(args.output)
+    with out_path.open("w", encoding="utf-8") as f:
+        f.write("# Re-scrape candidates: tag_type was 'fandom' but AO3 page likely says 'additional'\n")
+        f.write("# Generated by find_type_errors.py\n")
+        f.write("# Feed to: python3 ao3_seed_scraper.py -i additional_rescrape.txt --resume\n")
+        f.write("#\n")
+        for (tag_id, name, reasons), url in zip(polluted, urls):
+            f.write(f"# [{tag_id}] {name}  ({', '.join(reasons)})\n")
+            f.write(f"{url}\n")
+
+    print(f"\nWrote {len(urls)} URLs to {out_path.resolve()}")
+    print(f"\nNext steps:")
+    print(f"  1. Review {out_path.name} — remove any URLs that are genuinely fandom tags")
+    print(f"  2. Re-scrape (filename 'additional_rescrape.txt' sets type hint = 'additional'):")
+    print(f"       python3 ao3_seed_scraper.py -i {out_path} --resume")
+    print(f"  3. Verify:")
+    print(f"       pytest test_ao3_scraper.py --db {args.db} -v")
+
+
+if __name__ == "__main__":
+    main()

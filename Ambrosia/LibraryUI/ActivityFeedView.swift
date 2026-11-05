@@ -162,7 +162,7 @@ struct ActivityFeedView: View {
                             handleRowTap(entry)
                         }
                         Divider()
-                            .padding(.leading, 18)
+                            .padding(.leading, 50)
                     }
                 }
             }
@@ -320,26 +320,21 @@ struct ActivityFeedRow: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(alignment: .top, spacing: 12) {
-                // Coloured type indicator
-                ZStack {
-                    Circle()
-                        .fill(rowTint.opacity(0.12))
-                        .frame(width: 32, height: 32)
-                    Image(systemName: rowSymbol)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(rowTint)
-                }
-                .padding(.top, 2)
+            HStack(alignment: .center, spacing: 12) {
+                // Compact AppKit-style icon indicator
+                Image(systemName: rowSymbol)
+                    .font(.system(size: 15))
+                    .foregroundStyle(rowTint)
+                    .frame(width: 24, height: 24)
 
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: 3) {
                     titleLine
                     subtitleLine
                     detailBlock
                 }
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

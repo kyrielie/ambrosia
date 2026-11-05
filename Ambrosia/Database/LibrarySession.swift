@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import SwiftSoup
 
 extension Notification.Name {
     static let seriesOrMergedCollectionDidChange = Notification.Name("Ambrosia.seriesOrMergedCollectionDidChange")
@@ -1062,13 +1063,24 @@ final class LibrarySession {
                             // branch (AO3 preface found or not) this book takes.
                             indexedRecord = buildBookIndexRecord(from: parser)
                             // AO3 EPUBs always place the preface (dl.tags metadata block) in
-                            // spine[0]. Try it first as the fast path; only continue scanning
-                            // up to 4 more items for non-standard EPUBs where something (a
-                            // cover, a TOC page) precedes the preface.
+                            // spine[0]. Try it first as the fast path; scan up to 8 items
+                            // for external generators (FicLab, FicHub, FanFicFare) where title,
+                            // cover, or TOC items precede the frontmatter summary.
                             var checked = 0
-                            for item in parser.spine.prefix(5) {
+                            var detectedNonAO3Reason: String?
+                            for item in parser.spine.prefix(8) {
                                 checked += 1
                                 let html = try parser.html(for: item, userCSS: "")
+                                if let doc = try? SwiftSoup.parse(html) {
+                                    if let res = FanFicFareParser.parse(document: doc), case .nonAO3Source(_, let archive) = res {
+                                        detectedNonAO3Reason = "non-AO3 source (\(archive))"
+                                    } else if let res = FicLabParser.parse(document: doc), case .nonAO3Source(_, let archive) = res {
+                                        detectedNonAO3Reason = "non-AO3 source (\(archive))"
+                                    } else if let res = FicHubParser.parse(document: doc), case .nonAO3Source(_, let archive) = res {
+                                        detectedNonAO3Reason = "non-AO3 source (\(archive))"
+                                    }
+                                }
+
                                 if var metadata = AO3MetadataExtractor.extract(from: html) {
                                     spineItemsChecked = checked
                                     let prefaceIndex = checked - 1
@@ -1107,7 +1119,7 @@ final class LibrarySession {
                                 }
                             }
                             spineItemsChecked = checked
-                            failureReason = "no dl.tags AO3 preface metadata in first \(checked) spine items"
+                            failureReason = detectedNonAO3Reason ?? "no recognized AO3 preface metadata in first \(checked) spine items"
                             return nil
                         } catch {
                             failureStatus = "failed"

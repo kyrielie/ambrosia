@@ -206,9 +206,6 @@ final class TOCPopupViewController: NSViewController, NSTableViewDataSource, NST
         if let idx = filteredEntries.firstIndex(where: { $0.spineIndex == currentSpineIndex }) {
             table.selectRowIndexes(IndexSet(integer: idx), byExtendingSelection: false)
             table.scrollRowToVisible(idx)
-        } else if !filteredEntries.isEmpty {
-            table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-            table.scrollRowToVisible(0)
         } else {
             table.deselectAll(nil)
         }

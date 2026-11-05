@@ -107,3 +107,8 @@ _site/
 # never meant to be committed (accidentally landed in 6d5f91d).
 /patches/
 *.patch
+# Local test / dev artifacts
+testresults.txt
+samples/
+docs/plans/
+

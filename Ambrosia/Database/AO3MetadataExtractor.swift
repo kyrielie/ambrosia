@@ -93,8 +93,34 @@ enum AO3MetadataExtractor {
     static func extract(from html: String) -> AO3MetadataRecord? {
         do {
             let doc = try SwiftSoup.parse(html)
-            guard let meta = try doc.select("dl.tags").first() else { return nil }
 
+            // 1. Native AO3 preface fast path (dl.tags)
+            if let meta = try doc.select("dl.tags").first() {
+                return parseNativeAO3(doc: doc, meta: meta)
+            }
+
+            // 2. External Fanfiction Frontmatter Parsers
+            if let result = FanFicFareParser.parse(document: doc) {
+                if case .ao3(let record) = result { return record }
+            }
+            if let result = FicLabParser.parse(document: doc) {
+                if case .ao3(let record) = result { return record }
+            }
+            if let result = FicHubParser.parse(document: doc) {
+                if case .ao3(let record) = result { return record }
+            }
+
+            return nil
+        } catch {
+            #if DEBUG
+            print("[AO3MetadataExtractor] Parse failed: \(error)")
+            #endif
+            return nil
+        }
+    }
+
+    private static func parseNativeAO3(doc: Document, meta: Element) -> AO3MetadataRecord? {
+        do {
             var record = AO3MetadataRecord(
                 storyURL: nil,
                 workID: nil,
@@ -154,9 +180,6 @@ enum AO3MetadataExtractor {
             logMissingParsedFieldsIfNeeded(record)
             return record
         } catch {
-            #if DEBUG
-            print("[AO3MetadataExtractor] Parse failed: \(error)")
-            #endif
             return nil
         }
     }

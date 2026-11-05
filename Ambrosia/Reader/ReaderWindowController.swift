@@ -9,9 +9,10 @@ extension NSToolbarItem.Identifier {
     static let readerLike       = NSToolbarItem.Identifier("ambrosia.reader.like")
     static let readerReadLater  = NSToolbarItem.Identifier("ambrosia.reader.readlater")
     static let readerAppearance = NSToolbarItem.Identifier("ambrosia.reader.appearance")
+    static let readerInfo       = NSToolbarItem.Identifier("ambrosia.reader.info")
 }
 
-class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate {
+final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate, NSMenuItemValidation {
 
     private let target: ReadingTarget
     private let book: CalibreBook
@@ -251,7 +252,8 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
     private func configureToolbar(window: NSWindow) {
         let toolbar = NSToolbar(identifier: "ReaderWindowToolbar")
         toolbar.delegate = self
-        toolbar.allowsUserCustomization = false
+        toolbar.allowsUserCustomization = true
+        toolbar.autosavesConfiguration = true
         toolbar.displayMode = .iconOnly
         window.toolbar = toolbar
     }
@@ -267,6 +269,7 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
             .flexibleSpace,
             .readerLike,
             .readerReadLater,
+            .readerInfo,
             .readerAppearance
         ]
     }
@@ -278,6 +281,7 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
             .readerNavigation,
             .readerLike,
             .readerReadLater,
+            .readerInfo,
             .readerAppearance,
             .flexibleSpace,
             .space
@@ -305,6 +309,9 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
 
         case .readerAppearance:
             return makeAppearanceItem(identifier)
+
+        case .readerInfo:
+            return makeInfoItem(identifier)
 
         default:
             return nil
@@ -412,6 +419,24 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
         return item
     }
 
+    private func makeInfoItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = "Info"
+        item.toolTip = "Work Info & Preface (⌘I)"
+
+        let button = NSButton(
+            image: NSImage(systemSymbolName: "info.circle", accessibilityDescription: "Work Info")?
+                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
+            target: self,
+            action: #selector(infoClicked)
+        )
+        button.bezelStyle = .accessoryBarAction
+        button.isBordered = false
+
+        item.view = button
+        return item
+    }
+
     private func makeAppearanceItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
         let item = NSToolbarItem(itemIdentifier: identifier)
         item.label = "Appearance"
@@ -495,6 +520,21 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
         readerViewController?.toggleReadLaterCurrentWork(nil)
     }
 
+    @objc func infoClicked() {
+        showBookInfoSheet()
+    }
+
+    func showBookInfoSheet() {
+        guard let window = self.window else { return }
+        let currentBook = readerViewController?.activeBook ?? book
+        let ao3Record = readerViewController?.activeAO3Metadata
+        let libraryRoot = AppDelegate.shared?.session.activePath.map(URL.init(fileURLWithPath:))
+        let epubURL = libraryRoot.flatMap { currentBook.epubURL(libraryRoot: $0) }
+
+        let infoVC = BookInfoViewController(book: currentBook, ao3: ao3Record, epubURL: epubURL)
+        window.contentViewController?.presentAsSheet(infoVC)
+    }
+
     @objc private func appearanceClicked(_ sender: Any?) {
         guard let button = sender as? NSView else { return }
         if let popover = appearancePopover, popover.isShown {
@@ -513,7 +553,11 @@ class ReaderWindowController: NSWindowController, NSWindowDelegate, NSToolbarDel
         self.appearancePopover = popover
     }
 
-    // MARK: - State Updates
+    // MARK: - NSMenuItemValidation
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        return true
+    }
 
     @MainActor
     func updateToolbarState() {
