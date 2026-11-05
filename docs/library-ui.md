@@ -28,9 +28,9 @@ AmbrosiaApp
 
 ## Modes
 
-- List: SwiftUI AO3-style rows with title, series, authors, tags, stats, description, and pagination. Querying, filtering, sorting, paging, series grouping, and metadata hydration are managed by `LibraryDisplayController.swift`. `LibraryRootView.swift` acts as a declarative presentation shell; row rendering is split out into `BookListRow.swift` and `SeriesListRow.swift`; shared layout and series-grouping helpers (`FlowLayout`, `isAnthology`, `missingIndices`, `parseISODate`, `logMissingVisibleWorkMetadata`) live in `FlowLayout.swift`. These helpers and the row-support types (`LibraryStats`, `LibraryStatsRow`, `TagPillDisplay`) are intentionally `internal`, not `private`, because more than one row file depends on them — see Invariant 16.
+- List: SwiftUI AO3-style rows with title, series, authors, tags, stats, description, and pagination. Querying, filtering, sorting, paging, series grouping, and metadata hydration are managed by `LibraryDisplayController.swift`. `LibraryRootView.swift` acts as a declarative presentation shell; row rendering is split out into `BookListRow.swift` and `SeriesListRow.swift`; shared layout and series-grouping helpers (`FlowLayout`, `isAnthology`, `missingIndices`, `parseISODate`, `logMissingVisibleWorkMetadata`) live in `FlowLayout.swift`. These helpers and the row-support types (`LibraryStats`, `LibraryStatsRow`, `TagPillDisplay`) are intentionally `internal`, not `private`, because more than one row file depends on them — see Invariant 16. Action buttons (Liked, Read Later) feature instantaneous optimistic local state toggling with 24×24 pt hit areas. Reading progress (% read) is placed compactly inline inside the stats row (`LibraryStatsRow`) to prevent vertical row jitter during loading.
 - Email: AppKit split view with table sidebar and SwiftUI detail pane, also powered by `LibraryDisplayController.swift`.
-- Ranking: `ActivityFeedView` (reading activity feed). `BookState` already has ELO fields for a future ranking surface.
+- Ranking: `ActivityFeedView` (reading activity feed), designed with a compact, native AppKit layout with subtle separators and condensed 2/3-line entries wasting no unnecessary white space. `BookState` already has ELO fields for a future ranking surface.
 
 ## Row height bounds
 
@@ -62,6 +62,7 @@ List-mode rows are self-sizing `List` rows, so unbounded content makes row heigh
 ## Menu Bar Integrations
 
 The macOS menu bar adapts to whether the user is browsing the library or reading:
+- **File ▸ Get Info… (`⌘I`)**: Opens the modal "Get Info" sheet (`BookInfoViewController`) for the currently selected book in the library or active reader window.
 - **Edit ▸ Find (`⌘F`)**: Dynamically routes to the library search bar (`focusSearchField`) when in the library window, or activates the reader find bar when a reader window is focused.
 - **View ▸ Appearance**: Configures library window theme (`Follow System`, `Always Light`, `Always Dark`) via `ReaderPreferences.libraryAppearanceMode` and provides a quick `Toggle Dark/Light Mode` shortcut (`^⌘T`).
 - **View ▸ Reload Library (`⌘R`)**: Manually triggers a snapshot refresh of the library list and email views via `AppDelegate.reloadCurrentLibrary()`.
@@ -71,6 +72,7 @@ The macOS menu bar adapts to whether the user is browsing the library or reading
 ## Row Context Menus
 
 Book and series rows support macOS right-click / secondary-click context menus across all library modes (`BookListRow`, `SeriesListRow`, and `EmailSidebarViewController`):
+- **Get Info (`⌘I`)**: Presents `BookInfoViewController` modal sheet with AO3 tags, metadata, story link, Reveal in Finder, and Share sheet.
 - **Reveal in Finder**: Resolves the book's EPUB file URL via `CalibreLibrary.epubURL(for:)` and highlights it in macOS Finder (`AppDelegate.revealInFinder`).
 - Collection assignments (Read Later, Liked, Skipped, Finished, In Progress, custom collections).
 - Open in Reader / Open in External Reader.
