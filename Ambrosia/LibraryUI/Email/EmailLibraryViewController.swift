@@ -46,7 +46,7 @@ final class EmailLibraryViewController: NSViewController {
 
     // MARK: - Reader State
 
-    private var selectedBook: CalibreBook?
+    private(set) var selectedBook: CalibreBook?
     private(set) weak var currentReaderVC: ReaderViewController?
     private var readerLocalFindState = LocalReaderFindState()
     private var lastAppliedFullTextPhrase = ""
@@ -160,10 +160,7 @@ final class EmailLibraryViewController: NSViewController {
         }
         sidebarVC.onToggleLiked = { [weak self] books in
             guard let self, !books.isEmpty else { return }
-            Task {
-                let shouldLike = !books.allSatisfy { self.session.cachedLikedIDs.contains($0.id) }
-                try? await self.session.collectionStore?.setLiked(calibreIDs: books.map(\.id), liked: shouldLike)
-                self.session.bumpMembershipVersion()
+            CollectionAssignment.toggleLiked(calibreIDs: books.map(\.id), session: self.session) {
                 await self.displayController.refreshVisibilitySnapshots(resetPage: false)
             }
         }
@@ -257,6 +254,8 @@ final class EmailLibraryViewController: NSViewController {
             _ = self.displayController.bookStates
             _ = self.displayController.ao3Metadata
             _ = self.displayController.rebuildDegraded
+            _ = self.session.cachedLikedIDs
+            _ = self.session.cachedReadLaterIDs
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -314,6 +313,8 @@ final class EmailLibraryViewController: NSViewController {
                 showEmailAnnotationSidebar(nil)
             case .tableOfContents:
                 showTOCInEmailSidebar(nil)
+            case .info:
+                showEmailInfoSidebar(nil)
             }
         }
     }
@@ -425,12 +426,8 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Row Actions
 
     private func toggleReadLater(for books: [CalibreBook]) {
-        let ids = books.map(\.id)
-        let shouldAdd = !books.allSatisfy { session.cachedReadLaterIDs.contains($0.id) }
-        Task {
-            try? await session.collectionStore?.setReadLater(calibreIDs: ids, inReadLater: shouldAdd)
-            session.bumpMembershipVersion()
-            await displayController.refreshVisibilitySnapshots(resetPage: false)
+        CollectionAssignment.toggleReadLater(calibreIDs: books.map(\.id), session: session) {
+            await self.displayController.refreshVisibilitySnapshots(resetPage: false)
         }
     }
 
@@ -610,7 +607,10 @@ final class EmailLibraryViewController: NSViewController {
             currentSpineIndex: currentReaderVC?.currentSpineIndexValue ?? 0,
             onJumpToTOCEntry: { [weak self] entry in
                 self?.currentReaderVC?.jumpToTOCEntry(entry)
-            }
+            },
+            selectedBook: selectedBook,
+            bookState: selectedBook.flatMap { displayController.bookStates[$0.id] },
+            libraryRoot: session.activePath.map(URL.init(fileURLWithPath:))
         )
     }
 
@@ -729,15 +729,36 @@ final class EmailLibraryViewController: NSViewController {
     }
 
     @objc func showEmailAnnotationSidebar(_ sender: Any?) {
-        readerSidebarMode = .annotations
-        refreshReaderSidebar()
-        setReaderSidebarVisible(true)
+        let isVisible = !(annotationsSidebarItem?.isCollapsed ?? true)
+        if isVisible && readerSidebarMode == .annotations {
+            setReaderSidebarVisible(false)
+        } else {
+            readerSidebarMode = .annotations
+            refreshReaderSidebar()
+            setReaderSidebarVisible(true)
+        }
     }
 
     @objc func showTOCInEmailSidebar(_ sender: Any?) {
-        readerSidebarMode = .tableOfContents
-        refreshReaderSidebar()
-        setReaderSidebarVisible(true)
+        let isVisible = !(annotationsSidebarItem?.isCollapsed ?? true)
+        if isVisible && readerSidebarMode == .tableOfContents {
+            setReaderSidebarVisible(false)
+        } else {
+            readerSidebarMode = .tableOfContents
+            refreshReaderSidebar()
+            setReaderSidebarVisible(true)
+        }
+    }
+
+    @objc func showEmailInfoSidebar(_ sender: Any?) {
+        let isVisible = !(annotationsSidebarItem?.isCollapsed ?? true)
+        if isVisible && readerSidebarMode == .info {
+            setReaderSidebarVisible(false)
+        } else {
+            readerSidebarMode = .info
+            refreshReaderSidebar()
+            setReaderSidebarVisible(true)
+        }
     }
 
     private func repairReaderSplitItems() {
@@ -755,14 +776,18 @@ final class EmailLibraryViewController: NSViewController {
               splitVC.splitView.bounds.width > 0 else { return }
 
         let splitWidth = splitVC.splitView.bounds.width
-        let desiredAnnotationsWidth: CGFloat = 300
-        let annotationsWidth = min(
-            max(desiredAnnotationsWidth, annotationsSidebarItem.minimumThickness),
-            annotationsSidebarItem.maximumThickness
-        )
+        let currentWidth = annotationsSidebarItem.viewController.view.bounds.width
         let dividerIndex = splitVC.splitViewItems.count - 2
         guard dividerIndex >= 0 else { return }
-        splitVC.splitView.setPosition(splitWidth - annotationsWidth, ofDividerAt: dividerIndex)
+
+        if currentWidth < annotationsSidebarItem.minimumThickness || currentWidth > annotationsSidebarItem.maximumThickness {
+            let desiredAnnotationsWidth: CGFloat = 300
+            let annotationsWidth = min(
+                max(desiredAnnotationsWidth, annotationsSidebarItem.minimumThickness),
+                annotationsSidebarItem.maximumThickness
+            )
+            splitVC.splitView.setPosition(splitWidth - annotationsWidth, ofDividerAt: dividerIndex)
+        }
     }
 }
 
@@ -801,26 +826,6 @@ struct FilterSheetCarrier: View {
                 .environment(toolbarState)
                 .environment(session)
                 .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
-            }
-            .sheet(isPresented: Binding(
-                get: { toolbarState.showCollections },
-                set: { toolbarState.showCollections = $0 }
-            )) {
-                let seedIDs = emailVC?.consumePendingCollectionSeedIDs() ?? []
-                CollectionsView(calibreIDsToAdd: seedIDs, onSelectCollection: { collection in
-                    displayController.addOrReplaceRule(FilterRule(field: .collection, op: .equals, value: collection.name))
-                    toolbarState.showCollections = false
-                })
-                .environment(session)
-                .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
-            }
-            .sheet(isPresented: Binding(
-                get: { toolbarState.showReadingGoal },
-                set: { toolbarState.showReadingGoal = $0 }
-            )) {
-                ReadingGoalView()
-                    .environment(session)
-                    .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
             }
             .onChange(of: toolbarState.triggerExport) {
                 if toolbarState.triggerExport {

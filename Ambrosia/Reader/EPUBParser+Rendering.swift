@@ -101,8 +101,10 @@ extension EPUBParser {
     /// - Parameter collapseSpacerParagraphs: See `html(for:collapseSpacerParagraphs:)`.
     ///   The feed server does not pass it: feed consumers do not receive the
     ///   reader stylesheet, so the class would have no effect there.
-    func mergedHTML(
-        userCSS: String,
+    /// Returns just the concatenated body sections and optional AO3 endmatter
+    /// without wrapping in an outer `<!DOCTYPE html><html><head><style>...` frame.
+    /// Used by multi-work series loading so the whole series is wrapped in a single document.
+    func mergedBodySections(
         ao3Record: AO3MetadataRecord? = nil,
         spineIndexOffset: Int = 0,
         imageBaseOverride: URL? = nil,
@@ -183,7 +185,26 @@ extension EPUBParser {
             bodyChunks.append(Self.buildAO3Endmatter(record: record, workURL: workURL))
         }
 
-        let merged = bodyChunks.joined(separator: "\n")
+        return bodyChunks.joined(separator: "\n")
+    }
+
+    func mergedHTML(
+        userCSS: String,
+        ao3Record: AO3MetadataRecord? = nil,
+        spineIndexOffset: Int = 0,
+        imageBaseOverride: URL? = nil,
+        removeParagraphIndents: Bool = false,
+        collapseSpacerParagraphs: Bool = false,
+        ao3Order: AO3WorkLayoutOrder = ReaderPreferences.shared.ao3WorkLayoutOrder
+    ) throws -> String {
+        let merged = try mergedBodySections(
+            ao3Record: ao3Record,
+            spineIndexOffset: spineIndexOffset,
+            imageBaseOverride: imageBaseOverride,
+            removeParagraphIndents: removeParagraphIndents,
+            collapseSpacerParagraphs: collapseSpacerParagraphs,
+            ao3Order: ao3Order
+        )
 
         // Build a full document
         let html = """

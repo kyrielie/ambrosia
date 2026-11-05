@@ -100,26 +100,6 @@ final class BookInfoViewController: NSViewController {
         let headerBox = NSView()
         headerBox.translatesAutoresizingMaskIntoConstraints = false
 
-        let coverView = NSImageView()
-        coverView.imageScaling = .scaleProportionallyUpOrDown
-        coverView.wantsLayer = true
-        coverView.layer?.cornerRadius = 6
-        coverView.layer?.masksToBounds = true
-        coverView.layer?.borderColor = NSColor.separatorColor.cgColor
-        coverView.layer?.borderWidth = 0.5
-        coverView.translatesAutoresizingMaskIntoConstraints = false
-
-        if let libraryRoot = AppDelegate.shared?.session.activePath.map(URL.init(fileURLWithPath:)),
-           let coverURL = book.coverURL(libraryRoot: libraryRoot),
-           let img = NSImage(contentsOf: coverURL) {
-            coverView.image = img
-        } else {
-            let symbol = NSImage(systemSymbolName: "book.closed", accessibilityDescription: "Book cover")
-            coverView.image = symbol
-            coverView.contentTintColor = .secondaryLabelColor
-        }
-        headerBox.addSubview(coverView)
-
         let titleLabel = NSTextField(labelWithString: book.displayTitle.isEmpty ? "Untitled Document" : book.displayTitle)
         titleLabel.font = NSFont.systemFont(ofSize: 16, weight: .bold)
         titleLabel.lineBreakMode = .byWordWrapping
@@ -127,53 +107,121 @@ final class BookInfoViewController: NSViewController {
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         headerBox.addSubview(titleLabel)
 
-        let authorText = book.displayAuthors.isEmpty ? "Unknown Author" : book.displayAuthors
-        let authorLabel = NSTextField(labelWithString: "By \(authorText)")
-        authorLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        authorLabel.textColor = .secondaryLabelColor
-        authorLabel.lineBreakMode = .byTruncatingTail
+        let authorLabel = NSTextView()
+        authorLabel.isEditable = false
         authorLabel.isSelectable = true
+        authorLabel.drawsBackground = false
+        authorLabel.textContainer?.lineFragmentPadding = 0
         authorLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let authorAttr = NSMutableAttributedString()
+        authorAttr.append(NSAttributedString(string: "By ", attributes: [
+            .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+            .foregroundColor: NSColor.secondaryLabelColor
+        ]))
+
+        if let authors = ao3?.authors, !authors.isEmpty {
+            for (idx, author) in authors.enumerated() {
+                let name = author.pseud ?? author.username
+                let urlString = author.profileURL ?? "https://archiveofourown.org/users/\(author.username)/pseuds/\(name)"
+                if let url = URL(string: urlString) {
+                    authorAttr.append(NSAttributedString(string: name, attributes: [
+                        .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+                        .link: url,
+                        .foregroundColor: NSColor.controlAccentColor
+                    ]))
+                } else {
+                    authorAttr.append(NSAttributedString(string: name, attributes: [
+                        .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+                        .foregroundColor: NSColor.secondaryLabelColor
+                    ]))
+                }
+                if idx < authors.count - 1 {
+                    authorAttr.append(NSAttributedString(string: ", ", attributes: [
+                        .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+                        .foregroundColor: NSColor.secondaryLabelColor
+                    ]))
+                }
+            }
+        } else {
+            let authorText = book.displayAuthors.isEmpty ? "Unknown Author" : book.displayAuthors
+            authorAttr.append(NSAttributedString(string: authorText, attributes: [
+                .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+                .foregroundColor: NSColor.secondaryLabelColor
+            ]))
+        }
+        authorLabel.textStorage?.setAttributedString(authorAttr)
         headerBox.addSubview(authorLabel)
 
-        let sourceLabel: NSView
+        let realCoverImage: NSImage? = {
+            guard let libraryRoot = AppDelegate.shared?.session.activePath.map(URL.init(fileURLWithPath:)),
+                  let coverURL = book.coverURL(libraryRoot: libraryRoot),
+                  FileManager.default.fileExists(atPath: coverURL.path) else { return nil }
+            return NSImage(contentsOf: coverURL)
+        }()
+
+        var constraints: [NSLayoutConstraint] = []
+
+        if let coverImage = realCoverImage {
+            let coverView = NSImageView()
+            coverView.imageScaling = .scaleProportionallyUpOrDown
+            coverView.wantsLayer = true
+            coverView.layer?.cornerRadius = 6
+            coverView.layer?.masksToBounds = true
+            coverView.layer?.borderColor = NSColor.separatorColor.cgColor
+            coverView.layer?.borderWidth = 0.5
+            coverView.image = coverImage
+            coverView.translatesAutoresizingMaskIntoConstraints = false
+            headerBox.addSubview(coverView)
+
+            constraints += [
+                coverView.leadingAnchor.constraint(equalTo: headerBox.leadingAnchor),
+                coverView.topAnchor.constraint(equalTo: headerBox.topAnchor),
+                coverView.bottomAnchor.constraint(lessThanOrEqualTo: headerBox.bottomAnchor),
+                coverView.widthAnchor.constraint(equalToConstant: 64),
+                coverView.heightAnchor.constraint(equalToConstant: 90),
+
+                titleLabel.leadingAnchor.constraint(equalTo: coverView.trailingAnchor, constant: 14),
+                titleLabel.trailingAnchor.constraint(equalTo: headerBox.trailingAnchor),
+                titleLabel.topAnchor.constraint(equalTo: headerBox.topAnchor, constant: 2),
+
+                authorLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+                authorLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
+                authorLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4)
+            ]
+        } else {
+            constraints += [
+                titleLabel.leadingAnchor.constraint(equalTo: headerBox.leadingAnchor),
+                titleLabel.trailingAnchor.constraint(equalTo: headerBox.trailingAnchor),
+                titleLabel.topAnchor.constraint(equalTo: headerBox.topAnchor, constant: 2),
+
+                authorLabel.leadingAnchor.constraint(equalTo: headerBox.leadingAnchor),
+                authorLabel.trailingAnchor.constraint(equalTo: headerBox.trailingAnchor),
+                authorLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4)
+            ]
+        }
+
         if let storyURL = ao3?.storyURL, URL(string: storyURL) != nil {
-            let linkButton = NSButton(title: "Posted on Archive of Our Own ↗", target: self, action: #selector(openStoryURL))
+            let linkButton = NSButton(title: "View Work on Archive of Our Own ↗", target: self, action: #selector(openStoryURL))
             linkButton.bezelStyle = .inline
             linkButton.isBordered = false
             linkButton.contentTintColor = .controlAccentColor
             linkButton.font = NSFont.systemFont(ofSize: 11, weight: .regular)
             linkButton.translatesAutoresizingMaskIntoConstraints = false
-            sourceLabel = linkButton
+            headerBox.addSubview(linkButton)
+
+            constraints += [
+                linkButton.leadingAnchor.constraint(equalTo: authorLabel.leadingAnchor),
+                linkButton.topAnchor.constraint(equalTo: authorLabel.bottomAnchor, constant: 6),
+                linkButton.bottomAnchor.constraint(lessThanOrEqualTo: headerBox.bottomAnchor, constant: -2)
+            ]
         } else {
-            let label = NSTextField(labelWithString: "Calibre ID #\(book.id)")
-            label.font = NSFont.systemFont(ofSize: 11)
-            label.textColor = .tertiaryLabelColor
-            label.translatesAutoresizingMaskIntoConstraints = false
-            sourceLabel = label
+            constraints += [
+                authorLabel.bottomAnchor.constraint(lessThanOrEqualTo: headerBox.bottomAnchor, constant: -2)
+            ]
         }
-        headerBox.addSubview(sourceLabel)
 
-        NSLayoutConstraint.activate([
-            coverView.leadingAnchor.constraint(equalTo: headerBox.leadingAnchor),
-            coverView.topAnchor.constraint(equalTo: headerBox.topAnchor),
-            coverView.bottomAnchor.constraint(lessThanOrEqualTo: headerBox.bottomAnchor),
-            coverView.widthAnchor.constraint(equalToConstant: 64),
-            coverView.heightAnchor.constraint(equalToConstant: 90),
-
-            titleLabel.leadingAnchor.constraint(equalTo: coverView.trailingAnchor, constant: 14),
-            titleLabel.trailingAnchor.constraint(equalTo: headerBox.trailingAnchor),
-            titleLabel.topAnchor.constraint(equalTo: headerBox.topAnchor, constant: 2),
-
-            authorLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            authorLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
-            authorLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4),
-
-            sourceLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            sourceLabel.topAnchor.constraint(equalTo: authorLabel.bottomAnchor, constant: 6),
-            sourceLabel.bottomAnchor.constraint(lessThanOrEqualTo: headerBox.bottomAnchor, constant: -2)
-        ])
-
+        NSLayoutConstraint.activate(constraints)
         return headerBox
     }
 
@@ -194,8 +242,7 @@ final class BookInfoViewController: NSViewController {
             appendPrefaceRow(label: "Additional Tags:", tags: ao3.additionalTags, to: container)
 
             if !ao3.series.isEmpty {
-                let seriesText = ao3.series.map { "Part \($0.index) of \($0.name)" }.joined(separator: "; ")
-                appendPlainRow(label: "Series:", value: seriesText, to: container)
+                appendSeriesRow(series: ao3.series, to: container)
             }
 
             if let lang = ao3.language {
@@ -232,6 +279,61 @@ final class BookInfoViewController: NSViewController {
         }
 
         return container
+    }
+
+    private func appendSeriesRow(series: [AO3MetadataRecord.SeriesEntry], to container: NSStackView) {
+        guard !series.isEmpty else { return }
+
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .top
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let labelField = createRowLabel("Series:")
+        labelField.widthAnchor.constraint(equalToConstant: Self.labelColumnWidth).isActive = true
+        row.addArrangedSubview(labelField)
+
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.translatesAutoresizingMaskIntoConstraints = false
+
+        let attrString = NSMutableAttributedString()
+        for (idx, entry) in series.enumerated() {
+            let partText = "Part \(entry.index) of "
+            attrString.append(NSAttributedString(string: partText, attributes: [
+                .font: NSFont.systemFont(ofSize: 12),
+                .foregroundColor: NSColor.labelColor
+            ]))
+
+            if let ao3ID = entry.ao3ID, let url = URL(string: "https://archiveofourown.org/series/\(ao3ID)") {
+                attrString.append(NSAttributedString(string: entry.name, attributes: [
+                    .font: NSFont.systemFont(ofSize: 12),
+                    .link: url,
+                    .foregroundColor: NSColor.controlAccentColor
+                ]))
+            } else {
+                attrString.append(NSAttributedString(string: entry.name, attributes: [
+                    .font: NSFont.systemFont(ofSize: 12),
+                    .foregroundColor: NSColor.labelColor
+                ]))
+            }
+
+            if idx < series.count - 1 {
+                attrString.append(NSAttributedString(string: "; ", attributes: [
+                    .font: NSFont.systemFont(ofSize: 12),
+                    .foregroundColor: NSColor.secondaryLabelColor
+                ]))
+            }
+        }
+        textView.textStorage?.setAttributedString(attrString)
+        row.addArrangedSubview(textView)
+
+        container.addArrangedSubview(row)
+        row.widthAnchor.constraint(equalTo: container.widthAnchor).isActive = true
     }
 
     private func appendPlainRow(label: String, value: String, to container: NSStackView) {
@@ -393,6 +495,12 @@ final class BookInfoViewController: NSViewController {
         encoded = encoded.replacingOccurrences(of: ".", with: "*d*")
         let urlEncoded = encoded.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? encoded
         return URL(string: "https://archiveofourown.org/tags/\(urlEncoded)") ?? URL(string: "https://archiveofourown.org")!
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        // Prevent AppKit from auto-selecting the first text field / control on sheet presentation
+        view.window?.makeFirstResponder(nil)
     }
 
     @objc private func openStoryURL() {

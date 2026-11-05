@@ -345,24 +345,29 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         }
     }
 
-    // MARK: - Book Info Sheet
-
-    func showSelectedBookInfo() {
-        guard let lvc = contentViewController as? LibraryViewController else { return }
-        guard let book = lvc.displayController.selectedBook else { return }
-        let ao3 = lvc.displayController.ao3Metadata[book.id]
-        let libraryRoot = session?.activePath.map(URL.init(fileURLWithPath:))
-        let epubURL = libraryRoot.flatMap { book.epubURL(libraryRoot: $0) }
-
-        let infoVC = BookInfoViewController(book: book, ao3: ao3, epubURL: epubURL)
-        window?.contentViewController?.presentAsSheet(infoVC)
-    }
-
     // MARK: - NSMenuItemValidation
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(reshuffleSort) {
             return toolbarState?.sortField == .random
+        }
+        if menuItem.action == #selector(showBookInfoAction(_:)) ||
+           menuItem.action == #selector(toggleLikeCurrentWork(_:)) ||
+           menuItem.action == #selector(toggleReadLaterCurrentWork(_:)) {
+            return currentSelectedBook != nil
+        }
+        if menuItem.action == #selector(toggleFindBarAction(_:)) ||
+           menuItem.action == #selector(findNextAction(_:)) ||
+           menuItem.action == #selector(findPreviousAction(_:)) ||
+           menuItem.action == #selector(addAnnotation(_:)) ||
+           menuItem.action == #selector(toggleReadingMode(_:)) ||
+           menuItem.action == #selector(goToNextPageAction(_:)) ||
+           menuItem.action == #selector(goToPreviousPageAction(_:)) ||
+           menuItem.action == #selector(nextChapterAction(_:)) ||
+           menuItem.action == #selector(previousChapterAction(_:)) ||
+           menuItem.action == #selector(goToBeginningOfWorkAction(_:)) ||
+           menuItem.action == #selector(goToEndOfWorkAction(_:)) {
+            return currentReaderVC != nil
         }
         return true
     }
@@ -891,7 +896,11 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     }
 
     @objc func performFindAction(_ sender: Any?) {
-        focusSearchField(sender)
+        if toolbarState?.viewMode == .email, let currentReaderVC {
+            currentReaderVC.performFindAction(sender)
+        } else {
+            focusSearchField(sender)
+        }
     }
 
     @objc func focusSearchField(_ sender: Any?) {
@@ -901,21 +910,206 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         window.makeFirstResponder(searchField)
     }
 
+    var libraryViewController: LibraryViewController? {
+        window?.contentViewController as? LibraryViewController
+    }
+
+    var currentReaderVC: ReaderViewController? {
+        libraryViewController?.currentReaderVC
+    }
+
+    var currentSelectedBook: CalibreBook? {
+        if toolbarState?.viewMode == .email {
+            return currentReaderVC?.activeBook ?? libraryViewController?.activeEmailVC?.selectedBook
+        }
+        return nil
+    }
+
+    @objc func showBookInfoAction(_ sender: Any?) {
+        showBookInfoSheet()
+    }
+
+    func showBookInfoSheet() {
+        guard let window = self.window,
+              let currentBook = currentSelectedBook else { return }
+        let ao3Record = currentReaderVC?.activeAO3Metadata
+        let libraryRoot = session?.activePath.map(URL.init(fileURLWithPath:))
+        let epubURL = libraryRoot.flatMap { currentBook.epubURL(libraryRoot: $0) }
+
+        if let ao3Record {
+            let infoVC = BookInfoViewController(book: currentBook, ao3: ao3Record, epubURL: epubURL)
+            window.contentViewController?.presentAsSheet(infoVC)
+        } else {
+            Task { @MainActor [weak self, weak window] in
+                guard let self, let window else { return }
+                let metaDB = self.session?.metaDB
+                let fetchedAO3 = (try? await metaDB?.ao3Metadata(for: [currentBook.id]))?[currentBook.id]
+                let infoVC = BookInfoViewController(book: currentBook, ao3: fetchedAO3, epubURL: epubURL)
+                window.contentViewController?.presentAsSheet(infoVC)
+            }
+        }
+    }
+
     /// Called by the Show Annotations menu item (⌘B) when the library window is key.
-    /// Sets the requested mode then flips showEmailReaderSidebar, observed by
-    /// EmailLibraryViewController to ensure-visible in that mode (not a blind
-    /// toggle — repeated clicks shouldn't flip-flop visibility).
     @objc func showEmailAnnotationSidebar(_ sender: Any?) {
-        toolbarState?.emailReaderSidebarMode = .annotations
-        toolbarState?.showEmailReaderSidebar.toggle()
+        if let emailVC = libraryViewController?.activeEmailVC {
+            emailVC.showEmailAnnotationSidebar(sender)
+        } else {
+            toolbarState?.emailReaderSidebarMode = .annotations
+            toolbarState?.showEmailReaderSidebar.toggle()
+        }
     }
+
     @objc func showTOCInEmailSidebar(_ sender: Any?) {
-        toolbarState?.emailReaderSidebarMode = .tableOfContents
-        toolbarState?.showEmailReaderSidebar.toggle()
+        if let emailVC = libraryViewController?.activeEmailVC {
+            emailVC.showTOCInEmailSidebar(sender)
+        } else {
+            toolbarState?.emailReaderSidebarMode = .tableOfContents
+            toolbarState?.showEmailReaderSidebar.toggle()
+        }
     }
-    @objc func showCollections() { toolbarState?.showCollections    = true }
-    @objc func showReadingGoal() { toolbarState?.showReadingGoal    = true }
-    @objc func showErrorLog() { toolbarState?.showErrorLog = true }
+
+    @objc func showEmailInfoSidebar(_ sender: Any?) {
+        if let emailVC = libraryViewController?.activeEmailVC {
+            emailVC.showEmailInfoSidebar(sender)
+        } else {
+            toolbarState?.emailReaderSidebarMode = .info
+            toolbarState?.showEmailReaderSidebar.toggle()
+        }
+    }
+
+    // MARK: - Embedded Reader Action Forwarding
+
+    @objc func toggleReadingMode(_ sender: Any?) {
+        currentReaderVC?.toggleReadingMode(sender)
+    }
+
+    @objc func addAnnotation(_ sender: Any?) {
+        currentReaderVC?.addAnnotation(sender)
+    }
+
+    @objc func toggleFindBarAction(_ sender: Any?) {
+        currentReaderVC?.toggleFindBarAction(sender)
+    }
+
+    @objc func findNextAction(_ sender: Any?) {
+        currentReaderVC?.findNextAction(sender)
+    }
+
+    @objc func findPreviousAction(_ sender: Any?) {
+        currentReaderVC?.findPreviousAction(sender)
+    }
+
+    @objc func toggleLikeCurrentWork(_ sender: Any?) {
+        if let currentReaderVC {
+            currentReaderVC.toggleLikeCurrentWork(sender)
+        } else if let book = currentSelectedBook, let session {
+            CollectionAssignment.toggleLiked(calibreIDs: [book.id], session: session)
+        }
+    }
+
+    @objc func toggleReadLaterCurrentWork(_ sender: Any?) {
+        if let currentReaderVC {
+            currentReaderVC.toggleReadLaterCurrentWork(sender)
+        } else if let book = currentSelectedBook, let session {
+            CollectionAssignment.toggleReadLater(calibreIDs: [book.id], session: session)
+        }
+    }
+
+    @objc func goToNextPageAction(_ sender: Any?) {
+        currentReaderVC?.goToNextPageAction(sender)
+    }
+
+    @objc func goToPreviousPageAction(_ sender: Any?) {
+        currentReaderVC?.goToPreviousPageAction(sender)
+    }
+
+    @objc func nextChapterAction(_ sender: Any?) {
+        currentReaderVC?.nextChapterAction(sender)
+    }
+
+    @objc func previousChapterAction(_ sender: Any?) {
+        currentReaderVC?.previousChapterAction(sender)
+    }
+
+    @objc func goToBeginningOfWorkAction(_ sender: Any?) {
+        currentReaderVC?.goToBeginningOfWorkAction(sender)
+    }
+
+    @objc func goToEndOfWorkAction(_ sender: Any?) {
+        currentReaderVC?.goToEndOfWorkAction(sender)
+    }
+
+    @objc func showCollections() { showCollectionsSheet() }
+    @objc func showReadingGoal() { showReadingGoalSheet() }
+    @objc func showErrorLog() { showErrorLogSheet() }
+
+    @MainActor
+    func showCollectionsSheet() {
+        guard let window, window.attachedSheet == nil, let session else { return }
+        let seedIDs = libraryViewController?.activeEmailVC?.consumePendingCollectionSeedIDs() ?? []
+        let host = NSHostingController(rootView: CollectionsView(
+            calibreIDsToAdd: seedIDs,
+            onSelectCollection: { [weak self] collectionName in
+                self?.dismissAttachedSheet()
+                guard let self else { return }
+                let lvc = self.libraryViewController ?? (self.contentViewController as? LibraryViewController)
+                lvc?.displayController.addOrReplaceRule(
+                    FilterRule(field: .collection, op: .equals, value: collectionName)
+                )
+            },
+            onDismiss: { [weak self] in
+                self?.dismissAttachedSheet()
+            }
+        )
+        .environment(session)
+        .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme))
+        let sheetWindow = NSWindow(contentViewController: host)
+        sheetWindow.styleMask = [.titled, .closable, .resizable]
+        sheetWindow.setContentSize(NSSize(width: 740, height: 500))
+        sheetWindow.minSize = NSSize(width: 680, height: 460)
+        sheetWindow.initialFirstResponder = nil
+        window.beginSheet(sheetWindow, completionHandler: nil)
+    }
+
+    @MainActor
+    func showReadingGoalSheet() {
+        guard let window, window.attachedSheet == nil, let session else { return }
+        let host = NSHostingController(rootView: ReadingGoalView(
+            onDismiss: { [weak self] in
+                self?.dismissAttachedSheet()
+            }
+        )
+        .environment(session)
+        .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme))
+        let sheetWindow = NSWindow(contentViewController: host)
+        sheetWindow.styleMask = [.titled, .closable, .resizable]
+        sheetWindow.setContentSize(NSSize(width: 700, height: 540))
+        sheetWindow.minSize = NSSize(width: 640, height: 480)
+        sheetWindow.initialFirstResponder = nil
+        window.beginSheet(sheetWindow, completionHandler: nil)
+    }
+
+    @MainActor
+    func showErrorLogSheet() {
+        guard let window, window.attachedSheet == nil, let session else { return }
+        let host = NSHostingController(rootView: ErrorLogView(
+            onDismiss: { [weak self] in
+                self?.dismissAttachedSheet()
+            }
+        )
+        .environment(session)
+        .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme))
+        let sheetWindow = NSWindow(contentViewController: host)
+        sheetWindow.styleMask = [.titled]
+        window.beginSheet(sheetWindow, completionHandler: nil)
+    }
+
+    @MainActor
+    func dismissAttachedSheet() {
+        guard let window, let sheet = window.attachedSheet else { return }
+        window.endSheet(sheet)
+    }
     @objc func triggerCSVExport() { toolbarState?.triggerExport      = true }
     @objc func triggerEPUBExport() { toolbarState?.triggerEPUBExport  = true }
     @objc func triggerAnnotationExport() { toolbarState?.triggerAnnotationExport = true }
@@ -996,8 +1190,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
     @MainActor
     private func dismissRSSSheet() {
-        guard let window, let sheet = window.attachedSheet else { return }
-        window.endSheet(sheet)
+        dismissAttachedSheet()
     }
 
     /// Builds the calibre IDs and label for the current search, writing a

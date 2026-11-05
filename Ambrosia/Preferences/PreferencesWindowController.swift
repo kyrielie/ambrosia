@@ -42,6 +42,7 @@ final class PreferencesWindowController: NSWindowController {
     static func show() {
         shared.showWindow(nil)
         shared.window?.makeKeyAndOrderFront(nil)
+        shared.window?.makeFirstResponder(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 }

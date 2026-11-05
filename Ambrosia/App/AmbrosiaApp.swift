@@ -47,6 +47,10 @@ struct AmbrosiaApp: App {
                     Button("Find…") {
                         if let readerWindow = NSApp.keyWindow?.windowController as? ReaderWindowController {
                             readerWindow.readerViewController?.performFindAction(nil)
+                        } else if let libraryWindow = NSApp.keyWindow?.windowController as? LibraryWindowController,
+                                  libraryWindow.toolbarStateForCommands?.viewMode == .email,
+                                  let rvc = libraryWindow.currentReaderVC {
+                            rvc.performFindAction(nil)
                         } else {
                             AppDelegate.shared?.libraryWindowController?.focusSearchField(nil)
                         }
@@ -73,15 +77,6 @@ struct AmbrosiaApp: App {
             }
 
             CommandGroup(replacing: .newItem) {
-                Button("Get Info…") {
-                    if let readerWindow = NSApp.keyWindow?.windowController as? ReaderWindowController {
-                        readerWindow.showBookInfoSheet()
-                    } else if let libraryWindow = AppDelegate.shared?.libraryWindowController {
-                        libraryWindow.showSelectedBookInfo()
-                    }
-                }
-                .keyboardShortcut("i", modifiers: [.command])
-
                 Button("Open Library…") {
                     AppDelegate.shared?.chooseLibraryFolder()
                 }
@@ -234,7 +229,6 @@ struct AmbrosiaApp: App {
                                          to: nil, from: nil)
                     }
                 }
-                .disabled(AppDelegate.shared?.hasActiveReader != true)
 
                 Button("Annotations Panel") {
                     if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
@@ -245,10 +239,32 @@ struct AmbrosiaApp: App {
                                          to: nil, from: nil)
                     }
                 }
-                .disabled(AppDelegate.shared?.hasActiveReader != true)
+
+                Button("Info Panel") {
+                    if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
+                       libraryWindowController.window?.isKeyWindow == true {
+                        if libraryWindowController.toolbarStateForCommands?.viewMode == .email {
+                            libraryWindowController.showEmailInfoSidebar(nil)
+                        } else {
+                            libraryWindowController.showBookInfoSheet()
+                        }
+                    } else if let readerWindow = NSApp.keyWindow?.windowController as? ReaderWindowController {
+                        readerWindow.showBookInfoSheet()
+                    } else {
+                        AppDelegate.shared?.libraryWindowController?.showBookInfoSheet()
+                    }
+                }
             }
 
             CommandMenu("Reader") {
+                Button("Get Info…") {
+                    NSApp.sendAction(#selector(ReaderWindowController.showBookInfoAction(_:)),
+                                     to: nil, from: nil)
+                }
+                .keyboardShortcut("i", modifiers: [.command])
+
+                Divider()
+
                 Menu("Navigation") {
                     Button("Next Page") {
                         NSApp.sendAction(#selector(ReaderViewController.goToNextPageAction(_:)),
@@ -290,7 +306,6 @@ struct AmbrosiaApp: App {
                     }
                     .keyboardShortcut("]", modifiers: [.command, .option])
                 }
-                .disabled(AppDelegate.shared?.hasActiveReader != true)
 
                 Menu("Reader Text & Themes") {
                     Button("Increase Font Size") {
@@ -387,7 +402,6 @@ struct AmbrosiaApp: App {
                     NSApp.sendAction(#selector(ReaderViewController.toggleReadingMode(_:)),
                                      to: nil, from: nil)
                 }
-                .disabled(AppDelegate.shared?.hasActiveReader != true)
 
                 Button("Show Table of Contents") {
                     if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
@@ -398,7 +412,6 @@ struct AmbrosiaApp: App {
                                          to: nil, from: nil)
                     }
                 }
-                .disabled(AppDelegate.shared?.hasActiveReader != true)
 
                 Button("Show Annotations") {
                     if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
@@ -409,13 +422,11 @@ struct AmbrosiaApp: App {
                                          to: nil, from: nil)
                     }
                 }
-                .disabled(AppDelegate.shared?.hasActiveReader != true)
 
                 Button("Add Annotation") {
                     NSApp.sendAction(#selector(ReaderViewController.addAnnotation(_:)),
                                      to: nil, from: nil)
                 }
-                .disabled(AppDelegate.shared?.hasActiveReader != true)
 
                 Divider()
 
@@ -423,19 +434,16 @@ struct AmbrosiaApp: App {
                     NSApp.sendAction(#selector(ReaderViewController.toggleFindBarAction(_:)),
                                      to: nil, from: nil)
                 }
-                .disabled(AppDelegate.shared?.hasActiveReader != true)
 
                 Button("Find Next") {
                     NSApp.sendAction(#selector(ReaderViewController.findNextAction(_:)),
                                      to: nil, from: nil)
                 }
-                .disabled(AppDelegate.shared?.hasActiveReader != true)
 
                 Button("Find Previous") {
                     NSApp.sendAction(#selector(ReaderViewController.findPreviousAction(_:)),
                                      to: nil, from: nil)
                 }
-                .disabled(AppDelegate.shared?.hasActiveReader != true)
 
                 Divider()
 
@@ -443,13 +451,11 @@ struct AmbrosiaApp: App {
                     NSApp.sendAction(#selector(ReaderViewController.toggleLikeCurrentWork(_:)),
                                      to: nil, from: nil)
                 }
-                .disabled(AppDelegate.shared?.hasActiveReader != true)
 
                 Button("Add to Read Later") {
                     NSApp.sendAction(#selector(ReaderViewController.toggleReadLaterCurrentWork(_:)),
                                      to: nil, from: nil)
                 }
-                .disabled(AppDelegate.shared?.hasActiveReader != true)
 
                 Divider()
 
@@ -459,7 +465,6 @@ struct AmbrosiaApp: App {
                 Button("Reset Reader Window Size to Default") {
                     ReaderWindowController.resetAllToDefaultSize()
                 }
-                .disabled(AppDelegate.shared?.hasActiveReader != true)
             }
         }
     }

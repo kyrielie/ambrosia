@@ -38,14 +38,6 @@ struct ActivityFeedView: View {
                 }
             )
         }
-        .sheet(isPresented: collectionsBinding) {
-            CollectionsView()
-                .environment(session)
-        }
-        .sheet(isPresented: readingGoalBinding) {
-            ReadingGoalView()
-                .environment(session)
-        }
         .onChange(of: toolbarState.triggerExport) { _, triggered in
             // The activity view has no book list; silently reset the flag.
             // Export is handled by whichever content view owns the current book list.
@@ -66,20 +58,6 @@ struct ActivityFeedView: View {
         Binding(
             get: { toolbarState.showFilterDrawer },
             set: { toolbarState.showFilterDrawer = $0 }
-        )
-    }
-
-    private var collectionsBinding: Binding<Bool> {
-        Binding(
-            get: { toolbarState.showCollections },
-            set: { toolbarState.showCollections = $0 }
-        )
-    }
-
-    private var readingGoalBinding: Binding<Bool> {
-        Binding(
-            get: { toolbarState.showReadingGoal },
-            set: { toolbarState.showReadingGoal = $0 }
         )
     }
 

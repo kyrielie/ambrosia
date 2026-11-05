@@ -79,11 +79,7 @@ struct ReaderPageProgress {
             }
         case .scroll:
             let pct = Int((totalPercent * 100).rounded())
-            if totalSpineCount > 1 {
-                return "Ch. \(currentSpineIndex + 1) • \(pct)%"
-            } else {
-                return "\(pct)%"
-            }
+            return "\(pct)%"
         }
     }
 }
@@ -764,8 +760,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             // relative baseURL on the whole merged document can only ever
             // resolve one work's images — see EPUBParser.rewriteImageReferences.
             let workImageBase = workImageBaseURLs.indices.contains(offset) ? workImageBaseURLs[offset] : nil
-            let workHTML = try workParser.mergedHTML(
-                userCSS: ReaderPreferences.shared.css,
+            let workSections = try workParser.mergedBodySections(
                 ao3Record: record,
                 spineIndexOffset: spineIndexOffset,
                 imageBaseOverride: workImageBase,
@@ -774,13 +769,28 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             )
             let wrappedWorkHTML = """
             <div class="ambrosia-work" data-work-calibre-id="\(work.id)">
-            \(workHTML)
+            \(workSections)
             </div>
             """
             parts.append(breakHTML + wrappedWorkHTML)
             spineIndexOffset += workParser.spine.count
         }
-        return parts.joined(separator: "\n")
+        let mergedSeriesBody = parts.joined(separator: "\n")
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+        \(ReaderPreferences.shared.css)
+        </style>
+        </head>
+        <body>
+        \(mergedSeriesBody)
+        </body>
+        </html>
+        """
     }
 
     // MARK: - HTML reload
@@ -1254,8 +1264,15 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                     })
                 );
             }
+            var ticking = false;
             window.addEventListener('scroll', function() {
-                sendPosition();
+                if (!ticking) {
+                    window.requestAnimationFrame(function() {
+                        sendPosition();
+                        ticking = false;
+                    });
+                    ticking = true;
+                }
             }, { passive: true });
             sendPosition();
         })();
@@ -1681,6 +1698,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 bookStates[cid] = st
             }
 
+            self.onReadingProgressChanged?()
+
         case "pageAction":
             guard let body = message.body as? String else { return }
             // JS ambrosiaNextPage/PrevPage posts JSON only when crossing spine boundaries.
@@ -1802,38 +1821,16 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     /// Toggles Like on whichever work is currently on screen — `activeCalibreID`,
     /// not the reading target's primary book, so paging into a later work of a
     /// multi-work series toggles *that* work, matching what the reader is
-    /// actually displaying. Mirrors LibraryRootView's `toggleLike(for:)`.
+    /// actually displaying.
     @objc func toggleLikeCurrentWork(_ sender: Any?) {
-        let calibreID = activeCalibreID
-        guard let session = AppDelegate.shared?.session,
-              let collectionStore = session.collectionStore else { return }
-        Task {
-            let alreadyLiked = ((try? await collectionStore.likedIDs()) ?? []).contains(calibreID)
-            try? await collectionStore.setLiked(calibreIDs: [calibreID], liked: !alreadyLiked)
-            session.bumpMembershipVersion()
-            let refreshed = (try? await collectionStore.likedIDs()) ?? []
-            await MainActor.run { session.cachedLikedIDs = refreshed }
-        }
+        guard let session = AppDelegate.shared?.session else { return }
+        CollectionAssignment.toggleLiked(calibreIDs: [activeCalibreID], session: session)
     }
 
-    /// Toggles Read Later on whichever work is currently on screen. Mirrors
-    /// LibraryRootView's `toggleReadLater(for:)`.
+    /// Toggles Read Later on whichever work is currently on screen.
     @objc func toggleReadLaterCurrentWork(_ sender: Any?) {
-        let calibreID = activeCalibreID
-        guard let session = AppDelegate.shared?.session,
-              let collectionStore = session.collectionStore else { return }
-        Task {
-            let alreadyInReadLater = Set((try? await collectionStore.members(of: SystemCollectionID.readLater)) ?? [])
-                .contains(calibreID)
-            if alreadyInReadLater {
-                try? await collectionStore.remove(calibreID: calibreID, from: SystemCollectionID.readLater)
-            } else {
-                try? await collectionStore.bulkAdd(calibreIDs: [calibreID], to: SystemCollectionID.readLater)
-            }
-            session.bumpMembershipVersion()
-            let refreshed = Set((try? await collectionStore.members(of: SystemCollectionID.readLater)) ?? [])
-            await MainActor.run { session.cachedReadLaterIDs = refreshed }
-        }
+        guard let session = AppDelegate.shared?.session else { return }
+        CollectionAssignment.toggleReadLater(calibreIDs: [activeCalibreID], session: session)
     }
 
     // MARK: - Point annotations (⌘D)
@@ -2931,6 +2928,12 @@ private class ReaderMenuWebView: WKWebView {
                 return
             case 125:
                 scrollPageVertically(multiplier: 0.9)
+                return
+            case 123: // ← Left Arrow: previous page (matches toolbar arrow)
+                vc.goToPreviousPage()
+                return
+            case 124: // → Right Arrow: next page (matches toolbar arrow)
+                vc.goToNextPage()
                 return
             default:
                 super.keyDown(with: event)
