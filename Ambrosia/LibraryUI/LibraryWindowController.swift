@@ -303,7 +303,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         item.showsIndicator = true
 
         let menu = NSMenu()
-        for field in SortField.allCases {
+        for field in SortField.userFacingCases {
             let mi = NSMenuItem(title: field.label,
                                 action: #selector(sortMenuItemSelected(_:)),
                                 keyEquivalent: "")
@@ -334,9 +334,14 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         guard menu === sortMenuToolbarItem?.menu else { return }
         let current = toolbarState?.sortField
         let isRandom = current == .random
+        let hasKudos = AppDelegate.shared?.session.hasKudosData ?? false
         for item in menu.items {
             if let field = item.representedObject as? SortField {
                 item.state = (field == current) ? .on : .off
+                if field == .kudos {
+                    item.isEnabled = hasKudos
+                    item.toolTip = hasKudos ? nil : "No kudos data available for this library"
+                }
             }
         }
         // Enable/disable Ascending/Descending based on whether sort is random

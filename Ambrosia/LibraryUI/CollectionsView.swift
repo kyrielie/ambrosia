@@ -24,17 +24,22 @@ struct CollectionsView: View {
     var onSelectCollection: ((String) -> Void)?
     var onDismiss: (() -> Void)?
 
+    @AppStorage("CollectionsView.lastSelectedCollectionID") private var lastSelectedCollectionID: String = SystemCollectionID.readLater
+
     @State private var collections: [CollectionRow] = []
     @State private var membership: [String: Set<Int>] = [:]
     @State private var selectedCollectionID: String?
+    @State private var selectedWorkIDs: Set<Int> = []
     @State private var newName = ""
     @State private var isCreating = false
+    @FocusState private var isCreatingFocused: Bool
     @State private var renamingID: String?
     @State private var renameText = ""
     @State private var searchText = ""
     @State private var pendingDeleteCollection: CollectionRow?
     @State private var memberBooks: [CalibreBook] = []
     @State private var memberAddedDates: [Int: Date] = [:]
+    @State private var memberProgress: [Int: Double] = [:]
 
     private var selectedCalibreIDs: [Int] {
         if !calibreIDsToAdd.isEmpty { return calibreIDsToAdd }
@@ -60,6 +65,11 @@ struct CollectionsView: View {
             maxHeight: .infinity
         )
         .task { await reload() }
+        .onChange(of: selectedCollectionID) { _, newID in
+            if let newID {
+                lastSelectedCollectionID = newID
+            }
+        }
         .confirmationDialog(
             "Delete “\(pendingDeleteCollection?.name ?? "")”?",
             isPresented: Binding(
@@ -177,8 +187,11 @@ struct CollectionsView: View {
 
             HStack {
                 Button {
+                    newName = "Untitled Collection"
                     isCreating = true
-                    newName = ""
+                    DispatchQueue.main.async {
+                        isCreatingFocused = true
+                    }
                 } label: {
                     Label("New Collection", systemImage: "plus")
                 }
@@ -198,6 +211,21 @@ struct CollectionsView: View {
         .frame(maxHeight: .infinity)
     }
 
+    private func handleDrop(providers: [NSItemProvider], targetCollectionID: String) -> Bool {
+        guard let provider = providers.first else { return false }
+        _ = provider.loadObject(ofClass: NSString.self) { string, _ in
+            guard let str = string as? String else { return }
+            let ids = str.split(separator: ",").compactMap { Int($0) }
+            guard !ids.isEmpty else { return }
+            Task { @MainActor in
+                try? await session.collectionStore?.bulkAdd(calibreIDs: ids, to: targetCollectionID)
+                session.bumpMembershipVersion()
+                await reload()
+            }
+        }
+        return true
+    }
+
     private func smartRow(id: String, name: String, icon: String, color: Color, count: Int) -> some View {
         HStack {
             Image(systemName: icon)
@@ -214,6 +242,9 @@ struct CollectionsView: View {
                 .background(Color.secondary.opacity(0.12), in: Capsule())
         }
         .tag(id)
+        .onDrop(of: [.text], isTargeted: nil) { providers in
+            handleDrop(providers: providers, targetCollectionID: id)
+        }
         .contextMenu {
             Button("Show in Library") {
                 let filterName = resolveCollectionFilterName(for: id)
@@ -253,6 +284,10 @@ struct CollectionsView: View {
                     .background(Color.secondary.opacity(0.12), in: Capsule())
             }
         }
+        .tag(col.id)
+        .onDrop(of: [.text], isTargeted: nil) { providers in
+            handleDrop(providers: providers, targetCollectionID: col.id)
+        }
         .contextMenu {
             Button("Show in Library") {
                 let filterName = resolveCollectionFilterName(for: col.id)
@@ -279,12 +314,12 @@ struct CollectionsView: View {
                 .frame(width: 18)
             TextField("Collection name", text: $newName)
                 .textFieldStyle(.roundedBorder)
+                .focused($isCreatingFocused)
                 .onSubmit { commitCreate() }
-            Button("Add") { commitCreate() }
-                .buttonStyle(.borderedProminent).controlSize(.mini)
-                .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
-            Button("Cancel") { isCreating = false; newName = "" }
-                .buttonStyle(.borderless).controlSize(.mini)
+                .onExitCommand {
+                    isCreating = false
+                    newName = ""
+                }
         }
         .padding(.vertical, 2)
     }
@@ -373,66 +408,113 @@ struct CollectionsView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List {
+                List(selection: $selectedWorkIDs) {
                     ForEach(memberBooks) { book in
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(book.displayTitle)
-                                    .font(.headline)
-                                    .lineLimit(1)
-                                HStack(spacing: 6) {
-                                    Text(book.displayAuthors.isEmpty ? "Unknown Author" : book.displayAuthors)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                    if let words = book.wordCount, words > 0 {
-                                        Text("•").foregroundStyle(.tertiary)
-                                        Text(formatWords(words))
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    if let date = memberAddedDates[book.id] {
-                                        Text("•").foregroundStyle(.tertiary)
-                                        Text(formatAddedDate(date))
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                            Spacer()
-
-                            if !isSystem {
-                                Button {
-                                    removeBookFromCollection(calibreID: book.id, collectionID: collectionID)
-                                } label: {
-                                    Image(systemName: "xmark.circle")
-                                        .foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.borderless)
-                                .help("Remove from collection")
-                            }
-                        }
-                        .padding(.vertical, 5)
-                        .contentShape(Rectangle())
-                        .onTapGesture(count: 2) {
-                            openWork(book)
-                        }
-                        .contextMenu {
-                            Button("Open in Reader") {
-                                openWork(book)
-                            }
-                            if !isSystem {
-                                Divider()
-                                Button("Remove from Collection", role: .destructive) {
-                                    removeBookFromCollection(calibreID: book.id, collectionID: collectionID)
-                                }
-                            }
-                        }
+                        memberRow(book: book, collectionID: collectionID, isSystem: isSystem)
+                            .tag(book.id)
                     }
                 }
                 .listStyle(.inset)
+                .onDeleteCommand {
+                    if !isSystem && !selectedWorkIDs.isEmpty {
+                        batchRemoveSelectedWorks(from: collectionID)
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func memberRow(book: CalibreBook, collectionID: String, isSystem: Bool) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(book.displayTitle)
+                    .font(.headline)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(book.displayAuthors.isEmpty ? "Unknown Author" : book.displayAuthors)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    if let words = book.wordCount, words > 0 {
+                        Text("•").foregroundStyle(.tertiary)
+                        Text(formatWords(words))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let date = memberAddedDates[book.id] {
+                        Text("•").foregroundStyle(.tertiary)
+                        Text(formatAddedDate(date))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let pct = memberProgress[book.id] {
+                        if pct >= 0.98 {
+                            Text("•").foregroundStyle(.tertiary)
+                            Label("Finished", systemImage: "checkmark.circle.fill")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.green)
+                        } else if pct > 0.01 {
+                            Text("•").foregroundStyle(.tertiary)
+                            Text("\(Int((pct * 100).rounded()))% read")
+                                .font(.caption2.weight(.medium))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                .background(Color.accentColor.opacity(0.12), in: Capsule())
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                }
+            }
+            Spacer()
+
+            if !isSystem {
+                Button {
+                    removeBookFromCollection(calibreID: book.id, collectionID: collectionID)
+                } label: {
+                    Image(systemName: "xmark.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("Remove from collection")
+            }
+        }
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .onDrag {
+            let ids = selectedWorkIDs.contains(book.id) ? Array(selectedWorkIDs) : [book.id]
+            let str = ids.map(String.init).joined(separator: ",")
+            return NSItemProvider(object: str as NSString)
+        }
+        .onTapGesture(count: 2) {
+            openWork(book)
+        }
+        .contextMenu {
+            Button("Open in Reader") {
+                openWork(book)
+            }
+            if !isSystem {
+                Divider()
+                if selectedWorkIDs.contains(book.id) && selectedWorkIDs.count > 1 {
+                    Button("Remove \(selectedWorkIDs.count) Works from Collection", role: .destructive) {
+                        batchRemoveSelectedWorks(from: collectionID)
+                    }
+                } else {
+                    Button("Remove from Collection", role: .destructive) {
+                        removeBookFromCollection(calibreID: book.id, collectionID: collectionID)
+                    }
+                }
+            }
+        }
+    }
+
+    private func batchRemoveSelectedWorks(from collectionID: String) {
+        let ids = Array(selectedWorkIDs)
+        selectedWorkIDs.removeAll()
+        Task {
+            try? await session.collectionStore?.bulkRemove(calibreIDs: ids, from: collectionID)
+            session.bumpMembershipVersion()
+            await reload()
+        }
     }
 
     private func openWork(_ book: CalibreBook) {
@@ -472,15 +554,22 @@ struct CollectionsView: View {
             await MainActor.run {
                 self.memberBooks = []
                 self.memberAddedDates = [:]
+                self.memberProgress = [:]
+                self.selectedWorkIDs.removeAll()
             }
             return
         }
-        async let booksTask = library.booksForIDs(Array(memberIDs))
+        let idsArray = Array(memberIDs)
+        async let booksTask = library.booksForIDs(idsArray)
         async let datesTask = session.collectionStore?.memberAddedDates(for: collectionID)
+        let states = session.metaDB?.bookStates(for: idsArray) ?? [:]
         let (books, dates) = await (booksTask, (try? datesTask) ?? [:])
+        let progressMap = states.mapValues { $0.totalReadPercent }
         await MainActor.run {
             self.memberBooks = books
             self.memberAddedDates = dates
+            self.memberProgress = progressMap
+            self.selectedWorkIDs.removeAll()
         }
     }
 
@@ -601,6 +690,9 @@ struct CollectionsView: View {
     private func reload() async {
         collections = (try? await session.collectionStore?.collections()) ?? []
         membership = (try? await session.collectionStore?.membershipByCollectionID()) ?? [:]
+        if selectedCollectionID == nil {
+            selectedCollectionID = lastSelectedCollectionID
+        }
         if let sel = selectedCollectionID {
             await loadMemberBooks(for: sel)
         }
@@ -608,6 +700,8 @@ struct CollectionsView: View {
 
     private func commitCreate() {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        isCreating = false
+        newName = ""
         guard !trimmed.isEmpty else { return }
         let ids = selectedCalibreIDs
         Task {
@@ -616,8 +710,6 @@ struct CollectionsView: View {
                 await reload()
                 selectedCollectionID = created.id
             }
-            isCreating = false
-            newName = ""
         }
     }
 

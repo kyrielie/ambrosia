@@ -2,9 +2,25 @@ import SwiftUI
 
 // MARK: - Reading Goal & Insights View
 
+enum InsightsHorizon: String, CaseIterable, Identifiable {
+    case last7Days = "Last 7 Days"
+    case last30Days = "Last 30 Days"
+    case thisYear = "This Year"
+    case allTime = "All Time"
+
+    var id: String { rawValue }
+}
+
+enum InsightsMetric: String, CaseIterable, Identifiable {
+    case words = "Words"
+    case works = "Works"
+
+    var id: String { rawValue }
+}
+
 /// Modern macOS reading dashboard conforming to Apple HIG.
 /// Combines goal pacing, reading velocity, streaks, day-by-day activity heatmap,
-/// and monthly reading volume ported from Nectar.
+/// monthly reading volume, and StoryGraph reading analytics ported from Nectar.
 struct ReadingGoalView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(LibrarySession.self) private var session
@@ -17,6 +33,11 @@ struct ReadingGoalView: View {
     @State private var historyEntries: [ReadingHistoryEntry] = []
     @State private var bookTitles: [Int: String] = [:]
     @State private var historyReadCount: Int?
+
+    // StoryGraph analytics state
+    @State private var insightsHorizon: InsightsHorizon = .last30Days
+    @State private var insightsMetric: InsightsMetric = .words
+    @State private var insights = ReadingStatsInsights()
 
     // Goal editor state
     @State private var targetInput = 12
@@ -38,6 +59,9 @@ struct ReadingGoalView: View {
         .frame(minWidth: 680, minHeight: 520)
         .task {
             await loadData()
+        }
+        .onChange(of: insightsHorizon) { _, _ in
+            Task { await loadData() }
         }
     }
 
@@ -72,11 +96,37 @@ struct ReadingGoalView: View {
                     goalEditorSection
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
+                scoperBar
                 metricsPlatterGrid
+                fandomBreakdownCard
+                relationshipsCard
+                tropesCard
                 trendsSection
                 recentSessionsCard
             }
             .padding(20)
+        }
+    }
+
+    private var scoperBar: some View {
+        HStack(spacing: 12) {
+            Picker("Period", selection: $insightsHorizon) {
+                ForEach(InsightsHorizon.allCases) { horizon in
+                    Text(horizon.rawValue).tag(horizon)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            Spacer()
+
+            Picker("Metric", selection: $insightsMetric) {
+                ForEach(InsightsMetric.allCases) { metric in
+                    Text(metric.rawValue).tag(metric)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
         }
     }
 
@@ -192,27 +242,37 @@ struct ReadingGoalView: View {
         }
     }
 
+    private let paletteColors: [Color] = [
+        .purple,
+        .blue,
+        .teal,
+        .pink,
+        .orange,
+        .green,
+        .indigo
+    ]
+
     private var metricsPlatterGrid: some View {
-        let words = totalWordsRead
-        let hours = totalActiveHours
-        let wph = hours > 0 ? Double(words) / hours : 0.0
+        let words = (insightsHorizon == .allTime) ? totalWordsRead : insights.totalWords
+        let wph = insights.wordsPerHour > 0 ? insights.wordsPerHour : (totalActiveHours > 0 ? Double(totalWordsRead) / totalActiveHours : 0.0)
+        let hours = (insightsHorizon == .allTime) ? totalActiveHours : (insights.activeSeconds / 3600.0)
         let streak = currentStreakDays
 
         return LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
             metricCard(
-                title: "Words Read",
+                title: "Words Read (\(insightsHorizon.rawValue))",
                 value: formatWords(words),
                 icon: "character.book.closed.fill",
                 color: .accentColor
             )
             metricCard(
-                title: "Reading Speed",
+                title: "Reading Velocity",
                 value: String(format: "%.0f w/h", wph),
                 icon: "speedometer",
                 color: .orange
             )
             metricCard(
-                title: "Time Reading",
+                title: "Active Time",
                 value: String(format: "%.1f hrs", hours),
                 icon: "clock.fill",
                 color: .blue
@@ -224,6 +284,246 @@ struct ReadingGoalView: View {
                 color: .red
             )
         }
+    }
+
+    private struct PieSlice: Shape {
+        let startAngle: Angle
+        let endAngle: Angle
+
+        func path(in rect: CGRect) -> Path {
+            var path = Path()
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            let radius = min(rect.width, rect.height) / 2
+            path.move(to: center)
+            path.addArc(
+                center: center,
+                radius: radius,
+                startAngle: startAngle - .degrees(90),
+                endAngle: endAngle - .degrees(90),
+                clockwise: false
+            )
+            path.closeSubpath()
+            return path
+        }
+    }
+
+    private struct FandomWedge: Identifiable {
+        let id: Int
+        let name: String
+        let value: Int
+        let color: Color
+        let start: Angle
+        let end: Angle
+        let percentage: Double
+    }
+
+    private var fandomWedges: [FandomWedge] {
+        let items = insights.topFandoms
+        guard !items.isEmpty else { return [] }
+        let rawSlices: [(name: String, value: Int)] = items.map {
+            ($0.name, insightsMetric == .words ? $0.words : $0.works)
+        }
+        let topSlices: [(name: String, value: Int)]
+        if rawSlices.count > 4 {
+            let top4 = Array(rawSlices.prefix(4))
+            let otherValue = rawSlices.dropFirst(4).reduce(0) { $0 + $1.value }
+            topSlices = otherValue > 0 ? top4 + [("Other", otherValue)] : top4
+        } else {
+            topSlices = rawSlices
+        }
+        let total = max(1, topSlices.reduce(0) { $0 + $1.value })
+        var cumulative = 0.0
+        return topSlices.enumerated().map { index, slice in
+            let fraction = Double(slice.value) / Double(total)
+            let start = Angle(degrees: cumulative * 360)
+            cumulative += fraction
+            let end = Angle(degrees: cumulative * 360)
+            let color = paletteColors[index % paletteColors.count]
+            return FandomWedge(
+                id: index,
+                name: slice.name,
+                value: slice.value,
+                color: color,
+                start: start,
+                end: end,
+                percentage: fraction * 100.0
+            )
+        }
+    }
+
+    private var fandomBreakdownCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Top Fandoms")
+                        .font(.headline)
+                    Text(insightsMetric == .words ? "Share of total words read" : "Share of completed works")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            if fandomWedges.isEmpty {
+                Text("No fandom reading data recorded for this time period.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+            } else {
+                HStack(spacing: 24) {
+                    ZStack {
+                        ForEach(fandomWedges) { wedge in
+                            PieSlice(startAngle: wedge.start, endAngle: wedge.end)
+                                .fill(wedge.color)
+                        }
+                        Circle()
+                            .fill(Color(NSColor.windowBackgroundColor))
+                            .frame(width: 52, height: 52)
+                    }
+                    .frame(width: 104, height: 104)
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(fandomWedges) { wedge in
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(wedge.color)
+                                    .frame(width: 8, height: 8)
+                                Text(wedge.name)
+                                    .font(.subheadline)
+                                    .lineLimit(1)
+                                Spacer()
+                                Text(insightsMetric == .words ? formatWords(wedge.value) : "\(wedge.value) \(wedge.value == 1 ? "work" : "works")")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(String(format: "%.0f%%", wedge.percentage))
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 36, alignment: .trailing)
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .padding(16)
+        .background(Color(NSColor.windowBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(NSColor.separatorColor).opacity(0.4), lineWidth: 0.5))
+    }
+
+    private var relationshipsCard: some View {
+        let rels = insights.topRelationships
+        let maxValue = rels.map { insightsMetric == .words ? $0.words : $0.works }.max() ?? 1
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Top Ships & Relationships")
+                        .font(.headline)
+                    Text("Ranked by frequency in reading history")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            if rels.isEmpty {
+                Text("No relationship metadata recorded for this time period.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(Array(rels.prefix(5))) { rel in
+                        let value = insightsMetric == .words ? rel.words : rel.works
+                        let fraction = maxValue > 0 ? min(1.0, Double(value) / Double(maxValue)) : 0.0
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 6) {
+                                Text(rel.name)
+                                    .font(.subheadline.weight(.medium))
+                                    .lineLimit(1)
+
+                                Text(rel.isRomantic ? "Romantic (/)" : "Platonic (&)")
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1)
+                                    .background(
+                                        rel.isRomantic ? Color.pink.opacity(0.12) : Color.blue.opacity(0.12),
+                                        in: RoundedRectangle(cornerRadius: 4)
+                                    )
+                                    .foregroundStyle(rel.isRomantic ? Color.pink : Color.blue)
+
+                                Spacer()
+
+                                Text(insightsMetric == .words ? formatWords(value) : "\(value) \(value == 1 ? "work" : "works")")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(Color.secondary.opacity(0.12))
+                                        .frame(height: 6)
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(rel.isRomantic ? Color.pink : Color.blue)
+                                        .frame(width: max(4, geo.size.width * fraction), height: 6)
+                                }
+                            }
+                            .frame(height: 6)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(Color(NSColor.windowBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(NSColor.separatorColor).opacity(0.4), lineWidth: 0.5))
+    }
+
+    private var tropesCard: some View {
+        let tags = insights.topTags
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Top Tropes & Themes")
+                        .font(.headline)
+                    Text("Most frequent story tags in works read")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            if tags.isEmpty {
+                Text("No tag metadata recorded for this time period.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 8)
+            } else {
+                FlowLayout(spacing: 8) {
+                    ForEach(Array(tags.prefix(12))) { tag in
+                        HStack(spacing: 5) {
+                            Text(tag.name)
+                                .font(.caption.weight(.medium))
+                            let label = insightsMetric == .words ? formatWords(tag.words) : "\(tag.works)"
+                            Text(label)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(Color.secondary.opacity(0.12), in: Capsule())
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .padding(16)
+        .background(Color(NSColor.windowBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(NSColor.separatorColor).opacity(0.4), lineWidth: 0.5))
     }
 
     private func metricCard(title: String, value: String, icon: String, color: Color) -> some View {
@@ -646,6 +946,25 @@ struct ReadingGoalView: View {
 
     // MARK: - Database Logic
 
+    private func resolveHorizonDates(_ horizon: InsightsHorizon) -> (Date?, Date?) {
+        let now = Date()
+        let cal = Calendar.current
+        switch horizon {
+        case .last7Days:
+            let start = cal.date(byAdding: .day, value: -7, to: now)
+            return (start, now)
+        case .last30Days:
+            let start = cal.date(byAdding: .day, value: -30, to: now)
+            return (start, now)
+        case .thisYear:
+            let comps = cal.dateComponents([.year], from: now)
+            let start = cal.date(from: comps)
+            return (start, now)
+        case .allTime:
+            return (nil, nil)
+        }
+    }
+
     private func loadData() async {
         guard let metaDB = session.metaDB else { return }
         let goal = await metaDB.currentReadingGoal()
@@ -660,10 +979,14 @@ struct ReadingGoalView: View {
             }
         }
 
+        let (startDate, endDate) = resolveHorizonDates(insightsHorizon)
+        let newInsights = (try? await metaDB.readingStatsInsights(start: startDate, end: endDate)) ?? ReadingStatsInsights()
+
         await MainActor.run {
             self.activeGoal = goal
             self.historyEntries = history
             self.bookTitles = titles
+            self.insights = newInsights
             if let goal {
                 self.targetInput = goal.targetBooksCount
                 self.periodStart = goal.periodStart

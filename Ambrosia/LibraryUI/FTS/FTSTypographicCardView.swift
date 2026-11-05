@@ -10,6 +10,8 @@ struct FTSTypographicCardView: View {
     let ao3Metadata: AO3MetadataRecord?
     let result: FTSMultiSnippetResult?
     let isLoadingSnippets: Bool
+    var isReadLater: Bool = false
+    var onToggleReadLater: (() -> Void)?
     let onOpen: () -> Void
     let onSelectInLibrary: () -> Void
     let onJumpToSnippet: (FTSOccurrenceSnippet) -> Void
@@ -32,6 +34,23 @@ struct FTSTypographicCardView: View {
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
             onOpen()
+        }
+        .contextMenu {
+            if let onToggleReadLater {
+                Button(isReadLater ? "Remove from Read Later" : "Add to Read Later") {
+                    onToggleReadLater()
+                }
+            }
+            Button("Open in Reader") {
+                onOpen()
+            }
+            Button("Show in Library") {
+                onSelectInLibrary()
+            }
+            Divider()
+            Button("Copy Passages") {
+                copyExcerpts()
+            }
         }
     }
 

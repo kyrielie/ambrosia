@@ -950,17 +950,14 @@ actor AmbrosiaMetaDB {
                 [calibreID, now, now, percentStart, percentStart]
             )
         }
-        let value = try scalar("SELECT last_insert_rowid()")
-        if let int64 = value as? Int64 { return int64 }
-        if let int = value as? Int { return Int64(int) }
-        return 0
+        return db.lastInsertRowid
     }
 
     func updateReadingSession(id: Int64, calibreID: Int, percentEnd: Double?, endedAt: Date = Date()) throws {
         let end = ISO8601DateFormatter().string(from: endedAt)
         var wordsRead: Int?
         if let percentEnd {
-            let row = try prepare(
+            let row = try db.prepare(
                 """
                 SELECT rh.percent_start, am.word_count
                 FROM reading_history rh
@@ -968,7 +965,7 @@ actor AmbrosiaMetaDB {
                 WHERE rh.id = ? AND rh.calibre_id = ?
                 """,
                 [id, calibreID]
-            ).first
+            ).map({ $0 }).first
             let percentStart = row?.double(at: 0) ?? percentEnd
             if let wordCount = row?.int(at: 1), wordCount > 0 {
                 wordsRead = max(0, Int((percentEnd - percentStart) * Double(wordCount)))
@@ -985,23 +982,149 @@ actor AmbrosiaMetaDB {
         )
     }
 
-    func completedBooksCount(start: Date, end: Date, threshold: Double = 0.98) throws -> Int {
+    public func completedBooksCount(start: Date, end: Date, threshold: Double = 0.98) throws -> Int {
         let iso = ISO8601DateFormatter()
         let startString = iso.string(from: start)
         let endString = iso.string(from: end)
+        let startEpoch = start.timeIntervalSince1970
+        let endEpoch = end.timeIntervalSince1970
+        let finishedID = SystemCollectionID.finished
         let count = try scalar(
             """
-            SELECT COUNT(DISTINCT calibre_id)
-            FROM reading_history
-            WHERE session_end >= ?
-              AND session_end <= ?
-              AND percent_end >= ?
+            SELECT COUNT(DISTINCT calibre_id) FROM (
+                SELECT calibre_id
+                FROM reading_history
+                WHERE session_end >= ?
+                  AND session_end <= ?
+                  AND percent_end >= ?
+                UNION
+                SELECT calibre_id
+                FROM collection_members
+                WHERE collection_id = ?
+                  AND added_at >= ?
+                  AND added_at <= ?
+                UNION
+                SELECT calibre_id
+                FROM book_state
+                WHERE total_read_percent >= ?
+                  AND updated_at >= ?
+                  AND updated_at <= ?
+            )
             """,
-            [startString, endString, threshold]
+            [startString, endString, threshold, finishedID, startString, endString, threshold, startEpoch, endEpoch]
         )
         if let value = count as? Int64 { return Int(value) }
         if let value = count as? Int { return value }
         return 0
+    }
+
+    public func readingStatsInsights(start: Date?, end: Date?) throws -> ReadingStatsInsights {
+        let iso = ISO8601DateFormatter()
+        let decoder = JSONDecoder()
+
+        func decodeStrings(_ string: String?) -> [String] {
+            guard let string, let data = string.data(using: .utf8) else { return [] }
+            return (try? decoder.decode([String].self, from: data)) ?? []
+        }
+
+        var sql = """
+        SELECT rh.calibre_id, rh.words_read, rh.session_start, rh.session_end,
+               am.fandoms_json, am.relationships_json, am.additional_tags_json
+        FROM reading_history rh
+        LEFT JOIN ao3_metadata am ON am.calibre_id = rh.calibre_id
+        """
+        var bindings: [Binding?] = []
+        if let start, let end {
+            sql += " WHERE rh.session_start >= ? AND rh.session_end <= ?"
+            bindings.append(iso.string(from: start))
+            bindings.append(iso.string(from: end))
+        } else if let start {
+            sql += " WHERE rh.session_start >= ?"
+            bindings.append(iso.string(from: start))
+        } else if let end {
+            sql += " WHERE rh.session_end <= ?"
+            bindings.append(iso.string(from: end))
+        }
+
+        let rows = try prepare(sql, bindings)
+
+        var totalWords = 0
+        var totalActiveSeconds = 0.0
+        var activeCalibreIDs = Set<Int>()
+
+        var fandomWords: [String: Int] = [:]
+        var fandomWorks: [String: Set<Int>] = [:]
+
+        var relWords: [String: Int] = [:]
+        var relWorks: [String: Set<Int>] = [:]
+
+        var tagWords: [String: Int] = [:]
+        var tagWorks: [String: Set<Int>] = [:]
+
+        for row in rows {
+            guard let calibreID = row.int(at: 0) else { continue }
+            activeCalibreIDs.insert(calibreID)
+            let words = row.int(at: 1) ?? 0
+            totalWords += words
+
+            if let sStr = row[safe: 2] as? String,
+               let eStr = row[safe: 3] as? String,
+               let sDate = iso.date(from: sStr),
+               let eDate = iso.date(from: eStr) {
+                let duration = max(0, eDate.timeIntervalSince(sDate))
+                totalActiveSeconds += min(duration, 14400.0)
+            }
+
+            let fandoms = decodeStrings(row[safe: 4] as? String)
+            for fandom in fandoms where !fandom.isEmpty {
+                fandomWords[fandom, default: 0] += words
+                fandomWorks[fandom, default: []].insert(calibreID)
+            }
+
+            let rels = decodeStrings(row[safe: 5] as? String)
+            for rel in rels where !rel.isEmpty {
+                relWords[rel, default: 0] += words
+                relWorks[rel, default: []].insert(calibreID)
+            }
+
+            let tags = decodeStrings(row[safe: 6] as? String)
+            for tag in tags where !tag.isEmpty {
+                tagWords[tag, default: 0] += words
+                tagWorks[tag, default: []].insert(calibreID)
+            }
+        }
+
+        let hours = totalActiveSeconds / 3600.0
+        let wph = hours > 0 ? Double(totalWords) / hours : 0.0
+
+        let topFandoms = fandomWords
+            .map { FandomInsight(name: $0.key, words: $0.value, works: fandomWorks[$0.key]?.count ?? 0) }
+            .sorted { $0.words != $1.words ? $0.words > $1.words : $0.works > $1.works }
+
+        let topRelationships = relWords
+            .map {
+                RelationshipInsight(
+                    name: $0.key,
+                    words: $0.value,
+                    works: relWorks[$0.key]?.count ?? 0,
+                    isRomantic: $0.key.contains("/")
+                )
+            }
+            .sorted { $0.words != $1.words ? $0.words > $1.words : $0.works > $1.works }
+
+        let topTags = tagWords
+            .map { TagInsight(name: $0.key, words: $0.value, works: tagWorks[$0.key]?.count ?? 0) }
+            .sorted { $0.words != $1.words ? $0.words > $1.words : $0.works > $1.works }
+
+        return ReadingStatsInsights(
+            topFandoms: Array(topFandoms.prefix(10)),
+            topRelationships: Array(topRelationships.prefix(10)),
+            topTags: Array(topTags.prefix(15)),
+            totalWords: totalWords,
+            totalWorks: activeCalibreIDs.count,
+            wordsPerHour: wph,
+            activeSeconds: totalActiveSeconds
+        )
     }
 
     func recentReadingHistory(limit: Int = 200) throws -> [ReadingHistoryEntry] {
@@ -2834,14 +2957,7 @@ actor AmbrosiaMetaDB {
     }
 
     public func completedBooksCount(from start: Date, to end: Date) -> Int {
-        let query = """
-        SELECT COUNT(*) FROM book_state
-        WHERE total_read_percent >= 0.98
-          AND last_opened_date >= ?
-          AND last_opened_date <= ?
-        """
-        let count = (try? readDB.scalar(query, [start.timeIntervalSince1970 as Binding?, end.timeIntervalSince1970 as Binding?])) as? Int64 ?? 0
-        return Int(count)
+        (try? completedBooksCount(start: start, end: end)) ?? 0
     }
 }
 

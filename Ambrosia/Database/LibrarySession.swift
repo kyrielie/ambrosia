@@ -55,6 +55,9 @@ final class LibrarySession {
     /// and on search input (debounced). Never recomputed on page turns.
     private(set) var totalCount: Int = 0
 
+    /// Whether this library has kudos data (via custom column or AO3 metadata cache).
+    private(set) var hasKudosData: Bool = false
+
     // MARK: - Collection membership cache
     //
     // Survives view mode switches (list ↔ email ↔ history). The library view
@@ -489,6 +492,7 @@ final class LibrarySession {
         LaunchSignposts.end("refreshAO3MetaCaches.bulkLoads", bulkSignpost)
         guard self.library === library else { return }
         let pushSignpost = LaunchSignposts.begin("refreshAO3MetaCaches.pushToLibrary")
+        self.hasKudosData = !resolvedKudos.isEmpty || CustomColumnConfig.shared.kudosLabel != nil
         await library.updateAO3MetaCaches(
             wordCounts: resolvedWordCounts,
             kudos: resolvedKudos,
@@ -540,6 +544,7 @@ final class LibrarySession {
         metaDB = nil
         collectionStore = nil
         totalCount = 0
+        hasKudosData = false
         if let path = activePath {
             SearchActivityLog.shared.clear(libraryHash: Ambrosia.libraryHash(for: URL(fileURLWithPath: path)))
         } else {
