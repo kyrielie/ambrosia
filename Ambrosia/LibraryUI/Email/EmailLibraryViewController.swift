@@ -47,7 +47,11 @@ final class EmailLibraryViewController: NSViewController {
     // MARK: - Reader State
 
     private(set) var selectedBook: CalibreBook?
-    private(set) weak var currentReaderVC: ReaderViewController?
+    private(set) weak var currentReaderVC: ReaderViewController? {
+        didSet {
+            AppDelegate.shared?.updateReaderMenuState()
+        }
+    }
     private var readerLocalFindState = LocalReaderFindState()
     private var lastAppliedFullTextPhrase = ""
     private weak var lastAppliedFullTextReader: ReaderViewController?
@@ -514,6 +518,7 @@ final class EmailLibraryViewController: NSViewController {
         rvc.onReadingProgressChanged = { [weak self] in
             DispatchQueue.main.async {
                 self?.displayController.refreshBookStates()
+                AppDelegate.shared?.updateReaderMenuState()
             }
         }
         rvc.onAnnotationsChanged = { [weak self] annotations in

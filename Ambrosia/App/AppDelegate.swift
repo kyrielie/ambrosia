@@ -50,6 +50,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
         libraryWindowController?.showWindow(nil)
 
+        ReaderMenuController.shared.startMonitoring()
         syncReaderMenuShortcuts()
         startObservingKeyBindings()
     }
@@ -111,6 +112,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Library & Window management
+
+    var isReaderOrEmailViewFocused: Bool {
+        guard NSApp.isActive else { return false }
+        guard let keyWindow = NSApp.keyWindow, keyWindow.attachedSheet == nil else { return false }
+        if let rwc = keyWindow.windowController as? ReaderWindowController {
+            return rwc.readerViewController != nil
+        }
+        if let lwc = keyWindow.windowController as? LibraryWindowController,
+           let lvc = lwc.contentViewController as? LibraryViewController {
+            return lvc.toolbarState.viewMode == .email && lvc.hasEmbeddedReader
+        }
+        return false
+    }
+
+    var activeReaderViewController: ReaderViewController? {
+        guard isReaderOrEmailViewFocused, let keyWindow = NSApp.keyWindow else { return nil }
+        if let rwc = keyWindow.windowController as? ReaderWindowController {
+            return rwc.readerViewController
+        }
+        if let lwc = keyWindow.windowController as? LibraryWindowController,
+           let lvc = lwc.contentViewController as? LibraryViewController,
+           lvc.toolbarState.viewMode == .email {
+            return lvc.currentReaderVC
+        }
+        return nil
+    }
+
+    func updateReaderMenuState() {
+        let focused = isReaderOrEmailViewFocused
+        let rvc = activeReaderViewController
+        ReaderMenuState.shared.isReaderFocused = focused
+        ReaderMenuState.shared.canGoPreviousPage = focused && (rvc?.canGoPrevious ?? false)
+        ReaderMenuState.shared.canGoNextPage = focused && (rvc?.canGoNext ?? false)
+        ReaderMenuState.shared.canGoPreviousChapter = focused && (rvc?.canGoPreviousChapter ?? false)
+        ReaderMenuState.shared.canGoNextChapter = focused && (rvc?.canGoNextChapter ?? false)
+    }
 
     var hasActiveReader: Bool {
         if let keyWindow = NSApp.keyWindow,
@@ -589,5 +626,57 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let first = filenames.first {
             _ = application(sender, openFile: first)
         }
+    }
+}
+
+// MARK: - Reader Menu Focus State & Controller
+
+@MainActor
+@Observable
+final class ReaderMenuState {
+    static let shared = ReaderMenuState()
+
+    var isReaderFocused: Bool = false
+    var canGoPreviousPage: Bool = false
+    var canGoNextPage: Bool = false
+    var canGoPreviousChapter: Bool = false
+    var canGoNextChapter: Bool = false
+}
+
+@MainActor
+final class ReaderMenuController: NSObject {
+    static let shared = ReaderMenuController()
+
+    private var observers: [NSObjectProtocol] = []
+
+    func startMonitoring() {
+        guard observers.isEmpty else { return }
+
+        let nc = NotificationCenter.default
+        let notifications = [
+            NSWindow.didBecomeKeyNotification,
+            NSWindow.didResignKeyNotification,
+            NSApplication.didBecomeActiveNotification,
+            NSApplication.didResignActiveNotification
+        ]
+
+        for note in notifications {
+            observers.append(nc.addObserver(
+                forName: note,
+                object: nil,
+                queue: .main
+            ) { _ in
+                AppDelegate.shared?.updateReaderMenuState()
+            })
+        }
+
+        AppDelegate.shared?.updateReaderMenuState()
+    }
+
+    func stopMonitoring() {
+        for observer in observers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        observers.removeAll()
     }
 }

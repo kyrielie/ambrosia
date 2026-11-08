@@ -19,7 +19,13 @@ final class LibraryToolbarState {
     var searchText: String          = ""
     var sortField: SortField       = .title { didSet { lastViewDidChange() } }
     var ascending: Bool            = true { didSet { lastViewDidChange() } }
-    var viewMode: LibraryViewMode = .list
+    var viewMode: LibraryViewMode = .list {
+        didSet {
+            DispatchQueue.main.async {
+                AppDelegate.shared?.updateReaderMenuState()
+            }
+        }
+    }
     var groupBySeries: Bool {
         didSet { UserDefaults.standard.set(groupBySeries, forKey: "groupBySeries") }
     }

@@ -127,6 +127,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
 
         vc.onReadingProgressChanged = { [weak self] in
             self?.updateToolbarState()
+            AppDelegate.shared?.updateReaderMenuState()
         }
 
         scheduleSessionObservation()
@@ -245,6 +246,9 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         Self.openWindows.removeValue(forKey: target.windowKey)
         appearancePopover?.performClose(nil)
         appearancePopover = nil
+        DispatchQueue.main.async {
+            AppDelegate.shared?.updateReaderMenuState()
+        }
 
         let currentPct = readerViewController?.bookState?.totalReadPercent ?? 0.0
         NotificationCenter.default.post(
@@ -576,6 +580,19 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
     // MARK: - NSMenuItemValidation
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard let readerVC = readerViewController else { return false }
+        if menuItem.action == #selector(ReaderViewController.goToPreviousPageAction(_:)) {
+            return readerVC.canGoPrevious
+        }
+        if menuItem.action == #selector(ReaderViewController.goToNextPageAction(_:)) {
+            return readerVC.canGoNext
+        }
+        if menuItem.action == #selector(ReaderViewController.previousChapterAction(_:)) {
+            return readerVC.canGoPreviousChapter
+        }
+        if menuItem.action == #selector(ReaderViewController.nextChapterAction(_:)) {
+            return readerVC.canGoNextChapter
+        }
         return true
     }
 
