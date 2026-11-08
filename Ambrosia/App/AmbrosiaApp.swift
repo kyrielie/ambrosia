@@ -4,6 +4,7 @@ import AppKit
 @main
 struct AmbrosiaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @State private var readerMenuState = ReaderMenuState.shared
 
     let session = LibrarySession()
 
@@ -75,12 +76,14 @@ struct AmbrosiaApp: App {
                                          to: nil, from: nil)
                     }
                     .keyboardShortcut("g", modifiers: [.command])
+                    .disabled(!readerMenuState.isReaderFocused)
 
                     Button("Find Previous") {
                         NSApp.sendAction(#selector(ReaderViewController.findPreviousAction(_:)),
                                          to: nil, from: nil)
                     }
                     .keyboardShortcut("g", modifiers: [.command, .shift])
+                    .disabled(!readerMenuState.isReaderFocused)
                 }
             }
 
@@ -237,6 +240,7 @@ struct AmbrosiaApp: App {
                                          to: nil, from: nil)
                     }
                 }
+                .disabled(!readerMenuState.isReaderFocused)
 
                 Button("Annotations Panel") {
                     if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
@@ -247,6 +251,7 @@ struct AmbrosiaApp: App {
                                          to: nil, from: nil)
                     }
                 }
+                .disabled(!readerMenuState.isReaderFocused)
 
                 Button("Info Panel") {
                     if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
@@ -270,6 +275,7 @@ struct AmbrosiaApp: App {
                                      to: nil, from: nil)
                 }
                 .keyboardShortcut("i", modifiers: [.command])
+                .disabled(!readerMenuState.isReaderFocused)
 
                 Divider()
 
@@ -279,12 +285,14 @@ struct AmbrosiaApp: App {
                                          to: nil, from: nil)
                     }
                     .keyboardShortcut(.rightArrow, modifiers: [.command])
+                    .disabled(!readerMenuState.canGoNextPage)
 
                     Button("Previous Page") {
                         NSApp.sendAction(#selector(ReaderViewController.goToPreviousPageAction(_:)),
                                          to: nil, from: nil)
                     }
                     .keyboardShortcut(.leftArrow, modifiers: [.command])
+                    .disabled(!readerMenuState.canGoPreviousPage)
 
                     Divider()
 
@@ -293,12 +301,14 @@ struct AmbrosiaApp: App {
                                          to: nil, from: nil)
                     }
                     .keyboardShortcut("]", modifiers: [.command])
+                    .disabled(!readerMenuState.canGoNextChapter)
 
                     Button("Previous Chapter") {
                         NSApp.sendAction(#selector(ReaderViewController.previousChapterAction(_:)),
                                          to: nil, from: nil)
                     }
                     .keyboardShortcut("[", modifiers: [.command])
+                    .disabled(!readerMenuState.canGoPreviousChapter)
 
                     Divider()
 
@@ -307,29 +317,35 @@ struct AmbrosiaApp: App {
                                          to: nil, from: nil)
                     }
                     .keyboardShortcut("[", modifiers: [.command, .option])
+                    .disabled(!readerMenuState.isReaderFocused)
 
                     Button("End of Work") {
                         NSApp.sendAction(#selector(ReaderViewController.goToEndOfWorkAction(_:)),
                                          to: nil, from: nil)
                     }
                     .keyboardShortcut("]", modifiers: [.command, .option])
+                    .disabled(!readerMenuState.isReaderFocused)
                 }
+                .disabled(!readerMenuState.isReaderFocused)
 
                 Menu("Reader Text & Themes") {
                     Button("Increase Font Size") {
                         ReaderPreferences.shared.increaseFontSize()
                     }
                     .keyboardShortcut("=", modifiers: [.command])
+                    .disabled(!readerMenuState.isReaderFocused)
 
                     Button("Decrease Font Size") {
                         ReaderPreferences.shared.decreaseFontSize()
                     }
                     .keyboardShortcut("-", modifiers: [.command])
+                    .disabled(!readerMenuState.isReaderFocused)
 
                     Button("Reset Font Size") {
                         ReaderPreferences.shared.resetFontSize()
                     }
                     .keyboardShortcut("0", modifiers: [.command])
+                    .disabled(!readerMenuState.isReaderFocused)
 
                     Divider()
 
@@ -344,8 +360,10 @@ struct AmbrosiaApp: App {
                                     Text(mode.displayName)
                                 }
                             }
+                            .disabled(!readerMenuState.isReaderFocused)
                         }
                     }
+                    .disabled(!readerMenuState.isReaderFocused)
 
                     Menu("Theme") {
                         ForEach(ReaderTheme.allCases) { theme in
@@ -358,8 +376,10 @@ struct AmbrosiaApp: App {
                                     Text(theme.label)
                                 }
                             }
+                            .disabled(!readerMenuState.isReaderFocused)
                         }
                     }
+                    .disabled(!readerMenuState.isReaderFocused)
 
                     Menu("Text Alignment") {
                         ForEach(ThemeTextAlignment.allCases) { align in
@@ -372,8 +392,10 @@ struct AmbrosiaApp: App {
                                     Text(align.label)
                                 }
                             }
+                            .disabled(!readerMenuState.isReaderFocused)
                         }
                     }
+                    .disabled(!readerMenuState.isReaderFocused)
 
                     Menu("Columns (Paged Mode)") {
                         ForEach(ColsPerScreen.allCases, id: \.self) { cols in
@@ -386,8 +408,10 @@ struct AmbrosiaApp: App {
                                     Text(cols.label)
                                 }
                             }
+                            .disabled(!readerMenuState.isReaderFocused)
                         }
                     }
+                    .disabled(!readerMenuState.isReaderFocused)
 
                     Menu("AO3 Work Layout Order") {
                         ForEach(AO3WorkLayoutOrder.allCases, id: \.self) { order in
@@ -400,9 +424,12 @@ struct AmbrosiaApp: App {
                                     Text(order.label)
                                 }
                             }
+                            .disabled(!readerMenuState.isReaderFocused)
                         }
                     }
+                    .disabled(!readerMenuState.isReaderFocused)
                 }
+                .disabled(!readerMenuState.isReaderFocused)
 
                 Divider()
 
@@ -410,6 +437,7 @@ struct AmbrosiaApp: App {
                     NSApp.sendAction(#selector(ReaderViewController.toggleReadingMode(_:)),
                                      to: nil, from: nil)
                 }
+                .disabled(!readerMenuState.isReaderFocused)
 
                 Button("Show Table of Contents") {
                     if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
@@ -420,6 +448,7 @@ struct AmbrosiaApp: App {
                                          to: nil, from: nil)
                     }
                 }
+                .disabled(!readerMenuState.isReaderFocused)
 
                 Button("Show Annotations") {
                     if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
@@ -430,11 +459,13 @@ struct AmbrosiaApp: App {
                                          to: nil, from: nil)
                     }
                 }
+                .disabled(!readerMenuState.isReaderFocused)
 
                 Button("Add Annotation") {
                     NSApp.sendAction(#selector(ReaderViewController.addAnnotation(_:)),
                                      to: nil, from: nil)
                 }
+                .disabled(!readerMenuState.isReaderFocused)
 
                 Divider()
 
@@ -442,16 +473,19 @@ struct AmbrosiaApp: App {
                     NSApp.sendAction(#selector(ReaderViewController.toggleFindBarAction(_:)),
                                      to: nil, from: nil)
                 }
+                .disabled(!readerMenuState.isReaderFocused)
 
                 Button("Find Next") {
                     NSApp.sendAction(#selector(ReaderViewController.findNextAction(_:)),
                                      to: nil, from: nil)
                 }
+                .disabled(!readerMenuState.isReaderFocused)
 
                 Button("Find Previous") {
                     NSApp.sendAction(#selector(ReaderViewController.findPreviousAction(_:)),
                                      to: nil, from: nil)
                 }
+                .disabled(!readerMenuState.isReaderFocused)
 
                 Divider()
 
@@ -459,11 +493,13 @@ struct AmbrosiaApp: App {
                     NSApp.sendAction(#selector(ReaderViewController.toggleLikeCurrentWork(_:)),
                                      to: nil, from: nil)
                 }
+                .disabled(!readerMenuState.isReaderFocused)
 
                 Button("Add to Read Later") {
                     NSApp.sendAction(#selector(ReaderViewController.toggleReadLaterCurrentWork(_:)),
                                      to: nil, from: nil)
                 }
+                .disabled(!readerMenuState.isReaderFocused)
 
                 Divider()
 
@@ -473,6 +509,7 @@ struct AmbrosiaApp: App {
                 Button("Reset Reader Window Size to Default") {
                     ReaderWindowController.resetAllToDefaultSize()
                 }
+                .disabled(!readerMenuState.isReaderFocused)
             }
         }
     }

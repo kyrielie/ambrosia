@@ -357,23 +357,40 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         if menuItem.action == #selector(reshuffleSort) {
             return toolbarState?.sortField == .random
         }
-        if menuItem.action == #selector(showBookInfoAction(_:)) ||
-           menuItem.action == #selector(toggleLikeCurrentWork(_:)) ||
-           menuItem.action == #selector(toggleReadLaterCurrentWork(_:)) {
-            return currentSelectedBook != nil
-        }
-        if menuItem.action == #selector(toggleFindBarAction(_:)) ||
-           menuItem.action == #selector(findNextAction(_:)) ||
-           menuItem.action == #selector(findPreviousAction(_:)) ||
-           menuItem.action == #selector(addAnnotation(_:)) ||
-           menuItem.action == #selector(toggleReadingMode(_:)) ||
-           menuItem.action == #selector(goToNextPageAction(_:)) ||
-           menuItem.action == #selector(goToPreviousPageAction(_:)) ||
-           menuItem.action == #selector(nextChapterAction(_:)) ||
-           menuItem.action == #selector(previousChapterAction(_:)) ||
-           menuItem.action == #selector(goToBeginningOfWorkAction(_:)) ||
-           menuItem.action == #selector(goToEndOfWorkAction(_:)) {
-            return currentReaderVC != nil
+        let readerActions: [Selector] = [
+            #selector(showBookInfoAction(_:)),
+            #selector(toggleLikeCurrentWork(_:)),
+            #selector(toggleReadLaterCurrentWork(_:)),
+            #selector(goToPreviousPageAction(_:)),
+            #selector(goToNextPageAction(_:)),
+            #selector(previousChapterAction(_:)),
+            #selector(nextChapterAction(_:)),
+            #selector(toggleFindBarAction(_:)),
+            #selector(findNextAction(_:)),
+            #selector(findPreviousAction(_:)),
+            #selector(addAnnotation(_:)),
+            #selector(toggleReadingMode(_:)),
+            #selector(goToBeginningOfWorkAction(_:)),
+            #selector(goToEndOfWorkAction(_:))
+        ]
+        guard let action = menuItem.action else { return true }
+        if readerActions.contains(action) {
+            guard toolbarState?.viewMode == .email, let currentReaderVC else {
+                return false
+            }
+            if action == #selector(goToPreviousPageAction(_:)) {
+                return currentReaderVC.canGoPrevious
+            }
+            if action == #selector(goToNextPageAction(_:)) {
+                return currentReaderVC.canGoNext
+            }
+            if action == #selector(previousChapterAction(_:)) {
+                return currentReaderVC.canGoPreviousChapter
+            }
+            if action == #selector(nextChapterAction(_:)) {
+                return currentReaderVC.canGoNextChapter
+            }
+            return true
         }
         return true
     }

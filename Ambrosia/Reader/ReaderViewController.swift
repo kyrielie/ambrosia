@@ -1387,6 +1387,14 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
     }
 
+    var canGoPreviousChapter: Bool {
+        currentSpineIndex > 0
+    }
+
+    var canGoNextChapter: Bool {
+        currentSpineIndex + 1 < spineMap.count
+    }
+
     var pageProgress: ReaderPageProgress {
         let percent = bookState?.totalReadPercent ?? 0.0
         return ReaderPageProgress(
