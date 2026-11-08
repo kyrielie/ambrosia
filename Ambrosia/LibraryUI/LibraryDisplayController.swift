@@ -332,6 +332,22 @@ final class LibraryDisplayController {
             }
             .store(in: &cancellables)
 
+        NotificationCenter.default.publisher(for: .bookStateDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] note in
+                guard let self else { return }
+                if let calibreID = note.userInfo?["calibreID"] as? Int,
+                   let percent = note.userInfo?["totalReadPercent"] as? Double {
+                    if var existing = self.bookStates[calibreID] {
+                        existing.totalReadPercent = percent
+                        self.bookStates[calibreID] = existing
+                    } else {
+                        self.bookStates[calibreID] = BookState(calibreID: calibreID, totalReadPercent: percent)
+                    }
+                }
+            }
+            .store(in: &cancellables)
+
         NotificationCenter.default.publisher(for: .librarySnapshotsDidBecomeReady)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in

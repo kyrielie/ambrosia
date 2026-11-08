@@ -293,4 +293,102 @@ final class LibraryIndexManagerTests: XCTestCase {
         let found = manager.findLibrary(withUUID: "target-uuid-999", inSearchDirectories: [searchDir])
         XCTAssertEqual(found?.standardizedFileURL, targetLib.standardizedFileURL)
     }
+
+    // MARK: - Test Isolation & Stale Library Pruning
+
+    func testAppEnvironmentIsRunningTests() {
+        XCTAssertTrue(AppEnvironment.isRunningTests)
+    }
+
+    func testAppEnvironmentIsTestLibraryURL() {
+        let fixtureURL = URL(fileURLWithPath: "/tmp/ambrosia_test_library_1234")
+        XCTAssertTrue(AppEnvironment.isTestLibraryURL(fixtureURL))
+
+        let testClassURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TagCandidateRestrictionTests-ABCD")
+        XCTAssertTrue(AppEnvironment.isTestLibraryURL(testClassURL))
+
+        let userLibURL = URL(fileURLWithPath: "/Users/testuser/Calibre Library")
+        XCTAssertFalse(AppEnvironment.isTestLibraryURL(userLibURL))
+    }
+
+    func testAmbrosiaMetaDBLibrariesBaseDirectoryIsIsolatedDuringTests() throws {
+        let baseDir = try AmbrosiaMetaDB.librariesBaseDirectory()
+        // During tests, it must be scoped inside the temporary directory, NOT Application Support
+        XCTAssertTrue(baseDir.path.contains("AmbrosiaTestSupport"))
+        XCTAssertFalse(baseDir.path.contains("Application Support"))
+    }
+
+    func testLibraryRegistryUsesIsolatedSuiteDuringTests() throws {
+        let testDefaults = try XCTUnwrap(UserDefaults(suiteName: "com.ambrosia.test-registry-unit-test"))
+        let registry = LibraryRegistry(userDefaults: testDefaults)
+
+        let dummyTestURL = URL(fileURLWithPath: "/tmp/ambrosia_test_library_xyz")
+        registry.register(dummyTestURL)
+
+        // In UserDefaults.standard, this should NOT have been written
+        let standardKnown = UserDefaults.standard.stringArray(forKey: "calibreKnownLibraries") ?? []
+        XCTAssertFalse(standardKnown.contains(dummyTestURL.path))
+    }
+
+    func testLibraryRegistryPrunesTestLibraries() throws {
+        let testDefaults = try XCTUnwrap(UserDefaults(suiteName: "com.ambrosia.test-registry-prune-test"))
+        testDefaults.set([
+            "/tmp/ambrosia_test_library_1",
+            "/Users/someone/Calibre Library",
+            "/var/folders/xx/yy/T/TagCandidateRestrictionTests-123"
+        ], forKey: "calibreKnownLibraries")
+        testDefaults.set("/tmp/ambrosia_test_library_1", forKey: "calibreLibraryPath")
+
+        let registry = LibraryRegistry(userDefaults: testDefaults)
+        registry.pruneStaleTestLibraries(force: true)
+
+        let known = testDefaults.stringArray(forKey: "calibreKnownLibraries") ?? []
+        XCTAssertEqual(known, ["/Users/someone/Calibre Library"])
+        XCTAssertEqual(testDefaults.string(forKey: "calibreLibraryPath"), "/Users/someone/Calibre Library")
+    }
+
+    func testLibraryIndexManagerPrunesTestLibraries() throws {
+        let testDir = tempDir.appendingPathComponent("PruneManagerTest")
+        try FileManager.default.createDirectory(at: testDir, withIntermediateDirectories: true)
+        let customManager = LibraryIndexManager.makeForTesting(directory: testDir)
+
+        let testLibURL = URL(fileURLWithPath: "/tmp/ambrosia_test_library_fake")
+        let realLibURL = URL(fileURLWithPath: "/Users/testuser/Calibre Library")
+
+        customManager.record(url: testLibURL)
+        customManager.record(url: realLibURL)
+        XCTAssertEqual(customManager.entries().count, 2)
+
+        customManager.pruneStaleTestLibraries(force: true)
+        let remaining = customManager.entries()
+        XCTAssertEqual(remaining.count, 1)
+        XCTAssertEqual(remaining.first?.displayName, "Calibre Library")
+    }
+
+    func testAmbrosiaMetaDBPrunesTestDatabases() throws {
+        let pruneBase = tempDir.appendingPathComponent("PruneDBTest")
+        try FileManager.default.createDirectory(at: pruneBase, withIntermediateDirectories: true)
+        AmbrosiaMetaDB.baseDirectoryOverride = pruneBase
+        defer { AmbrosiaMetaDB.baseDirectoryOverride = nil }
+
+        let testLibURL = URL(fileURLWithPath: "/tmp/ambrosia_test_library_prune")
+        let metaDB = try AmbrosiaMetaDB(libraryURL: testLibURL)
+        _ = metaDB // created directory
+
+        let dbDir = try AmbrosiaMetaDB.databaseDirectory(for: Ambrosia.libraryHash(for: testLibURL))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dbDir.path))
+
+        // Create an orphaned, unregistered database directory (matching historical test residue)
+        let orphanDir = pruneBase.appendingPathComponent("0000deadbeef1234")
+        try FileManager.default.createDirectory(at: orphanDir, withIntermediateDirectories: true)
+        let orphanDB = orphanDir.appendingPathComponent("ambrosia_meta.db")
+        let conn = try Connection(orphanDB.path)
+        try conn.execute("CREATE TABLE collections (id TEXT PRIMARY KEY);")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: orphanDB.path))
+
+        AmbrosiaMetaDB.pruneStaleTestDatabases(force: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dbDir.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphanDir.path))
+    }
 }

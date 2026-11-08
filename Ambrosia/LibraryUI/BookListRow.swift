@@ -364,7 +364,7 @@ struct LibraryStatsRow: View {
     var readPercent: Double?
 
     var body: some View {
-        let hasPercent = (readPercent ?? 0) > 0
+        let hasPercent = readPercent != nil
         if !stats.isEmpty || hasPercent {
             HStack(spacing: 14) {
                 if let chapterText = stats.chapterText {
@@ -379,16 +379,21 @@ struct LibraryStatsRow: View {
                 if let updatedText = stats.normalizedUpdatedText {
                     statChip("Upd \(updatedText)", icon: "arrow.triangle.2.circlepath")
                 }
-                if let pct = readPercent, pct > 0 {
+                if let pct = readPercent {
                     statChip(String(format: "%.0f%% read", min(pct, 1.0) * 100), icon: "book.pages")
                 }
                 Spacer()
             }
+            .frame(height: 16)
         }
     }
 
     private func statChip(_ label: String, icon: String) -> some View {
-        Label(label, systemImage: icon).font(.caption2).foregroundStyle(.tertiary)
+        Label(label, systemImage: icon)
+            .font(.caption2)
+            .imageScale(.small)
+            .lineLimit(1)
+            .foregroundStyle(.tertiary)
     }
 }
 

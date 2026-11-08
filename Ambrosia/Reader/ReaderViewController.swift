@@ -256,7 +256,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     /// so that crossing a work boundary in a series transparently retargets
     /// reads/writes to that work's own row — the per-work-keying design in
     /// ambrosia_series_fix_plan.md Task 2c.
-    private var bookState: BookState? {
+    var bookState: BookState? {
         bookStates[activeCalibreID] ?? bookState(for: activeCalibreID)
     }
     /// Fetches (or creates) the BookState row for a specific calibreID,
@@ -1578,6 +1578,13 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             }
         }
         updateReadingHistory(final: final)
+        for state in statesToSave {
+            NotificationCenter.default.post(
+                name: .bookStateDidChange,
+                object: nil,
+                userInfo: ["calibreID": state.calibreID, "totalReadPercent": state.totalReadPercent]
+            )
+        }
         onReadingProgressChanged?()
     }
 

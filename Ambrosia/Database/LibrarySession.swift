@@ -17,6 +17,7 @@ extension Notification.Name {
     static let libraryContentsDidChange = Notification.Name("Ambrosia.libraryContentsDidChange")
     static let libraryVolumeDidDisconnect = Notification.Name("Ambrosia.libraryVolumeDidDisconnect")
     static let libraryVolumeDidReconnect = Notification.Name("Ambrosia.libraryVolumeDidReconnect")
+    static let bookStateDidChange = Notification.Name("Ambrosia.bookStateDidChange")
 }
 
 /// Holds the active CalibreLibrary connection for the current session.

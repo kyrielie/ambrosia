@@ -37,6 +37,7 @@ final class ImportProgressWindowController: NSWindowController {
             defer: false
         )
         window.center()
+        window.isRestorable = false
         self.init(window: window)
         setupUI()
     }

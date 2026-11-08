@@ -65,6 +65,12 @@ struct CollectionsView: View {
             maxHeight: .infinity
         )
         .task { await reload() }
+        .onReceive(NotificationCenter.default.publisher(for: .bookStateDidChange)) { note in
+            if let calibreID = note.userInfo?["calibreID"] as? Int,
+               let percent = note.userInfo?["totalReadPercent"] as? Double {
+                memberProgress[calibreID] = percent
+            }
+        }
         .onChange(of: selectedCollectionID) { _, newID in
             if let newID {
                 lastSelectedCollectionID = newID
@@ -453,17 +459,18 @@ struct CollectionsView: View {
                             Label("Finished", systemImage: "checkmark.circle.fill")
                                 .font(.caption2.weight(.medium))
                                 .foregroundStyle(.green)
-                        } else if pct > 0.01 {
+                        } else {
                             Text("•").foregroundStyle(.tertiary)
                             Text("\(Int((pct * 100).rounded()))% read")
                                 .font(.caption2.weight(.medium))
                                 .padding(.horizontal, 6)
-                                .padding(.vertical, 1)
+                                .frame(height: 16)
                                 .background(Color.accentColor.opacity(0.12), in: Capsule())
                                 .foregroundStyle(Color.accentColor)
                         }
                     }
                 }
+                .frame(height: 18)
             }
             Spacer()
 

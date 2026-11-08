@@ -106,6 +106,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
         panel.minSize = NSSize(width: Self.minWidth, height: 400)
         panel.isFloatingPanel = true
         panel.level = .floating
+        panel.isRestorable = false
         super.init(window: panel)
         panel.delegate = self
         panel.contentViewController = hostingController
