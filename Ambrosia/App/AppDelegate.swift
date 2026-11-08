@@ -23,7 +23,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// exercises -- every test that needs a library builds its own isolated
     /// temp fixture (see `CalibreTestFixture`) instead.
     private static var isRunningTests: Bool {
-        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        AppEnvironment.isRunningTests
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -34,7 +34,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // defaults to true, so it must be explicitly turned off.
         NSWindow.allowsAutomaticWindowTabbing = false
 
-        guard !Self.isRunningTests else { return }
+        guard !AppEnvironment.isRunningTests else { return }
+
+        // Clean up any test libraries from previous test runs
+        LibraryIndexManager.shared.pruneStaleTestLibraries()
+        LibraryRegistry.shared.pruneStaleTestLibraries()
+        AmbrosiaMetaDB.pruneStaleTestDatabases()
 
         // Reopen last used library silently on launch
         VolumeMonitor.shared.startMonitoring(session: session)
@@ -235,6 +240,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+        true
+    }
+
+    func application(
+        _ app: NSApplication,
+        restoreWindowWithIdentifier identifier: NSUserInterfaceItemIdentifier,
+        state: NSCoder,
+        completionHandler: @escaping (NSWindow?, (any Error)?) -> Void
+    ) {
+        // Ambrosia manages window lifecycles manually via custom window controllers
+        // (LibraryWindowController, ReaderWindowController, PreferencesWindowController)
+        // and persists geometry via setFrameAutosaveName, rather than Cocoa's legacy
+        // NSWindowRestoration architecture. Calling completionHandler(nil, nil) explicitly
+        // declines restoration without triggering AppKit's "Unable to find className=(null)" log.
+        completionHandler(nil, nil)
+    }
 
     /// Clicking the Dock icon when all windows are closed re-shows the library window.
     /// Returns false — we handle reopen entirely ourselves. Returning true would tell

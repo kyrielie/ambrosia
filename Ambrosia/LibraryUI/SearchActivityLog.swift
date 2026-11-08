@@ -105,14 +105,7 @@ final class SearchActivityLog {
     // MARK: - Private helpers
 
     private func activityFileURL(libraryHash: String) -> URL? {
-        guard let support = FileManager.default.urls(
-                for: .applicationSupportDirectory, in: .userDomainMask).first
-        else { return nil }
-        let dir = support
-            .appendingPathComponent("Ambrosia")
-            .appendingPathComponent("libraries")
-            .appendingPathComponent(libraryHash)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        guard let dir = try? AmbrosiaMetaDB.databaseDirectory(for: libraryHash) else { return nil }
         return dir.appendingPathComponent("search_activity.json")
     }
 }

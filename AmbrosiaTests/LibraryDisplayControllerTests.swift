@@ -102,4 +102,26 @@ final class LibraryDisplayControllerTests: XCTestCase {
         toolbarState.searchText = "fulltext:exact phrase"
         XCTAssertEqual(controller.activeFullTextPhrase, "exact phrase")
     }
+
+    func testBookStateDidChangeNotificationUpdatesBookStates() async {
+        XCTAssertNil(controller.bookStates[42])
+
+        NotificationCenter.default.post(
+            name: .bookStateDidChange,
+            object: nil,
+            userInfo: ["calibreID": 42, "totalReadPercent": 0.0]
+        )
+
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(controller.bookStates[42]?.totalReadPercent, 0.0)
+
+        NotificationCenter.default.post(
+            name: .bookStateDidChange,
+            object: nil,
+            userInfo: ["calibreID": 42, "totalReadPercent": 0.45]
+        )
+
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(controller.bookStates[42]?.totalReadPercent, 0.45)
+    }
 }

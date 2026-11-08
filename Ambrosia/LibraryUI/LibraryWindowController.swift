@@ -82,6 +82,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         window.toolbarStyle    = .unified
         window.minSize = NSSize(width: 700, height: 500)
         window.isReleasedWhenClosed = false
+        window.isRestorable = false
         // Finding 1: restore window position/size across launches via the
         // standard AppKit mechanism. setFrameAutosaveName must be set before
         // the window is shown; center() only runs as a fallback the first

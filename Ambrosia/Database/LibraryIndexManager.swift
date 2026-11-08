@@ -47,10 +47,29 @@ final class LibraryIndexManager {
 
     func entries() -> [LibraryIndexEntry] {
         guard let data = try? Data(contentsOf: indexURL()) else { return [] }
-        return (try? JSONDecoder().decode([LibraryIndexEntry].self, from: data)) ?? []
+        let all = (try? JSONDecoder().decode([LibraryIndexEntry].self, from: data)) ?? []
+        if AppEnvironment.isRunningTests { return all }
+        return all.filter { !AppEnvironment.isTestLibraryURL(URL(fileURLWithPath: $0.lastKnownPath)) }
+    }
+
+    /// Prunes stale test libraries and missing temporary directories from index.json,
+    /// and deletes their cached metadata directories in Application Support.
+    func pruneStaleTestLibraries(force: Bool = false) {
+        guard !AppEnvironment.isRunningTests || force else { return }
+        guard let data = try? Data(contentsOf: indexURL()),
+              let raw = try? JSONDecoder().decode([LibraryIndexEntry].self, from: data) else { return }
+        for entry in raw {
+            let url = URL(fileURLWithPath: entry.lastKnownPath)
+            if AppEnvironment.isTestLibraryURL(url) {
+                remove(hash: entry.hash, deleteAppSupportMetadata: true)
+            }
+        }
     }
 
     func record(url: URL) {
+        if !AppEnvironment.isRunningTests && AppEnvironment.isTestLibraryURL(url) {
+            return
+        }
         let hash = libraryHash(for: url)
         var current = entries()
         let bookmark = try? url.bookmarkData(

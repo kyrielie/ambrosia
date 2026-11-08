@@ -18,6 +18,7 @@ final class FTSSearchResultsWindowController: NSWindowController {
         window.minSize = NSSize(width: 550, height: 450)
         window.center()
         window.isReleasedWhenClosed = false
+        window.isRestorable = false
         window.setFrameAutosaveName("AmbrosiaFTSSearchWindow")
         if !window.setFrameUsingName("AmbrosiaFTSSearchWindow") {
             window.center()

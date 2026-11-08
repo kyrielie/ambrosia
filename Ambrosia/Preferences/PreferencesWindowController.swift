@@ -10,15 +10,16 @@ final class PreferencesWindowController: NSWindowController {
 
     private init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 580, height: 680),
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 680),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
         window.title   = "Preferences"
-        window.minSize = NSSize(width: 540, height: 500)
+        window.minSize = NSSize(width: 700, height: 500)
         window.center()
         window.isReleasedWhenClosed = false
+        window.isRestorable = false
         window.toolbarStyle = .preference
         window.animationBehavior = .documentWindow
         super.init(window: window)
@@ -75,7 +76,7 @@ private struct PreferencesRootView: View {
                 .tabItem { Label("Shortcuts", systemImage: "keyboard") }
                 .tag(PrefTab.shortcuts)
         }
-        .frame(width: 580)
+        .frame(width: 720)
         // Finding 11c: remember the last-open Preferences tab across launches,
         // the same way state restoration already applies to window position.
         .onChange(of: tab) { _, newValue in
@@ -135,8 +136,22 @@ private struct ReaderTab: View {
             // ── Typography ────────────────────────────────────────────────
             Section {
                 fontFamilyRow
-                sliderRow("Font size", int: $prefs.fontSize, range: 10...36, step: 1, unit: "pt")
-                sliderRow("Line height", dbl: $prefs.lineHeight, range: 1.0...3.0, step: 0.1)
+                sliderRow(
+                    "Font size",
+                    int: $prefs.fontSize,
+                    range: 10...36,
+                    step: 1,
+                    unit: "pt",
+                    defaultValue: ReaderPreferences.defaultFontSize
+                )
+                sliderRow(
+                    "Line height",
+                    dbl: $prefs.lineHeight,
+                    range: 1.0...3.0,
+                    step: 0.1,
+                    unit: "em",
+                    defaultValue: ReaderPreferences.defaultLineHeight
+                )
                 Picker("Text alignment", selection: $prefs.textAlignment) {
                     ForEach(ThemeTextAlignment.allCases) { align in
                         Text(align.label).tag(align)
@@ -144,28 +159,54 @@ private struct ReaderTab: View {
                 }
                 .pickerStyle(.menu)
 
-                HStack {
-                    Text("Paragraph indent")
-                    Spacer()
-                    Toggle("Book Default", isOn: Binding(
-                        get: { prefs.paragraphIndent == nil },
-                        set: { isDef in prefs.paragraphIndent = isDef ? nil : 1.5 }
-                    ))
-                    .toggleStyle(.checkbox)
-                    if let indent = prefs.paragraphIndent {
-                        Slider(value: Binding(
-                            get: { indent },
-                            set: { prefs.paragraphIndent = $0 }
-                        ), in: 0.5...3.0, step: 0.25)
-                        .frame(width: 80)
-                        Text(String(format: "%.2fem", indent))
-                            .font(.system(size: 11).monospacedDigit())
-                            .foregroundStyle(.secondary)
+                Picker("Paragraph indent", selection: $prefs.paragraphIndentMode) {
+                    ForEach(ParagraphIndentMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
                     }
                 }
-                sliderRow("Max line width", int: $prefs.maxWidth, range: 400...1400, step: 20, unit: "px")
-                sliderRow("Horizontal padding", int: $prefs.paddingH, range: 0...120, step: 4, unit: "px")
-                sliderRow("Vertical padding", int: $prefs.paddingV, range: 0...120, step: 4, unit: "px")
+                .pickerStyle(.menu)
+
+                let isIndentEnabled = prefs.paragraphIndentMode == .indented
+                let indentDisabledText = prefs.paragraphIndentMode == .bookDefault ? "Book" : "None"
+                let indentBinding = Binding<Double>(
+                    get: { prefs.paragraphIndent ?? 1.5 },
+                    set: { prefs.paragraphIndent = $0 }
+                )
+                sliderRow(
+                    "Indent size",
+                    dbl: indentBinding,
+                    range: 0.25...3.0,
+                    step: 0.25,
+                    fractionDigits: 2,
+                    unit: "em",
+                    disabledText: indentDisabledText,
+                    isEnabled: isIndentEnabled,
+                    defaultValue: ReaderPreferences.defaultParagraphIndent
+                )
+                sliderRow(
+                    "Max line width",
+                    int: $prefs.maxWidth,
+                    range: 400...1400,
+                    step: 20,
+                    unit: "px",
+                    defaultValue: ReaderPreferences.defaultMaxWidth
+                )
+                sliderRow(
+                    "Horizontal padding",
+                    int: $prefs.paddingH,
+                    range: 0...120,
+                    step: 4,
+                    unit: "px",
+                    defaultValue: ReaderPreferences.defaultPaddingH
+                )
+                sliderRow(
+                    "Vertical padding",
+                    int: $prefs.paddingV,
+                    range: 0...120,
+                    step: 4,
+                    unit: "px",
+                    defaultValue: ReaderPreferences.defaultPaddingV
+                )
 
                 // Live typography preview placed below controls
                 Text("The quick brown fox jumps over the lazy dog.")
@@ -474,39 +515,60 @@ private struct ReaderTab: View {
     }
 
     @ViewBuilder
-    private func sliderRow(_ label: String, int value: Binding<Int>,
-                           range: ClosedRange<Int>, step: Int, unit: String) -> some View {
+    private func sliderRow(
+        _ label: String,
+        int value: Binding<Int>,
+        range: ClosedRange<Int>,
+        step: Int,
+        unit: String,
+        defaultValue: Int? = nil
+    ) -> some View {
         HStack {
             Text(label)
                 .accessibilityLabeledPair(role: .label, id: label, in: a11y)
             Spacer()
-            Slider(value: Binding(
-                get: { Double(value.wrappedValue) },
-                set: { value.wrappedValue = Int($0) }
-            ), in: Double(range.lowerBound)...Double(range.upperBound), step: Double(step))
-            .frame(width: 140)
-            Text("\(value.wrappedValue) \(unit)")
-                .font(.system(size: 11).monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 55, alignment: .trailing)
-                .accessibilityLabeledPair(role: .content, id: label, in: a11y)
+            TypographySliderControl(
+                value: value,
+                range: range,
+                step: step,
+                unit: unit,
+                defaultValue: defaultValue.map(Double.init),
+                accessibilityLabel: label
+            )
+            .frame(width: 480)
+            .accessibilityLabeledPair(role: .content, id: label, in: a11y)
         }
     }
 
     @ViewBuilder
-    private func sliderRow(_ label: String, dbl value: Binding<Double>,
-                           range: ClosedRange<Double>, step: Double) -> some View {
+    private func sliderRow(
+        _ label: String,
+        dbl value: Binding<Double>,
+        range: ClosedRange<Double>,
+        step: Double,
+        fractionDigits: Int = 1,
+        unit: String = "",
+        disabledText: String? = nil,
+        isEnabled: Bool = true,
+        defaultValue: Double? = nil
+    ) -> some View {
         HStack {
             Text(label)
                 .accessibilityLabeledPair(role: .label, id: label, in: a11y)
             Spacer()
-            Slider(value: value, in: range, step: step)
-                .frame(width: 140)
-            Text(String(format: "%.1f", value.wrappedValue))
-                .font(.system(size: 11).monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 35, alignment: .trailing)
-                .accessibilityLabeledPair(role: .content, id: label, in: a11y)
+            TypographySliderControl(
+                value: value,
+                range: range,
+                step: step,
+                fractionDigits: fractionDigits,
+                unit: unit,
+                disabledText: disabledText,
+                isEnabled: isEnabled,
+                defaultValue: defaultValue,
+                accessibilityLabel: label
+            )
+            .frame(width: 480)
+            .accessibilityLabeledPair(role: .content, id: label, in: a11y)
         }
     }
 }
@@ -2076,5 +2138,377 @@ extension Color {
                 intent: .defaultIntent, options: nil),
               let components = cg.components, components.count >= 3 else { return nil }
         return String(format: "#%02X%02X%02X", Int(components[0]*255), Int(components[1]*255), Int(components[2]*255))
+    }
+}
+
+// MARK: - Typography Value Formatter
+
+enum TypographyValueFormat {
+    /// Formats a numeric value as a clean string without unit.
+    static func formatNumber(value: Double, fractionDigits: Int) -> String {
+        guard value.isFinite else { return "0" }
+        if fractionDigits == 0 {
+            return "\(Int(value.rounded()))"
+        } else {
+            var text = String(format: "%.\(fractionDigits)f", value)
+            if fractionDigits == 2 && text.hasSuffix("0") {
+                text.removeLast()
+            }
+            return text
+        }
+    }
+
+    /// Formats a numeric value for display with its unit outside or inline.
+    static func format(value: Double, fractionDigits: Int, unit: String) -> String {
+        let numStr = formatNumber(value: value, fractionDigits: fractionDigits)
+        if unit.isEmpty {
+            return numStr
+        } else if unit == "px" {
+            return "\(numStr)px"
+        } else {
+            return "\(numStr) \(unit)"
+        }
+    }
+
+    /// Parses the first numeric value from a string, normalizing comma to period and ignoring surrounding text.
+    static func parseNumber(_ text: String) -> Double? {
+        let normalized = text.replacingOccurrences(of: ",", with: ".")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Scanner(string: normalized).scanDouble(), value.isFinite else { return nil }
+        return value
+    }
+
+    static func clamp(_ value: Double, to range: ClosedRange<Double>) -> Double {
+        guard value.isFinite else { return range.lowerBound }
+        return min(range.upperBound, max(range.lowerBound, value))
+    }
+
+    static func roundedToDigits(_ value: Double, fractionDigits: Int) -> Double {
+        let factor = pow(10.0, Double(max(0, fractionDigits)))
+        return (value * factor).rounded() / factor
+    }
+
+    static func snap(_ value: Double, range: ClosedRange<Double>, step: Double, fractionDigits: Int) -> Double {
+        guard value.isFinite, step > 0 else { return range.lowerBound }
+        let steps = ((value - range.lowerBound) / step).rounded()
+        let snapped = roundedToDigits(range.lowerBound + steps * step, fractionDigits: fractionDigits)
+        return clamp(snapped, to: range)
+    }
+}
+
+// MARK: - Native AppKit Settings Number Text Field
+
+final class NativeNumericAppKitTextField: NSTextField {
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result {
+            DispatchQueue.main.async { [weak self] in
+                self?.currentEditor()?.selectAll(nil)
+            }
+        }
+        return result
+    }
+}
+
+struct NativeNumericTextField: NSViewRepresentable {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let fractionDigits: Int
+    var disabledText: String?
+    var isEnabled: Bool = true
+    var width: CGFloat = 58
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeNSView(context: Context) -> NativeNumericAppKitTextField {
+        let field = NativeNumericAppKitTextField()
+        field.isEditable = true
+        field.isSelectable = true
+        field.isBezeled = true
+        field.bezelStyle = .squareBezel
+        field.controlSize = .regular
+        field.alignment = .right
+        field.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        field.delegate = context.coordinator
+        field.target = context.coordinator
+        field.action = #selector(Coordinator.textFieldAction(_:))
+        field.setContentHuggingPriority(.required, for: .horizontal)
+        field.setContentCompressionResistancePriority(.required, for: .horizontal)
+        return field
+    }
+
+    func updateNSView(_ nsView: NativeNumericAppKitTextField, context: Context) {
+        context.coordinator.parent = self
+        nsView.isEnabled = isEnabled
+        nsView.isEditable = isEnabled
+
+        if !context.coordinator.isEditing {
+            let displayString: String
+            if !isEnabled, let disabledText {
+                displayString = disabledText
+            } else {
+                displayString = TypographyValueFormat.formatNumber(value: value, fractionDigits: fractionDigits)
+            }
+            if nsView.stringValue != displayString {
+                nsView.stringValue = displayString
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: NativeNumericTextField
+        var isEditing = false
+        private var clickMonitor: Any?
+
+        init(_ parent: NativeNumericTextField) {
+            self.parent = parent
+        }
+
+        func controlTextDidBeginEditing(_ obj: Notification) {
+            isEditing = true
+            guard let field = obj.object as? NSTextField else { return }
+            installClickMonitor(for: field)
+        }
+
+        func controlTextDidEndEditing(_ obj: Notification) {
+            removeClickMonitor()
+            guard isEditing else { return }
+            isEditing = false
+            guard let field = obj.object as? NSTextField else { return }
+            commit(field: field)
+        }
+
+        @objc func textFieldAction(_ sender: NSTextField) {
+            isEditing = false
+            commit(field: sender)
+            sender.window?.makeFirstResponder(nil)
+        }
+
+        private func installClickMonitor(for field: NSTextField) {
+            removeClickMonitor()
+            clickMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown]
+            ) { [weak self, weak field] event in
+                guard let self, self.isEditing, let field, let window = field.window else { return event }
+                let locationInWindow = event.locationInWindow
+                let fieldRectInWindow = field.convert(field.bounds, to: nil)
+                if !fieldRectInWindow.contains(locationInWindow) {
+                    self.removeClickMonitor()
+                    window.makeFirstResponder(nil)
+                }
+                return event
+            }
+        }
+
+        private func removeClickMonitor() {
+            if let clickMonitor {
+                NSEvent.removeMonitor(clickMonitor)
+                self.clickMonitor = nil
+            }
+        }
+
+        deinit {
+            removeClickMonitor()
+        }
+
+        private func commit(field: NSTextField) {
+            let text = field.stringValue
+            if let parsed = TypographyValueFormat.parseNumber(text) {
+                let clamped = TypographyValueFormat.clamp(parsed, to: parent.range)
+                let rounded = TypographyValueFormat.roundedToDigits(clamped, fractionDigits: parent.fractionDigits)
+                parent.value = rounded
+                field.stringValue = TypographyValueFormat.formatNumber(
+                    value: rounded,
+                    fractionDigits: parent.fractionDigits
+                )
+            } else {
+                field.stringValue = TypographyValueFormat.formatNumber(
+                    value: parent.value,
+                    fractionDigits: parent.fractionDigits
+                )
+            }
+        }
+    }
+}
+
+// MARK: - Native AppKit Stepper
+
+struct NativeStepperView: NSViewRepresentable {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let fractionDigits: Int
+    var isEnabled: Bool = true
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeNSView(context: Context) -> NSStepper {
+        let stepper = NSStepper()
+        stepper.minValue = range.lowerBound
+        stepper.maxValue = range.upperBound
+        stepper.increment = step
+        stepper.valueWraps = false
+        stepper.controlSize = .small
+        stepper.target = context.coordinator
+        stepper.action = #selector(Coordinator.stepperAction(_:))
+        stepper.setContentHuggingPriority(.required, for: .horizontal)
+        return stepper
+    }
+
+    func updateNSView(_ nsView: NSStepper, context: Context) {
+        context.coordinator.parent = self
+        nsView.minValue = range.lowerBound
+        nsView.maxValue = range.upperBound
+        nsView.increment = step
+        nsView.doubleValue = value
+        nsView.isEnabled = isEnabled
+    }
+
+    final class Coordinator: NSObject {
+        var parent: NativeStepperView
+        init(_ parent: NativeStepperView) {
+            self.parent = parent
+        }
+
+        @objc func stepperAction(_ sender: NSStepper) {
+            let snapped = TypographyValueFormat.snap(
+                sender.doubleValue,
+                range: parent.range,
+                step: parent.step,
+                fractionDigits: parent.fractionDigits
+            )
+            parent.value = snapped
+        }
+    }
+}
+
+// MARK: - Unified Typography Slider Control (Honeycrisp Pattern + Native AppKit Box, Stepper & Reset)
+
+struct TypographySliderControl: View {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let fractionDigits: Int
+    let unit: String
+    var disabledText: String?
+    var isEnabled: Bool = true
+    var fieldWidth: CGFloat = 58
+    var defaultValue: Double?
+    var accessibilityLabel: String = ""
+
+    init(
+        value: Binding<Double>,
+        range: ClosedRange<Double>,
+        step: Double,
+        fractionDigits: Int = 1,
+        unit: String = "",
+        disabledText: String? = nil,
+        isEnabled: Bool = true,
+        fieldWidth: CGFloat = 58,
+        defaultValue: Double? = nil,
+        accessibilityLabel: String = ""
+    ) {
+        self._value = value
+        self.range = range
+        self.step = step
+        self.fractionDigits = fractionDigits
+        self.unit = unit
+        self.disabledText = disabledText
+        self.isEnabled = isEnabled
+        self.fieldWidth = fieldWidth
+        self.defaultValue = defaultValue
+        self.accessibilityLabel = accessibilityLabel
+    }
+
+    init(
+        value: Binding<Int>,
+        range: ClosedRange<Int>,
+        step: Int = 1,
+        unit: String = "",
+        disabledText: String? = nil,
+        isEnabled: Bool = true,
+        fieldWidth: CGFloat = 58,
+        defaultValue: Double? = nil,
+        accessibilityLabel: String = ""
+    ) {
+        self._value = Binding<Double>(
+            get: { Double(value.wrappedValue) },
+            set: { value.wrappedValue = Int($0.rounded()) }
+        )
+        self.range = Double(range.lowerBound)...Double(range.upperBound)
+        self.step = Double(step)
+        self.fractionDigits = 0
+        self.unit = unit
+        self.disabledText = disabledText
+        self.isEnabled = isEnabled
+        self.fieldWidth = fieldWidth
+        self.defaultValue = defaultValue
+        self.accessibilityLabel = accessibilityLabel
+    }
+
+    private var canReset: Bool {
+        guard isEnabled, let defaultValue else { return false }
+        return abs(value - defaultValue) > 0.001
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Slider(value: Binding(
+                get: { value },
+                set: { raw in
+                    value = TypographyValueFormat.snap(raw, range: range, step: step, fractionDigits: fractionDigits)
+                }
+            ), in: range)
+            .accessibilityLabel(accessibilityLabel)
+            .disabled(!isEnabled)
+
+            // Native AppKit squareBezel text field showing only the raw number (spacious 58pt x 22pt)
+            NativeNumericTextField(
+                value: $value,
+                range: range,
+                step: step,
+                fractionDigits: fractionDigits,
+                disabledText: disabledText,
+                isEnabled: isEnabled,
+                width: fieldWidth
+            )
+            .frame(width: fieldWidth, height: 22)
+
+            // Native AppKit up/down stepper arrows
+            NativeStepperView(
+                value: $value,
+                range: range,
+                step: step,
+                fractionDigits: fractionDigits,
+                isEnabled: isEnabled
+            )
+            .frame(width: 13, height: 22)
+
+            // Unit placed cleanly OUTSIDE the box
+            Text(isEnabled ? unit : "")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 20, alignment: .leading)
+
+            // Inline reset button (circular counterclockwise arrow)
+            Button {
+                if let defaultValue {
+                    value = defaultValue
+                }
+            } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(canReset ? Color.secondary : Color.clear)
+            }
+            .buttonStyle(.plain)
+            .frame(width: 16, height: 16)
+            .disabled(!canReset)
+            .help(canReset ? "Reset to default" : "")
+        }
     }
 }

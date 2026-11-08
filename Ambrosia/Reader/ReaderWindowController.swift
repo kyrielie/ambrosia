@@ -137,6 +137,15 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         Task {
             if let metaDB = AppDelegate.shared?.session.metaDB {
                 try? await metaDB.markBookOpened(calibreID: calibreID)
+                let states = await metaDB.bookStates(for: [calibreID])
+                let pct = states[calibreID]?.totalReadPercent ?? 0.0
+                await MainActor.run {
+                    NotificationCenter.default.post(
+                        name: .bookStateDidChange,
+                        object: nil,
+                        userInfo: ["calibreID": calibreID, "totalReadPercent": pct]
+                    )
+                }
             }
         }
     }
@@ -236,6 +245,13 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         Self.openWindows.removeValue(forKey: target.windowKey)
         appearancePopover?.performClose(nil)
         appearancePopover = nil
+
+        let currentPct = readerViewController?.bookState?.totalReadPercent ?? 0.0
+        NotificationCenter.default.post(
+            name: .bookStateDidChange,
+            object: nil,
+            userInfo: ["calibreID": book.id, "totalReadPercent": currentPct]
+        )
 
         // Accumulate reading session time into BookState.totalReadingTimeSeconds
         let elapsed   = Date().timeIntervalSince(sessionStartDate)

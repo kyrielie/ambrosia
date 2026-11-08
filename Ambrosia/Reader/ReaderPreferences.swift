@@ -100,6 +100,23 @@ public enum ThemeTextAlignment: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - ParagraphIndentMode
+
+public enum ParagraphIndentMode: String, Codable, CaseIterable, Identifiable {
+    case bookDefault = "default"
+    case none = "none"
+    case indented = "indented"
+
+    public var id: String { rawValue }
+    public var label: String {
+        switch self {
+        case .bookDefault: return "Book Default"
+        case .none: return "None (0em)"
+        case .indented: return "Indented"
+        }
+    }
+}
+
 // MARK: - LibraryColorScheme
 
 /// The colour pair applied to the library background and text.
@@ -216,6 +233,26 @@ final class ReaderPreferences: ObservableObject {
                 UserDefaults.standard.removeObject(forKey: Keys.paragraphIndent)
             }
             preferenceChangeKind.send(.cosmetic)
+        }
+    }
+    var paragraphIndentMode: ParagraphIndentMode {
+        get {
+            guard let indent = paragraphIndent else { return .bookDefault }
+            return indent == 0.0 ? .none : .indented
+        }
+        set {
+            switch newValue {
+            case .bookDefault:
+                paragraphIndent = nil
+            case .none:
+                paragraphIndent = 0.0
+            case .indented:
+                if let current = paragraphIndent, current > 0.0 {
+                    paragraphIndent = current
+                } else {
+                    paragraphIndent = 1.5
+                }
+            }
         }
     }
     public var effectiveIsDark: Bool {
@@ -1352,6 +1389,13 @@ final class ReaderPreferences: ObservableObject {
     static var defaultKeyBindingsForReset: [RebindableAction: KeyBinding] {
         Defaults.keyBindings
     }
+
+    public static var defaultFontSize: Int { Defaults.fontSize }
+    public static var defaultLineHeight: Double { Defaults.lineHeight }
+    public static var defaultParagraphIndent: Double { 1.5 }
+    public static var defaultMaxWidth: Int { Defaults.maxWidth }
+    public static var defaultPaddingH: Int { Defaults.paddingH }
+    public static var defaultPaddingV: Int { Defaults.paddingV }
 
     func resetLibraryToDefaults() {
         libraryColorMode            = Defaults.libraryColorMode

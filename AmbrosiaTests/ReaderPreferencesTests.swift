@@ -202,4 +202,73 @@ final class ReaderPreferencesTests: XCTestCase {
         prefs.resetReaderShortcutsToDefaults()
         XCTAssertEqual(prefs.keyBindings[.showTOCSidebar]?.character, "t")
     }
+
+    func testParagraphIndentModeMappingAndCSS() {
+        let prefs = ReaderPreferences.shared
+        prefs.resetReaderToDefaults()
+
+        // 1. Default state: .bookDefault -> nil
+        XCTAssertEqual(prefs.paragraphIndentMode, .bookDefault)
+        XCTAssertNil(prefs.paragraphIndent)
+        var css = prefs.css(paginated: false)
+        XCTAssertFalse(css.contains("text-indent: var(--ambrosia-paragraph-indent);"))
+
+        // 2. None state: .none -> 0.0em
+        prefs.paragraphIndentMode = .none
+        XCTAssertEqual(prefs.paragraphIndentMode, .none)
+        XCTAssertEqual(prefs.paragraphIndent, 0.0)
+        css = prefs.css(paginated: false)
+        XCTAssertTrue(css.contains("--ambrosia-paragraph-indent: 0.0em;"))
+        XCTAssertTrue(css.contains("text-indent: var(--ambrosia-paragraph-indent);"))
+
+        // 3. Indented state: .indented -> default 1.5em (or custom)
+        prefs.paragraphIndentMode = .indented
+        XCTAssertEqual(prefs.paragraphIndentMode, .indented)
+        XCTAssertEqual(prefs.paragraphIndent, 1.5)
+        css = prefs.css(paginated: false)
+        XCTAssertTrue(css.contains("--ambrosia-paragraph-indent: 1.5em;"))
+        XCTAssertTrue(css.contains("text-indent: var(--ambrosia-paragraph-indent);"))
+
+        // Adjusting indent value preserves .indented mode
+        prefs.paragraphIndent = 2.0
+        XCTAssertEqual(prefs.paragraphIndentMode, .indented)
+        XCTAssertEqual(prefs.paragraphIndent, 2.0)
+
+        // Switching back to bookDefault
+        prefs.paragraphIndentMode = .bookDefault
+        XCTAssertEqual(prefs.paragraphIndentMode, .bookDefault)
+        XCTAssertNil(prefs.paragraphIndent)
+
+        prefs.resetReaderToDefaults()
+    }
+
+    func testTypographyValueFormatParsingAndSnapping() {
+        // 1. Parsing
+        XCTAssertEqual(TypographyValueFormat.parseNumber("16 pt"), 16.0)
+        XCTAssertEqual(TypographyValueFormat.parseNumber("18"), 18.0)
+        XCTAssertEqual(TypographyValueFormat.parseNumber("1.5 em"), 1.5)
+        XCTAssertEqual(TypographyValueFormat.parseNumber("1,75"), 1.75)
+        XCTAssertEqual(TypographyValueFormat.parseNumber("600px"), 600.0)
+        XCTAssertEqual(TypographyValueFormat.parseNumber("   2.25  "), 2.25)
+        XCTAssertNil(TypographyValueFormat.parseNumber("invalid"))
+        XCTAssertNil(TypographyValueFormat.parseNumber(""))
+
+        // 2. Formatting
+        XCTAssertEqual(TypographyValueFormat.format(value: 16.0, fractionDigits: 0, unit: "pt"), "16 pt")
+        XCTAssertEqual(TypographyValueFormat.format(value: 1.4, fractionDigits: 1, unit: ""), "1.4")
+        XCTAssertEqual(TypographyValueFormat.format(value: 1.50, fractionDigits: 2, unit: "em"), "1.5 em")
+        XCTAssertEqual(TypographyValueFormat.format(value: 1.25, fractionDigits: 2, unit: "em"), "1.25 em")
+        XCTAssertEqual(TypographyValueFormat.format(value: 600.0, fractionDigits: 0, unit: "px"), "600px")
+
+        // 3. Clamping
+        XCTAssertEqual(TypographyValueFormat.clamp(5.0, to: 10.0...36.0), 10.0)
+        XCTAssertEqual(TypographyValueFormat.clamp(45.0, to: 10.0...36.0), 36.0)
+        XCTAssertEqual(TypographyValueFormat.clamp(20.0, to: 10.0...36.0), 20.0)
+
+        // 4. Snapping
+        let snapped1 = TypographyValueFormat.snap(1.34, range: 1.0...3.0, step: 0.1, fractionDigits: 1)
+        XCTAssertEqual(snapped1, 1.3)
+        let snapped2 = TypographyValueFormat.snap(1.36, range: 1.0...3.0, step: 0.1, fractionDigits: 1)
+        XCTAssertEqual(snapped2, 1.4)
+    }
 }

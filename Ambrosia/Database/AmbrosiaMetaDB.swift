@@ -87,9 +87,23 @@ actor AmbrosiaMetaDB {
         try db.execute("PRAGMA journal_mode = WAL")
         try db.execute("PRAGMA synchronous = NORMAL")
         try Self.runMigrations(db: db)
+        try? db.run("INSERT OR REPLACE INTO library_state (key, value) VALUES (?, ?)", ["library_path", libraryURL.path])
     }
 
+    public static var baseDirectoryOverride: URL?
+
     static func librariesBaseDirectory() throws -> URL {
+        if let baseDirectoryOverride {
+            try FileManager.default.createDirectory(at: baseDirectoryOverride, withIntermediateDirectories: true)
+            return baseDirectoryOverride
+        }
+        if AppEnvironment.isRunningTests {
+            let testDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("AmbrosiaTestSupport", isDirectory: true)
+                .appendingPathComponent("libraries", isDirectory: true)
+            try FileManager.default.createDirectory(at: testDir, withIntermediateDirectories: true)
+            return testDir
+        }
         guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             throw MetaDBError.applicationSupportUnavailable
         }
@@ -102,6 +116,66 @@ actor AmbrosiaMetaDB {
         let dir = try librariesBaseDirectory().appendingPathComponent(hash)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+
+    /// Scans the production libraries directory and cleans up any orphaned database directories
+    /// that were created by tests or belong to non-existent temporary libraries.
+    static func pruneStaleTestDatabases(force: Bool = false) {
+        guard !AppEnvironment.isRunningTests || force else { return }
+        guard let base = try? librariesBaseDirectory() else { return }
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil) else { return }
+
+        var knownHashes = Set(LibraryIndexManager.shared.entries().map(\.hash))
+        for path in LibraryRegistry.shared.knownPaths {
+            knownHashes.insert(Ambrosia.libraryHash(for: URL(fileURLWithPath: path)))
+        }
+
+        for dir in contents {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            let folderName = dir.lastPathComponent
+            guard folderName != "index.json" else { continue }
+
+            let isRegistered = knownHashes.contains(folderName)
+            let dbFile = dir.appendingPathComponent("ambrosia_meta.db")
+            guard fm.fileExists(atPath: dbFile.path) else {
+                if !isRegistered {
+                    try? fm.removeItem(at: dir)
+                }
+                continue
+            }
+
+            let shouldPrune: Bool = autoreleasepool {
+                guard let db = try? Connection(dbFile.path, readonly: true) else {
+                    return !isRegistered
+                }
+                let pathVal = (try? db.scalar("SELECT value FROM library_state WHERE key = 'library_path'")) as? String
+                if let pathVal {
+                    let libURL = URL(fileURLWithPath: pathVal)
+                    if AppEnvironment.isTestLibraryURL(libURL) || !fm.fileExists(atPath: libURL.path) {
+                        return true
+                    }
+                } else if !isRegistered {
+                    // Orphaned or test database with no recorded library_path and not in index.json/knownPaths
+                    return true
+                }
+
+                // Check diagnostics table for any test EPUB paths, safely verifying table existence first
+                let hasDiagnostics = (try? db.scalar("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ao3_extraction_diagnostics'")) != nil
+                if hasDiagnostics {
+                    let epubPath = (try? db.scalar("SELECT epub_path FROM ao3_extraction_diagnostics WHERE epub_path IS NOT NULL LIMIT 1")) as? String
+                    if let epubPath, AppEnvironment.isTestLibraryURL(URL(fileURLWithPath: epubPath)) {
+                        return true
+                    }
+                }
+                return false
+            }
+
+            if shouldPrune {
+                try? fm.removeItem(at: dir)
+            }
+        }
     }
 
     static func runMigrations(db: Connection) throws {
