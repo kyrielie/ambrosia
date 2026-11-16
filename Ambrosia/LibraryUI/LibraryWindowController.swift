@@ -104,6 +104,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         applyLibraryAppearance()
         startObservingAppearance()
         startObservingCounts()
+        startObservingFTSAvailability()
     }
 
     @available(*, unavailable)
@@ -143,17 +144,61 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         toolbar.autosavesConfiguration  = true
         toolbar.displayMode = .iconOnly
         window.toolbar = toolbar
+        updateFTSSearchToolbarItemVisibility()
         installWindowMoveResizeObservers(for: window)
         scheduleSearchTextObservation()
     }
 
     // MARK: - NSToolbarDelegate
 
+    private var shouldShowFTSToolbarItem: Bool {
+        ReaderPreferences.shared.enableFullTextSearch && (session?.hasFulltextIndex ?? false)
+    }
+
+    private func startObservingFTSAvailability() {
+        withObservationTracking {
+            _ = ReaderPreferences.shared.enableFullTextSearch
+            _ = session?.activePath
+            _ = session?.hasFulltextIndex
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.updateFTSSearchToolbarItemVisibility()
+                self?.startObservingFTSAvailability()
+            }
+        }
+    }
+
+    func updateFTSSearchToolbarItemVisibility() {
+        guard let toolbar = window?.toolbar else { return }
+        let shouldShow = shouldShowFTSToolbarItem
+        let isCurrentlyPresent = toolbar.items.contains { $0.itemIdentifier == .libraryFTSSearch }
+
+        if shouldShow && !isCurrentlyPresent {
+            if let searchIndex = toolbar.items.firstIndex(where: { $0.itemIdentifier == .librarySearch }) {
+                toolbar.insertItem(withItemIdentifier: .libraryFTSSearch, at: searchIndex + 1)
+            } else if let filterIndex = toolbar.items.firstIndex(where: { $0.itemIdentifier == .libraryFilter }) {
+                toolbar.insertItem(withItemIdentifier: .libraryFTSSearch, at: filterIndex)
+            } else {
+                toolbar.insertItem(withItemIdentifier: .libraryFTSSearch, at: toolbar.items.count)
+            }
+        } else if !shouldShow && isCurrentlyPresent {
+            if let index = toolbar.items.firstIndex(where: { $0.itemIdentifier == .libraryFTSSearch }) {
+                toolbar.removeItem(at: index)
+            }
+        }
+    }
+
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.librarySidebarToggle, .libraryTitle, .librarySearch, .libraryFTSSearch, .libraryFilter, .librarySort,
-         .flexibleSpace,
-         .libraryCollections, .libraryReadingGoal, .libraryExport, .libraryViewMode
-        ]
+        var items: [NSToolbarItem.Identifier] = [.librarySidebarToggle, .libraryTitle, .librarySearch]
+        if shouldShowFTSToolbarItem {
+            items.append(.libraryFTSSearch)
+        }
+        items.append(contentsOf: [
+            .libraryFilter, .librarySort,
+            .flexibleSpace,
+            .libraryCollections, .libraryReadingGoal, .libraryExport, .libraryViewMode
+        ])
+        return items
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -170,10 +215,10 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
         case .librarySearch:
             let item = NSSearchToolbarItem(itemIdentifier: identifier)
-            item.toolTip = "Search titles — or type fulltext: for body search, or tag:, author:, series:, title:, status: to add a filter"
-            item.resignsFirstResponderWithCancel = true
+            item.toolTip = "Search library (see Preferences ▸ Documentation for syntax)"
+            item.resignsFirstResponderWithCancel = false
             item.searchField.delegate = self
-            item.searchField.placeholderString = "Search titles, or fulltext: / tag: / author: / series: / status:"
+            item.searchField.placeholderString = "Search"
             // Action fires on every keypress — we debounce manually in the delegate
             item.searchField.target = self
             item.searchField.action = #selector(searchFieldChanged(_:))
@@ -288,6 +333,12 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         errorLogItem.target = self
         menu.addItem(errorLogItem)
 
+        menu.addItem(NSMenuItem.separator())
+
+        let duplicateItem = NSMenuItem(title: "Manage Duplicate Works…", action: #selector(showDuplicateManager), keyEquivalent: "")
+        duplicateItem.target = self
+        menu.addItem(duplicateItem)
+
         return menu
     }
 
@@ -336,12 +387,20 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         let current = toolbarState?.sortField
         let isRandom = current == .random
         let hasKudos = AppDelegate.shared?.session.hasKudosData ?? false
+        let hasSearch = !(searchToolbarItem?.searchField.stringValue.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
+            || !(toolbarState?.searchText.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
+            || (toolbarState?.hasActiveFilter ?? false)
+
         for item in menu.items {
             if let field = item.representedObject as? SortField {
                 item.state = (field == current) ? .on : .off
                 if field == .kudos {
                     item.isEnabled = hasKudos
                     item.toolTip = hasKudos ? nil : "No kudos data available for this library"
+                } else if field == .relevance {
+                    item.isHidden = !hasSearch
+                    item.isEnabled = hasSearch
+                    item.toolTip = hasSearch ? "Sort by relevance to current search" : nil
                 }
             }
         }
@@ -351,9 +410,21 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         }
     }
 
+    // MARK: - NSToolbarItemValidation
+
+    func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
+        if item.itemIdentifier == .libraryFTSSearch {
+            return shouldShowFTSToolbarItem
+        }
+        return true
+    }
+
     // MARK: - NSMenuItemValidation
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(openFTSSearch) {
+            return shouldShowFTSToolbarItem
+        }
         if menuItem.action == #selector(reshuffleSort) {
             return toolbarState?.sortField == .random
         }
@@ -521,6 +592,9 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         // Update searchText immediately for display, but page load is debounced
         // inside BookGridItem / EmailLibraryViewController (0.4 s).
         toolbarState?.searchText = text
+        if text.trimmingCharacters(in: .whitespaces).isEmpty && !(toolbarState?.hasActiveFilter ?? false) {
+            toolbarState?.clearRelevanceSortIfNeeded()
+        }
 
         if text.isEmpty {
             closeSuggestionPanel()
@@ -546,6 +620,9 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     }
 
     func searchFieldDidEndSearching(_ sender: NSSearchField) {
+        if sender.stringValue.trimmingCharacters(in: .whitespaces).isEmpty && !(toolbarState?.hasActiveFilter ?? false) {
+            toolbarState?.clearRelevanceSortIfNeeded()
+        }
         // Delay so a panel row click fires before we close.
         // mouseUp on the NSPanel row arrives ~50 ms after endSearching.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
@@ -586,6 +663,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
                         self.commitFilterRule(rule)
                     }
                 }
+                self.searchToolbarItem?.searchField.window?.makeFirstResponder(nil)
                 self.closeSuggestionPanel()
             }
             return
@@ -610,6 +688,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
                     self.clearSearchField()
                     self.commitFilterRule(rule)
                 }
+                self.searchToolbarItem?.searchField.window?.makeFirstResponder(nil)
                 self.closeSuggestionPanel()
             }
             return
@@ -625,14 +704,26 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             toolbarState?.suppressNextSearchTextReload()
             clearSearchField()
             commitFilterRule(rule)
+        } else {
+            // Plain text, semantic, or fulltext: commit immediately to toolbarState
+            toolbarState?.searchText = text
         }
-        // Plain text and fulltext: stay in the field for the debounced list reload.
 
         closeSuggestionPanel()
+        field.window?.makeFirstResponder(nil)
     }
 
     /// Commits a suggestion row tap: always produces a filter rule and clears the field.
     private func commitSuggestion(_ suggestion: SearchSuggestion) {
+        if suggestion.kind == .semantic {
+            let semanticQuery = "semantic:\(suggestion.value)"
+            searchToolbarItem?.searchField.stringValue = semanticQuery
+            toolbarState?.searchText = semanticQuery
+            searchToolbarItem?.searchField.window?.makeFirstResponder(nil)
+            closeSuggestionPanel()
+            return
+        }
+
         let metaDB = AppDelegate.shared?.session.metaDB
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -646,6 +737,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             self.toolbarState?.suppressNextSearchTextReload()
             self.clearSearchField()
             self.commitFilterRule(rule)
+            self.searchToolbarItem?.searchField.window?.makeFirstResponder(nil)
             self.closeSuggestionPanel()
         }
     }
@@ -665,8 +757,15 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private func refreshSuggestions(for text: String) {
         guard let library = session?.library else { closeSuggestionPanel(); return }
         let hasTrailingPrefixWarning = SearchQueryParser.parse(text).hasTrailingPrefixWarning
+        let hasFulltext = shouldShowFTSToolbarItem
+        let hasSemantic = session?.semanticEngine != nil && ReaderPreferences.shared.enableSemanticSearch
         Task { [weak self] in
-            let sections = await computeSectionedSuggestions(for: text, library: library)
+            let sections = await computeSectionedSuggestions(
+                for: text,
+                library: library,
+                hasFulltext: hasFulltext,
+                hasSemantic: hasSemantic
+            )
             await MainActor.run {
                 guard let self else { return }
                 if sections.allSatisfy({ $0.suggestions.isEmpty }) && !hasTrailingPrefixWarning {
@@ -1136,6 +1235,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     @objc func triggerCSVExport() { toolbarState?.triggerExport      = true }
     @objc func triggerEPUBExport() { toolbarState?.triggerEPUBExport  = true }
     @objc func triggerAnnotationExport() { toolbarState?.triggerAnnotationExport = true }
+    @objc func showDuplicateManager() { toolbarState?.showDuplicateManager = true }
     @objc func showRSSPanel() {
         guard let session else { return }
 

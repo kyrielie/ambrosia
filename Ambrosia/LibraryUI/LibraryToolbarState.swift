@@ -16,8 +16,29 @@ final class LibraryToolbarState {
 
     // MARK: - Toolbar-driven fields
 
-    var searchText: String          = ""
-    var sortField: SortField       = .title { didSet { lastViewDidChange() } }
+    var searchText: String          = "" {
+        didSet {
+            let trimmed = searchText.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                if !hasActiveFilter {
+                    clearRelevanceSortIfNeeded()
+                }
+            } else if ReaderPreferences.shared.defaultSearchSortToRelevance {
+                applyRelevanceSort()
+            }
+        }
+    }
+    var previousSortFieldBeforeRelevance: SortField = .title
+    var previousAscendingBeforeRelevance: Bool      = true
+    var sortField: SortField       = .title {
+        didSet {
+            if oldValue != .relevance {
+                previousSortFieldBeforeRelevance = oldValue
+                previousAscendingBeforeRelevance = ascending
+            }
+            lastViewDidChange()
+        }
+    }
     var ascending: Bool            = true { didSet { lastViewDidChange() } }
     var viewMode: LibraryViewMode = .list {
         didSet {
@@ -34,6 +55,7 @@ final class LibraryToolbarState {
     }
 
     var showFilterDrawer: Bool = false
+    var showDuplicateManager: Bool = false
     var showCollections: Bool = false
     var showReadingGoal: Bool = false
     var showErrorLog: Bool = false
@@ -50,11 +72,36 @@ final class LibraryToolbarState {
     // MARK: - Filter state
 
     var filterExpression: FilterExpression = FilterExpression() { didSet { lastViewDidChange() } }
-    var activeFilterResult: FilterResult?
+    var activeFilterResult: FilterResult? {
+        didSet {
+            if !hasActiveFilter && searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                clearRelevanceSortIfNeeded()
+            }
+        }
+    }
     var pendingFullTextSearch: PendingFullTextSearch?
     var isApplyingLibraryFilter: Bool = false
     var libraryFilterApplicationToken: UUID?
     private var shouldSuppressNextSearchTextReload = false
+
+    /// Switches sort order to relevance descending (highest score first),
+    /// capturing the previous sort field and direction for restoration.
+    func applyRelevanceSort() {
+        if sortField != .relevance {
+            previousSortFieldBeforeRelevance = sortField
+            previousAscendingBeforeRelevance = ascending
+            sortField = .relevance
+            ascending = false
+        }
+    }
+
+    /// Restores the previous non-relevance sort field if currently sorting by relevance.
+    func clearRelevanceSortIfNeeded() {
+        if sortField == .relevance {
+            sortField = previousSortFieldBeforeRelevance
+            ascending = previousAscendingBeforeRelevance
+        }
+    }
 
     // MARK: - Search → filter commit
     //

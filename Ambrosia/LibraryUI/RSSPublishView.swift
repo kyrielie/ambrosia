@@ -48,6 +48,7 @@ struct RSSPublishWarningView: View {
         }
         .padding(20)
         .frame(width: 420)
+        .preventInitialButtonFocus()
     }
 }
 
@@ -231,11 +232,11 @@ struct ManageFeedsView: View {
                 OPMLShareAnchorButton(title: "Share OPML…", action: onExportOPML)
                 Spacer()
                 Button("Done", action: onDone)
-                    .keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
         .frame(width: 460)
+        .preventInitialButtonFocus()
     }
 }
 

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct SeriesListRow: View, Equatable {
     let series: SeriesGroup
@@ -105,6 +106,13 @@ struct SeriesListRow: View, Equatable {
             Button("Add to Collection…") { showCollectionPicker = true }
             if let activeCollectionID {
                 Button("Remove from Collection") { onRemoveFromCollection(activeCollectionID) }
+            }
+            Divider()
+            Button("Export Missing Works Manifest…") {
+                exportSeriesManifest()
+            }
+            Button("Export Series as Omnibus EPUB 3…") {
+                exportSeriesOmnibus()
             }
         }
         .popover(isPresented: $showCollectionPicker, arrowEdge: .trailing) {
@@ -212,6 +220,71 @@ struct SeriesListRow: View, Equatable {
         .padding(14)
         .frame(width: 340)
         .frame(maxHeight: 460)
+    }
+
+    private func exportSeriesManifest() {
+        let report = SeriesGapAnalyzer.analyze(series: series)
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.plainText, .html]
+        let invalid = CharacterSet(charactersIn: "\\/:*?\"<>|")
+        let safeName = series.seriesName.components(separatedBy: invalid).joined(separator: "_")
+        panel.nameFieldStringValue = "\(safeName)_manifest.txt"
+        panel.message = "Choose a location to save the missing works download manifest."
+        panel.prompt = "Export"
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            let content: String
+            if url.pathExtension.lowercased() == "html" {
+                content = SeriesGapManifestBuilder.generateHTMLManifest(report: report)
+            } else {
+                content = SeriesGapManifestBuilder.generateTextManifest(report: report)
+            }
+            try? content.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private func exportSeriesOmnibus() {
+        guard let session = AppDelegate.shared?.session,
+              let libraryRoot = session.activeURL else { return }
+
+        let panel = NSSavePanel()
+        if let epubType = UTType(filenameExtension: "epub") {
+            panel.allowedContentTypes = [epubType]
+        }
+        let invalid = CharacterSet(charactersIn: "\\/:*?\"<>|")
+        let safeName = series.seriesName.components(separatedBy: invalid).joined(separator: "_")
+        panel.nameFieldStringValue = "\(safeName) (Omnibus).epub"
+        panel.message = "Choose a destination for the EPUB 3 Series Omnibus."
+        panel.prompt = "Export Omnibus"
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task {
+                var metaByID: [Int: AO3MetadataRecord] = [:]
+                if let metaDB = session.metaDB {
+                    metaByID = (try? await metaDB.ao3Metadata(for: series.works.map(\.id))) ?? [:]
+                }
+                do {
+                    try AO3OmnibusBuilder.buildOmnibus(
+                        series: series,
+                        libraryRoot: libraryRoot,
+                        metadataByID: metaByID,
+                        incompletePolicy: .includeWithPlaceholders,
+                        unfinishedPolicy: .tagAsWIP,
+                        destinationEPUB: url
+                    )
+                } catch {
+                    await MainActor.run {
+                        let alert = NSAlert()
+                        alert.messageText = "Omnibus Export Failed"
+                        alert.informativeText = error.localizedDescription
+                        alert.alertStyle = .warning
+                        alert.runModal()
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -19,6 +19,34 @@ struct CalibreBook: Identifiable, Hashable {
     var tags: [String] = []
     var comment: String?        // HTML, stripped for display by HTMLStripper
 
+    init(
+        id: Int,
+        title: String,
+        series: String? = nil,
+        seriesIndex: Double? = nil,
+        wordCount: Int? = nil,
+        kudos: Int? = nil,
+        publishedDate: Date? = nil,
+        publisher: String? = nil,
+        relativePath: String,
+        authors: [String] = [],
+        tags: [String] = [],
+        comment: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.series = series
+        self.seriesIndex = seriesIndex
+        self.wordCount = wordCount
+        self.kudos = kudos
+        self.publishedDate = publishedDate
+        self.publisher = publisher
+        self.relativePath = relativePath
+        self.authors = authors
+        self.tags = tags
+        self.comment = comment
+    }
+
     // MARK: - Display accessors
 
     var displayTitle: String {

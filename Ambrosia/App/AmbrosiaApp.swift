@@ -51,6 +51,7 @@ struct AmbrosiaApp: App {
                     FTSSearchResultsWindowController.show()
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
+                .disabled(!(AppDelegate.shared?.session.hasFulltextIndex == true && ReaderPreferences.shared.enableFullTextSearch))
 
                 Menu("Find") {
                     Button("Find…") {
@@ -70,6 +71,7 @@ struct AmbrosiaApp: App {
                         FTSSearchResultsWindowController.show()
                     }
                     .keyboardShortcut("f", modifiers: [.command, .shift])
+                    .disabled(!(AppDelegate.shared?.session.hasFulltextIndex == true && ReaderPreferences.shared.enableFullTextSearch))
 
                     Button("Find Next") {
                         NSApp.sendAction(#selector(ReaderViewController.findNextAction(_:)),
@@ -119,6 +121,11 @@ struct AmbrosiaApp: App {
                     AppDelegate.shared?.revealCurrentOrLibraryInFinder()
                 }
                 .keyboardShortcut("r", modifiers: [.command, .option])
+
+                Button("Manage Duplicate AO3 Works…") {
+                    AppDelegate.shared?.libraryWindowController?.toolbarStateForCommands?.showDuplicateManager = true
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
 
                 Divider()
 

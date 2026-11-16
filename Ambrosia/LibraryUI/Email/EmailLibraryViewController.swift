@@ -274,6 +274,7 @@ final class EmailLibraryViewController: NSViewController {
         sidebar.items = displayController.items
         sidebar.bookStates = displayController.bookStates
         sidebar.ao3Metadata = displayController.ao3Metadata
+        sidebar.searchMatchBadges = displayController.searchMatchBadges
         sidebar.likedIDs = session.cachedLikedIDs
         sidebar.readLaterIDs = session.cachedReadLaterIDs
         sidebar.collectionMembership = session.collectionMembershipByName
@@ -875,7 +876,8 @@ struct FilterSheetCarrier: View {
                             libraryRoot: libraryRoot,
                             ao3Map: ao3Map,
                             groupBySeries: toolbarState.groupBySeries,
-                            seriesEntries: seriesEntriesByBook
+                            seriesEntries: seriesEntriesByBook,
+                            modernizeEPUB3: ReaderPreferences.shared.enableAdvancedEPUBExport
                         )
                     }
                     toolbarState.triggerEPUBExport = false

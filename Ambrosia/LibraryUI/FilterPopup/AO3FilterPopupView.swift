@@ -58,7 +58,6 @@ struct AO3FilterPopupView: View {
                 // Submit + sort, in that order, matching AO3's own <dl> order.
                 HStack {
                     Button("Sort and Filter") { apply() }
-                        .keyboardShortcut(.defaultAction)
                     Button("Reset") { resetSelections() }
                     Spacer()
                 }
@@ -119,6 +118,7 @@ struct AO3FilterPopupView: View {
         .task(id: toolbarState.searchText) { refreshFacets() }
         .task(id: facetController.baseIDs) { refreshFacets() }
         .frame(minWidth: 360, minHeight: 400)
+        .preventInitialButtonFocus()
     }
 
     private func resetSelections() {

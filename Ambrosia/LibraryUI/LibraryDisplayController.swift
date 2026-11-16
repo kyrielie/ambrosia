@@ -74,6 +74,9 @@ final class LibraryDisplayController {
     private var cancellables: Set<AnyCancellable> = []
     private let debouncer = DebounceTimer(delay: 0.4)
 
+    // MARK: - Search Match Badges
+    public private(set) var searchMatchBadges: [Int: SearchMatchBadge] = [:]
+
     // MARK: - Cached Query Expansions & Observation Baselines
 
     private(set) var resolvedTagExpansions: [String: [String]] = [:]
@@ -762,7 +765,28 @@ final class LibraryDisplayController {
         var loadedPageBooks: [CalibreBook] = []
         var pageHasMore = false
 
-        if toolbarState.sortField == .random {
+        if toolbarState.sortField == .relevance {
+            if rawQuery.isEmpty && toolbarState.activeFilterResult == nil {
+                toolbarState.clearRelevanceSortIfNeeded()
+            }
+            let rankedIDs = await resolveRelevanceRankedIDs(query: query)
+            let (page, hasMore) = await library.relevanceSortedPage(
+                offset: offsetState.currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
+                CalibreLibrary.PageQuery(
+                    query: query,
+                    filter: toolbarState.activeFilterResult?.isSQLBacked == true ? toolbarState.filterExpression : nil,
+                    restrictIDs: resolveRestrictIDs(query: query),
+                    visibility: currentVisibilityPolicy,
+                    filterTagExpansions: cachedFilterTagExpansions,
+                    visibilityVersion: session.membershipVersion,
+                    metaDB: session.metaDB,
+                    rankedIDs: rankedIDs
+                )
+            )
+            loadedPageBooks = page
+            pageHasMore = hasMore
+            triggerDeferredSQLCountIfNeeded(query: query)
+        } else if toolbarState.sortField == .random {
             let (page, hasMore) = await library.randomSortedPage(
                 offset: offsetState.currentPage * pageSize, limit: pageSize,
                 CalibreLibrary.PageQuery(
@@ -873,6 +897,7 @@ final class LibraryDisplayController {
         didFinishFirstLoad = true
 
         rebuildItems()
+        assignPrecisionBadgesForLoadedBooks(query: query, books: loadedPageBooks)
         loadAO3MetadataForCurrentPage()
         loadBookStatesForCurrentPage()
         scheduleGroupAwareCountIfNeeded()
@@ -1180,6 +1205,131 @@ final class LibraryDisplayController {
             scheduleLoadPage()
         }
         return true
+    }
+
+    private func resolveRelevanceRankedIDs(query: SearchQuery) async -> [Int]? {
+        guard let library = session.library else { return nil }
+
+        var semanticHits: [(id: Int, score: Double)] = []
+        if let phrase = query.semanticPhrase, !phrase.isEmpty {
+            semanticHits = await session.semanticSearch(query: phrase)
+        } else if !query.plainTerms.isEmpty && ReaderPreferences.shared.enableSemanticSearch {
+            let joined = query.plainTerms.joined(separator: " ")
+            semanticHits = await session.semanticSearch(query: joined)
+        }
+
+        let ftsIDs = query.ftsMatchedIDs ?? []
+
+        if !ftsIDs.isEmpty && !semanticHits.isEmpty {
+            let fused = HybridSearchCoordinator.fuse(lexicalIDs: ftsIDs, semanticHits: semanticHits)
+            updateSearchMatchBadges(query: query, fused: fused, semanticHits: semanticHits, ftsIDs: Set(ftsIDs))
+            return fused.map(\.bookID)
+        } else if !semanticHits.isEmpty {
+            if !query.plainTerms.isEmpty {
+                let lexicalIDs = await library.fetchAllMatchingIDs(
+                    query: query,
+                    filter: toolbarState.activeFilterResult?.isSQLBacked == true ? toolbarState.filterExpression : nil,
+                    restrictIDs: resolveRestrictIDs(query: query),
+                    filterTagExpansions: cachedFilterTagExpansions
+                )
+                if !lexicalIDs.isEmpty {
+                    let fused = HybridSearchCoordinator.fuse(lexicalIDs: lexicalIDs, semanticHits: semanticHits)
+                    updateSearchMatchBadges(query: query, fused: fused, semanticHits: semanticHits, ftsIDs: [])
+                    return fused.map(\.bookID)
+                }
+            }
+            updateSearchMatchBadges(query: query, fused: nil, semanticHits: semanticHits, ftsIDs: [])
+            return semanticHits.map(\.id)
+        } else if !ftsIDs.isEmpty {
+            updateSearchMatchBadges(query: query, fused: nil, semanticHits: [], ftsIDs: Set(ftsIDs))
+            return ftsIDs
+        }
+
+        updateSearchMatchBadges(query: query, fused: nil, semanticHits: [], ftsIDs: [])
+        return nil
+    }
+
+    private func updateSearchMatchBadges(
+        query: SearchQuery,
+        fused: [HybridSearchResult]? = nil,
+        semanticHits: [(id: Int, score: Double)]? = nil,
+        ftsIDs: Set<Int> = []
+    ) {
+        var badges: [Int: SearchMatchBadge] = [:]
+
+        if let fused {
+            for result in fused {
+                let semScore = result.semanticScore.map { Int(round($0 * 100)) }
+                if let sem = semScore {
+                    if result.lexicalRank != nil && result.semanticRank != nil {
+                        badges[result.bookID] = .hybrid(semanticPercent: sem)
+                    } else if result.semanticRank != nil {
+                        badges[result.bookID] = .semantic(percent: sem)
+                    }
+                } else if result.lexicalRank != nil && ftsIDs.contains(result.bookID) {
+                    badges[result.bookID] = .bodyText()
+                }
+            }
+        } else if let semanticHits, !semanticHits.isEmpty {
+            for hit in semanticHits {
+                let percent = Int(round(hit.score * 100))
+                badges[hit.id] = .semantic(percent: percent)
+            }
+        }
+
+        for id in ftsIDs where badges[id] == nil {
+            badges[id] = .bodyText()
+        }
+
+        self.searchMatchBadges = badges
+    }
+
+    private func assignPrecisionBadgesForLoadedBooks(query: SearchQuery, books: [CalibreBook]) {
+        guard !query.isEmpty else {
+            if toolbarState.searchText.isEmpty && toolbarState.activeFilterResult == nil {
+                searchMatchBadges.removeAll()
+            }
+            return
+        }
+
+        let exactTags = query.tagTerms.map(SearchTerm.parse).filter { $0.mode == .exact }.map(\.value)
+        let exactTitles = query.titleTerms.map(SearchTerm.parse).filter { $0.mode == .exact }.map(\.value)
+        let exactAuthors = query.authorTerms.map(SearchTerm.parse).filter { $0.mode == .exact }.map(\.value)
+        let exactSeries = query.seriesTerms.map(SearchTerm.parse).filter { $0.mode == .exact }.map(\.value)
+
+        guard !exactTags.isEmpty || !exactTitles.isEmpty || !exactAuthors.isEmpty || !exactSeries.isEmpty else {
+            return
+        }
+
+        for book in books {
+            if case .hybrid = searchMatchBadges[book.id] {
+                continue
+            }
+
+            if let matchedTag = exactTags.first(where: { tag in
+                book.tags.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame })
+            }) {
+                searchMatchBadges[book.id] = .exactTag(matchedTag)
+                continue
+            }
+
+            if exactTitles.contains(where: { $0.caseInsensitiveCompare(book.title) == .orderedSame }) {
+                searchMatchBadges[book.id] = .exactTitle
+                continue
+            }
+
+            if exactAuthors.contains(where: { author in
+                book.authors.contains(where: { $0.caseInsensitiveCompare(author) == .orderedSame })
+            }) {
+                searchMatchBadges[book.id] = .exactAuthor
+                continue
+            }
+
+            if let series = book.series, exactSeries.contains(where: { $0.caseInsensitiveCompare(series) == .orderedSame }) {
+                searchMatchBadges[book.id] = .exactSeries
+                continue
+            }
+        }
     }
 
     private func commitSearchActivityLogEntry(resultCount: Int) {

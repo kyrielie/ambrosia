@@ -41,6 +41,9 @@ final class LibrarySession {
     /// Optional full-text-search connection. Nil if full-text-search.db doesn't exist.
     private(set) var ftsLibrary: CalibreFTSLibrary?
 
+    /// On-device semantic search engine using Apple NaturalLanguage embeddings and SIMD.
+    private(set) var semanticEngine: SemanticSearchEngine?
+
     /// Per-library app-owned SQLite database for collections and annotations.
     private(set) var metaDB: AmbrosiaMetaDB?
 
@@ -247,6 +250,7 @@ final class LibrarySession {
     /// Test seam: when set, replaces `ftsLibrary` as the full-text backend.
     var fulltextSearcherOverride: (any FulltextSearching)?
     private var fulltextSearcher: (any FulltextSearching)? { fulltextSearcherOverride ?? ftsLibrary }
+    var hasFulltextIndex: Bool { fulltextSearcher != nil }
 
     // §7: True LRU cache for FilterResult (limit 8).
     var filterResultCache = LRUCache<FilterResultCacheKey, FilterResult>(limit: 8)
@@ -394,6 +398,11 @@ final class LibrarySession {
             activePath = url.path
             totalCount = await newLibrary.bookCount()
             ftsLibrary = CalibreFTSLibrary(libraryURL: url)
+            let newSemanticEngine = SemanticSearchEngine(storageURL: url)
+            semanticEngine = newSemanticEngine
+            Task {
+                _ = await newSemanticEngine.load(from: url)
+            }
             resolvedFulltextCache.removeAll()
             resolvedFulltextCacheOrder.removeAll()           // §7
             fulltextIndexStamp = nil
@@ -542,6 +551,7 @@ final class LibrarySession {
         missingLibraryName = nil
         library    = nil
         ftsLibrary = nil
+        semanticEngine = nil
         metaDB = nil
         collectionStore = nil
         totalCount = 0
@@ -626,6 +636,12 @@ final class LibrarySession {
         guard let query = FTSQuery.make(phrase) else { return [] }
         if let hit = resolvedFulltextCache[query.cacheKey] { return hit }
         if failedFulltextKeys[query.cacheKey] != nil { return [] }
+        guard ReaderPreferences.shared.enableFullTextSearch else {
+            let disabledMessage = "Full-text search is disabled in Preferences."
+            failedFulltextKeys[query.cacheKey] = disabledMessage
+            lastFulltextError = disabledMessage
+            return []
+        }
         guard let fts = fulltextSearcher else {
             #if DEBUG
             print("[LibrarySession] fulltext search unavailable for phrase=\"\(query.normalized)\"")
@@ -682,6 +698,12 @@ final class LibrarySession {
             plainTerms: [],
             ftsMatchedIDs: ids
         )
+    }
+
+    /// Searches the local semantic index for works matching the given natural language query.
+    func semanticSearch(query: String, minSimilarity: Double = 0.2, topK: Int = 100) async -> [(id: Int, score: Double)] {
+        guard ReaderPreferences.shared.enableSemanticSearch, let semanticEngine else { return [] }
+        return await semanticEngine.search(query: query, minSimilarity: minSimilarity, topK: topK)
     }
 
     private func rememberResolvedFulltext(ids: [Int], key: String) {

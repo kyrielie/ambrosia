@@ -82,6 +82,8 @@ actor AmbrosiaMetaDB {
         self.readDB = try Connection(writePath, readonly: true)
         db.busyTimeout = 5.0
         readDB.busyTimeout = 5.0
+        SQLiteRegexRegistration.register(on: db)
+        SQLiteRegexRegistration.register(on: readDB)
         // WAL mode: readers never block writers and writers never block readers.
         // Must be set on the write connection before migrations run.
         try db.execute("PRAGMA journal_mode = WAL")
@@ -1505,6 +1507,13 @@ actor AmbrosiaMetaDB {
         case .startsWith:
             matcher = "LOWER(name) LIKE ?"
             arg = "\(value.lowercased())%"
+        case .matchesWord:
+            let escaped = NSRegularExpression.escapedPattern(for: value)
+            matcher = "name REGEXP ?"
+            arg = "(?i)\\b\(escaped)\\b"
+        case .matchesRegex:
+            matcher = "name REGEXP ?"
+            arg = value
         case .ratingAtMost, .ratingAtLeast:
             // Not offered for authorName (see FilterRule.availableOperators); no valid SQL shape.
             return []
@@ -1580,6 +1589,13 @@ actor AmbrosiaMetaDB {
             args = terms.map { "\($0)%" as Binding? }
         case .equals, .notEquals:
             matcher = terms.map { _ in "tag_name = ?" }.joined(separator: " OR ")
+            args = terms.map { $0 as Binding? }
+        case .matchesWord:
+            let escaped = terms.map { NSRegularExpression.escapedPattern(for: $0) }
+            matcher = escaped.map { _ in "tag_name REGEXP ?" }.joined(separator: " OR ")
+            args = escaped.map { "(?i)\\b\($0)\\b" as Binding? }
+        case .matchesRegex:
+            matcher = terms.map { _ in "tag_name REGEXP ?" }.joined(separator: " OR ")
             args = terms.map { $0 as Binding? }
         case .ratingAtMost, .ratingAtLeast:
             fatalError("handled above")
@@ -2981,6 +2997,102 @@ actor AmbrosiaMetaDB {
         """
         try db.run(stmt, calibreID)
         bookStateCache.removeValue(forKey: calibreID)
+    }
+
+    // MARK: - Duplicate Book State Migration
+
+    /// Transfers all user data (reading progress, reading sessions, highlights,
+    /// point annotations, and manual collection memberships) from a superseded
+    /// duplicate work to the canonical winner.
+    public func transferBookState(fromLoserID loserID: Int, toWinnerID winnerID: Int) throws {
+        guard loserID != winnerID else { return }
+        try db.transaction {
+            let loserState = self.fetchBookState(for: loserID)
+            let winnerState = self.fetchBookState(for: winnerID)
+
+            if let loserState {
+                let combinedReadingTime = loserState.totalReadingTimeSeconds + (winnerState?.totalReadingTimeSeconds ?? 0)
+                let winnerPercent = winnerState?.totalReadPercent ?? 0.0
+                let loserPercent = loserState.totalReadPercent
+                let maxPercent = max(winnerPercent, loserPercent)
+
+                let preferredPosition: (spine: Int, char: Int, scroll: Double) = {
+                    if loserPercent > winnerPercent {
+                        return (loserState.lastSpineIndex, loserState.lastCharacterOffset, loserState.lastScrollOffset)
+                    } else if let winner = winnerState {
+                        return (winner.lastSpineIndex, winner.lastCharacterOffset, winner.lastScrollOffset)
+                    } else {
+                        return (loserState.lastSpineIndex, loserState.lastCharacterOffset, loserState.lastScrollOffset)
+                    }
+                }()
+
+                let latestOpenedDate = max(
+                    loserState.lastOpenedDate.timeIntervalSince1970,
+                    winnerState?.lastOpenedDate.timeIntervalSince1970 ?? 0
+                )
+                let eloScore = (winnerState != nil && (winnerState?.eloMatchCount ?? 0) > 0)
+                    ? (winnerState?.eloScore ?? 1000.0)
+                    : loserState.eloScore
+                let eloMatches = (winnerState != nil && (winnerState?.eloMatchCount ?? 0) > 0)
+                    ? (winnerState?.eloMatchCount ?? 0)
+                    : loserState.eloMatchCount
+
+                let upsertWinner = """
+                INSERT INTO book_state (
+                    calibre_id, last_spine_index, last_character_offset, last_scroll_offset,
+                    total_read_percent, last_opened_date, total_reading_time_seconds,
+                    elo_score, elo_match_count, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
+                ON CONFLICT(calibre_id) DO UPDATE SET
+                    last_spine_index = excluded.last_spine_index,
+                    last_character_offset = excluded.last_character_offset,
+                    last_scroll_offset = excluded.last_scroll_offset,
+                    total_read_percent = excluded.total_read_percent,
+                    last_opened_date = excluded.last_opened_date,
+                    total_reading_time_seconds = excluded.total_reading_time_seconds,
+                    elo_score = excluded.elo_score,
+                    elo_match_count = excluded.elo_match_count,
+                    updated_at = excluded.updated_at;
+                """
+                try db.run(
+                    upsertWinner,
+                    winnerID,
+                    preferredPosition.spine,
+                    preferredPosition.char,
+                    preferredPosition.scroll,
+                    maxPercent,
+                    latestOpenedDate,
+                    combinedReadingTime,
+                    eloScore,
+                    eloMatches
+                )
+            }
+
+            // Migrate annotations
+            try db.run("UPDATE annotations SET calibre_id = ? WHERE calibre_id = ?", winnerID, loserID)
+
+            // Migrate reading history
+            try db.run("UPDATE reading_history SET calibre_id = ? WHERE calibre_id = ?", winnerID, loserID)
+
+            // Migrate book opens
+            try db.run("UPDATE book_opens SET calibre_id = ? WHERE calibre_id = ?", winnerID, loserID)
+
+            // Migrate manual collection memberships without duplicating
+            let copyMemberships = """
+            INSERT OR IGNORE INTO collection_members (collection_id, calibre_id, added_at)
+            SELECT collection_id, ?, added_at
+            FROM collection_members
+            WHERE calibre_id = ?
+            """
+            try db.run(copyMemberships, winnerID, loserID)
+            try db.run("DELETE FROM collection_members WHERE calibre_id = ?", loserID)
+
+            // Remove loser from book_state
+            try db.run("DELETE FROM book_state WHERE calibre_id = ?", loserID)
+        }
+
+        bookStateCache.removeValue(forKey: loserID)
+        bookStateCache.removeValue(forKey: winnerID)
     }
 
     // MARK: - Reading Goals

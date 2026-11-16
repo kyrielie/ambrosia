@@ -14,6 +14,7 @@ struct BookListRow: View, Equatable {
     let onReadLaterToggle: () -> Void
     let hideFanworksTagPill: Bool
     let correctCalibreAmpEntities: Bool
+    let searchBadge: SearchMatchBadge?
     let onTagTap: (String, FilterField) -> Void
     let onAuthorTap: (String) -> Void
     let onOpen: () -> Void
@@ -50,6 +51,7 @@ struct BookListRow: View, Equatable {
             && lhs.isInReadLater                == rhs.isInReadLater
             && lhs.hideFanworksTagPill         == rhs.hideFanworksTagPill
             && lhs.correctCalibreAmpEntities   == rhs.correctCalibreAmpEntities
+            && lhs.searchBadge                 == rhs.searchBadge
             && lhs.bookState?.totalReadPercent == rhs.bookState?.totalReadPercent
             && lhs.activeCollectionID          == rhs.activeCollectionID
     }
@@ -62,6 +64,7 @@ struct BookListRow: View, Equatable {
          isLiked: Bool,
          hideFanworksTagPill: Bool,
          correctCalibreAmpEntities: Bool,
+         searchBadge: SearchMatchBadge? = nil,
          onTagTap: @escaping (String, FilterField) -> Void,
          onAuthorTap: @escaping (String) -> Void,
          onOpen: @escaping () -> Void,
@@ -85,6 +88,7 @@ struct BookListRow: View, Equatable {
         self.onReadLaterToggle = onReadLaterToggle
         self.hideFanworksTagPill = hideFanworksTagPill
         self.correctCalibreAmpEntities = correctCalibreAmpEntities
+        self.searchBadge = searchBadge
         self.onTagTap     = onTagTap
         self.onAuthorTap  = onAuthorTap
         self.onOpen = onOpen
@@ -158,8 +162,11 @@ struct BookListRow: View, Equatable {
     // MARK: - Row sections
 
     private var titleRow: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(book.displayTitle).font(.headline).lineLimit(1)
+            if let searchBadge {
+                searchBadgePill(searchBadge)
+            }
             if let series = book.displaySeries {
                 Text("·").foregroundStyle(.tertiary)
                 Text(series).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
@@ -193,6 +200,22 @@ struct BookListRow: View, Equatable {
             .buttonStyle(.borderless)
             .help(effectiveLiked ? "Unlike" : "Like")
         }
+    }
+
+    private func searchBadgePill(_ badge: SearchMatchBadge) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: badge.systemImage)
+                .font(.caption2)
+            Text(badge.label)
+                .font(.caption2.weight(.medium))
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(badge.tintColor.opacity(0.12))
+        )
+        .foregroundColor(badge.tintColor)
     }
 
     @ViewBuilder

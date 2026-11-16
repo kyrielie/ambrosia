@@ -7,19 +7,22 @@ public struct LibraryStorageBreakdown: Sendable, Equatable {
     public let calibreDBSizeBytes: Int64
     public let ftsDBSizeBytes: Int64
     public let ambrosiaMetaDBSizeBytes: Int64
+    public let semanticVectorsSizeBytes: Int64
     public let totalSizeBytes: Int64
 
     public init(
         epubsSizeBytes: Int64,
         calibreDBSizeBytes: Int64,
         ftsDBSizeBytes: Int64,
-        ambrosiaMetaDBSizeBytes: Int64
+        ambrosiaMetaDBSizeBytes: Int64,
+        semanticVectorsSizeBytes: Int64 = 0
     ) {
         self.epubsSizeBytes = epubsSizeBytes
         self.calibreDBSizeBytes = calibreDBSizeBytes
         self.ftsDBSizeBytes = ftsDBSizeBytes
         self.ambrosiaMetaDBSizeBytes = ambrosiaMetaDBSizeBytes
-        self.totalSizeBytes = epubsSizeBytes + calibreDBSizeBytes + ftsDBSizeBytes + ambrosiaMetaDBSizeBytes
+        self.semanticVectorsSizeBytes = semanticVectorsSizeBytes
+        self.totalSizeBytes = epubsSizeBytes + calibreDBSizeBytes + ftsDBSizeBytes + ambrosiaMetaDBSizeBytes + semanticVectorsSizeBytes
     }
 
     private static let byteFormatter: ByteCountFormatter = {
@@ -35,13 +38,15 @@ public struct LibraryStorageBreakdown: Sendable, Equatable {
     public var formattedCalibreDBSize: String { Self.byteFormatter.string(fromByteCount: calibreDBSizeBytes) }
     public var formattedFTSDBSize: String { Self.byteFormatter.string(fromByteCount: ftsDBSizeBytes) }
     public var formattedAmbrosiaMetaDBSize: String { Self.byteFormatter.string(fromByteCount: ambrosiaMetaDBSizeBytes) }
+    public var formattedSemanticVectorsSize: String { Self.byteFormatter.string(fromByteCount: semanticVectorsSizeBytes) }
 
     public static func combining(_ breakdowns: [LibraryStorageBreakdown]) -> LibraryStorageBreakdown {
         LibraryStorageBreakdown(
             epubsSizeBytes: breakdowns.reduce(0) { $0 + $1.epubsSizeBytes },
             calibreDBSizeBytes: breakdowns.reduce(0) { $0 + $1.calibreDBSizeBytes },
             ftsDBSizeBytes: breakdowns.reduce(0) { $0 + $1.ftsDBSizeBytes },
-            ambrosiaMetaDBSizeBytes: breakdowns.reduce(0) { $0 + $1.ambrosiaMetaDBSizeBytes }
+            ambrosiaMetaDBSizeBytes: breakdowns.reduce(0) { $0 + $1.ambrosiaMetaDBSizeBytes },
+            semanticVectorsSizeBytes: breakdowns.reduce(0) { $0 + $1.semanticVectorsSizeBytes }
         )
     }
 
@@ -76,17 +81,36 @@ public enum LibraryStorageCalculator {
             ambrosiaDBSize = calculateDatabaseSize(baseFileURL: metaURL)
         }
 
+        let semanticVectorsSize = calculateSemanticVectorsSize(libraryURL: libraryURL)
+
         return LibraryStorageBreakdown(
             epubsSizeBytes: epubsSize,
             calibreDBSizeBytes: calibreDBSize,
             ftsDBSizeBytes: ftsDBSize,
-            ambrosiaMetaDBSizeBytes: ambrosiaDBSize
+            ambrosiaMetaDBSizeBytes: ambrosiaDBSize,
+            semanticVectorsSizeBytes: semanticVectorsSize
         )
     }
 
     /// Convenience overload taking `for:`.
     public static func calculate(for libraryURL: URL) async -> LibraryStorageBreakdown {
         await calculate(libraryURL: libraryURL)
+    }
+
+    private static func calculateSemanticVectorsSize(libraryURL: URL) -> Int64 {
+        var total: Int64 = 0
+        let paths = [
+            libraryURL.appendingPathComponent("semantic_vectors.bin"),
+            libraryURL.appendingPathComponent("semantic_ids.json")
+        ]
+        let fm = FileManager.default
+        for url in paths {
+            if let attrs = try? fm.attributesOfItem(atPath: url.path),
+               let size = attrs[.size] as? Int64 {
+                total += size
+            }
+        }
+        return total
     }
 
     private static func calculateDatabaseSize(baseFileURL: URL) -> Int64 {

@@ -26,6 +26,12 @@ struct SearchQuery {
     let fulltextPhrase: String?
     let plainTerms: [String]
 
+    var scopedTagTerms: [SearchTerm] = []
+    var scopedAuthorTerms: [SearchTerm] = []
+    var scopedTitleTerms: [SearchTerm] = []
+    var scopedSeriesTerms: [SearchTerm] = []
+    var semanticPhrase: String?
+
     var excludedTagTerms: [String] = []
     var excludedAuthorTerms: [String] = []
     var excludedTitleTerms: [String] = []
@@ -55,6 +61,7 @@ struct SearchQuery {
             titleTerms.isEmpty && seriesTerms.isEmpty &&
             statusTerms.isEmpty &&
             (fulltextPhrase?.isEmpty ?? true) &&
+            (semanticPhrase?.isEmpty ?? true) &&
             plainTerms.isEmpty &&
             (ftsMatchedIDs?.isEmpty ?? true) &&
             excludedTagTerms.isEmpty && excludedAuthorTerms.isEmpty &&
@@ -74,38 +81,69 @@ struct SearchQuery {
     func asSingleFilterRule(resolvedTagTerm: String? = nil) -> FilterRule? {
         // Exactly one scoped term and no plain text
         if tagTerms.count == 1 && authorTerms.isEmpty && titleTerms.isEmpty
-            && seriesTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty {
-            let resolvedTag = resolvedTagTerm ?? tagTerms[0]
+            && seriesTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty && (semanticPhrase?.isEmpty ?? true) {
+            let term = scopedTagTerms.first ?? SearchTerm.parse(prefixValue: tagTerms[0])
+            let resolvedTag = resolvedTagTerm ?? term.value
             // AO3 rating/warning/category tags get their proper field and operator.
             // Rating tags default to .ratingAtMost — almost always the right intent.
             let kind = AO3TagKind.classify(resolvedTag)
             let field = kind.filterField
             let op: FilterOperator
-            switch kind {
-            case .rating: op = .ratingAtMost
-            default:      op = .equals
+            switch term.mode {
+            case .exact: op = .equals
+            case .regex: op = .matchesRegex
+            case .word:  op = .matchesWord
+            case .contains:
+                switch kind {
+                case .rating: op = .ratingAtMost
+                default:      op = .equals
+                }
             }
             return FilterRule(field: field, op: op, value: resolvedTag)
         }
         if authorTerms.count == 1 && tagTerms.isEmpty && titleTerms.isEmpty
-            && seriesTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty {
-            return FilterRule(field: .authorName, op: .equals, value: authorTerms[0])
+            && seriesTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty && (semanticPhrase?.isEmpty ?? true) {
+            let term = scopedAuthorTerms.first ?? SearchTerm.parse(prefixValue: authorTerms[0])
+            let op: FilterOperator
+            switch term.mode {
+            case .exact: op = .equals
+            case .regex: op = .matchesRegex
+            case .word:  op = .matchesWord
+            case .contains: op = .equals
+            }
+            return FilterRule(field: .authorName, op: op, value: term.value)
         }
         if titleTerms.count == 1 && tagTerms.isEmpty && authorTerms.isEmpty
-            && seriesTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty {
-            return FilterRule(field: .title, op: .contains, value: titleTerms[0])
+            && seriesTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty && (semanticPhrase?.isEmpty ?? true) {
+            let term = scopedTitleTerms.first ?? SearchTerm.parse(prefixValue: titleTerms[0])
+            let op: FilterOperator
+            switch term.mode {
+            case .exact: op = .equals
+            case .regex: op = .matchesRegex
+            case .word:  op = .matchesWord
+            case .contains: op = .contains
+            }
+            return FilterRule(field: .title, op: op, value: term.value)
         }
         if seriesTerms.count == 1 && tagTerms.isEmpty && authorTerms.isEmpty
-            && titleTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty {
-            return FilterRule(field: .series, op: .contains, value: seriesTerms[0])
+            && titleTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty && (semanticPhrase?.isEmpty ?? true) {
+            let term = scopedSeriesTerms.first ?? SearchTerm.parse(prefixValue: seriesTerms[0])
+            let op: FilterOperator
+            switch term.mode {
+            case .exact: op = .equals
+            case .regex: op = .matchesRegex
+            case .word:  op = .matchesWord
+            case .contains: op = .contains
+            }
+            return FilterRule(field: .series, op: op, value: term.value)
         }
         if statusTerms.count == 1 && tagTerms.isEmpty && authorTerms.isEmpty
-            && titleTerms.isEmpty && seriesTerms.isEmpty && plainTerms.isEmpty,
+            && titleTerms.isEmpty && seriesTerms.isEmpty && plainTerms.isEmpty && (semanticPhrase?.isEmpty ?? true),
            let status = AO3CompletionStatus(userValue: statusTerms[0]) {
             return FilterRule(field: .status, op: .equals, value: status.rawValue)
         }
         if let fulltextPhrase, !fulltextPhrase.isEmpty, tagTerms.isEmpty && authorTerms.isEmpty
-            && titleTerms.isEmpty && seriesTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty {
+            && titleTerms.isEmpty && seriesTerms.isEmpty && statusTerms.isEmpty && plainTerms.isEmpty && (semanticPhrase?.isEmpty ?? true) {
             return FilterRule(field: .fulltext, op: .contains, value: fulltextPhrase)
         }
         return nil
@@ -116,33 +154,64 @@ struct SearchQuery {
     func asFilterRules(canonicalTagResolver: ((String) async -> String)? = nil) async -> [FilterRule] {
         var rules: [FilterRule] = []
 
-        for tag in tagTerms {
+        for (index, tag) in tagTerms.enumerated() {
             let resolved: String
             if let resolver = canonicalTagResolver {
                 resolved = await resolver(tag)
             } else {
                 resolved = tag
             }
+            let term = scopedTagTerms.indices.contains(index) ? scopedTagTerms[index] : SearchTerm.parse(prefixValue: tag)
             let kind = AO3TagKind.classify(resolved)
             let field = kind.filterField
             let op: FilterOperator
-            switch kind {
-            case .rating: op = .ratingAtMost
-            default:      op = .equals
+            switch term.mode {
+            case .exact: op = .equals
+            case .regex: op = .matchesRegex
+            case .word:  op = .matchesWord
+            case .contains:
+                switch kind {
+                case .rating: op = .ratingAtMost
+                default:      op = .equals
+                }
             }
             rules.append(FilterRule(field: field, op: op, value: resolved))
         }
 
-        for author in authorTerms {
-            rules.append(FilterRule(field: .authorName, op: .equals, value: author))
+        for (index, author) in authorTerms.enumerated() {
+            let term = scopedAuthorTerms.indices.contains(index) ? scopedAuthorTerms[index] : SearchTerm.parse(prefixValue: author)
+            let op: FilterOperator
+            switch term.mode {
+            case .exact: op = .equals
+            case .regex: op = .matchesRegex
+            case .word:  op = .matchesWord
+            case .contains: op = .equals
+            }
+            rules.append(FilterRule(field: .authorName, op: op, value: term.value))
         }
 
-        for title in titleTerms {
-            rules.append(FilterRule(field: .title, op: .contains, value: title))
+        for (index, title) in titleTerms.enumerated() {
+            let term = scopedTitleTerms.indices.contains(index) ? scopedTitleTerms[index] : SearchTerm.parse(prefixValue: title)
+            let op: FilterOperator
+            switch term.mode {
+            case .exact: op = .equals
+            case .regex: op = .matchesRegex
+            case .word:  op = .matchesWord
+            case .contains: op = .contains
+            }
+            rules.append(FilterRule(field: .title, op: op, value: term.value))
         }
 
-        for series in seriesTerms {
-            rules.append(FilterRule(field: .series, op: .contains, value: series))
+        for (index, series) in seriesTerms.enumerated() {
+            let term = scopedSeriesTerms.indices.contains(index) ? scopedSeriesTerms[index] : SearchTerm.parse(prefixValue: series)
+            let op: FilterOperator
+            switch term.mode {
+            case .exact: op = .equals
+            case .regex: op = .matchesRegex
+            case .word:  op = .matchesWord
+            case .contains: op = .contains
+            }
+            rules.append(FilterRule(field: .series, op: op, value: term.value))
         }
 
         for status in statusTerms {
@@ -192,7 +261,10 @@ struct SearchQuery {
 
     // Convenience init without seriesTerms
     init(tagTerms: [String], authorTerms: [String], titleTerms: [String],
-         plainTerms: [String], ftsMatchedIDs: [Int]? = nil) {
+         plainTerms: [String], ftsMatchedIDs: [Int]? = nil,
+         scopedTagTerms: [SearchTerm]? = nil, scopedAuthorTerms: [SearchTerm]? = nil,
+         scopedTitleTerms: [SearchTerm]? = nil, scopedSeriesTerms: [SearchTerm]? = nil,
+         semanticPhrase: String? = nil) {
         self.tagTerms      = tagTerms
         self.authorTerms   = authorTerms
         self.titleTerms    = titleTerms
@@ -201,10 +273,18 @@ struct SearchQuery {
         self.fulltextPhrase = nil
         self.plainTerms    = plainTerms
         self.ftsMatchedIDs = ftsMatchedIDs
+        self.scopedTagTerms = scopedTagTerms ?? tagTerms.map { SearchTerm.parse(prefixValue: $0) }
+        self.scopedAuthorTerms = scopedAuthorTerms ?? authorTerms.map { SearchTerm.parse(prefixValue: $0) }
+        self.scopedTitleTerms = scopedTitleTerms ?? titleTerms.map { SearchTerm.parse(prefixValue: $0) }
+        self.scopedSeriesTerms = scopedSeriesTerms ?? []
+        self.semanticPhrase = semanticPhrase
     }
 
     init(tagTerms: [String], authorTerms: [String], titleTerms: [String],
-         seriesTerms: [String], plainTerms: [String], ftsMatchedIDs: [Int]? = nil) {
+         seriesTerms: [String], plainTerms: [String], ftsMatchedIDs: [Int]? = nil,
+         scopedTagTerms: [SearchTerm]? = nil, scopedAuthorTerms: [SearchTerm]? = nil,
+         scopedTitleTerms: [SearchTerm]? = nil, scopedSeriesTerms: [SearchTerm]? = nil,
+         semanticPhrase: String? = nil) {
         self.tagTerms      = tagTerms
         self.authorTerms   = authorTerms
         self.titleTerms    = titleTerms
@@ -213,11 +293,19 @@ struct SearchQuery {
         self.fulltextPhrase = nil
         self.plainTerms    = plainTerms
         self.ftsMatchedIDs = ftsMatchedIDs
+        self.scopedTagTerms = scopedTagTerms ?? tagTerms.map { SearchTerm.parse(prefixValue: $0) }
+        self.scopedAuthorTerms = scopedAuthorTerms ?? authorTerms.map { SearchTerm.parse(prefixValue: $0) }
+        self.scopedTitleTerms = scopedTitleTerms ?? titleTerms.map { SearchTerm.parse(prefixValue: $0) }
+        self.scopedSeriesTerms = scopedSeriesTerms ?? seriesTerms.map { SearchTerm.parse(prefixValue: $0) }
+        self.semanticPhrase = semanticPhrase
     }
 
     init(tagTerms: [String], authorTerms: [String], titleTerms: [String],
          seriesTerms: [String], statusTerms: [String], fulltextPhrase: String? = nil,
-         plainTerms: [String], ftsMatchedIDs: [Int]? = nil) {
+         plainTerms: [String], ftsMatchedIDs: [Int]? = nil,
+         scopedTagTerms: [SearchTerm]? = nil, scopedAuthorTerms: [SearchTerm]? = nil,
+         scopedTitleTerms: [SearchTerm]? = nil, scopedSeriesTerms: [SearchTerm]? = nil,
+         semanticPhrase: String? = nil) {
         self.tagTerms      = tagTerms
         self.authorTerms   = authorTerms
         self.titleTerms    = titleTerms
@@ -226,6 +314,11 @@ struct SearchQuery {
         self.fulltextPhrase = fulltextPhrase
         self.plainTerms    = plainTerms
         self.ftsMatchedIDs = ftsMatchedIDs
+        self.scopedTagTerms = scopedTagTerms ?? tagTerms.map { SearchTerm.parse(prefixValue: $0) }
+        self.scopedAuthorTerms = scopedAuthorTerms ?? authorTerms.map { SearchTerm.parse(prefixValue: $0) }
+        self.scopedTitleTerms = scopedTitleTerms ?? titleTerms.map { SearchTerm.parse(prefixValue: $0) }
+        self.scopedSeriesTerms = scopedSeriesTerms ?? seriesTerms.map { SearchTerm.parse(prefixValue: $0) }
+        self.semanticPhrase = semanticPhrase
     }
 }
 
@@ -246,11 +339,51 @@ struct SearchQueryParser {
     static func parse(_ input: String) -> SearchQuery {
         let trimmed = input.trimmingCharacters(in: .whitespaces)
 
+        func unquoted(_ val: String) -> String {
+            var str = val.trimmingCharacters(in: .whitespaces)
+            if str.hasPrefix("\"") && str.hasSuffix("\"") && str.count >= 2 {
+                str = String(str.dropFirst().dropLast())
+            }
+            return str
+        }
+
         // Check for a leading prefix that consumes the rest of the string.
         // Order matters: check longest prefixes first.
         let prefixes: [(String, (String) -> SearchQuery)] = [
-            ("author:", { value in SearchQuery(tagTerms: [], authorTerms: [value], titleTerms: [], seriesTerms: [], plainTerms: []) }),
-            ("series:", { value in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [value], plainTerms: []) }),
+            ("author:=", { value in
+                let clean = unquoted(value)
+                let term = SearchTerm(mode: .exact, value: clean)
+                return SearchQuery(tagTerms: [], authorTerms: [clean], titleTerms: [], seriesTerms: [],
+                                   plainTerms: [], scopedAuthorTerms: [term])
+            }),
+            ("author:~", { value in
+                let clean = unquoted(value)
+                let term = SearchTerm(mode: .regex, value: clean)
+                return SearchQuery(tagTerms: [], authorTerms: [clean], titleTerms: [], seriesTerms: [],
+                                   plainTerms: [], scopedAuthorTerms: [term])
+            }),
+            ("author:", { value in
+                let term = SearchTerm.parse(prefixValue: value)
+                return SearchQuery(tagTerms: [], authorTerms: [term.value], titleTerms: [], seriesTerms: [],
+                                   plainTerms: [], scopedAuthorTerms: [term])
+            }),
+            ("series:=", { value in
+                let clean = unquoted(value)
+                let term = SearchTerm(mode: .exact, value: clean)
+                return SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [clean],
+                                   plainTerms: [], scopedSeriesTerms: [term])
+            }),
+            ("series:~", { value in
+                let clean = unquoted(value)
+                let term = SearchTerm(mode: .regex, value: clean)
+                return SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [clean],
+                                   plainTerms: [], scopedSeriesTerms: [term])
+            }),
+            ("series:", { value in
+                let term = SearchTerm.parse(prefixValue: value)
+                return SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [term.value],
+                                   plainTerms: [], scopedSeriesTerms: [term])
+            }),
             ("status:", { value in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [], statusTerms: [value], plainTerms: []) }),
             ("fulltext:", { value in
                 SearchQuery(
@@ -258,8 +391,46 @@ struct SearchQueryParser {
                     statusTerms: [], fulltextPhrase: value, plainTerms: []
                 )
             }),
-            ("title:", { value in SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [value], seriesTerms: [], plainTerms: []) }),
-            ("tag:", { value in SearchQuery(tagTerms: [value], authorTerms: [], titleTerms: [], seriesTerms: [], plainTerms: []) })
+            ("semantic:", { value in
+                SearchQuery(
+                    tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [],
+                    statusTerms: [], plainTerms: [], semanticPhrase: value
+                )
+            }),
+            ("title:=", { value in
+                let clean = unquoted(value)
+                let term = SearchTerm(mode: .exact, value: clean)
+                return SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [clean], seriesTerms: [],
+                                   plainTerms: [], scopedTitleTerms: [term])
+            }),
+            ("title:~", { value in
+                let clean = unquoted(value)
+                let term = SearchTerm(mode: .regex, value: clean)
+                return SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [clean], seriesTerms: [],
+                                   plainTerms: [], scopedTitleTerms: [term])
+            }),
+            ("title:", { value in
+                let term = SearchTerm.parse(prefixValue: value)
+                return SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [term.value], seriesTerms: [],
+                                   plainTerms: [], scopedTitleTerms: [term])
+            }),
+            ("tag:=", { value in
+                let clean = unquoted(value)
+                let term = SearchTerm(mode: .exact, value: clean)
+                return SearchQuery(tagTerms: [clean], authorTerms: [], titleTerms: [], seriesTerms: [],
+                                   plainTerms: [], scopedTagTerms: [term])
+            }),
+            ("tag:~", { value in
+                let clean = unquoted(value)
+                let term = SearchTerm(mode: .regex, value: clean)
+                return SearchQuery(tagTerms: [clean], authorTerms: [], titleTerms: [], seriesTerms: [],
+                                   plainTerms: [], scopedTagTerms: [term])
+            }),
+            ("tag:", { value in
+                let term = SearchTerm.parse(prefixValue: value)
+                return SearchQuery(tagTerms: [term.value], authorTerms: [], titleTerms: [], seriesTerms: [],
+                                   plainTerms: [], scopedTagTerms: [term])
+            })
         ]
 
         for (prefix, builder) in prefixes where trimmed.lowercased().hasPrefix(prefix) {
@@ -295,8 +466,13 @@ struct SearchQueryParser {
         var authors: [String] = []
         var titles: [String] = []
         var series: [String] = []
+        var scopedTags: [SearchTerm] = []
+        var scopedAuthors: [SearchTerm] = []
+        var scopedTitles: [SearchTerm] = []
+        var scopedSeries: [SearchTerm] = []
         var statuses: [String] = []
         var fulltext: String?
+        var semantic: String?
         var excludedTags: [String] = []
         var excludedAuthors: [String] = []
         var excludedTitles: [String] = []
@@ -305,22 +481,123 @@ struct SearchQueryParser {
         var wordLT: Int?
         var plain: [String] = []
 
+        func unquoted(_ val: String) -> String {
+            var str = val.trimmingCharacters(in: .whitespaces)
+            if str.hasPrefix("\"") && str.hasSuffix("\"") && str.count >= 2 {
+                str = String(str.dropFirst().dropLast())
+            }
+            return str
+        }
+
         let tokens = tokenize(trimmed)
         let prefixMap: [(String, (String) -> Void)] = [
-            ("-author:", { excludedAuthors.append($0) }),
-            ("-series:", { excludedSeries.append($0) }),
-            ("-title:", { excludedTitles.append($0) }),
-            ("-tag:", { excludedTags.append($0) }),
-            ("-warning:", { excludedTags.append($0) }),
-            ("-category:", { excludedTags.append($0) }),
-            ("author:", { authors.append($0) }),
-            ("series:", { series.append($0) }),
-            ("status:", { statuses.append($0) }),
-            ("fulltext:", { fulltext = $0 }),
-            ("title:", { titles.append($0) }),
-            ("tag:", { tags.append($0) }),
-            ("warning:", { tags.append($0) }),
-            ("category:", { tags.append($0) })
+            ("-author:=", { val in excludedAuthors.append(unquoted(val)) }),
+            ("-author:~", { val in excludedAuthors.append(unquoted(val)) }),
+            ("-author:", { val in excludedAuthors.append(unquoted(val)) }),
+            ("-series:=", { val in excludedSeries.append(unquoted(val)) }),
+            ("-series:~", { val in excludedSeries.append(unquoted(val)) }),
+            ("-series:", { val in excludedSeries.append(unquoted(val)) }),
+            ("-title:=", { val in excludedTitles.append(unquoted(val)) }),
+            ("-title:~", { val in excludedTitles.append(unquoted(val)) }),
+            ("-title:", { val in excludedTitles.append(unquoted(val)) }),
+            ("-tag:=", { val in excludedTags.append(unquoted(val)) }),
+            ("-tag:~", { val in excludedTags.append(unquoted(val)) }),
+            ("-tag:", { val in excludedTags.append(unquoted(val)) }),
+            ("-warning:", { val in excludedTags.append(unquoted(val)) }),
+            ("-category:", { val in excludedTags.append(unquoted(val)) }),
+            ("author:=", { val in
+                let clean = unquoted(val)
+                authors.append(clean)
+                scopedAuthors.append(SearchTerm(mode: .exact, value: clean))
+            }),
+            ("author:~", { val in
+                let clean = unquoted(val)
+                authors.append(clean)
+                scopedAuthors.append(SearchTerm(mode: .regex, value: clean))
+            }),
+            ("author:", { val in
+                let term = SearchTerm.parse(prefixValue: val)
+                authors.append(term.value)
+                scopedAuthors.append(term)
+            }),
+            ("series:=", { val in
+                let clean = unquoted(val)
+                series.append(clean)
+                scopedSeries.append(SearchTerm(mode: .exact, value: clean))
+            }),
+            ("series:~", { val in
+                let clean = unquoted(val)
+                series.append(clean)
+                scopedSeries.append(SearchTerm(mode: .regex, value: clean))
+            }),
+            ("series:", { val in
+                let term = SearchTerm.parse(prefixValue: val)
+                series.append(term.value)
+                scopedSeries.append(term)
+            }),
+            ("status:", { statuses.append(unquoted($0)) }),
+            ("fulltext:", { fulltext = unquoted($0) }),
+            ("semantic:", { semantic = unquoted($0) }),
+            ("title:=", { val in
+                let clean = unquoted(val)
+                titles.append(clean)
+                scopedTitles.append(SearchTerm(mode: .exact, value: clean))
+            }),
+            ("title:~", { val in
+                let clean = unquoted(val)
+                titles.append(clean)
+                scopedTitles.append(SearchTerm(mode: .regex, value: clean))
+            }),
+            ("title:", { val in
+                let term = SearchTerm.parse(prefixValue: val)
+                titles.append(term.value)
+                scopedTitles.append(term)
+            }),
+            ("tag:=", { val in
+                let clean = unquoted(val)
+                tags.append(clean)
+                scopedTags.append(SearchTerm(mode: .exact, value: clean))
+            }),
+            ("tag:~", { val in
+                let clean = unquoted(val)
+                tags.append(clean)
+                scopedTags.append(SearchTerm(mode: .regex, value: clean))
+            }),
+            ("tag:", { val in
+                let term = SearchTerm.parse(prefixValue: val)
+                tags.append(term.value)
+                scopedTags.append(term)
+            }),
+            ("warning:=", { val in
+                let clean = unquoted(val)
+                tags.append(clean)
+                scopedTags.append(SearchTerm(mode: .exact, value: clean))
+            }),
+            ("warning:~", { val in
+                let clean = unquoted(val)
+                tags.append(clean)
+                scopedTags.append(SearchTerm(mode: .regex, value: clean))
+            }),
+            ("warning:", { val in
+                let term = SearchTerm.parse(prefixValue: val)
+                tags.append(term.value)
+                scopedTags.append(term)
+            }),
+            ("category:=", { val in
+                let clean = unquoted(val)
+                tags.append(clean)
+                scopedTags.append(SearchTerm(mode: .exact, value: clean))
+            }),
+            ("category:~", { val in
+                let clean = unquoted(val)
+                tags.append(clean)
+                scopedTags.append(SearchTerm(mode: .regex, value: clean))
+            }),
+            ("category:", { val in
+                let term = SearchTerm.parse(prefixValue: val)
+                tags.append(term.value)
+                scopedTags.append(term)
+            })
         ]
 
         for token in tokens {
@@ -347,7 +624,8 @@ struct SearchQueryParser {
 
             var matched = false
             for (prefix, assign) in prefixMap where lower.hasPrefix(prefix) {
-                let val = String(token.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+                let rawVal = String(token.dropFirst(prefix.count))
+                let val = rawVal.hasPrefix("\"") ? rawVal : rawVal.trimmingCharacters(in: .whitespaces)
                 if !val.isEmpty {
                     assign(val)
                     matched = true
@@ -355,7 +633,7 @@ struct SearchQueryParser {
                 }
             }
             if !matched && !token.isEmpty {
-                plain.append(token)
+                plain.append(unquoted(token))
             }
         }
 
@@ -366,7 +644,12 @@ struct SearchQueryParser {
             seriesTerms: series,
             statusTerms: statuses,
             fulltextPhrase: fulltext,
-            plainTerms: plain
+            plainTerms: plain,
+            scopedTagTerms: scopedTags,
+            scopedAuthorTerms: scopedAuthors,
+            scopedTitleTerms: scopedTitles,
+            scopedSeriesTerms: scopedSeries,
+            semanticPhrase: semantic
         )
         query.excludedTagTerms = excludedTags
         query.excludedAuthorTerms = excludedAuthors
@@ -397,6 +680,7 @@ struct SearchQueryParser {
         for char in input {
             if char == "\"" {
                 inQuotes.toggle()
+                current.append(char)
             } else if char.isWhitespace && !inQuotes {
                 if !current.isEmpty {
                     tokens.append(current)

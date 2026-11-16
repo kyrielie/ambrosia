@@ -40,7 +40,7 @@ final class CollectionAssignmentTests: XCTestCase {
         XCTAssertTrue(session.cachedReadLaterIDs.contains(bookID))
 
         // Wait for debouncer (200ms) to settle and write to store
-        try await Task.sleep(nanoseconds: 350_000_000)
+        try await Task.sleep(nanoseconds: 500_000_000)
 
         let members = try await store.members(of: SystemCollectionID.readLater)
         XCTAssertTrue(members.contains(bookID))
@@ -56,7 +56,7 @@ final class CollectionAssignmentTests: XCTestCase {
         CollectionAssignment.toggleReadLater(calibreIDs: [bookID], session: session)
         XCTAssertFalse(session.cachedReadLaterIDs.contains(bookID))
 
-        try await Task.sleep(nanoseconds: 350_000_000)
+        try await Task.sleep(nanoseconds: 500_000_000)
 
         let membersAfter = try await store.members(of: SystemCollectionID.readLater)
         XCTAssertFalse(membersAfter.contains(bookID))
@@ -219,6 +219,7 @@ final class CollectionAssignmentTests: XCTestCase {
         XCTAssertTrue(userCases.contains(.updated))
         XCTAssertTrue(userCases.contains(.title))
         XCTAssertTrue(userCases.contains(.kudos))
+        XCTAssertTrue(userCases.contains(.relevance))
 
         // LastViewState backward compatibility
         let stateSeries = LastViewState(sortField: .series, ascending: true, filterExpression: nil)
@@ -229,5 +230,8 @@ final class CollectionAssignmentTests: XCTestCase {
 
         let stateAO3Upd = LastViewState(sortField: .ao3Updated, ascending: true, filterExpression: nil)
         XCTAssertEqual(stateAO3Upd.sortField, .updated)
+
+        let stateRelevance = LastViewState(sortField: .relevance, ascending: true, filterExpression: nil)
+        XCTAssertEqual(stateRelevance.sortField, .title)
     }
 }

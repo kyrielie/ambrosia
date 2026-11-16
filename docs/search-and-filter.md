@@ -9,7 +9,20 @@ the app-structure/UI shell these run inside, see `library-ui.md`.
 Search:
 
 - Raw text is parsed by `SearchQueryParser`.
-- Prefixes: `tag:`, `author:`, `title:`, `series:`, `status:`, `warning:`, `category:`, `fulltext:`, `words:`.
+- Prefixes: `tag:`, `author:`, `title:`, `series:`, `status:`, `warning:`, `category:`, `fulltext:`, `words:`, `semantic:`.
+- Precision matching operators (Calibre search-bar syntax parity):
+  - Exact match (`=`): `tag:=value`, `title:="Exact Title"`, `author:="Exact Author"`, `series:="Exact Series"`. Compares field equality (`field = ?` in SQL, `.equals` operator).
+  - Regex match (`~`): `tag:~"pattern"`, `title:~"^The "`, `author:~"Surname, [A-Z]"`, `series:~"pattern"`. Evaluates SQLite `REGEXP ?` pattern matching (`.matchesRegex` operator).
+  - Whole-word match (`""`): `tag:"Fluff"`, `author:"Alice"`. Word-bounded search (`.matchesWord` operator) enforcing `\b` boundaries.
+  - Negation with precision operators: `-tag:=`, `-tag:~`, `-author:=`, `-author:~`, `-series:=`, `-series:~`, `-title:=`, `-title:~`.
+- SQLite `REGEXP` support (`SQLiteRegexRegistration`):
+  - Registers custom SQLite scalar `regexp(pattern, text)` using `sqlite3_create_function_v2` and a thread-safe LRU `RegexCache` (caching compiled `NSRegularExpression` with `.caseInsensitive`).
+  - Active across all read/write connections in `CalibreLibrary` and `AmbrosiaMetaDB`.
+- Local Semantic & Hybrid Search:
+  - `semantic:"phrase"` queries Apple's built-in on-device sentence embeddings (`NLEmbedding.sentenceEmbedding(for: .english)` via `SemanticSearchEngine`).
+  - Work profile text is synthesized via `WorkEmbeddingSynthesizer` combining title, author, fandoms, relationships, characters, freeforms, ratings, language, status, and stripped summary (clamped to 600 chars).
+  - Embeddings are persisted in memory-mapped binary format (`VectorStore`, magic `0x4C465631`) and scanned using Apple `Accelerate` BLAS SIMD (`cblas_sgemv`) for high-speed cosine similarity.
+  - `HybridSearchCoordinator` blends lexical (Calibre/FTS) and semantic candidate ranks using Reciprocal Rank Fusion ($k=60$).
 - Scoped search supports compositional multi-token input via `SearchQueryParser.parseMultiToken(_:)` (e.g. `author:Alice tag:"Slow Burn" -tag:Angst words:>50k`).
   - Supports quote-pairing preserving spaces.
   - Supports negation prefixes (`-tag:`, `-author:`, `-series:`, `-title:`, `-warning:`, `-category:`) producing `.notEquals` / `.notContains` rules.
@@ -18,8 +31,19 @@ Search:
 - Single committed prefix tokens also become `FilterRule`s via `SearchQuery.asSingleFilterRule(resolvedTagTerm:)`.
 - Plain terms use fuzzy title LIKE (`CalibreLibrary.fuzzyTitleCondition`). Only an explicit `fulltext:` prefix reaches `CalibreFTSLibrary`.
 - `fulltext:` semantics (native mode, see `calibre-fts.md`): the text is NFKC-normalized and tried as raw FTS5 syntax first (`AND`, `OR`, `NEAR(...)`, `prefix*`, `^`). If FTS5 rejects the syntax (for example `C++`), it is retried once as an AND of quoted terms. Bare multi-word input is therefore AND, not an exact phrase; quote it (`"once upon a time"`) for a phrase. Matching is by token: `cat` does not match `category`. Accents: `resume` matches documents containing either `resume` or `résumé`, while `résumé` matches only the accented form. In `likeFallback` mode the text is matched literally as a substring instead.
-- Dedicated Full-Text Search Window (`FTSSearchResultsWindowController`, shortcut `⇧⌘F`, menu **Edit ▸ Search Library Body Text…**, or the toolbar magnifying glass): Opens a dedicated typographic multi-snippet search surface allowing users to search book body text across either the **Current Filter** or **All Books**, view highlighted passage cards, and jump directly to occurrences in the Reader.
-- Suggestions query Calibre authors/tags/titles/series directly.
+- Dedicated Full-Text Search Window (`FTSSearchResultsWindowController`, shortcut `⇧⌘F`, menu **Edit ▸ Search Library Body Text…**, or the toolbar magnifying glass): Opens a dedicated typographic multi-snippet search surface allowing users to search book body text across either the **Current Filter** or **All Books**, view highlighted passage cards, and jump directly to occurrences in the Reader. Snippet extraction (`FTSOccurrenceExtractor`) uses regex word boundaries (`\b`) around alphanumeric search tokens to prevent false-positive highlights ("love" inside "gloves"/"inlove"). The toolbar button is hidden by default and menu items disabled whenever FTS is turned off in settings or `full-text-search.db` is unavailable. Building the FTS database is strictly opt-in from Preferences ▸ Data.
+- Suggestions query Calibre authors/tags/titles/series directly. Suggestions only offer `fulltext:` search when FTS is enabled and available.
+- Search Field & In-App Documentation:
+  - Search field uses clean macOS-standard `"Search"` placeholder to avoid text truncation on narrower window sizes.
+  - Full syntax reference and shortcut guide is accessible in-app via **Preferences ▸ Documentation** (`⌘,`).
+- Search Preferences & Feature Toggles (**Preferences ▸ Data**):
+  - **Full-Text Search (FTS)**: Toggle `enableFullTextSearch` enables or bypasses Calibre FTS5 queries; displays availability of `full-text-search.db`; includes opt-in action buttons to "Build Full-Text Search Index" / "Index Unindexed Works" and "Clear Index"; toggle `autoOpenFindBarForFullTextSearch` controls whether opening a book from full-text search automatically launches the reader find bar.
+  - **Local Semantic Search**: Toggle `enableSemanticSearch` enables or disables on-device Apple sentence embeddings (`semantic:`); includes index status and interactive buttons to Rebuild or Clear the vector store.
+- Contextual Relevance Sort Order:
+  - When search or filtering is active, the toolbar Sort menu exposes a **Relevance** option (`SortField.relevance`).
+  - When Relevance sort is selected, results are ranked in-memory using Reciprocal Rank Fusion (`HybridSearchCoordinator`), fusing lexical/FTS hit ranks with Apple NaturalLanguage semantic vector similarity scores (`relevanceSortedPage`).
+  - If search is cleared while sorting by Relevance, the sort field automatically returns to the user's previously selected sort order (e.g. Title, Word Count, Kudos).
+  - On app launch/library switch, `LastViewState` safely normalizes any transient Relevance state to default Title sort, preventing invalid persisted sort order when no query is active.
 - `SearchActivityLog` (`@MainActor` singleton) keeps an in-memory ring buffer (200 entries) of committed search/filter operations for the current session, persisted per-library-hash to a JSON file in Application Support on `close()` and reloaded on `open()`. It dedupes only against the single most recent entry (not the whole window), and is not saved on crash/unclean shutdown — only on the `close()` path.
 
 Filters — two front ends, one engine:

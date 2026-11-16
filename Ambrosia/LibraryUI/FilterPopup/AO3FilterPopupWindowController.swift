@@ -48,6 +48,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
             existing.syncPanelPosition()
             existing.showWindow(nil)
             existing.window?.makeKeyAndOrderFront(nil)
+            DispatchQueue.main.async { existing.window?.makeFirstResponder(nil) }
             existing.loadTask?.cancel()
             existing.loadTask = Task {
                 await existing.refreshIfDigestChanged(toolbarState: toolbarState, membershipVersion: membershipVersion)
@@ -59,6 +60,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
         wc.installAnchorObservers()
         wc.syncPanelPosition()
         wc.showWindow(nil)
+        DispatchQueue.main.async { wc.window?.makeFirstResponder(nil) }
         wc.loadTask = Task {
             let facetController = await AO3FilterFacetController.make(
                 toolbarState: toolbarState, metaDB: metaDB, library: library,
@@ -140,6 +142,9 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
                                    onApply: { [weak self] in self?.applyDidCommit(toolbarState: toolbarState) })
             }
         )
+        DispatchQueue.main.async { [weak self] in
+            self?.window?.makeFirstResponder(nil)
+        }
     }
 
     private func attachBackToSidebar(toolbarState: LibraryToolbarState) {

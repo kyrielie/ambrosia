@@ -305,6 +305,7 @@ struct LibraryRootView: View {
             isLiked: session.cachedLikedIDs.contains(book.id),
             hideFanworksTagPill: prefs.hideFanworksTagPill,
             correctCalibreAmpEntities: prefs.correctCalibreAmpEntities,
+            searchBadge: displayController.searchMatchBadges[book.id],
             onTagTap: { tag, field in
                 addTagPillRule(tag: tag, field: field)
             },
@@ -720,6 +721,13 @@ struct LibraryRootView: View {
                 )
                 .preferredColorScheme(prefs.resolvedLibraryColorScheme)
             }
+            .sheet(isPresented: Binding(
+                get: { toolbarState.showDuplicateManager },
+                set: { toolbarState.showDuplicateManager = $0 }
+            )) {
+                DuplicateWorksManagerView(session: session)
+                    .preferredColorScheme(prefs.resolvedLibraryColorScheme)
+            }
             .onChange(of: toolbarState.triggerExport) {
                 if toolbarState.triggerExport {
                     ExportManager.presentExportPanel(
@@ -809,7 +817,8 @@ struct LibraryRootView: View {
                                 destination: destination,
                                 ao3Map: ao3Map,
                                 groupBySeries: toolbarState.groupBySeries,
-                                seriesEntries: seriesEntriesByBook
+                                seriesEntries: seriesEntriesByBook,
+                                modernizeEPUB3: prefs.enableAdvancedEPUBExport
                             ),
                             progress: { done in
                                 Task { @MainActor in

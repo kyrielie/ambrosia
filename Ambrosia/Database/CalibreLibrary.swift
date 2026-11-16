@@ -17,6 +17,7 @@ enum SortField: String, CaseIterable, Identifiable {
     case ao3Published   // Legacy case kept for enum stability
     case ao3Updated     // Legacy case kept for enum stability
     case random         // Seeded random order
+    case relevance      // Contextual relevance rank for search and filter results
 
     var id: String { rawValue }
 
@@ -30,13 +31,14 @@ enum SortField: String, CaseIterable, Identifiable {
         case .updated, .ao3Updated:     return "Date Updated"
         case .series:                   return "Series"
         case .random:                   return "Random"
+        case .relevance:                return "Relevance"
         }
     }
 
     /// User-facing active cases presented in UI sort pickers and menus.
     /// Retires `.series` (redundant with Title series grouping) and legacy duplicate date cases.
     static var userFacingCases: [SortField] {
-        [.title, .author, .wordCount, .kudos, .published, .updated, .random]
+        [.relevance, .title, .author, .wordCount, .kudos, .published, .updated, .random]
     }
 }
 
@@ -93,6 +95,7 @@ actor CalibreLibrary {
     private static func openConnection(path: String) throws -> Connection {
         let connection = try Connection(path, readonly: true)
         connection.busyTimeout = 5.0
+        SQLiteRegexRegistration.register(on: connection)
         // Increase the page cache to 32 MB and keep temp tables in memory.
         // These are session-scoped PRAGMAs, safe on a read-only connection.
         try? connection.execute("PRAGMA cache_size = -32768")   // negative = kibibytes
@@ -414,6 +417,10 @@ actor CalibreLibrary {
         case .random:
             // Seeded random is handled post-fetch in the caller (sortedRandomly).
             return "b.title ASC, b.id ASC"
+        case .relevance:
+            // Relevance sort is resolved in Swift via relevanceSortedPage.
+            // SQL only needs a stable baseline order here.
+            return "b.title \(direction), b.id ASC"
         }
     }
 
@@ -586,6 +593,7 @@ actor CalibreLibrary {
         var filterTagExpansions: [String: [String]] = [:]
         var visibilityVersion: Int = 0
         var metaDB: AmbrosiaMetaDB?
+        var rankedIDs: [Int]?
     }
 
     /// Fetches the full matching set (capped at exportCap, same cap as export),
@@ -991,6 +999,87 @@ actor CalibreLibrary {
         )
         let allIDs = visibility.filter(matchedIDs)
         let sortedIDs = sortedRandomly(allIDs)
+        let start = min(offset, sortedIDs.count)
+        let end   = min(offset + limit, sortedIDs.count)
+        guard start < end else {
+            pageCache.set(([], false), for: cacheKey)
+            return ([], false)
+        }
+        let pageIDs = Array(sortedIDs[start..<end])
+        let page = booksForIDs(pageIDs)
+        let result = (page, end < sortedIDs.count)
+        pageCache.set(result, for: cacheKey)
+        return result
+    }
+
+    /// Relevance-sorted page for search and filter hits.
+    /// Sorts matching IDs by relevance rank (hybrid RRF / semantic similarity / FTS rank) in memory.
+    func relevanceSortedPage(
+        offset: Int,
+        limit: Int,
+        ascending: Bool,
+        _ pageQuery: PageQuery
+    ) async -> (page: [CalibreBook], hasMore: Bool) {
+        let query = pageQuery.query
+        let filter = pageQuery.filter
+        let restrictIDs = pageQuery.restrictIDs
+        let visibility = pageQuery.visibility
+        let filterTagExpansions = pageQuery.filterTagExpansions
+        let visibilityVersion = pageQuery.visibilityVersion
+        let metaDB = pageQuery.metaDB
+        let rankedIDs = pageQuery.rankedIDs
+
+        let cacheKey = PageCacheKey(
+            querySignature: LibraryFilterDebug.summary(query: query),
+            filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
+            tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
+            visibilityVersion: visibilityVersion,
+            visibilitySignature: visibility.cacheSignature,
+            sortField: .relevance,
+            ascending: ascending,
+            randomSeed: randomSeed,
+            offset: offset,
+            limit: limit
+        )
+        if let cached = pageCache[cacheKey] { return cached }
+
+        let rawMatchedIDs = fetchAllMatchingIDs(
+            query: query,
+            filter: filter,
+            restrictIDs: restrictIDs,
+            filterTagExpansions: filterTagExpansions
+        )
+        let matchedIDs = await SeriesMatchExpansion.expand(
+            matchedIDs: rawMatchedIDs,
+            shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
+            filter: filter,
+            library: self,
+            metaDB: metaDB
+        )
+        let allIDs = visibility.filter(matchedIDs)
+
+        let sortedIDs: [Int]
+        let candidateRanked = rankedIDs ?? query.ftsMatchedIDs
+        if let ranked = candidateRanked, !ranked.isEmpty {
+            let rankMap = Dictionary(uniqueKeysWithValues: ranked.enumerated().map { ($1, $0) })
+            sortedIDs = allIDs.sorted { idA, idB in
+                let rankA = rankMap[idA]
+                let rankB = rankMap[idB]
+                switch (rankA, rankB) {
+                case let (valA?, valB?):
+                    return ascending ? valA > valB : valA < valB
+                case (.some, nil):
+                    return !ascending
+                case (nil, .some):
+                    return ascending
+                case (nil, nil):
+                    return idA < idB
+                }
+            }
+        } else {
+            sortedIDs = allIDs
+        }
+
         let start = min(offset, sortedIDs.count)
         let end   = min(offset + limit, sortedIDs.count)
         guard start < end else {

@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - SuggestionKind
 
 enum SuggestionKind {
-    case tag, author, title, series, status, fulltext
+    case tag, author, title, series, status, fulltext, semantic
 
     var icon: String {
         switch self {
@@ -13,6 +13,7 @@ enum SuggestionKind {
         case .series: return "books.vertical"
         case .status: return "checkmark.circle"
         case .fulltext: return "doc.text.magnifyingglass"
+        case .semantic: return "sparkles"
         }
     }
 
@@ -24,6 +25,7 @@ enum SuggestionKind {
         case .series: return "Series"
         case .status: return "Status"
         case .fulltext: return "Full Text"
+        case .semantic: return "Semantic"
         }
     }
 
@@ -35,6 +37,7 @@ enum SuggestionKind {
         case .series: return "series:"
         case .status: return "status:"
         case .fulltext: return "fulltext:"
+        case .semantic: return "semantic:"
         }
     }
 
@@ -46,7 +49,7 @@ enum SuggestionKind {
         case .title:  return .title
         case .series: return .series
         case .status: return .status
-        case .fulltext: return .fulltext
+        case .fulltext, .semantic: return .fulltext
         }
     }
 
@@ -62,7 +65,7 @@ enum SuggestionKind {
             return .equals
         case .author, .status:
             return .equals
-        case .title, .series, .fulltext:
+        case .title, .series, .fulltext, .semantic:
             return .contains
         }
     }
@@ -113,7 +116,7 @@ enum FilterRuleFactory {
             field = AO3TagKind.classify(resolvedValue).filterField
         case .status:
             field = .status
-        case .fulltext:
+        case .fulltext, .semantic:
             field = .fulltext
         default:
             field = kind.filterField
@@ -241,7 +244,7 @@ struct SearchSuggestionsView: View {
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)
             Spacer()
-            Text(kind == .fulltext ? "searches body" : "adds filter")
+            Text(kind == .fulltext ? "searches body" : (kind == .semantic ? "searches meaning" : "adds filter"))
                 .font(.caption2)
                 .foregroundStyle(.quaternary)
         }
@@ -260,7 +263,9 @@ struct SearchSuggestionsView: View {
 /// Computes sectioned suggestions for the current raw search text.
 /// Detects whether a prefix is active and narrows accordingly.
 func computeSectionedSuggestions(for searchText: String,
-                                 library: CalibreLibrary) async -> [SuggestionSection] {
+                                 library: CalibreLibrary,
+                                 hasFulltext: Bool = true,
+                                 hasSemantic: Bool = false) async -> [SuggestionSection] {
     let text = searchText.trimmingCharacters(in: .whitespaces)
     guard !text.isEmpty else { return [] }
 
@@ -302,12 +307,12 @@ func computeSectionedSuggestions(for searchText: String,
         return suggestions.isEmpty ? [] : [SuggestionSection(kind: .status, suggestions: suggestions)]
     }
 
-    // fulltext: prefix is accepted as-is and intentionally has no completions.
-    if text.activePrefixValue(for: "fulltext:") != nil {
+    // fulltext: and semantic: prefixes are accepted as-is and intentionally have no completions.
+    if text.activePrefixValue(for: "fulltext:") != nil || text.activePrefixValue(for: "semantic:") != nil {
         return []
     }
 
-    // Plain text (≥ 2 chars) → multi-section: titles, authors, tags, series
+    // Plain text (≥ 2 chars) → multi-section: semantic, fulltext, titles, authors, tags, series, status
     guard text.count >= 2 else { return [] }
 
     let titleSugs  = await library.titleSuggestions(prefix: text, limit: 3)
@@ -319,9 +324,11 @@ func computeSectionedSuggestions(for searchText: String,
     let seriesSugs = await library.seriesSuggestions(prefix: text, limit: 3)
         .map { SearchSuggestion(kind: .series, value: $0) }
     let statusSugs = statusSuggestions(prefix: text)
-    let fulltextSugs = [SearchSuggestion(kind: .fulltext, value: text)]
+    let semanticSugs = hasSemantic ? [SearchSuggestion(kind: .semantic, value: text)] : []
+    let fulltextSugs = hasFulltext ? [SearchSuggestion(kind: .fulltext, value: text)] : []
 
     return [
+        SuggestionSection(kind: .semantic, suggestions: semanticSugs),
         SuggestionSection(kind: .fulltext, suggestions: fulltextSugs),
         SuggestionSection(kind: .title, suggestions: titleSugs),
         SuggestionSection(kind: .author, suggestions: authorSugs),

@@ -271,4 +271,17 @@ final class ReaderPreferencesTests: XCTestCase {
         let snapped2 = TypographyValueFormat.snap(1.36, range: 1.0...3.0, step: 0.1, fractionDigits: 1)
         XCTAssertEqual(snapped2, 1.4)
     }
+
+    func testEnableAdvancedEPUBExportDefaultAndPersistence() {
+        let prefs = ReaderPreferences.shared
+        XCTAssertTrue(prefs.enableAdvancedEPUBExport, "Defaults to true")
+
+        prefs.enableAdvancedEPUBExport = false
+        XCTAssertFalse(prefs.enableAdvancedEPUBExport)
+        XCTAssertEqual(UserDefaults.standard.bool(forKey: "rp.enableAdvancedEPUBExport"), false)
+
+        prefs.enableAdvancedEPUBExport = true
+        XCTAssertTrue(prefs.enableAdvancedEPUBExport)
+        XCTAssertEqual(UserDefaults.standard.bool(forKey: "rp.enableAdvancedEPUBExport"), true)
+    }
 }

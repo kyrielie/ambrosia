@@ -30,6 +30,7 @@ struct ErrorLogView: View {
             content
         }
         .frame(minWidth: 520, minHeight: 420)
+        .preventInitialButtonFocus()
         .task { await load() }
     }
 
@@ -47,7 +48,6 @@ struct ErrorLogView: View {
                     dismiss()
                 }
             }
-                .keyboardShortcut(.defaultAction)
         }
         .padding()
     }

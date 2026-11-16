@@ -259,3 +259,12 @@ To help users manage disk consumption and database health, Ambrosia provides thr
 - **Why use it**: Full-text search databases can take multiple gigabytes of storage on large libraries. If a user needs to reclaim disk space immediately or wants to reset search indexing from scratch, clearing the index frees up that disk space immediately.
 - **Safety**: Safe and non-destructive. Ambrosia and Calibre treat `full-text-search.db` as a derived cache. The source of truth for books is `metadata.db` and the EPUB files, which are untouched.
 - **Rebuilding**: Full-text search can be rebuilt at any time simply by clicking **"Index Unindexed Works"** in Settings or running Calibre's indexer.
+
+---
+
+## Full-Text Semantic Search Extension
+
+For full-text semantic/passage vector search over body text, see:
+- Architectural Plan: [`docs/plans/fulltext-semantic-search-and-external-ingestion-plan.md`](~/Documents/Applications/ambrosia/docs/plans/fulltext-semantic-search-and-external-ingestion-plan.md)
+- External Headless Ingestion Walkthrough: [`docs/guides/external-semantic-indexing-walkthrough.md`](~/Documents/Applications/ambrosia/docs/guides/external-semantic-indexing-walkthrough.md)
+- Ingestion CLI Script: [`scripts/ambrosia_embed_cli.py`](~/Documents/Applications/ambrosia/scripts/ambrosia_embed_cli.py)

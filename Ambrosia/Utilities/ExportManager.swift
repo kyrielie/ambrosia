@@ -299,6 +299,7 @@ struct ExportManager {
         var groupBySeries: Bool
         var seriesEntries: [Int: [SeriesCacheEntry]] = [:]
         var filenameIDSource: ExportFilenameIDSource = .ao3ThenCalibre
+        var modernizeEPUB3: Bool = ReaderPreferences.shared.enableAdvancedEPUBExport
     }
 
     static func exportEPUBs(
@@ -358,12 +359,28 @@ struct ExportManager {
                     )
                     try? FileManager.default.createDirectory(at: targetFolder.url, withIntermediateDirectories: true)
                     let dest = uniqueDestination(for: filename, in: targetFolder.url)
-                    do {
-                        try FileManager.default.copyItem(at: source, to: dest)
-                        copiedThisBook = true
-                    } catch {
-                        // Continue attempting the remaining folders for this book even
-                        // if one copy fails; only count as skipped if none succeeded.
+                    if options.modernizeEPUB3 {
+                        do {
+                            try AO3EPUB3Normalizer.normalize(
+                                sourceEPUB: source,
+                                destinationEPUB: dest,
+                                metadata: ao3Map[book.id],
+                                bookTitle: book.displayTitle,
+                                authors: book.authors
+                            )
+                            copiedThisBook = true
+                        } catch {
+                            // Fall back to direct copy if modernization fails
+                            do {
+                                try FileManager.default.copyItem(at: source, to: dest)
+                                copiedThisBook = true
+                            } catch { }
+                        }
+                    } else {
+                        do {
+                            try FileManager.default.copyItem(at: source, to: dest)
+                            copiedThisBook = true
+                        } catch { }
                     }
                 }
                 if copiedThisBook {
@@ -393,7 +410,8 @@ struct ExportManager {
                                        ao3Map: [Int: AO3MetadataRecord],
                                        groupBySeries: Bool = false,
                                        seriesEntries: [Int: [SeriesCacheEntry]] = [:],
-                                       filenameIDSource: ExportFilenameIDSource = .ao3ThenCalibre) {
+                                       filenameIDSource: ExportFilenameIDSource = .ao3ThenCalibre,
+                                       modernizeEPUB3: Bool = ReaderPreferences.shared.enableAdvancedEPUBExport) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -423,7 +441,8 @@ struct ExportManager {
                         ao3Map: ao3Map,
                         groupBySeries: groupBySeries,
                         seriesEntries: seriesEntries,
-                        filenameIDSource: filenameIDSource
+                        filenameIDSource: filenameIDSource,
+                        modernizeEPUB3: modernizeEPUB3
                     ),
                     progress: { _ in }
                 )

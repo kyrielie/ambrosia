@@ -34,6 +34,11 @@ enum MatchingSubqueryBuilder {
             matcher = "LOWER(a2.name) = ?"; args = [value.lowercased()]; negated = true
         case .startsWith:
             matcher = "LOWER(a2.name) LIKE ?"; args = ["\(value.lowercased())%"]; negated = false
+        case .matchesWord:
+            let escaped = NSRegularExpression.escapedPattern(for: value)
+            matcher = "a2.name REGEXP ?"; args = ["(?i)\\b\(escaped)\\b"]; negated = false
+        case .matchesRegex:
+            matcher = "a2.name REGEXP ?"; args = [value]; negated = false
         case .ratingAtMost, .ratingAtLeast:
             // Not offered for authorName (see FilterRule.availableOperators); no valid SQL shape.
             return nil
@@ -65,6 +70,11 @@ enum MatchingSubqueryBuilder {
             matcher = "LOWER(s2.name) = ?"; args = [value.lowercased()]; negated = true
         case .startsWith:
             matcher = "LOWER(s2.name) LIKE ?"; args = ["\(value.lowercased())%"]; negated = false
+        case .matchesWord:
+            let escaped = NSRegularExpression.escapedPattern(for: value)
+            matcher = "s2.name REGEXP ?"; args = ["(?i)\\b\(escaped)\\b"]; negated = false
+        case .matchesRegex:
+            matcher = "s2.name REGEXP ?"; args = [value]; negated = false
         case .ratingAtMost, .ratingAtLeast:
             // Not offered for series (see FilterRule.availableOperators); no valid SQL shape.
             return nil
@@ -314,7 +324,7 @@ enum TagRuleStrategy: Equatable {
     static func choose(op: FilterOperator, candidates: Set<Int>?, coveredCount: Int) -> TagRuleStrategy {
         guard let candidates else { return .unrestricted }
         switch op {
-        case .contains, .startsWith, .notContains:
+        case .contains, .startsWith, .notContains, .matchesWord, .matchesRegex:
             // `notContains` is evaluated as `contains` then subtracted.
             guard coveredCount > 0,
                   candidates.count * restrictionDivisor <= coveredCount else { return .unrestricted }
@@ -331,14 +341,14 @@ enum TagRuleStrategy: Equatable {
 /// candidate set (and qualify for `TagRuleStrategy.restricted`).
 enum AndGroupOrdering {
     /// 0 known set (already evaluated this call), 1 equals, 2 rating range,
-    /// 3 contains/startsWith, 4 negated.
+    /// 3 contains/startsWith/matches, 4 negated.
     static func costClass(_ op: FilterOperator, knownSize: Int?) -> Int {
         if knownSize != nil { return 0 }
         switch op {
-        case .equals:                       return 1
-        case .ratingAtMost, .ratingAtLeast: return 2
-        case .contains, .startsWith:        return 3
-        case .notContains, .notEquals:      return 4
+        case .equals:                                                    return 1
+        case .ratingAtMost, .ratingAtLeast:                              return 2
+        case .contains, .startsWith, .matchesWord, .matchesRegex:        return 3
+        case .notContains, .notEquals:                                   return 4
         }
     }
 
@@ -716,7 +726,7 @@ struct FilterBuilder {
                         op: rule.op, metaDB: metaDB
                     )
                     switch rule.op {
-                    case .contains, .equals, .startsWith: idSet = idSet.intersection(memberIDs)
+                    case .contains, .equals, .startsWith, .matchesWord, .matchesRegex: idSet = idSet.intersection(memberIDs)
                     case .notContains, .notEquals:        idSet = idSet.subtracting(memberIDs)
                     case .ratingAtMost, .ratingAtLeast:    break
                     }
@@ -729,7 +739,7 @@ struct FilterBuilder {
                         op: rule.op, metaDB: metaDB
                     )
                     switch rule.op {
-                    case .contains, .equals, .startsWith: unionIDs.formUnion(idSet.intersection(memberIDs))
+                    case .contains, .equals, .startsWith, .matchesWord, .matchesRegex: unionIDs.formUnion(idSet.intersection(memberIDs))
                     case .notContains, .notEquals:        unionIDs.formUnion(idSet.subtracting(memberIDs))
                     case .ratingAtMost, .ratingAtLeast:    break
                     }
@@ -758,7 +768,7 @@ struct FilterBuilder {
                     let memberIDs = await tagRuleMembers(rule, candidates: idSet,
                                                          coverage: tagCoverage, memo: &memo)
                     switch rule.op {
-                    case .contains, .equals, .startsWith, .ratingAtMost, .ratingAtLeast:
+                    case .contains, .equals, .startsWith, .ratingAtMost, .ratingAtLeast, .matchesWord, .matchesRegex:
                         idSet = idSet.intersection(memberIDs)
                     case .notContains, .notEquals:
                         idSet = idSet.subtracting(memberIDs)
@@ -770,7 +780,7 @@ struct FilterBuilder {
                     let memberIDs = await tagRuleMembers(rule, candidates: idSet,
                                                          coverage: tagCoverage, memo: &memo)
                     switch rule.op {
-                    case .contains, .equals, .startsWith, .ratingAtMost, .ratingAtLeast:
+                    case .contains, .equals, .startsWith, .ratingAtMost, .ratingAtLeast, .matchesWord, .matchesRegex:
                         unionIDs.formUnion(idSet.intersection(memberIDs))
                     case .notContains, .notEquals:
                         unionIDs.formUnion(idSet.subtracting(memberIDs))
@@ -901,6 +911,10 @@ struct FilterBuilder {
             return !lowerNames.contains { $0 == value }
         case .startsWith:
             return lowerNames.contains { $0.hasPrefix(value) }
+        case .matchesWord:
+            return lowerNames.contains { RegexCache.shared.matchesWord(word: value, in: $0) }
+        case .matchesRegex:
+            return lowerNames.contains { RegexCache.shared.matchesRegex(pattern: value, in: $0) }
         case .ratingAtMost, .ratingAtLeast:
             // Not offered for series (see FilterRule.availableOperators), matching
             // MatchingSubqueryBuilder.seriesFragment's own "no valid SQL shape" nil.
@@ -1453,6 +1467,11 @@ extension CalibreLibrary {
             return ("\(null)\(column) != ?\(end)", [value])
         case .startsWith:
             return ("\(column) LIKE ?", ["\(value)%"])
+        case .matchesWord:
+            let escaped = NSRegularExpression.escapedPattern(for: value)
+            return ("\(column) REGEXP ?", ["(?i)\\b\(escaped)\\b"])
+        case .matchesRegex:
+            return ("\(column) REGEXP ?", [value])
         case .ratingAtMost, .ratingAtLeast:
             return ("\(column) = ?", [value])
         }
@@ -1484,6 +1503,15 @@ extension CalibreLibrary {
         case .startsWith:
             matcher = terms.map { _ in "t2.name LIKE ?" }.joined(separator: " OR ")
             args = terms.map { "\($0)%" as Binding? }
+            return tagMembershipFragment(matcher: matcher, args: args, negated: false)
+        case .matchesWord:
+            let escaped = terms.map { NSRegularExpression.escapedPattern(for: $0) }
+            matcher = escaped.map { _ in "t2.name REGEXP ?" }.joined(separator: " OR ")
+            args = escaped.map { "(?i)\\b\($0)\\b" as Binding? }
+            return tagMembershipFragment(matcher: matcher, args: args, negated: false)
+        case .matchesRegex:
+            matcher = terms.map { _ in "t2.name REGEXP ?" }.joined(separator: " OR ")
+            args = terms.map { $0 as Binding? }
             return tagMembershipFragment(matcher: matcher, args: args, negated: false)
         }
     }
@@ -1522,6 +1550,11 @@ extension CalibreLibrary {
             return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name LIKE ?", args: ["%\(value)%"], negated: true)
         case .startsWith:
             return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name LIKE ?", args: ["\(value)%"], negated: false)
+        case .matchesWord:
+            let escaped = NSRegularExpression.escapedPattern(for: value)
+            return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name REGEXP ?", args: ["(?i)\\b\(escaped)\\b"], negated: false)
+        case .matchesRegex:
+            return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name REGEXP ?", args: [value], negated: false)
 
         case .ratingAtMost:
             guard let rating = AO3Rating(rawValue: value) else {

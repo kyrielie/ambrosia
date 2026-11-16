@@ -29,6 +29,7 @@ doc(s) relevant to your task**, not this whole index cover-to-cover.
 - **Architectural modernization roadmap and implementation plans** → `docs/roadmap.md` and completed blueprints under `docs/plans/completed/`
 - **Three-app suite framework (Honeycrisp, Ambrosia, Nectar)** → `docs/three-app-suite-framework.md`
 - **Nectar and Honeycrisp feature adoption strategy** → `docs/nectar-feature-adoption.md`
+- **Local Swift reference implementations (swiftreference, companion reader architectures)** → `docs/local-dev-references.md`
 - **Adding a test file, or "why didn't my new test run"** → `docs/testing.md`
 
 If nothing above fits, grep the codebase before assuming it's
@@ -54,23 +55,16 @@ codebase moves faster than docs do. See "Keeping this current" below.
   concurrency/build rules); other docs reference it by number and filename
   instead of copying its text, so a future edit only has one place to land.
 
-## Dangling references (confirmed, not yet resolved)
+## Historical Plan Citations (Resolved)
 
-Grepping the codebase for planning-doc citations in comments turns up at
-least eight references to plan files that do not exist anywhere in the
-current tree: `ambrosia_caching_plan.md`, `ambrosia_cleanup_plan.md`,
-`ambrosia_gap_closure_plan.md`, `ambrosia_series_fix_plan.md` (cited 9
-times), `ambrosia-implementation-plan.md`, `ambrosia_reader_fix_plan.md`,
-`plan.md`/`plan2`, and `collections-management-plan.md` (cited from
-`docs/collections-management-selection-verification-checklist.md`). This is
-the same anti-pattern Nectar's own doc set names and tracks explicitly: **a
-missing plan doc is a missing citation, not missing evidence** — the code
-and tests are the ground truth, and a stray reference doesn't mean the
-described work never happened. Treat this as an open question, not a solved
-mystery. If you're the one who resolves a specific citation (by recovering
-the decision it referred to, or confirming the file is simply gone and
-folding the relevant context into the nearest topic doc above), remove it
-from this list as part of that change.
+Historical planning documents cited in codebase comments have been recovered and permanently indexed under [`docs/plans/completed/`](~/Documents/Applications/ambrosia/docs/plans/completed/):
+- `ambrosia_caching_plan.md` -> [`docs/plans/completed/ambrosia_caching_plan.md`](~/Documents/Applications/ambrosia/docs/plans/completed/ambrosia_caching_plan.md) (and modernized in `library-load-performance-and-caching-plan.md`)
+- `ambrosia_cleanup_plan.md` / `ambrosia_cleanup_plan2.md` -> [`docs/plans/completed/ambrosia_cleanup_plan.md`](~/Documents/Applications/ambrosia/docs/plans/completed/ambrosia_cleanup_plan.md)
+- `ambrosia_series_fix_plan.md` (cited 9 times) -> [`docs/plans/completed/ambrosia_series_fix_plan.md`](~/Documents/Applications/ambrosia/docs/plans/completed/ambrosia_series_fix_plan.md)
+- `ambrosia-implementation-plan.md` -> [`docs/plans/completed/ambrosia-implementation-plan.md`](~/Documents/Applications/ambrosia/docs/plans/completed/ambrosia-implementation-plan.md) (and original origin plan in `project-ambrosia-origin-plan.md`)
+- `ambrosia_reader_fix_plan.md` -> [`docs/plans/completed/ambrosia_reader_fix_plan.md`](~/Documents/Applications/ambrosia/docs/plans/completed/ambrosia_reader_fix_plan.md)
+- `collections-management-plan.md` -> [`docs/plans/completed/collections-management-plan.md`](~/Documents/Applications/ambrosia/docs/plans/completed/collections-management-plan.md)
+- All active roadmap proposals and architectural plans are indexed in [`docs/plans/README.md`](~/Documents/Applications/ambrosia/docs/plans/README.md) and tracked in [`docs/roadmap.md`](~/Documents/Applications/ambrosia/docs/roadmap.md).
 
 ## Keeping this current
 
@@ -106,6 +100,7 @@ it's trusted by default. Specifically:
 | Shipping something previously listed as not-yet-built | `docs/not-yet-built.md` (remove the line) and whichever system doc now owns it |
 | `.swiftlint.yml` rules (adding/disabling a rule, changing thresholds), or a new accepted force-unwrap exception | `docs/overview.md`'s "Repo-wide engineering rules" (Invariant 12) |
 | Adding an `AmbrosiaTests/` file, or changing what CI verifies about test-file wiring | `docs/testing.md` |
+| Local reference repositories, architectural models from companion apps | `docs/local-dev-references.md` |
 | Strategic roadmap, modernization milestones, or implementation plans | `docs/roadmap.md` and `docs/plans/completed/` |
 
 If a change doesn't fit any row above — new system, new cross-cutting

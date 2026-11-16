@@ -67,6 +67,36 @@ enum FTSOccurrenceExtractor {
             }
     }
 
+    /// Builds a regex pattern with word boundaries for alphanumeric bounds.
+    static func occurrencePattern(for term: String) -> String {
+        let escaped = NSRegularExpression.escapedPattern(for: term)
+        let leading = term.first?.isLetter == true || term.first?.isNumber == true ? "\\b" : ""
+        let trailing = term.last?.isLetter == true || term.last?.isNumber == true ? "\\b" : ""
+        return "\(leading)\(escaped)\(trailing)"
+    }
+
+    /// Finds all matching ranges for terms respecting word boundaries.
+    static func findTermRanges(in string: String, terms: [String]) -> [Range<String.Index>] {
+        var allRanges: [Range<String.Index>] = []
+        let nsString = string as NSString
+        let fullRange = NSRange(location: 0, length: nsString.length)
+
+        for term in terms {
+            let pattern = occurrencePattern(for: term)
+            guard let regex = RegexCache.shared.regex(for: pattern, options: [.caseInsensitive]) else {
+                continue
+            }
+            let matches = regex.matches(in: string, options: [], range: fullRange)
+            for match in matches {
+                if let swiftRange = Range(match.range, in: string) {
+                    allRanges.append(swiftRange)
+                }
+            }
+        }
+        allRanges.sort { $0.lowerBound < $1.lowerBound }
+        return allRanges
+    }
+
     /// Extracts up to `maxSnippets` occurrence snippets from `text`.
     static func extract(
         text: String,
@@ -89,17 +119,7 @@ enum FTSOccurrenceExtractor {
         }
 
         // 1. Locate all matches for all terms
-        var allRanges: [Range<String.Index>] = []
-        for term in terms {
-            var searchStart = text.startIndex
-            while searchStart < text.endIndex,
-                  let match = text.range(of: term, options: [.caseInsensitive, .diacriticInsensitive], range: searchStart..<text.endIndex) {
-                allRanges.append(match)
-                searchStart = match.upperBound
-            }
-        }
-
-        allRanges.sort { $0.lowerBound < $1.lowerBound }
+        let allRanges = findTermRanges(in: text, terms: terms)
 
         // 2. Merge overlapping or immediately adjacent ranges
         var uniqueRanges: [Range<String.Index>] = []
@@ -151,17 +171,7 @@ enum FTSOccurrenceExtractor {
             var snippetContent = String(text[effectiveStart..<effectiveEnd])
 
             // Highlight all term matches inside snippetContent, replacing from back to front
-            var termRangesInSnippet: [Range<String.Index>] = []
-            for term in terms {
-                var pos = snippetContent.startIndex
-                while pos < snippetContent.endIndex,
-                      let hit = snippetContent.range(of: term, options: [.caseInsensitive, .diacriticInsensitive], range: pos..<snippetContent.endIndex) {
-                    termRangesInSnippet.append(hit)
-                    pos = hit.upperBound
-                }
-            }
-
-            termRangesInSnippet.sort { $0.lowerBound < $1.lowerBound }
+            let termRangesInSnippet = findTermRanges(in: snippetContent, terms: terms)
             var mergedSnippetHits: [Range<String.Index>] = []
             for hit in termRangesInSnippet {
                 if let last = mergedSnippetHits.last, last.overlaps(hit) || last.upperBound == hit.lowerBound {

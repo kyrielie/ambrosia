@@ -64,6 +64,7 @@ struct CollectionsView: View {
             minHeight: isPickerMode ? 380 : 480,
             maxHeight: .infinity
         )
+        .preventInitialButtonFocus()
         .task { await reload() }
         .onReceive(NotificationCenter.default.publisher(for: .bookStateDidChange)) { note in
             if let calibreID = note.userInfo?["calibreID"] as? Int,
@@ -126,7 +127,6 @@ struct CollectionsView: View {
             Button("Done") {
                 doDismiss()
             }
-            .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -614,7 +614,6 @@ struct CollectionsView: View {
                     .font(.headline)
                 Spacer()
                 Button("Done") { doDismiss() }
-                    .keyboardShortcut(.defaultAction)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)

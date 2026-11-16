@@ -40,18 +40,28 @@ enum DuplicateBookDetector {
         var losers = Set<Int>()
 
         for (_, calibreIDs) in groups where calibreIDs.count > 1 {
-            let winner = calibreIDs.dropFirst().reduce(calibreIDs[calibreIDs.startIndex]) { current, candidate in
-                isPreferred(candidate, over: current, dates: dates) ? candidate : current
+            if let winner = preferredWinner(in: calibreIDs, dates: dates) {
+                losers.formUnion(calibreIDs.filter { $0 != winner })
             }
-            losers.formUnion(calibreIDs.filter { $0 != winner })
         }
 
         return losers
     }
 
+    /// Selects the single preferred winner among a list of duplicate calibre IDs.
+    static func preferredWinner(
+        in calibreIDs: [Int],
+        dates: [Int: (published: String?, updated: String?)]
+    ) -> Int? {
+        guard let first = calibreIDs.first else { return nil }
+        return calibreIDs.dropFirst().reduce(first) { current, candidate in
+            isPreferred(candidate, over: current, dates: dates) ? candidate : current
+        }
+    }
+
     /// True if `candidate` should be kept over `current` as the winner of
     /// their duplicate group.
-    private static func isPreferred(
+    static func isPreferred(
         _ candidate: Int,
         over current: Int,
         dates: [Int: (published: String?, updated: String?)]

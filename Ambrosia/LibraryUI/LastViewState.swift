@@ -30,6 +30,7 @@ struct LastViewState: Codable, Equatable {
         case .series: return .title
         case .ao3Published: return .published
         case .ao3Updated: return .updated
+        case .relevance: return .title
         default: return field
         }
     }

@@ -320,6 +320,35 @@ final class ReaderPreferences: ObservableObject {
         }
     }
 
+    // MARK: - Search engines & feature toggles
+
+    var enableFullTextSearch: Bool {
+        didSet {
+            UserDefaults.standard.set(enableFullTextSearch, forKey: Keys.enableFullTextSearch)
+        }
+    }
+    var enableSemanticSearch: Bool {
+        didSet {
+            UserDefaults.standard.set(enableSemanticSearch, forKey: Keys.enableSemanticSearch)
+        }
+    }
+
+    // MARK: - Search sorting
+
+    var defaultSearchSortToRelevance: Bool {
+        didSet {
+            UserDefaults.standard.set(defaultSearchSortToRelevance, forKey: Keys.defaultSearchSortToRelevance)
+        }
+    }
+
+    // MARK: - EPUB Export
+
+    var enableAdvancedEPUBExport: Bool {
+        didSet {
+            UserDefaults.standard.set(enableAdvancedEPUBExport, forKey: Keys.enableAdvancedEPUBExport)
+        }
+    }
+
     // MARK: - Reader application choice
 
     var preferredReader: PreferredReaderOption {
@@ -603,6 +632,10 @@ final class ReaderPreferences: ObservableObject {
         static let collapseSpacerParagraphs    = false
         static let colsPerScreen               = ColsPerScreen.one
         static let autoOpenFindBarForFullTextSearch = true
+        static let enableFullTextSearch        = true
+        static let enableSemanticSearch        = true
+        static let defaultSearchSortToRelevance = true
+        static let enableAdvancedEPUBExport    = true
         static let libraryColorMode            = LibraryColorMode.systemDefault
         static let libraryAppearanceMode       = LibraryAppearanceMode.system
         static let libraryLightBackgroundColor = "#FFFFFF"
@@ -665,6 +698,10 @@ final class ReaderPreferences: ObservableObject {
         static let collapseSpacerParagraphs    = "rp.collapseSpacerParagraphs"
         static let colsPerScreen               = "rp.colsPerScreen"
         static let autoOpenFindBarForFullTextSearch = "rp.autoOpenFindBarForFullTextSearch"
+        static let enableFullTextSearch        = "rp.enableFullTextSearch"
+        static let enableSemanticSearch        = "rp.enableSemanticSearch"
+        static let defaultSearchSortToRelevance = "rp.defaultSearchSortToRelevance"
+        static let enableAdvancedEPUBExport    = "rp.enableAdvancedEPUBExport"
         static let libraryColorMode            = "rp.libraryColorMode"
         static let libraryAppearanceMode       = "rp.libraryAppearanceMode"
         static let libraryLightBG              = "rp.libraryLightBG"
@@ -718,6 +755,18 @@ final class ReaderPreferences: ObservableObject {
         autoOpenFindBarForFullTextSearch = ud.object(forKey: Keys.autoOpenFindBarForFullTextSearch) != nil
             ? ud.bool(forKey: Keys.autoOpenFindBarForFullTextSearch)
             : Defaults.autoOpenFindBarForFullTextSearch
+        enableFullTextSearch = ud.object(forKey: Keys.enableFullTextSearch) != nil
+            ? ud.bool(forKey: Keys.enableFullTextSearch)
+            : Defaults.enableFullTextSearch
+        enableSemanticSearch = ud.object(forKey: Keys.enableSemanticSearch) != nil
+            ? ud.bool(forKey: Keys.enableSemanticSearch)
+            : Defaults.enableSemanticSearch
+        defaultSearchSortToRelevance = ud.object(forKey: Keys.defaultSearchSortToRelevance) != nil
+            ? ud.bool(forKey: Keys.defaultSearchSortToRelevance)
+            : Defaults.defaultSearchSortToRelevance
+        enableAdvancedEPUBExport = ud.object(forKey: Keys.enableAdvancedEPUBExport) != nil
+            ? ud.bool(forKey: Keys.enableAdvancedEPUBExport)
+            : Defaults.enableAdvancedEPUBExport
         let rawAO3Order = ud.string(forKey: Keys.ao3WorkLayoutOrder) ?? Defaults.ao3WorkLayoutOrder.rawValue
         ao3WorkLayoutOrder = AO3WorkLayoutOrder(rawValue: rawAO3Order) ?? Defaults.ao3WorkLayoutOrder
 
@@ -1350,6 +1399,8 @@ final class ReaderPreferences: ObservableObject {
             || hideDuplicateBooks != Defaults.hideDuplicateBooks
             || emailPillsShowCollections != Defaults.emailPillsShowCollections
             || groupBySeries != Defaults.groupBySeries
+            || enableFullTextSearch != Defaults.enableFullTextSearch
+            || enableSemanticSearch != Defaults.enableSemanticSearch
     }
 
     func resetReaderToDefaults() {
@@ -1411,6 +1462,8 @@ final class ReaderPreferences: ObservableObject {
         hideDuplicateBooks          = Defaults.hideDuplicateBooks
         emailPillsShowCollections   = Defaults.emailPillsShowCollections
         groupBySeries               = Defaults.groupBySeries
+        enableFullTextSearch        = Defaults.enableFullTextSearch
+        enableSemanticSearch        = Defaults.enableSemanticSearch
     }
 }
 

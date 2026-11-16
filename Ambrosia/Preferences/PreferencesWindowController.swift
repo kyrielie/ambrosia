@@ -2,6 +2,23 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - PreferencesTabViewController
+
+final class PreferencesTabViewController: NSTabViewController {
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        tabStyle = .toolbar
+        canPropagateSelectedChildViewControllerTitle = false
+    }
+
+    override func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        super.tabView(tabView, didSelect: tabViewItem)
+        if let identifier = tabViewItem?.identifier as? String {
+            UserDefaults.standard.set(identifier, forKey: "lastPreferencesTab")
+        }
+    }
+}
+
 // MARK: - PreferencesWindowController
 
 final class PreferencesWindowController: NSWindowController {
@@ -9,20 +26,6 @@ final class PreferencesWindowController: NSWindowController {
     static let shared = PreferencesWindowController()
 
     private init() {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 680),
-            styleMask: [.titled, .closable, .miniaturizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title   = "Preferences"
-        window.minSize = NSSize(width: 700, height: 500)
-        window.center()
-        window.isReleasedWhenClosed = false
-        window.isRestorable = false
-        window.toolbarStyle = .preference
-        window.animationBehavior = .documentWindow
-        super.init(window: window)
         // `AppDelegate.shared` is set in `AppDelegate.applicationDidFinishLaunching`,
         // which always runs well before `show()` (the only caller of this
         // initializer) can be reached -- so this guard should never trip in
@@ -31,9 +34,43 @@ final class PreferencesWindowController: NSWindowController {
         guard let session = AppDelegate.shared?.session else {
             fatalError("PreferencesWindowController initialized before AppDelegate.shared.session was set")
         }
-        window.contentView = NSHostingView(
-            rootView: PreferencesRootView().environment(session)
-        )
+
+        let tabVC = PreferencesTabViewController()
+        tabVC.tabStyle = .toolbar
+
+        let tabs: [(id: PrefTab, label: String, icon: String, view: AnyView)] = [
+            (.reader, "Reader", "text.book.closed", AnyView(ReaderTab().environment(session).frame(width: 720).preventInitialButtonFocus())),
+            (.library, "Library", "books.vertical", AnyView(LibraryTab().environment(session).frame(width: 720).preventInitialButtonFocus())),
+            (.data, "Data", "externaldrive", AnyView(DataTab().environment(session).frame(width: 720).preventInitialButtonFocus())),
+            (.rss, "RSS", "dot.radiowaves.left.and.right", AnyView(RSSTab().environment(session).frame(width: 720).preventInitialButtonFocus())),
+            (.shortcuts, "Shortcuts", "keyboard", AnyView(ShortcutsTab().environment(session).frame(width: 720).preventInitialButtonFocus())),
+            (.docs, "Documentation", "book.pages", AnyView(DocsTab().environment(session).frame(width: 720).preventInitialButtonFocus()))
+        ]
+
+        for (id, label, icon, view) in tabs {
+            let hosting = NSHostingController(rootView: view)
+            let item = NSTabViewItem(viewController: hosting)
+            item.identifier = id.rawValue
+            item.label = label
+            item.image = NSImage(systemSymbolName: icon, accessibilityDescription: label)
+            tabVC.addTabViewItem(item)
+        }
+
+        let savedTab = UserDefaults.standard.string(forKey: "lastPreferencesTab") ?? PrefTab.reader.rawValue
+        if let index = tabs.firstIndex(where: { $0.id.rawValue == savedTab }) {
+            tabVC.selectedTabViewItemIndex = index
+        }
+
+        let window = NSWindow(contentViewController: tabVC)
+        window.title   = "Preferences"
+        window.minSize = NSSize(width: 700, height: 500)
+        window.setContentSize(NSSize(width: 720, height: 680))
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.isRestorable = false
+        window.toolbarStyle = .preference
+        window.animationBehavior = .documentWindow
+        super.init(window: window)
     }
 
     @available(*, unavailable)
@@ -48,44 +85,7 @@ final class PreferencesWindowController: NSWindowController {
     }
 }
 
-// MARK: - Root tabbed view
-
-private struct PreferencesRootView: View {
-    @Bindable private var prefs = ReaderPreferences.shared
-    @State private var tab: PrefTab = PrefTab(rawValue: UserDefaults.standard.string(forKey: "lastPreferencesTab") ?? "") ?? .reader
-
-    var body: some View {
-        TabView(selection: $tab) {
-            ReaderTab()
-                .tabItem { Label("Reader", systemImage: "text.book.closed") }
-                .tag(PrefTab.reader)
-
-            LibraryTab()
-                .tabItem { Label("Library", systemImage: "books.vertical") }
-                .tag(PrefTab.library)
-
-            DataTab()
-                .tabItem { Label("Data", systemImage: "externaldrive") }
-                .tag(PrefTab.data)
-
-            RSSTab()
-                .tabItem { Label("RSS", systemImage: "dot.radiowaves.left.and.right") }
-                .tag(PrefTab.rss)
-
-            ShortcutsTab()
-                .tabItem { Label("Shortcuts", systemImage: "keyboard") }
-                .tag(PrefTab.shortcuts)
-        }
-        .frame(width: 720)
-        // Finding 11c: remember the last-open Preferences tab across launches,
-        // the same way state restoration already applies to window position.
-        .onChange(of: tab) { _, newValue in
-            UserDefaults.standard.set(newValue.rawValue, forKey: "lastPreferencesTab")
-        }
-    }
-}
-
-private enum PrefTab: String { case reader, library, data, rss, shortcuts }
+private enum PrefTab: String { case reader, library, data, rss, shortcuts, docs }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MARK: - Reader Tab
@@ -608,6 +608,18 @@ private struct LibraryTab: View {
             }
 
             Section {
+                Toggle("Default searches to relevance descending", isOn: $prefs.defaultSearchSortToRelevance)
+            } header: {
+                Label("Search Sorting", systemImage: "arrow.up.arrow.down.circle").font(.headline)
+            } footer: {
+                Text(
+                    "When enabled, performing a search automatically sorts results by relevance descending " +
+                    "(highest match score first) and restores your previous sort order when the search is cleared."
+                )
+                .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
                 Toggle("Group series", isOn: $prefs.groupBySeries)
             } header: {
                 Label("Series", systemImage: "link").font(.headline)
@@ -621,6 +633,12 @@ private struct LibraryTab: View {
                 Toggle("Show AO3 books only", isOn: $prefs.hideNonAO3PublisherBooks)
                 Toggle("Hide anthology/merged books", isOn: $prefs.hideAnthologyBooks)
                 Toggle("Deduplicate books", isOn: $prefs.hideDuplicateBooks)
+                if prefs.hideDuplicateBooks {
+                    Button("Manage Duplicate Works…") {
+                        AppDelegate.shared?.libraryWindowController?.toolbarStateForCommands?.showDuplicateManager = true
+                    }
+                    .controlSize(.small)
+                }
                 Toggle("Show collection pills in email view", isOn: $prefs.emailPillsShowCollections)
             } header: {
                 Label("Library Rows", systemImage: "list.bullet.rectangle").font(.headline)
@@ -635,6 +653,19 @@ private struct LibraryTab: View {
                     "series grouping, and feeds. Collection pills apply to email view rows."
                 )
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Enable Advanced EPUB 3 Export", isOn: $prefs.enableAdvancedEPUBExport)
+            } header: {
+                Label("EPUB Export", systemImage: "square.and.arrow.up").font(.headline)
+            } footer: {
+                Text(
+                    "Restructures raw EPUBs into clean, standards-compliant EPUB 3 containers with " +
+                    "semantic HTML5 markup, normalized styles, and a rich AO3 metadata title page. " +
+                    "When disabled, exports original EPUB files unchanged."
+                )
+                .font(.caption).foregroundStyle(.secondary)
             }
 
             // ── Appearance (light / dark / system) ───────────────────────
@@ -905,7 +936,14 @@ private struct DataTab: View {
     @State private var ao3ExtractionStatus: AO3ExtractionStatus = .noLibrary
     @State private var storageBreakdown: LibraryStorageBreakdown?
     @State private var isCalculatingStorage: Bool = false
+    @State private var isIndexingFTS: Bool = false
     @State private var ftsActionMessage: String?
+    @State private var semanticIndexMessage: String?
+    @State private var isIndexingSemantic: Bool = false
+    @State private var semanticProgressCompleted: Int = 0
+    @State private var semanticProgressTotal: Int = 0
+    @State private var semanticIndexedCount: Int = 0
+    @State private var semanticStorageBytes: Int64 = 0
     @State private var libraryFootprints: [String: LibraryStorageBreakdown] = [:]
     @State private var showDiagnosticsSheet: Bool = false
     @State private var storageScope: StorageScope = .active
@@ -1132,6 +1170,183 @@ private struct DataTab: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            Section {
+                Toggle("Enable Calibre full-text search", isOn: $prefs.enableFullTextSearch)
+                Toggle("Automatically open Find bar in Reader", isOn: $prefs.autoOpenFindBarForFullTextSearch)
+                Toggle("Default searches to relevance descending", isOn: $prefs.defaultSearchSortToRelevance)
+
+                if session.isOpen {
+                    HStack {
+                        Text("Calibre FTS Database")
+                        Spacer()
+                        Text(session.hasFulltextIndex ? "Available" : "Not Found")
+                            .foregroundStyle(session.hasFulltextIndex ? Color.secondary : Color.orange)
+                    }
+                    .font(.callout)
+
+                    if prefs.enableFullTextSearch {
+                        HStack {
+                            Button(isIndexingFTS ? "Indexing…" : (session.hasFulltextIndex ? "Index Unindexed Works" : "Build Full-Text Search Index")) {
+                                indexUnindexedBooks()
+                            }
+                            .disabled(!session.isOpen || isIndexingFTS)
+                            .controlSize(.small)
+
+                            if session.hasFulltextIndex {
+                                Button("Clear Index") {
+                                    clearFTSIndex()
+                                }
+                                .disabled(!session.isOpen || isIndexingFTS)
+                                .controlSize(.small)
+                            }
+
+                            Spacer()
+
+                            if let ftsActionMessage {
+                                Text(ftsActionMessage)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Label("Full-Text Search (FTS)", systemImage: "doc.text.magnifyingglass").font(.headline)
+            } footer: {
+                Text(
+                    "Searches book body text using Calibre's SQLite FTS5 index. When disabled or unavailable, " +
+                    "the toolbar search button is hidden. Building the index is strictly opt-in."
+                )
+                .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Enable on-device semantic search", isOn: $prefs.enableSemanticSearch)
+
+                HStack {
+                    Text("Embedding Engine")
+                    Spacer()
+                    Text("Apple NaturalLanguage (384-dim)")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.callout)
+
+                if session.isOpen {
+                    HStack {
+                        Text("Vector Index Status")
+                        Spacer()
+                        if isIndexingSemantic {
+                            Text("Indexing (\(semanticProgressCompleted)/\(semanticProgressTotal))…")
+                                .foregroundStyle(.secondary)
+                        } else if semanticIndexedCount > 0 {
+                            let sizeStr = ByteCountFormatter.string(fromByteCount: semanticStorageBytes, countStyle: .file)
+                            if semanticIndexedCount >= session.totalCount && session.totalCount > 0 {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                    Text("\(semanticIndexedCount) works indexed (\(sizeStr))")
+                                        .foregroundStyle(.secondary)
+                                }
+                            } else {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "exclamationmark.circle.fill")
+                                        .foregroundStyle(.orange)
+                                    Text("\(semanticIndexedCount) of \(session.totalCount) works indexed (\(sizeStr))")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        } else {
+                            Text("Not Indexed (0 of \(session.totalCount) works)")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    .font(.callout)
+
+                    if isIndexingSemantic {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ProgressView(value: Double(semanticProgressCompleted), total: Double(max(1, semanticProgressTotal)))
+                            HStack {
+                                Text("Generating embeddings on Neural Engine…")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text("\(semanticProgressCompleted) / \(semanticProgressTotal)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+
+                    if prefs.enableSemanticSearch {
+                        HStack {
+                            if semanticIndexedCount < session.totalCount && !isIndexingSemantic {
+                                Button(semanticIndexedCount == 0 ? "Build Semantic Index" : "Index Unindexed Works") {
+                                    indexSemanticWorks(incremental: semanticIndexedCount > 0)
+                                }
+                                .controlSize(.small)
+                            }
+
+                            Button("Rebuild Index") {
+                                indexSemanticWorks(incremental: false)
+                            }
+                            .disabled(!session.isOpen || isIndexingSemantic)
+                            .controlSize(.small)
+
+                            if semanticIndexedCount > 0 {
+                                Button("Clear Index") {
+                                    clearSemanticIndex()
+                                }
+                                .disabled(!session.isOpen || isIndexingSemantic)
+                                .controlSize(.small)
+                            }
+
+                            Spacer()
+
+                            if let semanticIndexMessage {
+                                Text(semanticIndexMessage)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Label("Semantic Search", systemImage: "sparkles").font(.headline)
+            } footer: {
+                Text(
+                    "Synthesizes work profiles and embeds them locally using Apple Neural Engine sentence embeddings. " +
+                    "Enables conceptual trope and vibe discovery via semantic: queries with zero external network access."
+                )
+                .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Enable Advanced EPUB 3 Export", isOn: $prefs.enableAdvancedEPUBExport)
+
+                HStack {
+                    Text("Export Format")
+                    Spacer()
+                    Text(prefs.enableAdvancedEPUBExport ? "Modern EPUB 3 (otwarchive)" : "Standard Copy (EPUB 2)")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.callout)
+
+                Button("Export EPUBs…") {
+                    AppDelegate.shared?.libraryWindowController?.triggerEPUBExport()
+                }
+                .controlSize(.small)
+            } header: {
+                Label("EPUB Export", systemImage: "square.and.arrow.up").font(.headline)
+            } footer: {
+                Text(
+                    "Advanced EPUB 3 export restructures raw EPUBs into clean, standards-compliant EPUB 3 containers " +
+                    "conforming to the epub-otwarchive specification with clean HTML5 markup, semantic tags, and a " +
+                    "rich metadata page. When disabled, original EPUB files are copied directly without modification."
+                )
+                .font(.caption).foregroundStyle(.secondary)
+            }
+
         }
         .formStyle(.grouped)
         .padding(.bottom, 8)
@@ -1143,6 +1358,7 @@ private struct DataTab: View {
             tagSeedConfig.refreshValidation()
             Task { await loadAvailableColumns() }
             Task { await reloadAO3ExtractionStatus() }
+            Task { await reloadSemanticStatus() }
             Task { await reloadStorageBreakdown() }
             scheduleObservingExtraction()
         }
@@ -1154,6 +1370,7 @@ private struct DataTab: View {
             Task {
                 await loadAvailableColumns()
                 await reloadAO3ExtractionStatus()
+                await reloadSemanticStatus()
                 await reloadStorageBreakdown()
             }
         }
@@ -1261,6 +1478,14 @@ private struct DataTab: View {
                 color: .gray,
                 icon: "gearshape"
             )
+            if breakdown.semanticVectorsSizeBytes > 0 {
+                storageRow(
+                    label: scope == .active ? "Semantic Vector Index" : "Semantic Vector Indexes",
+                    size: breakdown.formattedSemanticVectorsSize,
+                    color: .indigo,
+                    icon: "sparkles"
+                )
+            }
 
             Divider()
 
@@ -1302,6 +1527,12 @@ private struct DataTab: View {
                     }
                     .controlSize(.small)
                     .help("Deletes full-text-search.db to reclaim disk space.")
+
+                    Button("Manage Duplicate Works…") {
+                        AppDelegate.shared?.libraryWindowController?.toolbarStateForCommands?.showDuplicateManager = true
+                    }
+                    .controlSize(.small)
+                    .help("Reviews version differences across duplicate AO3 works and migrates reading state.")
                 }
                 .padding(.top, 4)
             }
@@ -1343,12 +1574,18 @@ private struct DataTab: View {
 
     private func indexUnindexedBooks() {
         guard let url = session.activeURL else { return }
-        ftsActionMessage = "Indexing unindexed works in background…"
+        isIndexingFTS = true
+        ftsActionMessage = "Indexing works in background…"
         Task.detached(priority: .userInitiated) { [weak session] in
-            _ = try? CalibreFTSWriter.indexLibrary(at: url)
+            let count = (try? CalibreFTSWriter.indexLibrary(at: url)) ?? 0
             await MainActor.run {
+                self.isIndexingFTS = false
+                self.ftsActionMessage = "Indexing complete (\(count) works indexed)."
                 if let url = session?.activeURL {
-                    Task { await session?.open(url: url) }
+                    Task {
+                        await session?.open(url: url)
+                        await self.reloadStorageBreakdown()
+                    }
                 }
             }
         }
@@ -1682,6 +1919,79 @@ private struct DataTab: View {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         AppDelegate.shared?.session?.reextractAO3Metadata()
+    }
+
+    private func reloadSemanticStatus() async {
+        guard let url = session.activeURL else {
+            semanticIndexedCount = 0
+            semanticStorageBytes = 0
+            return
+        }
+        let engine = session.semanticEngine ?? SemanticSearchEngine(storageURL: url)
+        let status = await engine.status(in: url)
+        semanticIndexedCount = status.indexedCount
+        semanticStorageBytes = status.storageBytes
+    }
+
+    private func indexSemanticWorks(incremental: Bool) {
+        guard let url = session.activeURL, let library = session.library else { return }
+        isIndexingSemantic = true
+        semanticIndexMessage = nil
+        Task {
+            let emptyQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [], plainTerms: [])
+            let books = await library.fetchAllMatchingBooks(ids: nil, query: emptyQuery, sort: .title, ascending: true)
+            let engine = session.semanticEngine ?? SemanticSearchEngine(storageURL: url)
+            let alreadyIndexed = incremental ? await engine.indexedIDSet() : []
+            let booksToIndex = incremental ? books.filter { !alreadyIndexed.contains($0.id) } : books
+
+            guard !booksToIndex.isEmpty else {
+                isIndexingSemantic = false
+                semanticIndexMessage = "All \(books.count) works already indexed."
+                await reloadSemanticStatus()
+                return
+            }
+
+            semanticProgressCompleted = 0
+            semanticProgressTotal = booksToIndex.count
+
+            let metaDB = session.metaDB
+            let ao3Map = (try? await metaDB?.ao3Metadata(for: booksToIndex.map(\.id))) ?? [:]
+            var docs: [(id: Int, text: String)] = []
+            docs.reserveCapacity(booksToIndex.count)
+
+            for book in booksToIndex {
+                let ao3 = ao3Map[book.id]
+                let doc = WorkEmbeddingSynthesizer.synthesize(book: book, ao3: ao3)
+                docs.append((id: book.id, text: doc))
+            }
+
+            await engine.index(documents: docs, incremental: incremental) { completed, total in
+                Task { @MainActor in
+                    semanticProgressCompleted = completed
+                    semanticProgressTotal = total
+                }
+            }
+
+            isIndexingSemantic = false
+            await reloadSemanticStatus()
+            await reloadStorageBreakdown()
+            semanticIndexMessage = "Successfully indexed \(docs.count) works."
+        }
+    }
+
+    private func clearSemanticIndex() {
+        guard let url = session.activeURL else { return }
+        Task {
+            if let engine = session.semanticEngine {
+                await engine.clear(in: url)
+            } else {
+                let engine = SemanticSearchEngine()
+                await engine.clear(in: url)
+            }
+            await reloadSemanticStatus()
+            await reloadStorageBreakdown()
+            semanticIndexMessage = "Semantic index cleared."
+        }
     }
 }
 
@@ -2510,5 +2820,158 @@ struct TypographySliderControl: View {
             .disabled(!canReset)
             .help(canReset ? "Reset to default" : "")
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARK: - Documentation Tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+private struct DocsTab: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                docHeader
+
+                docSection(
+                    title: "Quick Search & Scoped Prefixes",
+                    icon: "magnifyingglass",
+                    description: "Type directly in the toolbar search field (Cmd+F). Combine multiple tokens separated by spaces."
+                ) {
+                    syntaxRow(syntax: "tag:Romance", description: "Matches works with the tag (or synonyms)")
+                    syntaxRow(syntax: "author:Alice", description: "Matches author name")
+                    syntaxRow(syntax: "title:Secret", description: "Matches title substring")
+                    syntaxRow(syntax: "series:Trilogy", description: "Matches series name")
+                    syntaxRow(syntax: "status:Complete", description: "Filters by status: Complete or InProgress")
+                    syntaxRow(syntax: "words:>50k", description: "Filters word count: >50k, <20k, or 10k-50k")
+                    syntaxRow(syntax: "tag:\"Slow Burn\"", description: "Use double quotes for multi-word phrases")
+                }
+
+                docSection(
+                    title: "Precision Operators (Calibre Parity)",
+                    icon: "equal.circle",
+                    description: "Strict matching and regular expression evaluation powered by SQLite REGEXP."
+                ) {
+                    syntaxRow(syntax: "tag:=Romance", description: "Exact tag equality; avoids matching 'Romantic Comedy'")
+                    syntaxRow(syntax: "title:=\"Exact Title\"", description: "Matches title exactly with case-insensitivity")
+                    syntaxRow(syntax: "author:=\"Jane Doe\"", description: "Matches exact author name")
+                    syntaxRow(syntax: "title:~\"^The \"", description: "Regex match: titles starting with 'The '")
+                    syntaxRow(syntax: "tag:~\"^Chapter \\d+\"", description: "Regex match: matches numbered chapter tags")
+                    syntaxRow(syntax: "author:~\"^[A-M]\"", description: "Regex match: authors with surname in A-M")
+                    syntaxRow(syntax: "-tag:=Angst", description: "Negation: excludes works with the exact tag")
+                    syntaxRow(syntax: "-author:Voldemort", description: "Negation: excludes works by this author")
+                }
+
+                docSection(
+                    title: "Full-Text & Semantic Search",
+                    icon: "sparkles",
+                    description: "Deep content search across book body text and on-device conceptual discovery."
+                ) {
+                    syntaxRow(
+                        syntax: "fulltext:\"secret agent\"",
+                        description: "Searches body text using Calibre's FTS5 index (full-text-search.db)"
+                    )
+                    syntaxRow(
+                        syntax: "Shift+Cmd+F",
+                        description: "Opens dedicated Full-Text Search window with typographic snippet cards"
+                    )
+                    syntaxRow(
+                        syntax: "semantic:vibe or trope",
+                        description: "On-device sentence embeddings finding works by trope, mood, or narrative vibe"
+                    )
+                }
+
+                docSection(
+                    title: "Filter Drawer (Shift+Cmd+D)",
+                    icon: "line.3.horizontal.decrease.circle",
+                    description: "Visual rule builder supporting nested groups, custom boolean conjunctions (AND/OR), and advanced comparison operators."
+                ) {
+                    syntaxRow(syntax: "matches whole word", description: "Enforces regex word boundaries (\\b) on tags, authors, or titles")
+                    syntaxRow(syntax: "matches regex", description: "Executes custom regular expressions against database fields")
+                    syntaxRow(syntax: "max / min rating", description: "Evaluates AO3 rating hierarchy (General < Teen < Mature < Explicit)")
+                }
+
+                docSection(
+                    title: "Keyboard Shortcuts Quick Reference",
+                    icon: "command",
+                    description: "Standard keyboard shortcuts available throughout the application."
+                ) {
+                    syntaxRow(syntax: "Cmd+F", description: "Focus library search field")
+                    syntaxRow(syntax: "Shift+Cmd+F", description: "Open Search Library Body Text window")
+                    syntaxRow(syntax: "Shift+Cmd+D", description: "Toggle Filter Drawer")
+                    syntaxRow(syntax: "Cmd+1 / Cmd+2", description: "Switch between List view and Email view")
+                    syntaxRow(syntax: "Cmd+,", description: "Open Preferences")
+                    syntaxRow(syntax: "Space", description: "Toggle Quick Look / Book Info inspector")
+                    syntaxRow(syntax: "Esc", description: "Dismiss search completions, filter drawer, or popover")
+                }
+            }
+            .padding(20)
+        }
+    }
+
+    private var docHeader: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "book.pages")
+                .font(.system(size: 32))
+                .foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Ambrosia Search & Query Guide")
+                    .font(.title2.weight(.bold))
+                Text("A comprehensive reference for quick search syntax, precision operators, and keyboard navigation.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.bottom, 6)
+    }
+
+    private func docSection<Content: View>(
+        title: String,
+        icon: String,
+        description: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: icon)
+                .font(.headline)
+            Text(description)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            VStack(spacing: 0) {
+                content()
+            }
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+            )
+        }
+    }
+
+    private func syntaxRow(syntax: String, description: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(syntax)
+                .font(.system(.caption, design: .monospaced).weight(.semibold))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .frame(width: 190, alignment: .leading)
+
+            Text(description)
+                .font(.callout)
+                .foregroundStyle(.primary)
+
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .overlay(
+            Divider()
+                .padding(.horizontal, 8),
+            alignment: .bottom
+        )
     }
 }

@@ -97,6 +97,8 @@ enum FilterOperator: String, CaseIterable, Identifiable, Codable {
     case equals
     case notEquals
     case startsWith
+    case matchesWord
+    case matchesRegex
     /// Rating ceiling: matches books whose highest rating is ≤ this value.
     /// Books with "Not Rated" ARE included (they are not higher than anything).
     case ratingAtMost
@@ -113,13 +115,15 @@ enum FilterOperator: String, CaseIterable, Identifiable, Codable {
         case .equals:       return "is"
         case .notEquals:    return "is not"
         case .startsWith:   return "starts with"
+        case .matchesWord:  return "matches whole word"
+        case .matchesRegex: return "matches regex"
         case .ratingAtMost: return "max rating"
         case .ratingAtLeast: return "min rating"
         }
     }
 
     static var numericOperators: [FilterOperator] { [.equals, .notEquals] }
-    static var textOperators: [FilterOperator] { [.contains, .notContains, .equals, .startsWith] }
+    static var textOperators: [FilterOperator] { [.contains, .notContains, .equals, .startsWith, .matchesWord, .matchesRegex] }
     static var exactOperators: [FilterOperator] { [.equals, .notEquals] }
     static var ratingOperators: [FilterOperator] { [.equals, .notEquals, .ratingAtMost, .ratingAtLeast] }
 }

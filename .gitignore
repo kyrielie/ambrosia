@@ -112,3 +112,25 @@ testresults.txt
 samples/
 docs/plans/
 
+
+# Developer identity, local signing & personal settings
+*DeveloperSettings.xcconfig
+SharedXcodeSettings/
+*.cer
+*.p12
+*.mobileprovision
+*.pem
+*.key
+
+# Runtime, crash & debug logs
+*.log
+*logs.txt
+crash.txt
+*.xcresult
+
+# Scrape dumps, local test works, and scratch caches
+test-works/
+scratch/
+*.html.dump
+*.json.dump
+docs/mockups/scratch/

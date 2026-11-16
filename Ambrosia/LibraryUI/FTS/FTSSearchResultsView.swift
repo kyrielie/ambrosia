@@ -60,8 +60,13 @@ final class FTSSearchViewModel {
             return
         }
 
+        guard ReaderPreferences.shared.enableFullTextSearch else {
+            errorMessage = "Full-text search is disabled in Preferences ▸ Data."
+            return
+        }
+
         guard let ftsLibrary = session.ftsLibrary else {
-            errorMessage = "Full-text search database (full-text-search.db) not found for this library."
+            errorMessage = "Full-text search database (full-text-search.db) not found for this library. You can build it in Preferences ▸ Data."
             return
         }
 

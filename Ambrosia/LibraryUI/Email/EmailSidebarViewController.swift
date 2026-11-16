@@ -47,6 +47,7 @@ final class EmailSidebarViewController: NSViewController,
     var ao3Metadata: [Int: AO3MetadataRecord] = [:] { didSet { reloadVisibleRows() } }
     var likedIDs: Set<Int> = [] { didSet { reloadVisibleRows() } }
     var readLaterIDs: Set<Int> = [] { didSet { reloadVisibleRows() } }
+    var searchMatchBadges: [Int: SearchMatchBadge] = [:] { didSet { reloadVisibleRows() } }
     /// Collection snapshot for building context menu submenus. Key = name, value = member calibreIDs.
     var collectionMembership: [String: Set<Int>] = [:] { didSet { reloadVisibleRows() } }
     /// The single collection ID the current filter is scoped to, if any — mirrors
@@ -202,7 +203,8 @@ final class EmailSidebarViewController: NSViewController,
                 isLiked: likedIDs.contains(items[row].primaryBook.id),
                 isInReadLater: readLaterIDs.contains(items[row].primaryBook.id),
                 collectionPills: manualCollectionPills(for: items[row]),
-                showCollectionPills: ReaderPreferences.shared.emailPillsShowCollections
+                showCollectionPills: ReaderPreferences.shared.emailPillsShowCollections,
+                searchBadge: searchMatchBadges[items[row].primaryBook.id]
             ),
             onToggleLiked: { [weak self] books in
                 self?.onToggleLiked?(books)
@@ -647,6 +649,7 @@ final class EmailBookCellView: NSTableCellView {
         var isInReadLater: Bool
         var collectionPills: [String]
         var showCollectionPills: Bool
+        var searchBadge: SearchMatchBadge?
     }
 
     func configure(
@@ -693,6 +696,14 @@ final class EmailBookCellView: NSTableCellView {
             } else {
                 configureMetadataPills(ao3Metadata)
             }
+        }
+
+        if let searchBadge = content.searchBadge {
+            metadataClip.isHidden = false
+            metadataStack.insertArrangedSubview(
+                Self.metadataPill(label: searchBadge.label, color: searchBadge.nsColor),
+                at: 0
+            )
         }
 
         if readPercent > 0.01 {
