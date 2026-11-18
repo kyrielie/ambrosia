@@ -103,8 +103,7 @@ tmbootpicker.efi
 # Local site build
 _site/
 
-# Scratch patch/bundle output from AI-assisted engineering sessions --
-# never meant to be committed (accidentally landed in 6d5f91d).
+
 /patches/
 *.patch
 # Local test / dev artifacts

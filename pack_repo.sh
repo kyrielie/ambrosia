@@ -37,7 +37,7 @@ zip -r "$OUT" . \
 # Optional additional exclusions -- uncomment the block below and re-run if
 # you don't want AGENTS.md / the scratch architecture docs included:
 #
-# zip -d "$OUT" 'AGENTS.md' 'ambrosia_architecture.md' 'ambrosia_formatting_prompt_future.md'
+# zip -d "$OUT" 'AGENTS.md' 'ambrosia_architecture.md' 'docs/plans/finished/ambrosia_formatting_prompt_future.md'
 
 echo "Wrote $OUT"
 du -sh "$OUT"

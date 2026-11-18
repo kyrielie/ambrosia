@@ -22,11 +22,11 @@ doc(s) relevant to your task**, not this whole index cover-to-cover.
 - **`EPUBParser` (zip/OPF/spine parsing, merged HTML, offset contract)** → `docs/epub-parsing.md`
 - **`ReaderViewController`/`ReaderWindowController`, scroll vs. paginated mode, the CSS preference pipeline** → `docs/reader.md`
 - **Highlights, point annotations, `HighlightBridge`** → `docs/annotations.md`
-- **`LocalFeedServer`, `RSSPublishView`, the served RSS/JSON-feed/OPML routes** → `docs/local-feed-server.md` (and see historical `docs/plans/completed/ambrosia-feed-transfer-phase0-findings.md` for the `.sqlite`/large-collection transfer route)
+- **`LocalFeedServer`, `RSSPublishView`, the served RSS/JSON-feed/OPML routes** → `docs/local-feed-server.md` (and see historical `docs/plans/finished/ambrosia-feed-transfer-phase0-findings.md` for the `.sqlite`/large-collection transfer route)
 - **`NSHostingView` inside AppKit, or an `async` closure that won't compile where you expect** → `docs/swiftui-appkit-bridging.md`
 - **Any Swift 6 actor/`Task`/`async let` compile error, or "why is this cached value stale"** → `docs/concurrency-invariants.md`
 - **"Does feature X exist yet?"** → `docs/not-yet-built.md`
-- **Architectural modernization roadmap and implementation plans** → `docs/roadmap.md` and completed blueprints under `docs/plans/completed/`
+- **Architectural modernization roadmap and implementation plans** → `docs/roadmap.md`, active plans under `docs/plans/`, and archived plans under `docs/plans/finished/`
 - **Three-app suite framework (Honeycrisp, Ambrosia, Nectar)** → `docs/three-app-suite-framework.md`
 - **Nectar and Honeycrisp feature adoption strategy** → `docs/nectar-feature-adoption.md`
 - **Local Swift reference implementations (swiftreference, companion reader architectures)** → `docs/local-dev-references.md`
@@ -57,13 +57,13 @@ codebase moves faster than docs do. See "Keeping this current" below.
 
 ## Historical Plan Citations (Resolved)
 
-Historical planning documents cited in codebase comments have been recovered and permanently indexed under [`docs/plans/completed/`](~/Documents/Applications/ambrosia/docs/plans/completed/):
-- `ambrosia_caching_plan.md` -> [`docs/plans/completed/ambrosia_caching_plan.md`](~/Documents/Applications/ambrosia/docs/plans/completed/ambrosia_caching_plan.md) (and modernized in `library-load-performance-and-caching-plan.md`)
-- `ambrosia_cleanup_plan.md` / `ambrosia_cleanup_plan2.md` -> [`docs/plans/completed/ambrosia_cleanup_plan.md`](~/Documents/Applications/ambrosia/docs/plans/completed/ambrosia_cleanup_plan.md)
-- `ambrosia_series_fix_plan.md` (cited 9 times) -> [`docs/plans/completed/ambrosia_series_fix_plan.md`](~/Documents/Applications/ambrosia/docs/plans/completed/ambrosia_series_fix_plan.md)
-- `ambrosia-implementation-plan.md` -> [`docs/plans/completed/ambrosia-implementation-plan.md`](~/Documents/Applications/ambrosia/docs/plans/completed/ambrosia-implementation-plan.md) (and original origin plan in `project-ambrosia-origin-plan.md`)
-- `ambrosia_reader_fix_plan.md` -> [`docs/plans/completed/ambrosia_reader_fix_plan.md`](~/Documents/Applications/ambrosia/docs/plans/completed/ambrosia_reader_fix_plan.md)
-- `collections-management-plan.md` -> [`docs/plans/completed/collections-management-plan.md`](~/Documents/Applications/ambrosia/docs/plans/completed/collections-management-plan.md)
+Historical planning documents cited in codebase comments have been recovered and permanently indexed under [`docs/plans/finished/`](~/Documents/Applications/ambrosia/docs/plans/finished/):
+- `ambrosia_caching_plan.md` -> [`docs/plans/finished/ambrosia_caching_plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/ambrosia_caching_plan.md) (and modernized in `library-load-performance-and-caching-plan.md`)
+- `ambrosia_cleanup_plan.md` / `ambrosia_cleanup_plan2.md` -> [`docs/plans/finished/ambrosia_cleanup_plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/ambrosia_cleanup_plan.md)
+- `ambrosia_series_fix_plan.md` (cited 9 times) -> [`docs/plans/finished/ambrosia_series_fix_plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/ambrosia_series_fix_plan.md)
+- `ambrosia-implementation-plan.md` -> [`docs/plans/finished/ambrosia-implementation-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/ambrosia-implementation-plan.md) (and original origin plan in `project-ambrosia-origin-plan.md`)
+- `ambrosia_reader_fix_plan.md` -> [`docs/plans/finished/ambrosia_reader_fix_plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/ambrosia_reader_fix_plan.md)
+- `collections-management-plan.md` -> [`docs/plans/finished/collections-management-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/collections-management-plan.md)
 - All active roadmap proposals and architectural plans are indexed in [`docs/plans/README.md`](~/Documents/Applications/ambrosia/docs/plans/README.md) and tracked in [`docs/roadmap.md`](~/Documents/Applications/ambrosia/docs/roadmap.md).
 
 ## Keeping this current
@@ -101,7 +101,7 @@ it's trusted by default. Specifically:
 | `.swiftlint.yml` rules (adding/disabling a rule, changing thresholds), or a new accepted force-unwrap exception | `docs/overview.md`'s "Repo-wide engineering rules" (Invariant 12) |
 | Adding an `AmbrosiaTests/` file, or changing what CI verifies about test-file wiring | `docs/testing.md` |
 | Local reference repositories, architectural models from companion apps | `docs/local-dev-references.md` |
-| Strategic roadmap, modernization milestones, or implementation plans | `docs/roadmap.md` and `docs/plans/completed/` |
+| Strategic roadmap, modernization milestones, or implementation plans | `docs/roadmap.md` and `docs/plans/finished/` |
 
 If a change doesn't fit any row above — new system, new cross-cutting
 concern, or something genuinely new — **add a new doc** rather than
@@ -154,10 +154,6 @@ reference to it (comments, other docs, tooling), replace it with the
 specific current topic doc from the routing table above, not with a
 reference to this section.
 
-`docs/ambrosia_formatting_prompt_future.md` is a forward-looking
-feature brief for a not-yet-implemented theming/formatting layer, not a
-description of current behavior — it intentionally isn't folded into any
-topic doc above, since these docs describe confirmed current state, not
-proposals. Treat it the way you'd treat any other design doc: read it
-before starting that work, update `docs/reader.md` and `docs/library-ui.md`
-once (and if) it ships, per the table above.
+`docs/plans/finished/ambrosia_formatting_prompt_future.md` is an archived,
+superseded feature brief. Its implementation assumptions predate the current
+reader and library theme systems; do not use it as a current specification.

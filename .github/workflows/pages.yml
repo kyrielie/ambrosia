@@ -1,14 +1,6 @@
 name: Pages
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "site/**"
-      - "screenshots/**"
-      - "Ambrosia/Assets.xcassets/AppIcon.appiconset/**"
-      - "scripts/build-site.sh"
-      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
