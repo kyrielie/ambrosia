@@ -23,7 +23,14 @@ Like, Read Later, and collection assignment changes. `LibraryDisplayController`
 captures `pinnedCollectionVersion` when the user changes the query, search,
 sort, or grouping. A membership press updates session-backed icons but leaves
 the active result IDs, page, and scroll in place; the next query application
-uses the latest collection version.
+uses the latest collection version. `refreshCollectionSnapshots` also bumps
+`collectionVersion` when `collectionMembershipByName` changes, so a custom
+collection edit from a path that does not call `bumpCollectionVersion()` is
+still detected. Skip and other visibility refreshes re-apply the filter and
+therefore also re-pin the collection version; this is accepted because Skip is
+rare. Filter popup facets: the whole-library baseline queries are unscoped and
+keyed on `visibilityVersion`; scoped facets are uncached and read collection
+membership live when the popup loads, so they are not reloaded on a Like.
 
 `sortedIDsCache` holds the full sorted id list for one grouped title-sorted view (`groupAwareTitleSortedPage`), so paging within a view costs a slice plus `booksForIDs` instead of a fresh materialize-and-sort. It is read through `LRUCache.get`, which refreshes recency (the subscript does not). A same-key sort already running is joined through `sortedIDsInFlight` rather than started twice, and `sortedIDsGeneration` stops a sort that began before `invalidateSortedIDs()` from storing a stale result. `wordCountSortedPage`, `kudosSortedPage` and `randomSortedPage` are not split yet.
 

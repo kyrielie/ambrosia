@@ -87,6 +87,7 @@ Testing), against 112 source files (updated October 2026 after Phases 1–6).
 | `GzipEncoder` | `GzipEncoderTests` |
 | `HTMLStripper` | `HTMLStripperTests` |
 | `RowDescriptionLimit` (`BookListRow.swift`) | `RowDescriptionLimitTests` |
+| `RowClickPolicy` (`BookListRow.swift`) | `RowClickPolicyTests` |
 | `TagPillDisplay.capped` (`BookListRow.swift`) | `TagPillCapTests` |
 | `SeriesSpineMap` | `SeriesSpineMapTests` |
 | `SeriesMatchExpansion`, `SeriesGroupBuilder` | `SeriesMatchExpansionTests`, `SeriesGroupBuilderTests` (plus `SeriesHelpersTests`) |

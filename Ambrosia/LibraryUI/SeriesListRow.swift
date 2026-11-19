@@ -38,9 +38,8 @@ struct SeriesListRow: View, Equatable {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(series.seriesName)
-                    .font(.headline.weight(.semibold))
-                    .lineLimit(2)
+                RowTitleButton(text: series.seriesName, font: .headline.weight(.semibold),
+                               lineLimit: 2, help: "Open series", action: onOpen)
                 Text("\(series.works.count) works")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -56,7 +55,6 @@ struct SeriesListRow: View, Equatable {
                     Image(systemName: series.missingIndices.isEmpty ? "list.number" : "exclamationmark.triangle.fill")
                 }
                 .buttonStyle(.borderless)
-                .modifier(RowOpenDoubleClickShield())
                 .help(series.missingIndices.isEmpty ? "Show series index" : "Missing works")
                 .popover(isPresented: $showIndex) { indexPopover }
                 Button(action: onReadLaterToggle) {
@@ -64,14 +62,12 @@ struct SeriesListRow: View, Equatable {
                         .foregroundStyle(isInReadLater ? Color.accentColor : Color.secondary)
                 }
                 .buttonStyle(.borderless)
-                .modifier(RowOpenDoubleClickShield())
                 .help(isInReadLater ? "Remove from Read Later" : "Add to Read Later")
                 Button(action: onLikeToggle) {
                     Image(systemName: isLiked ? "star.fill" : "star")
                         .foregroundStyle(isLiked ? Color.yellow : Color.secondary)
                 }
                 .buttonStyle(.borderless)
-                .modifier(RowOpenDoubleClickShield())
                 .help(isLiked ? "Unlike Series" : "Like Series")
             }
             Text(series.displayAuthors)
@@ -88,8 +84,13 @@ struct SeriesListRow: View, Equatable {
         // Outside a List the row no longer stretches to the row width, so
         // extend the frame to keep the double-click hit area full width.
         .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2, perform: onOpen)
+        // Row-open double-click lives on a layer behind the content, so
+        // buttons, pills and popover triggers never see it.
+        .background {
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2, perform: onOpen)
+        }
         .contextMenu {
             Button("Open Series", action: onOpen)
             Button("Show Individual Works") { showIndex = true }
@@ -145,13 +146,13 @@ struct SeriesListRow: View, Equatable {
             FlowLayout(spacing: 4) {
                 ForEach(capped.shown) { pill in
                     Button {
+                        guard RowClickPolicy.shouldHandleCurrentClick else { return }
                         onTagTap(pill.label, pill.field)
                     } label: {
                         tagPill(pill.label, color: pill.color, isSelected: isSelected)
                     }
                     .buttonStyle(.plain)
-                    .modifier(RowOpenDoubleClickShield())
-                    .help("Filter by \(pill.label)")
+                        .help("Filter by \(pill.label)")
                 }
                 if capped.hiddenCount > 0 {
                     tagPill("+\(capped.hiddenCount)", color: nil, isSelected: isSelected)

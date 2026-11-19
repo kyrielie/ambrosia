@@ -149,8 +149,15 @@ final class LibrarySession {
             || cachedAO3PublisherIDs != currentAO3PublisherIDs
             || cachedAnthologyIDs != currentAnthologyIDs
             || cachedDuplicateLoserIDs != currentDuplicateLoserIDs
+        let newMembershipByName = LibraryQueryHelpers.indexed(collections.map { collection in
+            (collection.name, membershipByID[collection.id] ?? [])
+        })
+        // Custom-collection edits made through a path that forgets to call
+        // `bumpCollectionVersion()` are still detected here. The live version
+        // moves; the pinned version used by the visible results does not.
         let collectionChanged = explicitLikedIDs != resolvedLiked
             || explicitReadLaterIDs != resolvedReadLater
+            || collectionMembershipByName != newMembershipByName
 
         explicitLikedIDs = resolvedLiked
         explicitReadLaterIDs = resolvedReadLater
@@ -160,9 +167,7 @@ final class LibrarySession {
         cachedAnthologyIDs = currentAnthologyIDs
         cachedDuplicateLoserIDs = currentDuplicateLoserIDs
 
-        collectionMembershipByName = LibraryQueryHelpers.indexed(collections.map { collection in
-            (collection.name, membershipByID[collection.id] ?? [])
-        })
+        collectionMembershipByName = newMembershipByName
 
         if visibilityChanged { bumpVisibilityVersion() }
         if collectionChanged { bumpCollectionVersion() }
@@ -797,10 +802,12 @@ final class LibrarySession {
         bookTagsRevision = revision
     }
 
-    /// Increment the membership version, invalidating all cached filter results
-    /// that depend on collection / liked / status membership data.
-    /// Call after: liked/skipped toggle, series sync. An AO3 extraction flush does
-    /// not bump this; it advances `bookTagsRevision` instead.
+    /// Increment the visibility version, invalidating cached results that depend
+    /// on visibility sets (Skipped, Series or Merged, AO3 publisher, anthology,
+    /// duplicate losers). Call after: skip toggle, series sync, visibility
+    /// preference changes. Liked, Read Later and custom-collection edits bump
+    /// `collectionVersion` instead; an AO3 extraction flush advances
+    /// `bookTagsRevision`.
     func bumpVisibilityVersion(caller: String = #function) {
         visibilityVersion &+= 1
         LaunchSignposts.membershipBump(

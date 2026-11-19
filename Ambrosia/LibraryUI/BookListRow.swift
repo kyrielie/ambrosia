@@ -1,9 +1,49 @@
 import SwiftUI
 import AppKit
 
-struct RowOpenDoubleClickShield: ViewModifier {
-    func body(content: Content) -> some View {
-        content.highPriorityGesture(TapGesture(count: 2).onEnded {})
+/// Click-count policy for controls inside a row (title, tag pills, authors).
+///
+/// A control acts on the first click of a multi-click only. After that first
+/// click the list may reload and re-lay out, so a second click can land on a
+/// different element; ignoring repeat clicks makes a double-click on a pill
+/// apply its filter exactly once and a double-click on the title open once.
+enum RowClickPolicy {
+    /// Pure rule, unit tested: only a first click is handled.
+    static func shouldHandle(clickCount: Int) -> Bool { clickCount <= 1 }
+
+    /// True when the click being delivered is a first click (or no event is
+    /// available, for example when invoked from a context menu or VoiceOver).
+    @MainActor
+    static var shouldHandleCurrentClick: Bool {
+        shouldHandle(clickCount: NSApp.currentEvent?.clickCount ?? 1)
+    }
+}
+
+/// Row title as a link-style button: single click opens the work. Shows a
+/// pointing-hand cursor and an underline on hover so it reads as clickable.
+struct RowTitleButton: View {
+    let text: String
+    let font: Font
+    let lineLimit: Int
+    let help: String
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button {
+            guard RowClickPolicy.shouldHandleCurrentClick else { return }
+            action()
+        } label: {
+            Text(text)
+                .font(font)
+                .lineLimit(lineLimit)
+                .underline(isHovering)
+                .multilineTextAlignment(.leading)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .pointerStyle(.link)
+        .help(help)
     }
 }
 
@@ -126,8 +166,13 @@ struct BookListRow: View, Equatable {
         // Outside a List the row no longer stretches to the row width, so
         // extend the frame to keep the double-click hit area full width.
         .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2, perform: onOpen)
+        // Row-open double-click lives on a layer behind the content, so
+        // buttons, pills and popover triggers never see it.
+        .background {
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2, perform: onOpen)
+        }
         .contextMenu {
             Button("Open") {
                 onOpen()
@@ -167,7 +212,8 @@ struct BookListRow: View, Equatable {
 
     private var titleRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(book.displayTitle).font(.headline).lineLimit(1)
+            RowTitleButton(text: book.displayTitle, font: .headline, lineLimit: 1,
+                           help: "Open", action: onOpen)
             if let searchBadge {
                 searchBadgePill(searchBadge)
             }
@@ -189,7 +235,6 @@ struct BookListRow: View, Equatable {
                     .contentShape(Rectangle())
             })
             .buttonStyle(.borderless)
-            .modifier(RowOpenDoubleClickShield())
             .help(effectiveReadLater ? "Remove from Read Later" : "Add to Read Later")
             Button(action: {
                 let next = !effectiveLiked
@@ -203,7 +248,6 @@ struct BookListRow: View, Equatable {
                     .contentShape(Rectangle())
             })
             .buttonStyle(.borderless)
-            .modifier(RowOpenDoubleClickShield())
             .help(effectiveLiked ? "Unlike" : "Like")
         }
     }
@@ -237,13 +281,13 @@ struct BookListRow: View, Equatable {
             HStack(spacing: 4) {
                 ForEach(book.authors, id: \.self) { author in
                     Button {
+                        guard RowClickPolicy.shouldHandleCurrentClick else { return }
                         onAuthorTap(author)
                     } label: {
                         Text(author)
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
-                    .modifier(RowOpenDoubleClickShield())
                     .help("Filter by \(author)")
                     if author != book.authors.last {
                         Text("·").foregroundStyle(.tertiary).font(.subheadline)
@@ -261,12 +305,12 @@ struct BookListRow: View, Equatable {
             FlowLayout(spacing: 4) {
                 ForEach(capped.shown) { pill in
                     Button {
+                        guard RowClickPolicy.shouldHandleCurrentClick else { return }
                         onTagTap(pill.label, pill.field)
                     } label: {
                         tagPill(pill.label, color: pill.color, isSelected: false)
                     }
                     .buttonStyle(.plain)
-                    .modifier(RowOpenDoubleClickShield())
                     .help("Filter by \(pill.label)")
                 }
                 if capped.hiddenCount > 0 {
