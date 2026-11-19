@@ -251,6 +251,7 @@ To help users manage disk consumption and database health, Ambrosia provides thr
   2. Runs `PRAGMA wal_checkpoint(TRUNCATE)` to flush and truncate SQLite write-ahead log (`-wal`) files down to zero bytes.
   3. Executes `VACUUM` on `full-text-search.db` and `ambrosia_meta.db` to defragment pages and return unallocated disk space to the macOS filesystem.
 - **Safe & Non-Destructive**: Does not modify book text, tokens, or indexes; simply optimizes internal layout.
+- **Quit & Sleep Protection**: Coordinated through `DatabaseMaintenanceCoordinator`. While compaction, vacuuming, or indexing is in progress, Ambrosia holds an `NSProcessInfo` activity (`[.userInitiated, .idleSystemSleepDisabled]`) to prevent macOS App Nap or system sleep. If the user attempts to quit (`⌘Q` or shutdown), an `NSAlert` modal warns that maintenance is active and that interrupting it may leave incomplete temporary files (such as multi-gigabyte rollback journals) on disk, allowing the user to continue waiting or choose to quit anyway. UI buttons in Preferences show live spinner indicators and are disabled to prevent duplicate concurrent runs.
 
 ### 3. "Clear Search Index"
 - **Behavior**: Permanently removes `full-text-search.db`, `full-text-search.db-wal`, and `full-text-search.db-shm` from the Calibre library directory.

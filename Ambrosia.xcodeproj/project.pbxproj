@@ -165,6 +165,7 @@
 		97E9203533FBA1A4C3F732CB /* calibre_fts_schema.sql in Resources */ = {isa = PBXBuildFile; fileRef = FDB7D41D6882A12F39CA3103 /* calibre_fts_schema.sql */; };
 		9807E10286C73FC3560247F6 /* CalibreLibraryCreator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09EC73ECCFDCD9DE6BA71FC5 /* CalibreLibraryCreator.swift */; };
 		98B9BDEC8715DD9C9529DD87 /* PagingOffsetStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3BE2629DDF8EAB124077AED /* PagingOffsetStateTests.swift */; };
+		98C9DA9A49DA30D27837A49D /* DatabaseMaintenanceCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 107CB98355FB8F57C4706BB2 /* DatabaseMaintenanceCoordinatorTests.swift */; };
 		995D835489B07B86D184319E /* CalibreTokenizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B3AA90D729C0CA1F1E374D9 /* CalibreTokenizerTests.swift */; };
 		9ADC604DBB8559D9B9C37099 /* StandaloneCalibreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1695E9AE3A1819CA093A5006 /* StandaloneCalibreTests.swift */; };
 		9AE518DDCEA469B118172905 /* FTSTypographicCardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C0B7265929C2368B7F3C78E /* FTSTypographicCardTests.swift */; };
@@ -244,6 +245,7 @@
 		ED317D5B97B9981AA15D7B87 /* IncrementalFilterPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B073D271350B15DD4538FB5 /* IncrementalFilterPlanner.swift */; };
 		ED89D2736F91BD173E578768 /* SearchBarViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FC8DCAE67EE99DA5325074A /* SearchBarViewController.swift */; };
 		EFCF92CBB609972FC3FCBD17 /* ImportProgressWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11F2931DDDA2A646DACE7B79 /* ImportProgressWindowController.swift */; };
+		EFDD6C5E61BFF4A52A809B8B /* DatabaseMaintenanceCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 050F5A90184F761778BB9890 /* DatabaseMaintenanceCoordinator.swift */; };
 		F0235C41374268C070190AF3 /* calibre_fixture_data.sql in Resources */ = {isa = PBXBuildFile; fileRef = EB46547F0B0CEB082CB74EB9 /* calibre_fixture_data.sql */; };
 		F0D486337BD1CA09ADCA138E /* AO3MetadataExtractorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B547B85ED0CF70EB9F72BD3E /* AO3MetadataExtractorTests.swift */; };
 		F15129C30028966A9990922E /* ActivityFeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9CEAC89B61ED72F3667E59F /* ActivityFeedView.swift */; };
@@ -278,6 +280,7 @@
 		02E9C162B42B8E11DD289DE2 /* AnnotationExportManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnnotationExportManagerTests.swift; sourceTree = "<group>"; };
 		046417E7A9FBF863E9CE24DD /* CalibreFunctions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreFunctions.swift; sourceTree = "<group>"; };
 		04F58260882BDC466A01879A /* TagRuleStrategyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagRuleStrategyTests.swift; sourceTree = "<group>"; };
+		050F5A90184F761778BB9890 /* DatabaseMaintenanceCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseMaintenanceCoordinator.swift; sourceTree = "<group>"; };
 		05580F2DED73F5B3BBC177EC /* LibraryQueryHelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryQueryHelpersTests.swift; sourceTree = "<group>"; };
 		060BF9352739D33CF84CCD35 /* ExtractionProgressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtractionProgressTests.swift; sourceTree = "<group>"; };
 		0638A722737E35BA3DAEBBFD /* NarrowingBaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NarrowingBaseTests.swift; sourceTree = "<group>"; };
@@ -292,6 +295,7 @@
 		0E4C68BA43E2002747E40C5B /* TagCoverageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagCoverageTests.swift; sourceTree = "<group>"; };
 		0ED83928408A6AD3A3407283 /* FilterValueTextField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterValueTextField.swift; sourceTree = "<group>"; };
 		0F2089EC5204E6AB6EF954D0 /* DuplicateManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuplicateManagerTests.swift; sourceTree = "<group>"; };
+		107CB98355FB8F57C4706BB2 /* DatabaseMaintenanceCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabaseMaintenanceCoordinatorTests.swift; sourceTree = "<group>"; };
 		11F2931DDDA2A646DACE7B79 /* ImportProgressWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportProgressWindowController.swift; sourceTree = "<group>"; };
 		1472376CCAAB242388EF0B04 /* CalibreTokenizerRegistrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibreTokenizerRegistrationTests.swift; sourceTree = "<group>"; };
 		164A825B58B5CE9C8FE2C059 /* DebounceTimer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebounceTimer.swift; sourceTree = "<group>"; };
@@ -634,6 +638,7 @@
 				F2F08901A91F472FA2BB39DC /* CollectionAssignmentTests.swift */,
 				924FF25A20F2B23710B28DCB /* CollectionStoreTests.swift */,
 				2196294396CDD4B3E8829E06 /* CustomColumnConfigTests.swift */,
+				107CB98355FB8F57C4706BB2 /* DatabaseMaintenanceCoordinatorTests.swift */,
 				C93A7D6EB654A54A2B397977 /* DebounceTimerTests.swift */,
 				BC4127C048C740C4D67ABA73 /* DuplicateBookDetectorTests.swift */,
 				0F2089EC5204E6AB6EF954D0 /* DuplicateManagerTests.swift */,
@@ -722,6 +727,7 @@
 				49EE8EF4BEE6DB8E21000B1F /* CalibreLibrarySearch.swift */,
 				EAC76C5100C10622DB76497F /* CollectionStore.swift */,
 				005021FDE49E54B59A17E61E /* CustomColumnConfig.swift */,
+				050F5A90184F761778BB9890 /* DatabaseMaintenanceCoordinator.swift */,
 				B5503A33168ED0175CD23C34 /* DuplicateBookDetector.swift */,
 				E1627DFE9CB214F9EBCE1B2F /* ExtractionProgress.swift */,
 				283B4EAB220F6EE49FB1995D /* GroupAwareSorter.swift */,
@@ -1131,6 +1137,7 @@
 				4A03A994BE717CA796B34CDC /* CollectionAssignmentTests.swift in Sources */,
 				872E80005951E9497316FED8 /* CollectionStoreTests.swift in Sources */,
 				D47A6682162DD2A7380CB245 /* CustomColumnConfigTests.swift in Sources */,
+				98C9DA9A49DA30D27837A49D /* DatabaseMaintenanceCoordinatorTests.swift in Sources */,
 				21E04E2D3EA285585E88FA53 /* DebounceTimerTests.swift in Sources */,
 				60ED45101F91AD7575088757 /* DuplicateBookDetectorTests.swift in Sources */,
 				6C69091F19E89AAA9456B431 /* DuplicateManagerTests.swift in Sources */,
@@ -1251,6 +1258,7 @@
 				19A7EF21D956685EFC7AF9A7 /* CollectionsView.swift in Sources */,
 				83DB8078E61E82FF0DED5758 /* ContextMenuPreferences.swift in Sources */,
 				B099C8187C941012B35C1ABB /* CustomColumnConfig.swift in Sources */,
+				EFDD6C5E61BFF4A52A809B8B /* DatabaseMaintenanceCoordinator.swift in Sources */,
 				AB681CDDA5DBA0D27337FB44 /* DebounceTimer.swift in Sources */,
 				925490FDC1E4EB1DD8C1504A /* DuplicateBookDetector.swift in Sources */,
 				BA2743ECE563AD266D522381 /* DuplicateWorksManagerView.swift in Sources */,

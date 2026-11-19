@@ -1041,9 +1041,15 @@ private struct DataTab: View {
                 }
 
                 if let ftsActionMessage {
-                    Text(ftsActionMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        if DatabaseMaintenanceCoordinator.shared.isMaintenanceInProgress {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text(ftsActionMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             } header: {
                 Label("Storage Footprint", systemImage: "internaldrive").font(.headline)
@@ -1186,26 +1192,34 @@ private struct DataTab: View {
 
                     if prefs.enableFullTextSearch {
                         HStack {
-                            Button(isIndexingFTS ? "Indexing…" : (session.hasFulltextIndex ? "Index Unindexed Works" : "Build Full-Text Search Index")) {
+                            Button(DatabaseMaintenanceCoordinator.shared.isIndexingFTS
+                                ? "Indexing…"
+                                : (session.hasFulltextIndex ? "Index Unindexed Works" : "Build Full-Text Search Index")) {
                                 indexUnindexedBooks()
                             }
-                            .disabled(!session.isOpen || isIndexingFTS)
+                            .disabled(!session.isOpen || DatabaseMaintenanceCoordinator.shared.isMaintenanceInProgress)
                             .controlSize(.small)
 
                             if session.hasFulltextIndex {
                                 Button("Clear Index") {
                                     clearFTSIndex()
                                 }
-                                .disabled(!session.isOpen || isIndexingFTS)
+                                .disabled(!session.isOpen || DatabaseMaintenanceCoordinator.shared.isMaintenanceInProgress)
                                 .controlSize(.small)
                             }
 
                             Spacer()
 
                             if let ftsActionMessage {
-                                Text(ftsActionMessage)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                HStack(spacing: 6) {
+                                    if DatabaseMaintenanceCoordinator.shared.isMaintenanceInProgress {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    }
+                                    Text(ftsActionMessage)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
@@ -1510,28 +1524,32 @@ private struct DataTab: View {
 
             if scope == .active {
                 HStack(spacing: 12) {
-                    Button("Index Unindexed Works") {
+                    Button(DatabaseMaintenanceCoordinator.shared.isIndexingFTS ? "Indexing…" : "Index Unindexed Works") {
                         indexUnindexedBooks()
                     }
                     .controlSize(.small)
+                    .disabled(!session.isOpen || DatabaseMaintenanceCoordinator.shared.isMaintenanceInProgress)
                     .help("Scans for unindexed EPUBs in this library and indexes their text in the background, matching Calibre's behavior.")
 
-                    Button("Compact & Vacuum") {
+                    Button(DatabaseMaintenanceCoordinator.shared.isCompacting ? "Compacting…" : "Compact & Vacuum") {
                         compactAndVacuumDatabases()
                     }
                     .controlSize(.small)
+                    .disabled(!session.isOpen || DatabaseMaintenanceCoordinator.shared.isMaintenanceInProgress)
                     .help("Optimizes search index segment trees, flushes WAL logs, and vacuums databases to reclaim unused disk space.")
 
                     Button("Clear Search Index") {
                         clearFTSIndex()
                     }
                     .controlSize(.small)
+                    .disabled(!session.isOpen || DatabaseMaintenanceCoordinator.shared.isMaintenanceInProgress)
                     .help("Deletes full-text-search.db to reclaim disk space.")
 
                     Button("Manage Duplicate Works…") {
                         AppDelegate.shared?.libraryWindowController?.toolbarStateForCommands?.showDuplicateManager = true
                     }
                     .controlSize(.small)
+                    .disabled(DatabaseMaintenanceCoordinator.shared.isMaintenanceInProgress)
                     .help("Reviews version differences across duplicate AO3 works and migrates reading state.")
                 }
                 .padding(.top, 4)
@@ -1574,20 +1592,29 @@ private struct DataTab: View {
 
     private func indexUnindexedBooks() {
         guard let url = session.activeURL else { return }
-        isIndexingFTS = true
         ftsActionMessage = "Indexing works in background…"
-        Task.detached(priority: .userInitiated) { [weak session] in
-            let count = (try? CalibreFTSWriter.indexLibrary(at: url)) ?? 0
-            await MainActor.run {
-                self.isIndexingFTS = false
-                self.ftsActionMessage = "Indexing complete (\(count) works indexed)."
-                if let url = session?.activeURL {
-                    Task {
-                        await session?.open(url: url)
+        Task {
+            var isCancelled = false
+            await DatabaseMaintenanceCoordinator.shared.withMaintenance(
+                kind: .indexingFTS,
+                detail: url.lastPathComponent,
+                onCancel: {
+                    isCancelled = true
+                },
+                work: {
+                    let count = (try? await Task.detached(priority: .userInitiated) {
+                        try CalibreFTSWriter.indexLibrary(at: url, isCancelled: { isCancelled })
+                    }.value) ?? 0
+
+                    ftsActionMessage = isCancelled
+                        ? "Indexing cancelled (\(count) works indexed)."
+                        : "Indexing complete (\(count) works indexed)."
+                    if let url = session.activeURL {
+                        await session.open(url: url)
                         await self.reloadStorageBreakdown()
                     }
                 }
-            }
+            )
         }
     }
 
@@ -1595,21 +1622,26 @@ private struct DataTab: View {
         guard let url = session.activeURL else { return }
         ftsActionMessage = "Compacting and vacuuming databases…"
         Task {
-            let beforeBreakdown = await LibraryStorageCalculator.calculate(libraryURL: url)
-            _ = try? await Task.detached(priority: .userInitiated) {
-                try CalibreFTSWriter.compactAndVacuum(libraryURL: url)
-            }.value
-            if let metaDB = session.metaDB {
-                try? await metaDB.vacuumAndCheckpoint()
+            await DatabaseMaintenanceCoordinator.shared.withMaintenance(
+                kind: .compactAndVacuum,
+                detail: url.lastPathComponent
+            ) {
+                let beforeBreakdown = await LibraryStorageCalculator.calculate(libraryURL: url)
+                _ = try? await Task.detached(priority: .userInitiated) {
+                    try CalibreFTSWriter.compactAndVacuum(libraryURL: url)
+                }.value
+                if let metaDB = session.metaDB {
+                    try? await metaDB.vacuumAndCheckpoint()
+                }
+                let afterBreakdown = await LibraryStorageCalculator.calculate(libraryURL: url)
+                let reclaimed = max(0, beforeBreakdown.totalSizeBytes - afterBreakdown.totalSizeBytes)
+                let formattedReclaimed = ByteCountFormatter.string(fromByteCount: reclaimed, countStyle: .file)
+                ftsActionMessage = reclaimed > 0
+                    ? "Compaction complete. Reclaimed \(formattedReclaimed) of disk space."
+                    : "Compaction complete. Databases are already fully compacted."
+                await reloadStorageBreakdown()
+                reloadKnownLibraries()
             }
-            let afterBreakdown = await LibraryStorageCalculator.calculate(libraryURL: url)
-            let reclaimed = max(0, beforeBreakdown.totalSizeBytes - afterBreakdown.totalSizeBytes)
-            let formattedReclaimed = ByteCountFormatter.string(fromByteCount: reclaimed, countStyle: .file)
-            ftsActionMessage = reclaimed > 0
-                ? "Compaction complete. Reclaimed \(formattedReclaimed) of disk space."
-                : "Compaction complete. Databases are already fully compacted."
-            await reloadStorageBreakdown()
-            reloadKnownLibraries()
         }
     }
 
@@ -1938,44 +1970,49 @@ private struct DataTab: View {
         isIndexingSemantic = true
         semanticIndexMessage = nil
         Task {
-            let emptyQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [], plainTerms: [])
-            let books = await library.fetchAllMatchingBooks(ids: nil, query: emptyQuery, sort: .title, ascending: true)
-            let engine = session.semanticEngine ?? SemanticSearchEngine(storageURL: url)
-            let alreadyIndexed = incremental ? await engine.indexedIDSet() : []
-            let booksToIndex = incremental ? books.filter { !alreadyIndexed.contains($0.id) } : books
+            await DatabaseMaintenanceCoordinator.shared.withMaintenance(
+                kind: .semanticIndexing,
+                detail: url.lastPathComponent
+            ) {
+                let emptyQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [], plainTerms: [])
+                let books = await library.fetchAllMatchingBooks(ids: nil, query: emptyQuery, sort: .title, ascending: true)
+                let engine = session.semanticEngine ?? SemanticSearchEngine(storageURL: url)
+                let alreadyIndexed = incremental ? await engine.indexedIDSet() : []
+                let booksToIndex = incremental ? books.filter { !alreadyIndexed.contains($0.id) } : books
 
-            guard !booksToIndex.isEmpty else {
-                isIndexingSemantic = false
-                semanticIndexMessage = "All \(books.count) works already indexed."
-                await reloadSemanticStatus()
-                return
-            }
-
-            semanticProgressCompleted = 0
-            semanticProgressTotal = booksToIndex.count
-
-            let metaDB = session.metaDB
-            let ao3Map = (try? await metaDB?.ao3Metadata(for: booksToIndex.map(\.id))) ?? [:]
-            var docs: [(id: Int, text: String)] = []
-            docs.reserveCapacity(booksToIndex.count)
-
-            for book in booksToIndex {
-                let ao3 = ao3Map[book.id]
-                let doc = WorkEmbeddingSynthesizer.synthesize(book: book, ao3: ao3)
-                docs.append((id: book.id, text: doc))
-            }
-
-            await engine.index(documents: docs, incremental: incremental) { completed, total in
-                Task { @MainActor in
-                    semanticProgressCompleted = completed
-                    semanticProgressTotal = total
+                guard !booksToIndex.isEmpty else {
+                    isIndexingSemantic = false
+                    semanticIndexMessage = "All \(books.count) works already indexed."
+                    await reloadSemanticStatus()
+                    return
                 }
-            }
 
-            isIndexingSemantic = false
-            await reloadSemanticStatus()
-            await reloadStorageBreakdown()
-            semanticIndexMessage = "Successfully indexed \(docs.count) works."
+                semanticProgressCompleted = 0
+                semanticProgressTotal = booksToIndex.count
+
+                let metaDB = session.metaDB
+                let ao3Map = (try? await metaDB?.ao3Metadata(for: booksToIndex.map(\.id))) ?? [:]
+                var docs: [(id: Int, text: String)] = []
+                docs.reserveCapacity(booksToIndex.count)
+
+                for book in booksToIndex {
+                    let ao3 = ao3Map[book.id]
+                    let doc = WorkEmbeddingSynthesizer.synthesize(book: book, ao3: ao3)
+                    docs.append((id: book.id, text: doc))
+                }
+
+                await engine.index(documents: docs, incremental: incremental) { completed, total in
+                    Task { @MainActor in
+                        semanticProgressCompleted = completed
+                        semanticProgressTotal = total
+                    }
+                }
+
+                isIndexingSemantic = false
+                await reloadSemanticStatus()
+                await reloadStorageBreakdown()
+                semanticIndexMessage = "Successfully indexed \(docs.count) works."
+            }
         }
     }
 

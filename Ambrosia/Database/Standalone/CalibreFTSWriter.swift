@@ -82,6 +82,7 @@ public enum CalibreFTSWriter {
     ) throws -> Int {
         let ftsURL = rootURL.appendingPathComponent("full-text-search.db")
         let ftsConn = try Connection(ftsURL.path)
+        ftsConn.busyTimeout = 5.0
         try CalibreTokenizerRegistration.register(on: ftsConn)
 
         try ftsConn.execute("PRAGMA journal_mode = WAL;")
@@ -204,6 +205,7 @@ public enum CalibreFTSWriter {
         }
         let ftsBefore = databaseFilesSize(baseFileURL: ftsURL)
         let ftsConn = try Connection(ftsURL.path)
+        ftsConn.busyTimeout = 5.0
         try CalibreTokenizerRegistration.register(on: ftsConn)
 
         _ = try? ftsConn.run("INSERT INTO books_fts(books_fts) VALUES('optimize');")

@@ -318,6 +318,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !Self.isRunningTests else { return .terminateNow }
+
+        if DatabaseMaintenanceCoordinator.shared.isMaintenanceInProgress {
+            let alert = NSAlert()
+            alert.messageText = "Database Maintenance in Progress"
+            let summary = DatabaseMaintenanceCoordinator.shared.currentSummary ?? "Database maintenance"
+            alert.informativeText = """
+                \(summary) is currently in progress. Quitting now will interrupt the operation and \
+                may leave incomplete temporary files or unindexed records on disk.
+
+                Do you want to continue waiting or quit anyway?
+                """
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Continue Waiting")
+            let quitButton = alert.addButton(withTitle: "Quit Anyway")
+            quitButton.hasDestructiveAction = true
+
+            let response = alert.runModal()
+            if response == .alertFirstButtonReturn {
+                return .terminateCancel
+            } else {
+                DatabaseMaintenanceCoordinator.shared.cancelAll()
+                return .terminateNow
+            }
+        }
+
+        return .terminateNow
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         guard !Self.isRunningTests else { return }
 

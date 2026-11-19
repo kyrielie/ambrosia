@@ -182,16 +182,25 @@ final class ImportProgressWindowController: NSWindowController {
                 self?.progressBar.doubleValue = 0
             }
 
-            _ = try? CalibreFTSWriter.indexLibrary(
-                at: folderURL,
-                batchSize: 10,
-                progress: { [weak self] info in
-                    Task { @MainActor [weak self] in
-                        self?.progressBar.doubleValue = Double(info.current)
-                        self?.statusLabel.stringValue = "(\(info.current)/\(info.total)) \(info.currentTitle)"
-                    }
+            _ = try? await DatabaseMaintenanceCoordinator.shared.withMaintenance(
+                kind: .indexingFTS,
+                detail: folderURL.lastPathComponent,
+                onCancel: {
+                    token.cancel()
                 },
-                isCancelled: isCancelledClosure
+                work: {
+                    try CalibreFTSWriter.indexLibrary(
+                        at: folderURL,
+                        batchSize: 10,
+                        progress: { [weak self] info in
+                            Task { @MainActor [weak self] in
+                                self?.progressBar.doubleValue = Double(info.current)
+                                self?.statusLabel.stringValue = "(\(info.current)/\(info.total)) \(info.currentTitle)"
+                            }
+                        },
+                        isCancelled: isCancelledClosure
+                    )
+                }
             )
 
             await MainActor.run { [weak self] in
