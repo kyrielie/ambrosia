@@ -13,11 +13,17 @@ It may be absent from your checkout; do not copy its text into tracked files.
 
 ## AO3 Metadata and Tags
 
-`AO3MetadataExtractor` parses AO3 EPUB preface HTML with SwiftSoup and returns `AO3MetadataRecord`. `LibrarySession` tries spine[0] first (AO3 EPUBs reliably place the preface there), falling back through the first 8 spine items for non-standard files or external fanfiction tools, stores successful extraction in `ao3_metadata`, and stores skipped/failed attempts in `ao3_extraction_diagnostics`. Extraction runs concurrently via a capped `TaskGroup` (up to 8 books in flight at once), flushing to the DB every 10 books or every 2 seconds, whichever comes first, with `Task.yield()` between flushes so read queries can cut in.
+`AO3MetadataExtractor` parses AO3 EPUB preface HTML with SwiftSoup and returns `AO3MetadataRecord`. Extraction reads spine items raw (`EPUBParser.rawXHTML(for:archive:)`, one `Archive` per book, `parse(skipTOC: true)`) and parses each once with SwiftSoup. It does not use the reader's `html(for:)`, because `sanitise` rewrites the preface and title page for display (it removes `p.message`, headings and the `div.byline` wrapper depending on `ao3WorkLayoutOrder`), which made extraction results depend on a reader preference. `LibrarySession` tries spine[0] first (AO3 EPUBs reliably place the preface there), falling back through the first 8 spine items for non-standard files or external fanfiction tools, stores successful extraction in `ao3_metadata`, and stores skipped/failed attempts in `ao3_extraction_diagnostics`. `book_index.word_count` is AO3's stated word count when the preface has one. Otherwise the book's markup is counted with `EPUBWordCounter` (one open archive, no regex; same strip-tags-then-split-on-whitespace rule as before). On Re-extract (`forceAll`), books that already have a `book_index` row and no AO3 stated count keep their stored row and are not recounted. Extraction runs concurrently via a capped `TaskGroup` (up to 8 books in flight at once), flushing to the DB every 50 books or every 5 seconds, whichever comes first (`ExtractionBatchPolicy`), with `Task.yield()` between flushes so read queries can cut in. The run uses `.utility` priority at library open and `.userInitiated` for the Preferences Re-extract action (`startAO3Extraction(priority:)`); `.background` was dropped because it throttles CPU and disk I/O on Apple silicon.
 
 Extracted fields include story URL, work ID, author username, kudos, word count, chapter counts, completion, language, dates, fandoms, relationships, characters, additional tags, categories, AO3 collections, and AO3 series.
 
-Series metadata is cached in `series_cache`; Calibre series data is inserted as fallback.
+Series metadata is resolved to persistent rows in `series` and book memberships
+are stored in `series_cache`. AO3 IDs and Calibre series IDs have stable keys;
+name-only entries reuse a trimmed, case-folded, whitespace-normalized identity.
+The key is stored once and is not reconstructed from a later display-name
+change. Re-extract clears and rebuilds memberships while leaving series rows
+and any future series-level flags intact. See `metadb-and-migrations.md` for
+the required one-time series-cache reset before using the schema-changing build.
 
 ### Multi-Engine External Fanfiction Parsers (FanFicFare, FicLab, FicHub)
 
@@ -35,9 +41,9 @@ Configured AO3 tag seed databases (`ao3_tag_seeds.db`) are queried **directly in
 `canonicalTerm(for:)` and `expandedTerms(for:)` on `AmbrosiaMetaDB` delegate directly to `AO3TagSeedDatabaseConfig.shared`, providing canonicalization and synonym expansion across search and filter pipelines without redundant disk copies.
 
 ### Extraction Diagnostics & Debugging Failed Works
-When extraction encounters a non-AO3 EPUB or malformed preface structure, the failure reason is recorded in `ao3_extraction_diagnostics (calibre_id, story_url, reason, attempted_at)`.
+When extraction encounters a non-AO3 EPUB or malformed preface structure, the failure reason is recorded in `ao3_extraction_diagnostics (calibre_id, story_url, reason, attempted_at)`. When metadata is successfully extracted for a work, any existing diagnostic for that work is automatically removed. On open and diagnostic queries, stale diagnostic rows for works present in `ao3_metadata` are pruned automatically.
 
-In **Settings ▸ Data**, users can view extraction progress (Extracted vs. Failed vs. Total) and click **"View Failed Works"** to open a diagnostic inspection sheet. The sheet displays the book title, author, and specific parsing error message (e.g. missing preface elements, malformed HTML, or unparseable metadata), with a button to open each failed book directly in the reader for inspection.
+In **Settings ▸ Data**, users can view extraction progress (Extracted vs. Failed vs. Total) and click **"View Diagnostics…"** to open a diagnostic inspection sheet. The sheet displays the book title, author, and specific parsing error message (e.g. missing preface elements, malformed HTML, or unparseable metadata), with a button to open each failed book directly in the reader for inspection.
 
 ---
 

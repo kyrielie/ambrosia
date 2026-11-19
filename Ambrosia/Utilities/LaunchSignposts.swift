@@ -39,7 +39,10 @@ enum LaunchSignposts {
     static func membershipBump(caller: String, visibilityVersion: Int, collectionVersion: Int) {
         event("visibilityCollectionVersionBump")
         logger.info(
-            "membership versions visibility=\(visibilityVersion, privacy: .public) collection=\(collectionVersion, privacy: .public) from \(caller, privacy: .public)"
+            """
+            membership versions visibility=\(visibilityVersion, privacy: .public) \
+            collection=\(collectionVersion, privacy: .public) from \(caller, privacy: .public)
+            """
         )
     }
 }

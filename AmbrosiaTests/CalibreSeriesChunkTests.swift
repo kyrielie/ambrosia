@@ -33,7 +33,7 @@ final class CalibreSeriesChunkTests: XCTestCase {
         XCTAssertFalse(all.isEmpty)
         let maxID = await library.allBookIDs().max() ?? 0
         for windowSize in [1, 7, 5_000] {
-            var chunked: [SeriesCacheEntry] = []
+            var chunked: [SeriesCacheWriteInput] = []
             var lower = 0
             while lower < maxID {
                 let upper = lower + windowSize

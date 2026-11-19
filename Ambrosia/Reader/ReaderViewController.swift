@@ -1848,6 +1848,20 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         CollectionAssignment.toggleReadLater(calibreIDs: [activeCalibreID], session: session)
     }
 
+    @objc func toggleLikeCurrentSeries(_ sender: Any?) {
+        guard case .series(let series) = target,
+              let session = AppDelegate.shared?.session else { return }
+        CollectionAssignment.toggleLiked(series: series, session: session)
+        AppDelegate.shared?.updateReaderMenuState()
+    }
+
+    @objc func toggleReadLaterCurrentSeries(_ sender: Any?) {
+        guard case .series(let series) = target,
+              let session = AppDelegate.shared?.session else { return }
+        CollectionAssignment.toggleReadLater(series: series, session: session)
+        AppDelegate.shared?.updateReaderMenuState()
+    }
+
     // MARK: - Point annotations (⌘D)
 
     private func savePointAnnotationAtCurrentPosition() {

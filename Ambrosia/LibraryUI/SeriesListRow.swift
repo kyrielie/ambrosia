@@ -5,11 +5,11 @@ import UniformTypeIdentifiers
 struct SeriesListRow: View, Equatable {
     let series: SeriesGroup
     let hideFanworksTagPill: Bool
-    let isLiked: Bool
+    let likeState: SeriesLikeState
     let onTagTap: (String, FilterField) -> Void
     let onLikeToggle: () -> Void
     let onOpen: () -> Void
-    let isInReadLater: Bool
+    let readLaterState: SeriesLikeState
     let onReadLaterToggle: () -> Void
     let onSkip: () -> Void
     let onMarkRead: () -> Void
@@ -29,8 +29,8 @@ struct SeriesListRow: View, Equatable {
     static func == (lhs: SeriesListRow, rhs: SeriesListRow) -> Bool {
         lhs.series               == rhs.series
             && lhs.hideFanworksTagPill == rhs.hideFanworksTagPill
-            && lhs.isLiked             == rhs.isLiked
-            && lhs.isInReadLater       == rhs.isInReadLater
+            && lhs.likeState           == rhs.likeState
+            && lhs.readLaterState      == rhs.readLaterState
             && lhs.activeCollectionID  == rhs.activeCollectionID
             && lhs.isSelected          == rhs.isSelected
     }
@@ -58,17 +58,19 @@ struct SeriesListRow: View, Equatable {
                 .help(series.missingIndices.isEmpty ? "Show series index" : "Missing works")
                 .popover(isPresented: $showIndex) { indexPopover }
                 Button(action: onReadLaterToggle) {
-                    Image(systemName: isInReadLater ? "bookmark.fill" : "bookmark")
-                        .foregroundStyle(isInReadLater ? Color.accentColor : Color.secondary)
+                    Image(systemName: readLaterState == .none ? "bookmark" : "bookmark.fill")
+                        .foregroundStyle(readLaterState == .full ? Color.accentColor : (readLaterState == .partial ? Color.orange : Color.secondary))
                 }
                 .buttonStyle(.borderless)
-                .help(isInReadLater ? "Remove from Read Later" : "Add to Read Later")
+                .disabled(!series.isFlaggable)
+                .help(readLaterState == .full ? "Remove Series from Read Later" : "Add Series to Read Later")
                 Button(action: onLikeToggle) {
-                    Image(systemName: isLiked ? "star.fill" : "star")
-                        .foregroundStyle(isLiked ? Color.yellow : Color.secondary)
+                    Image(systemName: likeState == .full ? "star.fill" : (likeState == .partial ? "star.leadinghalf.filled" : "star"))
+                        .foregroundStyle(likeState == .full ? Color.yellow : (likeState == .partial ? Color.orange : Color.secondary))
                 }
                 .buttonStyle(.borderless)
-                .help(isLiked ? "Unlike Series" : "Like Series")
+                .disabled(!series.isFlaggable)
+                .help(likeState == .full ? "Unlike Series" : "Like Series")
             }
             Text(series.displayAuthors)
                 .font(.subheadline)
@@ -98,8 +100,8 @@ struct SeriesListRow: View, Equatable {
                 AppDelegate.shared?.revealInFinder(books: series.works)
             }
             Divider()
-            Button(isLiked ? "Unlike Series" : "Like Series", action: onLikeToggle)
-            Button(isInReadLater ? "Remove Series from Read Later" : "Add Series to Read Later",
+            Button(likeState == .full ? "Unlike Series" : "Like Series", action: onLikeToggle)
+            Button(readLaterState == .full ? "Remove Series from Read Later" : "Add Series to Read Later",
                    action: onReadLaterToggle)
             Button("Mark Series as Read", action: onMarkRead)
             Button("Reset Series Reading Progress", action: onResetProgress)

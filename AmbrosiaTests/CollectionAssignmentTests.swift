@@ -40,9 +40,12 @@ final class CollectionAssignmentTests: XCTestCase {
         XCTAssertTrue(session.explicitReadLaterIDs.contains(bookID))
 
         // Wait for debouncer (200ms) to settle and write to store
-        try await Task.sleep(nanoseconds: 500_000_000)
-
-        let members = try await store.members(of: SystemCollectionID.readLater)
+        let deadline = Date().addingTimeInterval(2.0)
+        var members = try await store.members(of: SystemCollectionID.readLater)
+        while !members.contains(bookID) && Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            members = try await store.members(of: SystemCollectionID.readLater)
+        }
         XCTAssertTrue(members.contains(bookID))
         XCTAssertTrue(session.explicitReadLaterIDs.contains(bookID))
 
@@ -56,9 +59,12 @@ final class CollectionAssignmentTests: XCTestCase {
         CollectionAssignment.toggleReadLater(calibreIDs: [bookID], session: session)
         XCTAssertFalse(session.explicitReadLaterIDs.contains(bookID))
 
-        try await Task.sleep(nanoseconds: 500_000_000)
-
-        let membersAfter = try await store.members(of: SystemCollectionID.readLater)
+        let deadlineAfter = Date().addingTimeInterval(2.0)
+        var membersAfter = try await store.members(of: SystemCollectionID.readLater)
+        while membersAfter.contains(bookID) && Date() < deadlineAfter {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            membersAfter = try await store.members(of: SystemCollectionID.readLater)
+        }
         XCTAssertFalse(membersAfter.contains(bookID))
         XCTAssertFalse(session.explicitReadLaterIDs.contains(bookID))
     }
@@ -76,18 +82,21 @@ final class CollectionAssignmentTests: XCTestCase {
         }
 
         XCTAssertTrue(Set(calibreIDs).isSubset(of: session.explicitLikedIDs))
-        try await Task.sleep(nanoseconds: 500_000_000)
+        let deadline = Date().addingTimeInterval(2.0)
+        while refreshCount == 0 && Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
 
         XCTAssertEqual(refreshCount, 1)
         let persistedIDs = Set(try await store.likedIDs())
         XCTAssertTrue(Set(calibreIDs).isSubset(of: persistedIDs))
     }
 
-    func testEffectiveMembershipCurrentlyMatchesExplicitMembership() {
+    func testEffectiveMembershipIsStoredSeparatelyFromExplicitMembership() {
         session.explicitLikedIDs = [7, 8]
         session.explicitReadLaterIDs = [9]
-        XCTAssertEqual(session.effectiveLikedIDs, session.explicitLikedIDs)
-        XCTAssertEqual(session.effectiveReadLaterIDs, session.explicitReadLaterIDs)
+        XCTAssertTrue(session.effectiveLikedIDs.isEmpty)
+        XCTAssertTrue(session.effectiveReadLaterIDs.isEmpty)
     }
 
     func testOverlappingRapidBatchesPersistFinalPerWorkStates() async throws {
@@ -104,7 +113,10 @@ final class CollectionAssignmentTests: XCTestCase {
             refreshCount += 1
         }
 
-        try await Task.sleep(nanoseconds: 500_000_000)
+        let deadline = Date().addingTimeInterval(2.0)
+        while refreshCount == 0 && Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
 
         let persistedIDs = Set(try await store.likedIDs())
         XCTAssertFalse(persistedIDs.contains(1_101))

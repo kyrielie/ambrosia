@@ -339,13 +339,13 @@ struct LibraryRootView: View {
         SeriesListRow(
             series: series,
             hideFanworksTagPill: prefs.hideFanworksTagPill,
-            isLiked: series.works.allSatisfy { session.effectiveLikedIDs.contains($0.id) },
+            likeState: session.seriesLikeState(for: series, collectionID: SystemCollectionID.liked),
             onTagTap: { tag, field in
                 addTagPillRule(tag: tag, field: field)
             },
             onLikeToggle: { toggleLike(for: series) },
             onOpen: { AppDelegate.shared?.openReaderWindow(target: .series(series)) },
-            isInReadLater: series.works.allSatisfy { session.effectiveReadLaterIDs.contains($0.id) },
+            readLaterState: session.seriesLikeState(for: series, collectionID: SystemCollectionID.readLater),
             onReadLaterToggle: { toggleReadLater(for: series) },
             onSkip: { skip(series.works) },
             onMarkRead: { markRead(series.works) },
@@ -380,7 +380,14 @@ struct LibraryRootView: View {
         Task {
             guard let collections = try? await session.collectionStore?.collections(),
                   let match = collections.first(where: { $0.name == collectionName }) else { return }
-            try? await session.collectionStore?.bulkRemove(calibreIDs: calibreIDs, from: match.id)
+            if match.id == SystemCollectionID.liked || match.id == SystemCollectionID.readLater {
+                _ = try? await session.collectionStore?.setWorkFlags(
+                    collectionID: match.id,
+                    desired: Dictionary(uniqueKeysWithValues: calibreIDs.map { ($0, false) })
+                )
+            } else {
+                try? await session.collectionStore?.bulkRemove(calibreIDs: calibreIDs, from: match.id)
+            }
             CollectionAssignment.didAssign(session: session) {
                 Task { await displayController.refreshVisibilitySnapshots(resetPage: false) }
             }
@@ -394,7 +401,7 @@ struct LibraryRootView: View {
     }
 
     private func toggleLike(for series: SeriesGroup) {
-        CollectionAssignment.toggleLiked(calibreIDs: series.works.map(\.id), session: session) {
+        CollectionAssignment.toggleLiked(series: series, session: session) {
             await displayController.refreshVisibilitySnapshots(resetPage: false)
         }
     }
@@ -406,7 +413,7 @@ struct LibraryRootView: View {
     }
 
     private func toggleReadLater(for series: SeriesGroup) {
-        CollectionAssignment.toggleReadLater(calibreIDs: series.works.map(\.id), session: session) {
+        CollectionAssignment.toggleReadLater(series: series, session: session) {
             await displayController.refreshVisibilitySnapshots(resetPage: false)
         }
     }
@@ -420,16 +427,17 @@ struct LibraryRootView: View {
     private func addToReadLater(_ books: [CalibreBook]) {
         let ids = books.map(\.id)
         Task {
-            try? await session.collectionStore?.bulkAdd(calibreIDs: ids, to: SystemCollectionID.readLater)
+            _ = try? await session.collectionStore?.setWorkFlags(
+                collectionID: SystemCollectionID.readLater,
+                desired: Dictionary(uniqueKeysWithValues: ids.map { ($0, true) })
+            )
             await displayController.refreshVisibilitySnapshots(resetPage: false)
         }
     }
 
     private func skip(_ books: [CalibreBook]) {
         Task {
-            for book in books {
-                try? await session.collectionStore?.skipBook(calibreID: book.id)
-            }
+            try? await session.collectionStore?.skip(calibreIDs: books.map(\.id))
             await displayController.refreshVisibilitySnapshots(resetPage: false)
         }
     }

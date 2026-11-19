@@ -18,6 +18,17 @@ enum CollectionAssignment {
     private static var pendingLikedIDs: Set<Int> = []
     private static var pendingReadLaterRefresh: (() async -> Void)?
     private static var pendingLikedRefresh: (() async -> Void)?
+    private static var pendingSeriesActions: [String: [SeriesPressAction]] = [:]
+    private static var pendingSeriesRefresh: [String: (() async -> Void)] = [:]
+    private static var seriesActionTasks: [String: Task<Void, Never>] = [:]
+    private(set) static var inFlightSeriesFlagKeys: Set<String> = []
+
+    static func inFlightSeriesIDs(collectionID: String) -> Set<Int> {
+        Set(inFlightSeriesFlagKeys.compactMap { key in
+            guard key.hasPrefix(collectionID + "|") else { return nil }
+            return Int(key.dropFirst(collectionID.count + 1))
+        })
+    }
 
     static func didAssign(session: LibrarySession, onRefresh: () -> Void) {
         session.bumpCollectionVersion()
@@ -31,11 +42,15 @@ enum CollectionAssignment {
         onRefresh: (() async -> Void)? = nil
     ) {
         guard !calibreIDs.isEmpty else { return }
-        let shouldLike = !calibreIDs.allSatisfy { session.explicitLikedIDs.contains($0) }
-        if shouldLike {
-            for id in calibreIDs { session.explicitLikedIDs.insert(id) }
-        } else {
-            for id in calibreIDs { session.explicitLikedIDs.remove(id) }
+        let shouldLike = !calibreIDs.allSatisfy { session.effectiveLikedIDs.contains($0) }
+        for id in calibreIDs {
+            if shouldLike {
+                if !session.effectiveLikedIDs.contains(id) { session.explicitLikedIDs.insert(id) }
+                session.effectiveLikedIDs.insert(id)
+            } else {
+                session.explicitLikedIDs.remove(id)
+                session.effectiveLikedIDs.remove(id)
+            }
         }
         session.noteOptimisticCollectionMutation()
 
@@ -51,8 +66,8 @@ enum CollectionAssignment {
             pendingLikedIDs.subtract(ids)
             let refresh = pendingLikedRefresh
             pendingLikedRefresh = nil
-            let states = Dictionary(uniqueKeysWithValues: ids.map { ($0, session.explicitLikedIDs.contains($0)) })
-            try? await session.collectionStore?.setLiked(states: states)
+            let states = Dictionary(uniqueKeysWithValues: ids.map { ($0, session.effectiveLikedIDs.contains($0)) })
+            _ = try? await session.collectionStore?.setWorkFlags(collectionID: SystemCollectionID.liked, desired: states)
             session.noteCollectionMutationPersisted()
             inFlightLikedIDs.subtract(ids.subtracting(pendingLikedIDs))
             await refresh?()
@@ -66,11 +81,15 @@ enum CollectionAssignment {
         onRefresh: (() async -> Void)? = nil
     ) {
         guard !calibreIDs.isEmpty else { return }
-        let shouldAdd = !calibreIDs.allSatisfy { session.explicitReadLaterIDs.contains($0) }
-        if shouldAdd {
-            for id in calibreIDs { session.explicitReadLaterIDs.insert(id) }
-        } else {
-            for id in calibreIDs { session.explicitReadLaterIDs.remove(id) }
+        let shouldAdd = !calibreIDs.allSatisfy { session.effectiveReadLaterIDs.contains($0) }
+        for id in calibreIDs {
+            if shouldAdd {
+                if !session.effectiveReadLaterIDs.contains(id) { session.explicitReadLaterIDs.insert(id) }
+                session.effectiveReadLaterIDs.insert(id)
+            } else {
+                session.explicitReadLaterIDs.remove(id)
+                session.effectiveReadLaterIDs.remove(id)
+            }
         }
         session.noteOptimisticCollectionMutation()
 
@@ -86,11 +105,96 @@ enum CollectionAssignment {
             pendingReadLaterIDs.subtract(ids)
             let refresh = pendingReadLaterRefresh
             pendingReadLaterRefresh = nil
-            let states = Dictionary(uniqueKeysWithValues: ids.map { ($0, session.explicitReadLaterIDs.contains($0)) })
-            try? await session.collectionStore?.setReadLater(states: states)
+            let states = Dictionary(uniqueKeysWithValues: ids.map { ($0, session.effectiveReadLaterIDs.contains($0)) })
+            _ = try? await session.collectionStore?.setWorkFlags(collectionID: SystemCollectionID.readLater, desired: states)
             session.noteCollectionMutationPersisted()
             inFlightReadLaterIDs.subtract(ids.subtracting(pendingReadLaterIDs))
             await refresh?()
+        }
+    }
+
+    static func toggleLiked(series: SeriesGroup, session: LibrarySession,
+                            onRefresh: (() async -> Void)? = nil) {
+        toggleSeriesFlag(series: series, collectionID: SystemCollectionID.liked, session: session, onRefresh: onRefresh)
+    }
+
+    static func toggleReadLater(series: SeriesGroup, session: LibrarySession,
+                                onRefresh: (() async -> Void)? = nil) {
+        toggleSeriesFlag(series: series, collectionID: SystemCollectionID.readLater, session: session, onRefresh: onRefresh)
+    }
+
+    private static func toggleSeriesFlag(series: SeriesGroup, collectionID: String,
+                                         session: LibrarySession,
+                                         onRefresh: (() async -> Void)?) {
+        guard series.isFlaggable, let seriesID = series.seriesID else { return }
+        var flags = collectionID == SystemCollectionID.readLater ? session.readLaterSeriesFlags : session.likedSeriesFlags
+        let currentFlag = flags[seriesID]
+        var covering: [Int: String] = [:]
+        for (otherID, flag) in flags where otherID != seriesID {
+            for memberID in flag.memberIDs where !flag.exclusions.contains(memberID) {
+                covering[memberID] = flag.seriesName
+            }
+        }
+        let memberIDs = Set(series.works.map(\.id))
+        let effective = collectionID == SystemCollectionID.readLater ? session.effectiveReadLaterIDs : session.effectiveLikedIDs
+        let explicit = collectionID == SystemCollectionID.readLater ? session.explicitReadLaterIDs : session.explicitLikedIDs
+        let plan = SeriesPressPlanner.plan(
+            flagIsSet: currentFlag != nil,
+            exclusions: currentFlag?.exclusions ?? [],
+            displayedMemberIDs: memberIDs,
+            effectiveIDs: effective,
+            explicitIDs: explicit,
+            coveringSeriesByMember: covering
+        )
+        guard !plan.actions.isEmpty else { return }
+        for action in plan.actions {
+            switch action {
+            case .clearExclusions:
+                if let flag = flags[seriesID] {
+                    flags[seriesID] = SeriesCollectionFlag(seriesID: seriesID, seriesName: flag.seriesName,
+                                                          memberIDs: flag.memberIDs, exclusions: [])
+                }
+            case .clearFlag:
+                flags[seriesID] = nil
+            case .clearExplicit(let ids):
+                if collectionID == SystemCollectionID.readLater {
+                    session.explicitReadLaterIDs.subtract(ids)
+                } else {
+                    session.explicitLikedIDs.subtract(ids)
+                }
+            case .setFlag:
+                flags[seriesID] = SeriesCollectionFlag(seriesID: seriesID, seriesName: series.seriesName,
+                                                      memberIDs: memberIDs, exclusions: [])
+            }
+        }
+        if collectionID == SystemCollectionID.readLater {
+            session.readLaterSeriesFlags = flags
+        } else {
+            session.likedSeriesFlags = flags
+        }
+        session.recomputeEffectiveFlags(collectionID: collectionID, calibreIDs: memberIDs)
+        session.noteOptimisticCollectionMutation()
+
+        let queueKey = "\(collectionID)|\(seriesID)"
+        pendingSeriesActions[queueKey, default: []].append(contentsOf: plan.actions)
+        inFlightSeriesFlagKeys.insert(queueKey)
+        if let onRefresh { pendingSeriesRefresh[queueKey] = onRefresh }
+        guard seriesActionTasks[queueKey] == nil else { return }
+        seriesActionTasks[queueKey] = Task { @MainActor in
+            while !Task.isCancelled {
+                await Task.yield()
+                let actions = pendingSeriesActions.removeValue(forKey: queueKey) ?? []
+                if actions.isEmpty { break }
+                let refresh = pendingSeriesRefresh[queueKey]
+                _ = try? await session.collectionStore?.applySeriesActions(
+                    collectionID: collectionID, seriesID: seriesID, actions: actions
+                )
+                session.noteCollectionMutationPersisted()
+                await refresh?()
+            }
+            seriesActionTasks[queueKey] = nil
+            pendingSeriesRefresh[queueKey] = nil
+            inFlightSeriesFlagKeys.remove(queueKey)
         }
     }
 }

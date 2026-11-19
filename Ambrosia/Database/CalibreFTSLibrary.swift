@@ -74,12 +74,26 @@ actor CalibreFTSLibrary {
             log("could not stat \(ftsURL.path)")
             return nil
         }
-        let conn: Connection
+        var conn: Connection
         do {
             conn = try Connection(ftsURL.path, readonly: true)
         } catch {
-            log("could not open full-text-search.db read-only: \(error)")
-            return nil
+            // When an interrupted process leaves a hot rollback journal (-journal) or WAL,
+            // SQLite refuses to open read-only (error: attempt to write a readonly database)
+            // because recovery requires write access. If the file is writable, opening
+            // read-write once lets SQLite recover the journal cleanly before opening read-only.
+            if FileManager.default.isWritableFile(atPath: ftsURL.path),
+               let recovered = try? Connection(ftsURL.path, readonly: false) {
+                _ = try? recovered.execute("PRAGMA schema_version;")
+                do {
+                    conn = try Connection(ftsURL.path, readonly: true)
+                } catch {
+                    conn = recovered
+                }
+            } else {
+                log("could not open full-text-search.db read-only: \(error)")
+                return nil
+            }
         }
         conn.busyTimeout = 10   // D14: matches Calibre's own 10 s busy timeout
 

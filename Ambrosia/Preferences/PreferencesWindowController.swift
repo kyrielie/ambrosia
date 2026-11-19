@@ -1672,7 +1672,7 @@ private struct DataTab: View {
                 if reachable {
                     if !isActive {
                         Button("Switch") {
-                            AppDelegate.shared?.openLibraryAtURL(URL(fileURLWithPath: entry.lastKnownPath))
+                            AppDelegate.shared?.openLibraryAtURL(URL(fileURLWithPath: entry.lastKnownPath), activateLibraryWindow: false)
                             reloadKnownLibraries()
                         }
                         .controlSize(.small)
@@ -1701,7 +1701,7 @@ private struct DataTab: View {
                 }
                 if !isActive {
                     Button("Switch to Library") {
-                        AppDelegate.shared?.openLibraryAtURL(URL(fileURLWithPath: entry.lastKnownPath))
+                        AppDelegate.shared?.openLibraryAtURL(URL(fileURLWithPath: entry.lastKnownPath), activateLibraryWindow: false)
                         reloadKnownLibraries()
                     }
                 }
@@ -2167,30 +2167,6 @@ private struct AO3ExtractionDiagnosticsSheet: View {
             var items: [AO3ExtractionDiagnostic] = []
             if let metaDB = session.metaDB {
                 items = (try? await metaDB.allAO3Diagnostics(failedOnly: false)) ?? []
-            }
-            if let library = session.library, let metaDB = session.metaDB {
-                let allIDs = await library.allBookIDs()
-                let extractedIDs = (try? await metaDB.existingAO3MetadataIDs()) ?? []
-                let diagnosticIDs = Set(items.map(\.calibreID))
-                let missingIDs = allIDs.filter { !extractedIDs.contains($0) && !diagnosticIDs.contains($0) }
-                if !missingIDs.isEmpty {
-                    let missingBooks = await library.booksForIDs(missingIDs)
-                    let now = ISO8601DateFormatter().string(from: Date())
-                    for book in missingBooks {
-                        let epub = await library.epubURL(calibreID: book.id)
-                        let diag = AO3ExtractionDiagnostic(
-                            calibreID: book.id,
-                            status: "skipped",
-                            reason: epub == nil ? "No EPUB file found in library" : "No AO3 preface metadata (dl.tags) found in EPUB",
-                            epubPath: epub?.path,
-                            epubFilename: epub?.lastPathComponent ?? book.title,
-                            spineItemsChecked: epub == nil ? 0 : 5,
-                            attemptedAt: now
-                        )
-                        items.append(diag)
-                        try? await metaDB.insert(diag)
-                    }
-                }
             }
             diagnostics = items.sorted { $0.calibreID < $1.calibreID }
             if let library = session.library {

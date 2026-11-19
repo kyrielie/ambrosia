@@ -140,6 +140,14 @@ The list `NSHostingView` stays alive while hidden, so its handlers must not act 
 - `LibraryViewController` clears `filterCommitHandler` when it hides the list, and the list re-registers it from `.onChange(of: isListSurfaceTornDown)` as well as `.onAppear`, because SwiftUI may not call `.onAppear` when a hidden hosting view is shown again. Whether it does is gate L1 (not yet run).
 - `applyViewMode` ignores a repeated mode so a same-value observation callback does not rebuild a surface.
 
+Series Like and Read Later buttons operate on the stable series identity in
+grouped List, Email, and series Reader views. Their states distinguish none,
+partial, and full membership. A work-level unlike inserts exclusions for each
+flagged series that covers the work; it never writes inherited membership as
+an explicit work flag. Name-only series cannot be flagged. The series Reader
+toolbar and Reader menu expose series actions only for a series reading target,
+and its window subtitle follows the active work.
+
 ## First-load gating
 
 `LibraryRootView.loadPage` and `EmailLibraryViewController.loadPage` return immediately while `session.snapshotsReady` is false. When the session posts `.librarySnapshotsDidBecomeReady` each surface seeds its local membership sets from `session.cached*` and schedules the real first load. A surface mounted after the session is ready (a mode switch) behaves as before. Do not add a new first-load trigger that bypasses the guard; before the guard existed the first page loaded with empty visibility sets and was rebuilt by a second load when the Series or Merged sync notification arrived.

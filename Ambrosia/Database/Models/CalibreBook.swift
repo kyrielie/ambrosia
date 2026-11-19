@@ -153,6 +153,7 @@ private extension String {
 }
 
 struct SeriesCacheEntry: Hashable, Sendable {
+    let seriesID: Int?
     let calibreID: Int
     let seriesName: String
     let seriesIndex: Int
@@ -170,7 +171,23 @@ struct SeriesCacheEntry: Hashable, Sendable {
     /// libraries/rows that haven't been backfilled). Two distinct Calibre
     /// series sharing a name previously collided under the name-only key;
     /// this fixes that as soon as `calibreSeriesID` is populated. See Bug 3.
-    var seriesKey: String {
+    let seriesKey: String
+
+    init(seriesID: Int? = nil, calibreID: Int, seriesName: String, seriesIndex: Int,
+         ao3SeriesID: String?, isAnthology: Bool, calibreSeriesID: Int?, seriesKey: String? = nil) {
+        self.seriesID = seriesID
+        self.calibreID = calibreID
+        self.seriesName = seriesName
+        self.seriesIndex = seriesIndex
+        self.ao3SeriesID = ao3SeriesID
+        self.isAnthology = isAnthology
+        self.calibreSeriesID = calibreSeriesID
+        self.seriesKey = seriesKey ?? Self.derivedKey(ao3SeriesID: ao3SeriesID,
+                                                       calibreSeriesID: calibreSeriesID,
+                                                       seriesName: seriesName)
+    }
+
+    private static func derivedKey(ao3SeriesID: String?, calibreSeriesID: Int?, seriesName: String) -> String {
         if let ao3SeriesID, !ao3SeriesID.isEmpty {
             return "ao3:\(ao3SeriesID)"
         }
@@ -179,6 +196,22 @@ struct SeriesCacheEntry: Hashable, Sendable {
         }
         return "calibre-name:\(seriesName)"
     }
+}
+
+struct SeriesCacheWriteInput: Hashable, Sendable {
+    let calibreID: Int
+    let seriesName: String
+    let seriesIndex: Int
+    let ao3SeriesID: String?
+    let isAnthology: Bool
+    let calibreSeriesID: Int?
+}
+
+struct SeriesCollectionFlag: Equatable, Sendable {
+    let seriesID: Int
+    let seriesName: String
+    let memberIDs: Set<Int>
+    let exclusions: Set<Int>
 }
 
 struct SeriesPlaceholder: Hashable, Sendable {
@@ -202,6 +235,8 @@ struct SingletonSeriesWarning: Hashable, Sendable {
 struct SeriesGroup: Identifiable, Hashable {
     let id: String
     let seriesKey: String
+    let seriesID: Int?
+    let isFlaggable: Bool
     let seriesName: String
     let works: [CalibreBook]
     let allFandoms: [String]
@@ -228,6 +263,8 @@ struct SeriesGroup: Identifiable, Hashable {
     init(
         id: String,
         seriesKey: String,
+        seriesID: Int? = nil,
+        isFlaggable: Bool = false,
         seriesName: String,
         works: [CalibreBook],
         allFandoms: [String],
@@ -254,6 +291,8 @@ struct SeriesGroup: Identifiable, Hashable {
         precondition(!works.isEmpty, "SeriesGroup must be constructed with at least one work")
         self.id = id
         self.seriesKey = seriesKey
+        self.seriesID = seriesID
+        self.isFlaggable = isFlaggable
         self.seriesName = seriesName
         self.works = works
         self.allFandoms = allFandoms

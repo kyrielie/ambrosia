@@ -77,12 +77,19 @@ struct FilterEvaluator {
     /// then always a subset of `candidates`. Returns nil when cancelled.
     func evaluate(expression: FilterExpression,
                   fulltextMap: [String: Set<Int>],
-                  candidates: Set<Int>? = nil) async -> Output? {
+                  candidates: Set<Int>? = nil,
+                  collectionMapOverride: [String: Set<Int>]? = nil) async -> Output? {
         let rules = expression.groups.flatMap(\.rules)
 
         let needsCollection = rules.contains { $0.field == .collection }
-        var collectionMap: [String: Set<Int>] = needsCollection
-            ? ((try? await collectionStore?.membershipMap()) ?? [:]) : [:]
+        var collectionMap: [String: Set<Int>] = [:]
+        if needsCollection {
+            collectionMap = if let collectionMapOverride {
+                collectionMapOverride
+            } else {
+                (try? await collectionStore?.membershipMap()) ?? [:]
+            }
+        }
         let statusValues = Set(rules.filter { $0.field == .status }
                                     .compactMap { AO3CompletionStatus(userValue: $0.value) })
         var statusMap: [AO3CompletionStatus: Set<Int>] = [:]

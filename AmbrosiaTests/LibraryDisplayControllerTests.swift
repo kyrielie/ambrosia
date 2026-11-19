@@ -36,6 +36,22 @@ final class LibraryDisplayControllerTests: XCTestCase {
         XCTAssertFalse(controller.didFinishFirstLoad)
     }
 
+    func testPinnedCollectionMembershipKeepsItsCapturedValues() {
+        session.collectionMembershipByName = ["Custom": [1]]
+        session.explicitLikedIDs = [2]
+        session.effectiveLikedIDs = [2]
+        session.effectiveReadLaterIDs = [3]
+        let pinned = session.pinnableCollectionMembership()
+
+        session.collectionMembershipByName["Custom"] = [4]
+        session.effectiveLikedIDs = [5]
+        session.effectiveReadLaterIDs = [6]
+
+        XCTAssertEqual(pinned["Custom"], [1])
+        XCTAssertEqual(pinned["Liked"], [2])
+        XCTAssertEqual(pinned["Read Later"], [3])
+    }
+
     func testSelectionResolution() {
         let book1 = CalibreBook(
             id: 1,

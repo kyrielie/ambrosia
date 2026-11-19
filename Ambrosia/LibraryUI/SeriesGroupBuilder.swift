@@ -87,6 +87,8 @@ func buildSeriesGroups(
         seriesByKey[seriesKey] = SeriesGroup(
             id: seriesKey,
             seriesKey: seriesKey,
+            seriesID: filteredSortedEntries.first?.seriesID,
+            isFlaggable: filteredSortedEntries.first.map { $0.ao3SeriesID != nil || $0.calibreSeriesID != nil } ?? false,
             seriesName: filteredSortedEntries.first?.seriesName ?? seriesKey,
             works: sortedSeriesWorks(works, using: filteredSortedEntries),
             allFandoms: fandoms,

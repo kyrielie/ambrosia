@@ -16,7 +16,9 @@ see `swiftdata-store.md`.
 - `collections`, `collection_members`.
 - `annotations`.
 - `ao3_metadata`, `ao3_extraction_diagnostics`.
-- `series_cache`, `series_placeholders`.
+- `series` (stable series identity), `series_cache` (book membership),
+  `series_collection_members`, `series_collection_exclusions`,
+  `effective_collection_members`, and `series_placeholders`.
 - `canonical_tags`, `tag_synonyms`, `tag_parent_links`, `tag_subtag_sections`.
 - `reading_history`, `book_opens` (write path wired up: `startReadingSession`, `updateReadingSession`, `closeZombieReadingSessions` are called from the reader session lifecycle).
 - `error_log` — a general-purpose, prunable failure trail (`logError`/`recentErrors`/`pruneErrorLog`/`clearErrorLog`), viewable via `ErrorLogView` (Export menu → "Error Log…"). Complements, not replaces, `ao3_extraction_diagnostics`'s scoped-per-subsystem diagnostics.
@@ -41,7 +43,9 @@ see `swiftdata-store.md`.
 
 Annotation inserts/deletes maintain `Has Annotations` membership. Series/anthology sync maintains `Series or Merged` membership for collapsed non-leading series members and anthology-style merged works.
 
-**Migration note:** Most migrations in `runMigrations` are still gated with `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN` wrapped in `try?`, which is fine for additive, idempotent changes. The destructive `series_placeholders` -> `series_placeholders_keyed` migration in `createAO3Metadata` is now gated on `PRAGMA user_version` and wrapped in a transaction, so it runs exactly once and a crash mid-migration can't strand the table. Use this migration as the template for any future destructive schema change; do not revert to `IF NOT EXISTS`-only gating for anything that drops or renames a table.
+**Series schema reset:** Series identity is stored in `series.series_key`; `series_cache` contains only `(calibre_id, series_id, series_index, is_anthology)`. The effective membership view combines explicit collection rows with series-derived rows and exclusions. The view is dropped and recreated on every open so its definition stays current. There is no automatic migration for the old `series_cache` format: after installing the schema-changing build, quit Ambrosia, run `DROP TABLE IF EXISTS series_cache;` against that library's `ambrosia_meta.db`, relaunch, then run Re-extract in Preferences. This drops only derived series membership; do not delete the database or `series_placeholders`. Do not open the new build against the old `series_cache` shape before doing this reset.
+
+Series identities survive extraction rewrites: AO3 IDs resolve to `ao3:<id>`, Calibre IDs to `calibre:<id>`, and name-only rows to a creation-time `calibre-name:<name>` key. Name-only resolution trims, case-folds, and collapses whitespace. If a Calibre series later becomes AO3-sourced, its old flag remains dormant on the Calibre series row; there is no Calibre-to-AO3 flag transfer. `series_placeholders` remains keyed by `series_key` and has no active writer.
 
 
 ---

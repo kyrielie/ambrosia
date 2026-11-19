@@ -96,6 +96,8 @@ Testing), against 112 source files (updated October 2026 after Phases 1–6).
 | `LibraryIndexManager` | `LibraryIndexManagerTests` |
 | `AO3TagSeedDatabaseConfig` | `AO3TagSeedDatabaseConfigValidationTests`, `AO3TagSeedDatabaseConfigInstanceTests` |
 | `ExtractionProgress` | `ExtractionProgressTests` |
+| `EPUBWordCounter` | `EPUBWordCounterTests` |
+| Extraction raw-read path (`rawXHTML`, `parse(skipTOC:)`, `Document` overloads) | `ExtractionRawReadTests` |
 | `LibraryQueryHelpers`, `LibraryVisibilityPolicy`, `DuplicateBookDetector` | `LibraryQueryHelpersTests`, `LibraryVisibilityPolicyTests`, `DuplicateBookDetectorTests` |
 | `KeyBinding.validate` | `KeyBindingValidationTests` |
 | `CollectionStore`, `ErrorLogEntry` storage | `CollectionStoreTests`, `ErrorLogTests` |
@@ -113,6 +115,7 @@ Testing), against 112 source files (updated October 2026 after Phases 1–6).
 | `RuleMatchCache` | `RuleMatchCacheTests` |
 | `LibraryFilterDebug` | `LibraryFilterDebugSummaryTests` |
 | `AmbrosiaMetaDB` migrations | `AmbrosiaMetaDBMigrationTests` |
+| Normalized name-only series identity | `NormalizedSeriesNameTests` |
 | `LocalFeedServer` walk cache | `LocalFeedServerWalkCacheTests` |
 | `LibraryQueryHelpers` full-text cache key and `fulltextMap` | `FulltextCacheKeyTests` |
 | `FTSQuery` normalization, cache key, sanitized expression | `FTSQueryTests` |

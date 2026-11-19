@@ -65,6 +65,7 @@ actor AmbrosiaMetaDB {
     private var seriesEntriesByKeyCache: [String: [SeriesCacheEntry]] = [:]
     private var singletonWarningsCache: [Int: [SingletonSeriesWarning]] = [:]
     private var placeholdersCache: [String: [SeriesPlaceholder]] = [:]
+    private var hasSeriesFlagsCache: Bool?
     /// §7.3 (Phase 6): no reader caches book_index rows yet (§7.4 — the table
     /// isn't wired into any filter/sort/UI surface in this phase), but this
     /// exists now and is invalidated on every write so a future reader can
@@ -194,28 +195,18 @@ actor AmbrosiaMetaDB {
         try createReadingGoals(db: db)
         try createSchemaMigrations(db: db)
         try createLibraryState(db: db)
-        try bridgeLegacyUserVersionMigrations(db: db)
-        try migrateSeriesPlaceholdersToKeyedIfNeeded(db: db)
-        try dedupeSeriesCacheIfNeeded(db: db)
         try dropAO3AuthorUsernameIfNeeded(db: db)
         try migrateLegacySwiftDataIfNeeded(db: db)
         purgeLegacyTagSeedTablesIfPresent(db: db)
         try bootstrapSystemCollections(db: db)
-        backfillMissingDiagnosticsIfNeeded(db: db)
+        pruneStaleDiagnostics(db: db)
     }
 
     // MARK: - Migration tracking (Finding 13)
     //
-    // The two migrations below predate this table and were gated solely on
-    // PRAGMA user_version — a single global ordinal with no per-migration
-    // name record. That means a future migration must know the current
-    // highest version number *and* be appended after these two in
-    // runMigrations' call order, with nothing enforcing either constraint.
-    // schema_migrations replaces that with name-based membership checks, so
-    // new migrations can be added in any order without an ordinal to track.
-    // bridgeLegacyUserVersionMigrations backfills this table for installs
-    // that already ran the two user_version-gated migrations, so they are
-    // not re-run under the new check.
+    // Named records are retained for the AO3 author cleanup and legacy
+    // SwiftData import. Series schema replacement has no automatic migration;
+    // the derived cache is reset manually and rebuilt by Re-extract.
 
     private static func createSchemaMigrations(db: Connection) throws {
         try db.execute("""
@@ -249,16 +240,6 @@ actor AmbrosiaMetaDB {
             "INSERT OR IGNORE INTO schema_migrations (name, applied_at) VALUES (?, ?)",
             name, ISO8601DateFormatter().string(from: Date())
         )
-    }
-
-    private static func bridgeLegacyUserVersionMigrations(db: Connection) throws {
-        let version = (try? db.scalar("PRAGMA user_version")) as? Int64 ?? 0
-        if version >= seriesPlaceholdersKeyedMigrationVersion {
-            try markMigrationApplied(migrationNameSeriesPlaceholdersToKeyed, db: db)
-        }
-        if version >= dedupeSeriesCacheMigrationVersion {
-            try markMigrationApplied(migrationNameDedupeSeriesCache, db: db)
-        }
     }
 
     private static func createCollections(db: Connection) throws {
@@ -410,17 +391,58 @@ actor AmbrosiaMetaDB {
             try db.run("ALTER TABLE ao3_metadata ADD COLUMN author_names_json TEXT")
         }
         try db.execute("""
+        CREATE TABLE IF NOT EXISTS series (
+            series_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            series_key TEXT NOT NULL,
+            name TEXT NOT NULL,
+            ao3_series_id TEXT,
+            calibre_series_id INTEGER,
+            name_key TEXT,
+            created_at TEXT NOT NULL,
+            CHECK (ao3_series_id IS NULL OR ao3_series_id <> ''),
+            CHECK (ao3_series_id IS NOT NULL OR calibre_series_id IS NOT NULL OR name_key IS NOT NULL)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_series_key ON series(series_key);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_series_ao3 ON series(ao3_series_id) WHERE ao3_series_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_series_calibre ON series(calibre_series_id) WHERE calibre_series_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_series_name ON series(name_key) WHERE name_key IS NOT NULL;
+
         CREATE TABLE IF NOT EXISTS series_cache (
             calibre_id INTEGER NOT NULL,
-            series_name TEXT NOT NULL,
+            series_id INTEGER NOT NULL REFERENCES series(series_id),
             series_index INTEGER NOT NULL,
-            ao3_series_id TEXT,
             is_anthology INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (calibre_id, series_name)
+            PRIMARY KEY (calibre_id, series_id)
         );
+        CREATE INDEX IF NOT EXISTS idx_series_cache_series ON series_cache(series_id, series_index);
 
-        CREATE INDEX IF NOT EXISTS idx_series_cache_name ON series_cache(series_name);
-        CREATE INDEX IF NOT EXISTS idx_series_cache_calibre ON series_cache(calibre_id);
+        CREATE TABLE IF NOT EXISTS series_collection_members (
+            collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+            series_id INTEGER NOT NULL REFERENCES series(series_id) ON DELETE CASCADE,
+            added_at TEXT NOT NULL,
+            PRIMARY KEY (collection_id, series_id)
+        );
+        CREATE TABLE IF NOT EXISTS series_collection_exclusions (
+            collection_id TEXT NOT NULL,
+            series_id INTEGER NOT NULL,
+            calibre_id INTEGER NOT NULL,
+            PRIMARY KEY (collection_id, series_id, calibre_id),
+            FOREIGN KEY (collection_id, series_id)
+                REFERENCES series_collection_members(collection_id, series_id) ON DELETE CASCADE
+        );
+        DROP VIEW IF EXISTS effective_collection_members;
+        CREATE VIEW effective_collection_members AS
+        SELECT collection_id, calibre_id, added_at FROM collection_members
+        UNION ALL
+        SELECT f.collection_id, m.calibre_id, f.added_at
+        FROM series_collection_members f
+        JOIN series_cache m ON m.series_id = f.series_id
+        WHERE NOT EXISTS (
+            SELECT 1 FROM series_collection_exclusions x
+            WHERE x.collection_id = f.collection_id
+              AND x.series_id = f.series_id
+              AND x.calibre_id = m.calibre_id
+        );
 
         CREATE TABLE IF NOT EXISTS series_placeholders (
             series_name TEXT NOT NULL,
@@ -444,78 +466,52 @@ actor AmbrosiaMetaDB {
             ON ao3_extraction_diagnostics(status);
 
         """)
-        // calibre_series_id: Calibre's own series.id for a Calibre-fallback
-        // row (NULL for AO3-derived rows, and for rows written before this
-        // column existed). Lets seriesKey disambiguate two distinct Calibre
-        // series that happen to share a display name, instead of colliding
-        // under a name-only key. Additive per the table's existing
-        // convention (see rating/warnings_json above) since ALTER TABLE ADD
-        // COLUMN can't be expressed inside CREATE TABLE IF NOT EXISTS.
-        //
-        // idx_series_cache_key's expression must mirror seriesKeySQL exactly
-        // (see that constant's doc comment). It only needs rebuilding the
-        // one time the column is introduced — not on every cold start, which
-        // would mean an unnecessary DROP+CREATE index pass over the whole
-        // table on every launch for libraries that already have the column.
-        if try !columnExists("series_cache", "calibre_series_id", db: db) {
-            try db.run("ALTER TABLE series_cache ADD COLUMN calibre_series_id INTEGER")
-            try db.run("DROP INDEX IF EXISTS idx_series_cache_key")
-            try db.run("CREATE INDEX idx_series_cache_key ON series_cache(\(seriesKeySQL))")
-        }
     }
 
-    /// Single source of truth for the series-membership key expression used
-    /// throughout series grouping (index, all read queries, and
-    /// `SeriesCacheEntry.seriesKey` above, which this must stay in sync
-    /// with). Precedence: an AO3-derived series id, then Calibre's own
-    /// series.id (added in `calibre_series_id`, bug #3 — disambiguates two
-    /// distinct Calibre series sharing a display name), then bare series
-    /// name as a last resort for rows written before `calibre_series_id`
-    /// existed. Previously each call site duplicated this COALESCE
-    /// independently, which is how it silently drifted out of sync with
-    /// `SeriesCacheEntry.seriesKey` for the Calibre-name case.
-    private static let seriesKeySQL = """
-        COALESCE('ao3:' || NULLIF(ao3_series_id, ''), \
-        CASE WHEN calibre_series_id IS NOT NULL THEN 'calibre:' || calibre_series_id \
-        ELSE 'calibre-name:' || series_name END)
-        """
-
-    /// One-time migration: the original `series_placeholders` table predates
-    /// the `series_key` column. This rekeys it onto `series_key` as the
-    /// primary key component instead of bare `series_name`. Gated on
-    /// `PRAGMA user_version` so the destructive DROP + RENAME runs exactly
-    /// once instead of on every cold start, and wrapped in a transaction so
-    /// a crash mid-migration cannot leave the database without the table.
-    private static let seriesPlaceholdersKeyedMigrationVersion: Int64 = 1
-    private static let migrationNameSeriesPlaceholdersToKeyed = "2025_series_placeholders_keyed"
-
-    private static func migrateSeriesPlaceholdersToKeyedIfNeeded(db: Connection) throws {
-        guard !hasAppliedMigration(migrationNameSeriesPlaceholdersToKeyed, db: db) else { return }
-        try db.transaction {
-            _ = try? db.run("ALTER TABLE series_placeholders ADD COLUMN series_key TEXT")
-            try db.run("UPDATE series_placeholders SET series_key = 'calibre:' || series_name WHERE series_key IS NULL OR series_key = ''")
-            try db.execute("""
-            CREATE TABLE IF NOT EXISTS series_placeholders_keyed (
-                series_key TEXT NOT NULL,
-                series_name TEXT NOT NULL,
-                part_index INTEGER NOT NULL,
-                note TEXT,
-                PRIMARY KEY (series_key, part_index)
-            );
-
-            INSERT OR IGNORE INTO series_placeholders_keyed (series_key, series_name, part_index, note)
-            SELECT series_key, series_name, part_index, note
-            FROM series_placeholders
-            WHERE series_key IS NOT NULL AND series_key != '';
-
-            DROP TABLE series_placeholders;
-            ALTER TABLE series_placeholders_keyed RENAME TO series_placeholders;
-
-            CREATE INDEX IF NOT EXISTS idx_series_placeholders_key ON series_placeholders(series_key);
-            """)
-            try db.run("PRAGMA user_version = \(seriesPlaceholdersKeyedMigrationVersion)")
-            try markMigrationApplied(migrationNameSeriesPlaceholdersToKeyed, db: db)
+    /// Resolves stable identity inside the database actor. Existing rows keep
+    /// their creation-time key when the display name changes.
+    private func resolveSeriesID(name: String, ao3ID: String?, calibreSeriesID: Int?) throws -> Int {
+        let cleanedAO3ID = ao3ID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedAO3ID = cleanedAO3ID?.isEmpty == false ? cleanedAO3ID : nil
+        let nameKey = NormalizedSeriesName.key(name)
+        let identityColumn: String
+        let identityValue: Binding
+        let key: String
+        let normalizedName: String?
+        if let normalizedAO3ID {
+            identityColumn = "ao3_series_id"
+            identityValue = normalizedAO3ID
+            key = "ao3:\(normalizedAO3ID)"
+            normalizedName = nil
+        } else if let calibreSeriesID {
+            identityColumn = "calibre_series_id"
+            identityValue = calibreSeriesID
+            key = "calibre:\(calibreSeriesID)"
+            normalizedName = nil
+        } else {
+            identityColumn = "name_key"
+            identityValue = nameKey
+            key = "calibre-name:\(name.trimmingCharacters(in: .whitespacesAndNewlines))"
+            normalizedName = nameKey
         }
+        if let row = try db.prepare("SELECT series_id FROM series WHERE \(identityColumn) = ?", [identityValue]).map({ $0 }).first,
+           let id = row.int(at: 0) {
+            try db.run("UPDATE series SET name = ? WHERE series_id = ?", [name, id])
+            return id
+        }
+        try run("""
+            INSERT INTO series (series_key, name, ao3_series_id, calibre_series_id, name_key, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, [key, name, normalizedAO3ID, calibreSeriesID, normalizedName,
+                  ISO8601DateFormatter().string(from: Date())])
+        // Read the inserted row ID from the same write connection. The
+        // read-only connection cannot see an uncommitted insert in this
+        // transaction.
+        guard let id = (try db.scalar("SELECT last_insert_rowid()") as? Int64).map(Int.init) else {
+            throw NSError(domain: "AmbrosiaMetaDB", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to resolve series identity for \(name)"])
+        }
+        return id
     }
 
     /// One-time data repair: prior to the `insertCalibreSeriesFallback` fix
@@ -527,24 +523,6 @@ actor AmbrosiaMetaDB {
     /// for a `calibre_id` that also has a genuine AO3 row (`ao3_series_id IS
     /// NOT NULL`), leaving only the genuine AO3 series membership. Gated on
     /// `PRAGMA user_version` per Invariant 11 so it runs exactly once.
-    private static let dedupeSeriesCacheMigrationVersion: Int64 = 2
-    private static let migrationNameDedupeSeriesCache = "2025_dedupe_series_cache"
-
-    private static func dedupeSeriesCacheIfNeeded(db: Connection) throws {
-        guard !hasAppliedMigration(migrationNameDedupeSeriesCache, db: db) else { return }
-        try db.transaction {
-            try db.run("""
-                DELETE FROM series_cache
-                WHERE ao3_series_id IS NULL
-                  AND calibre_id IN (
-                      SELECT calibre_id FROM series_cache WHERE ao3_series_id IS NOT NULL
-                  )
-                """)
-            try db.run("PRAGMA user_version = \(dedupeSeriesCacheMigrationVersion)")
-            try markMigrationApplied(migrationNameDedupeSeriesCache, db: db)
-        }
-    }
-
     /// One-time schema migration: `ao3_author_username` was a dead scalar
     /// column — the old extractor never populated it (always nil in every
     /// extracted record). `AO3MetadataRecord.authors` replaces it with a
@@ -799,17 +777,11 @@ actor AmbrosiaMetaDB {
         }
     }
 
-    private static func backfillMissingDiagnosticsIfNeeded(db: Connection) {
-        let backfillSQL = """
-        INSERT OR IGNORE INTO ao3_extraction_diagnostics
-        (calibre_id, status, reason, epub_path, epub_filename, spine_items_checked, attempted_at)
-        SELECT b.calibre_id, 'skipped', 'No AO3 preface metadata (dl.tags) found in EPUB', NULL, b.title, 5, b.indexed_at
-        FROM book_index b
-        LEFT JOIN ao3_metadata m ON b.calibre_id = m.calibre_id
-        LEFT JOIN ao3_extraction_diagnostics d ON b.calibre_id = d.calibre_id
-        WHERE m.calibre_id IS NULL AND d.calibre_id IS NULL;
-        """
-        _ = try? db.run(backfillSQL)
+    private static func pruneStaleDiagnostics(db: Connection) {
+        _ = try? db.run("""
+            DELETE FROM ao3_extraction_diagnostics
+            WHERE calibre_id IN (SELECT calibre_id FROM ao3_metadata);
+            """)
     }
 
     private var tagSeedLoadedKey: String {
@@ -1678,7 +1650,10 @@ actor AmbrosiaMetaDB {
 
     /// Fetches all stored extraction diagnostics, optionally filtering to failures only.
     func allAO3Diagnostics(failedOnly: Bool = false) throws -> [AO3ExtractionDiagnostic] {
-        Self.backfillMissingDiagnosticsIfNeeded(db: db)
+        try? run("""
+            DELETE FROM ao3_extraction_diagnostics
+            WHERE calibre_id IN (SELECT calibre_id FROM ao3_metadata);
+            """)
         let condition = failedOnly ? "WHERE status = 'failed' OR reason LIKE '%error%'" : ""
         let sql = """
         SELECT calibre_id, status, reason, epub_path, epub_filename, spine_items_checked, attempted_at
@@ -1841,15 +1816,18 @@ actor AmbrosiaMetaDB {
         )
 
         try run("DELETE FROM series_cache WHERE calibre_id = ?", [calibreID])
+        try run("DELETE FROM ao3_extraction_diagnostics WHERE calibre_id = ?", [calibreID])
+        ao3DiagnosticsCache[calibreID] = nil
         try invalidateSeriesSeedMarker()
-        for entry in metadata.series where !entry.name.isEmpty {
+        for entry in metadata.series where !entry.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let seriesID = try resolveSeriesID(name: entry.name, ao3ID: entry.ao3ID, calibreSeriesID: nil)
             try run(
                 """
                 INSERT OR REPLACE INTO series_cache
-                (calibre_id, series_name, series_index, ao3_series_id, is_anthology, calibre_series_id)
-                VALUES (?, ?, ?, ?, 0, NULL)
+                (calibre_id, series_id, series_index, is_anthology)
+                VALUES (?, ?, ?, 0)
                 """,
-                [calibreID, entry.name, entry.index, entry.ao3ID]
+                [calibreID, seriesID, entry.index]
             )
         }
     }
@@ -2021,6 +1999,30 @@ actor AmbrosiaMetaDB {
         singletonWarningsCache.removeAll()
     }
 
+    func collectUnreferencedSeries() throws {
+        try run("""
+            DELETE FROM series
+            WHERE NOT EXISTS (SELECT 1 FROM series_cache WHERE series_cache.series_id = series.series_id)
+              AND NOT EXISTS (SELECT 1 FROM series_collection_members
+                              WHERE series_collection_members.series_id = series.series_id)
+            """)
+        seriesEntriesCache.removeAll()
+        seriesEntriesByKeyCache.removeAll()
+        singletonWarningsCache.removeAll()
+    }
+
+    func hasSeriesFlags() throws -> Bool {
+        if let hasSeriesFlagsCache { return hasSeriesFlagsCache }
+        let count = (try scalar("SELECT COUNT(*) FROM series_collection_members")) as? Int64 ?? 0
+        let result = count > 0
+        hasSeriesFlagsCache = result
+        return result
+    }
+
+    func invalidateSeriesFlagsCache() {
+        hasSeriesFlagsCache = nil
+    }
+
     func seriesEntries(for calibreIDs: [Int]) throws -> [SeriesCacheEntry] {
         guard !calibreIDs.isEmpty else { return [] }
         let missing = calibreIDs.filter { seriesEntriesCache[$0] == nil }
@@ -2043,22 +2045,25 @@ actor AmbrosiaMetaDB {
         guard !calibreIDs.isEmpty else { return [] }
         let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")
         let sql = """
-        SELECT calibre_id, series_name, series_index, ao3_series_id, is_anthology, calibre_series_id
-        FROM series_cache
-        WHERE calibre_id IN (\(placeholders))
-        ORDER BY series_name, series_index
+        SELECT m.calibre_id, s.name, m.series_index, s.ao3_series_id,
+               m.is_anthology, s.calibre_series_id, s.series_id, s.series_key
+        FROM series_cache m JOIN series s ON s.series_id = m.series_id
+        WHERE m.calibre_id IN (\(placeholders))
+        ORDER BY s.name, m.series_index
         """
         return try prepare(sql, calibreIDs.map { $0 as Binding? }).compactMap { row in
             guard let calibreID = row.int(at: 0),
                   let seriesName = row[safe: 1] as? String,
                   let seriesIndex = row.int(at: 2) else { return nil }
             return SeriesCacheEntry(
+                seriesID: row.int(at: 6),
                 calibreID: calibreID,
                 seriesName: seriesName,
                 seriesIndex: seriesIndex,
                 ao3SeriesID: row[safe: 3] as? String,
                 isAnthology: (row.int(at: 4) ?? 0) != 0,
-                calibreSeriesID: row.int(at: 5)
+                calibreSeriesID: row.int(at: 5),
+                seriesKey: row[safe: 7] as? String
             )
         }
     }
@@ -2086,22 +2091,25 @@ actor AmbrosiaMetaDB {
         guard !keys.isEmpty else { return [] }
         let placeholders = keys.map { _ in "?" }.joined(separator: ",")
         let sql = """
-        SELECT calibre_id, series_name, series_index, ao3_series_id, is_anthology, calibre_series_id
-        FROM series_cache
-        WHERE \(Self.seriesKeySQL) IN (\(placeholders))
-        ORDER BY series_name, series_index
+        SELECT m.calibre_id, s.name, m.series_index, s.ao3_series_id,
+               m.is_anthology, s.calibre_series_id, s.series_id, s.series_key
+        FROM series_cache m JOIN series s ON s.series_id = m.series_id
+        WHERE s.series_key IN (\(placeholders))
+        ORDER BY s.name, m.series_index
         """
         return try prepare(sql, keys.map { $0 as Binding? }).compactMap { row in
             guard let calibreID = row.int(at: 0),
                   let seriesName = row[safe: 1] as? String,
                   let seriesIndex = row.int(at: 2) else { return nil }
             return SeriesCacheEntry(
+                seriesID: row.int(at: 6),
                 calibreID: calibreID,
                 seriesName: seriesName,
                 seriesIndex: seriesIndex,
                 ao3SeriesID: row[safe: 3] as? String,
                 isAnthology: (row.int(at: 4) ?? 0) != 0,
-                calibreSeriesID: row.int(at: 5)
+                calibreSeriesID: row.int(at: 5),
+                seriesKey: row[safe: 7] as? String
             )
         }
     }
@@ -2129,24 +2137,22 @@ actor AmbrosiaMetaDB {
         let args: [Binding?] = [SQLIDList.binding(calibreIDs)]
         let sql = """
         WITH keyed AS (
-            SELECT calibre_id,
-                   \(Self.seriesKeySQL) AS series_key,
-                   is_anthology
-            FROM series_cache
+            SELECT m.calibre_id, s.series_id, m.is_anthology
+            FROM series_cache m JOIN series s ON s.series_id = m.series_id
         ),
         matched_keys AS (
-            SELECT DISTINCT series_key FROM keyed WHERE \(SQLIDList.clause(column: "calibre_id"))
+            SELECT DISTINCT series_id FROM keyed WHERE \(SQLIDList.clause(column: "calibre_id"))
         ),
         qualifying_keys AS (
-            SELECT series_key
+            SELECT series_id
             FROM keyed
-            GROUP BY series_key
+            GROUP BY series_id
             HAVING COUNT(*) > 1 AND MAX(is_anthology) = 0
         )
         SELECT calibre_id
         FROM keyed
-        WHERE series_key IN (SELECT series_key FROM matched_keys)
-          AND series_key IN (SELECT series_key FROM qualifying_keys)
+        WHERE series_id IN (SELECT series_id FROM matched_keys)
+          AND series_id IN (SELECT series_id FROM qualifying_keys)
         """
         let rows = try prepare(sql, args)
         var result = Set(calibreIDs)
@@ -2172,21 +2178,19 @@ actor AmbrosiaMetaDB {
         let args: [Binding?] = [SQLIDList.binding(calibreIDs)]
         let sql = """
         WITH keyed AS (
-            SELECT calibre_id, series_name,
-                   \(Self.seriesKeySQL) AS series_key,
-                   is_anthology
-            FROM series_cache
+            SELECT m.calibre_id, s.name AS series_name, s.series_key, s.series_id, m.is_anthology
+            FROM series_cache m JOIN series s ON s.series_id = m.series_id
         ),
         qualifying_keys AS (
-            SELECT series_key
+            SELECT series_id
             FROM keyed
-            GROUP BY series_key
+            GROUP BY series_id
             HAVING COUNT(*) > 1 AND MAX(is_anthology) = 0
         )
         SELECT calibre_id, series_name
         FROM keyed
         WHERE \(SQLIDList.clause(column: "calibre_id"))
-          AND series_key IN (SELECT series_key FROM qualifying_keys)
+          AND series_id IN (SELECT series_id FROM qualifying_keys)
         """
         let rows = try prepare(sql, args)
         var result: [Int: String] = [:]
@@ -2221,15 +2225,16 @@ actor AmbrosiaMetaDB {
         let placeholders = calibreIDs.map { _ in "?" }.joined(separator: ",")
         let sql = """
         WITH counted AS (
-            SELECT calibre_id, series_name, series_index, is_anthology,
-                   \(Self.seriesKeySQL) AS series_key,
+            SELECT m.calibre_id, s.name AS series_name, m.series_index, m.is_anthology,
+                   s.series_id,
+                   s.series_key AS series_key,
                    COUNT(*) OVER (
-                       PARTITION BY \(Self.seriesKeySQL)
+                       PARTITION BY s.series_id
                    ) AS series_count,
                    MAX(is_anthology) OVER (
-                       PARTITION BY \(Self.seriesKeySQL)
+                       PARTITION BY s.series_id
                    ) AS anthology
-            FROM series_cache
+            FROM series_cache m JOIN series s ON s.series_id = m.series_id
         )
         SELECT calibre_id, series_key, series_name, series_index
         FROM counted
@@ -2299,80 +2304,33 @@ actor AmbrosiaMetaDB {
         placeholdersCache[seriesKey] = nil
     }
 
-    func setAnthology(seriesName: String, isAnthology: Bool) throws {
-        try run(
-            "UPDATE series_cache SET is_anthology = ? WHERE series_name = ?",
-            [isAnthology ? 1 : 0, seriesName]
-        )
-        // Keyed by series_name, which can span many calibreIDs and series
-        // keys — no cheap way to compute exactly which cache entries are
-        // affected, so drop all series-derived caches.
-        seriesEntriesCache.removeAll()
-        seriesEntriesByKeyCache.removeAll()
-        singletonWarningsCache.removeAll()
-    }
-
-    /// Inserts Calibre-derived series fallback entries for books with no
-    /// `series_cache` row at all yet, and separately backfills
-    /// `calibre_series_id` onto existing Calibre-sourced rows
-    /// (`ao3_series_id IS NULL`) that predate that column. `INSERT OR
-    /// IGNORE` alone is not sufficient for the insert half: the table's
-    /// primary key is `(calibre_id, series_name)`, and a Calibre series name
-    /// is almost never identical to the AO3-extracted series name for the
-    /// same book, so a plain `INSERT OR IGNORE` does not collide with an
-    /// existing AO3 row — it silently adds a second, spurious row for that
-    /// `calibre_id` under an unrelated `series_key`. That row then pulls the
-    /// book into whatever (often much larger, cross-author) group shares
-    /// that Calibre series name, breaking series-or-merged stripping and
-    /// grouped display for every book affected. The `WHERE NOT EXISTS`
-    /// guard below ensures Calibre fallback data is only ever inserted for a
-    /// book that has no series_cache membership yet (i.e. AO3 extraction
-    /// either hasn't run for it or found no series). The backfill half is
-    /// separate and unconditional (per row, only touching AO3-untouched
-    /// rows) so libraries seeded before `calibre_series_id` existed get it
-    /// retroactively too, not just newly-inserted rows — see Bug 3 decision
-    /// 2.
-    func insertCalibreSeriesFallback(_ entries: [SeriesCacheEntry]) throws {
+    /// Inserts Calibre-derived fallback memberships for books that have no
+    /// series membership yet. The guard prevents a Calibre fallback from
+    /// adding an unrelated second membership after AO3 extraction.
+    func insertCalibreSeriesFallback(_ entries: [SeriesCacheWriteInput]) throws {
         guard !entries.isEmpty else { return }
         try transaction {
             for entry in entries {
+                let seriesID = try resolveSeriesID(name: entry.seriesName,
+                                                   ao3ID: entry.ao3SeriesID,
+                                                   calibreSeriesID: entry.calibreSeriesID)
                 try run(
                     """
                     INSERT INTO series_cache
-                    (calibre_id, series_name, series_index, ao3_series_id, is_anthology, calibre_series_id)
-                    SELECT ?, ?, ?, ?, ?, ?
+                    (calibre_id, series_id, series_index, is_anthology)
+                    SELECT ?, ?, ?, ?
                     WHERE NOT EXISTS (
                         SELECT 1 FROM series_cache WHERE calibre_id = ?
                     )
                     """,
                     [
                         entry.calibreID,
-                        entry.seriesName,
+                        seriesID,
                         entry.seriesIndex,
-                        entry.ao3SeriesID,
                         entry.isAnthology ? 1 : 0,
-                        entry.calibreSeriesID,
                         entry.calibreID
                     ]
                 )
-                // Backfill: an already-existing Calibre-sourced row for this
-                // exact (calibre_id, series_name) that predates
-                // calibre_series_id. Scoped to ao3_series_id IS NULL so an
-                // AO3-derived row is never touched (decision 1), and to a
-                // NULL calibre_series_id so a row already backfilled isn't
-                // needlessly rewritten.
-                if let calibreSeriesID = entry.calibreSeriesID {
-                    try run(
-                        """
-                        UPDATE series_cache
-                        SET calibre_series_id = ?
-                        WHERE calibre_id = ? AND series_name = ?
-                          AND ao3_series_id IS NULL
-                          AND calibre_series_id IS NULL
-                        """,
-                        [calibreSeriesID, entry.calibreID, entry.seriesName]
-                    )
-                }
             }
         }
         // Both the insert and the backfill above only ever touch rows for
@@ -2399,17 +2357,16 @@ actor AmbrosiaMetaDB {
         // which would indicate a COALESCE key collision rather than real series data).
         #if DEBUG
         let diagSQL = """
-        SELECT \(Self.seriesKeySQL) AS series_key,
-               COUNT(*) AS member_count
-        FROM series_cache
-        GROUP BY series_key
+        SELECT s.series_key, COUNT(*) AS member_count
+        FROM series_cache m JOIN series s ON s.series_id = m.series_id
+        GROUP BY s.series_id
         ORDER BY member_count DESC
         LIMIT 5
         """
         let totalRows: Int? = (try? prepare("SELECT COUNT(*) FROM series_cache").first)?.int(at: 0)
         let distinctKeys: Int? = (try? prepare("""
-            SELECT COUNT(DISTINCT \(Self.seriesKeySQL))
-            FROM series_cache
+            SELECT COUNT(DISTINCT s.series_id)
+            FROM series_cache m JOIN series s ON s.series_id = m.series_id
             """).first)?.int(at: 0)
         let topSeries = (try? prepare(diagSQL).map { row -> (String, Int) in
             let key = (row[safe: 0] as? String) ?? "?"
@@ -2462,16 +2419,16 @@ actor AmbrosiaMetaDB {
     private static let seriesLeadershipCTE = """
     WITH ordered AS (
         SELECT calibre_id,
-               \(seriesKeySQL) AS series_key,
+               series_id,
                ROW_NUMBER() OVER (
-                   PARTITION BY \(seriesKeySQL)
+                   PARTITION BY series_id
                    ORDER BY series_index ASC, calibre_id ASC
                ) AS rn,
                COUNT(*) OVER (
-                   PARTITION BY \(seriesKeySQL)
+                   PARTITION BY series_id
                ) AS series_count,
                MAX(is_anthology) OVER (
-                   PARTITION BY \(seriesKeySQL)
+                   PARTITION BY series_id
                ) AS anthology
         FROM series_cache
     ),

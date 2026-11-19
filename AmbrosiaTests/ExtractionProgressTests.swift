@@ -41,4 +41,24 @@ final class ExtractionProgressTests: XCTestCase {
         XCTAssertFalse(progress.isRunning)
         XCTAssertNil(progress.statusText)
     }
+
+    // MARK: - ExtractionBatchPolicy
+
+    func testBatchPolicyFlushesOnBatchBoundary() {
+        XCTAssertTrue(ExtractionBatchPolicy.shouldFlush(completedCount: 50, secondsSinceLastFlush: 0))
+        XCTAssertTrue(ExtractionBatchPolicy.shouldFlush(completedCount: 100, secondsSinceLastFlush: 0))
+    }
+
+    func testBatchPolicyDoesNotFlushMidBatchBeforeInterval() {
+        XCTAssertFalse(ExtractionBatchPolicy.shouldFlush(completedCount: 49, secondsSinceLastFlush: 4.9))
+        XCTAssertFalse(ExtractionBatchPolicy.shouldFlush(completedCount: 51, secondsSinceLastFlush: 0))
+    }
+
+    func testBatchPolicyFlushesAfterIntervalEvenMidBatch() {
+        XCTAssertTrue(ExtractionBatchPolicy.shouldFlush(completedCount: 7, secondsSinceLastFlush: 5))
+    }
+
+    func testBatchPolicyNeverFlushesWithNothingCompleted() {
+        XCTAssertFalse(ExtractionBatchPolicy.shouldFlush(completedCount: 0, secondsSinceLastFlush: 60))
+    }
 }

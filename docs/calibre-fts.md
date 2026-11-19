@@ -109,9 +109,7 @@ something this repo has observed.
   Every call stats the path and compares `(st_dev, st_ino)` with the value taken before
   the connection was opened; a mismatch reopens (full open sequence). A missing file
   throws `.sqlite` and is not cached. The index stamp is `(device, inode, data_version)`.
-- Hot journals: Ambrosia never writes and never recovers a journal. A failure from one
-  surfaces as `.sqlite` in `LibrarySession.lastFulltextError`. Opening the library in
-  Calibre once clears it. The exact code is recorded by G9 (not run).
+- Hot journals: when an interrupted write leaves a hot rollback journal (-journal) or WAL, SQLite refuses read-only connections (`attempt to write a readonly database`). `CalibreFTSLibrary.openConnection` now automatically checks if the file is writable, performs a brief read-write open so SQLite recovers the journal, and then proceeds with read-only access. If the file is not writable, opening the library in Calibre once clears it.
 - Network or cloud-synced library folders: SQLite locking is unreliable there. Documented
   limitation, no code (D24).
 - Vacuum: Calibre's `VACUUM fts_db` is user-initiated only (found by reading its source,

@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import SwiftSoup
+import ZIPFoundation
 
 extension Notification.Name {
     static let seriesOrMergedCollectionDidChange = Notification.Name("Ambrosia.seriesOrMergedCollectionDidChange")
@@ -86,8 +87,10 @@ final class LibrarySession {
     /// Work-level membership currently equals explicit state. These accessors
     /// give query and presentation code the effective-state vocabulary needed
     /// before series-level inheritance is introduced.
-    var effectiveLikedIDs: Set<Int> { explicitLikedIDs }
-    var effectiveReadLaterIDs: Set<Int> { explicitReadLaterIDs }
+    var effectiveLikedIDs: Set<Int> = []
+    var effectiveReadLaterIDs: Set<Int> = []
+    var likedSeriesFlags: [Int: SeriesCollectionFlag] = [:]
+    var readLaterSeriesFlags: [Int: SeriesCollectionFlag] = [:]
 
     /// The path of the currently open library.
     private(set) var activePath: String?
@@ -100,6 +103,16 @@ final class LibrarySession {
     /// build itself from `collectionStore.collections()` +
     /// `membershipByCollectionID()`. Populated by `refreshCollectionSnapshots()`.
     var collectionMembershipByName: [String: Set<Int>] = [:]
+
+    /// Captures the collection membership inputs used to evaluate the visible
+    /// result snapshot. System Like collections are sourced from the session
+    /// sets so a pending optimistic update is pinned consistently too.
+    func pinnableCollectionMembership() -> [String: Set<Int>] {
+        var membership = collectionMembershipByName
+        membership["Liked"] = effectiveLikedIDs
+        membership["Read Later"] = effectiveReadLaterIDs
+        return membership
+    }
 
     /// §Phase1: Single source of truth for the six visibility ID sets.
     /// Replaces the two independent per-surface refresh functions previously
@@ -118,6 +131,10 @@ final class LibrarySession {
         let membershipByID = (try? await collectionStore.membershipByCollectionID()) ?? [:]
         let currentLiked = (try? await collectionStore.likedIDs()) ?? []
         let currentReadLater = Set((try? await collectionStore.members(of: SystemCollectionID.readLater)) ?? [])
+        let currentExplicitLiked = Set((try? await collectionStore.explicitMembers(of: SystemCollectionID.liked)) ?? [])
+        let currentExplicitReadLater = Set((try? await collectionStore.explicitMembers(of: SystemCollectionID.readLater)) ?? [])
+        var resolvedLikedSeriesFlags = (try? await collectionStore.seriesFlagSnapshot(collectionID: SystemCollectionID.liked)) ?? [:]
+        var resolvedReadLaterSeriesFlags = (try? await collectionStore.seriesFlagSnapshot(collectionID: SystemCollectionID.readLater)) ?? [:]
         let currentSkipped = membershipByID[SystemCollectionID.skipped] ?? []
         let currentSeriesOrMerged = membershipByID[SystemCollectionID.seriesOrMerged] ?? []
         let currentAO3PublisherIDs = await library?.ao3PublisherBookIDs() ?? []
@@ -125,11 +142,22 @@ final class LibrarySession {
         let currentDuplicateLoserIDs = await library?.duplicateLoserBookIDs() ?? []
 
         let collectionSnapshotIsCurrent = snapshotRevisionAtStart == collectionSnapshotRevision
-        var resolvedLiked = collectionSnapshotIsCurrent ? currentLiked : explicitLikedIDs
-        var resolvedReadLater = collectionSnapshotIsCurrent ? currentReadLater : explicitReadLaterIDs
+        var resolvedLiked = collectionSnapshotIsCurrent ? currentLiked : effectiveLikedIDs
+        var resolvedReadLater = collectionSnapshotIsCurrent ? currentReadLater : effectiveReadLaterIDs
+        var resolvedExplicitLiked = collectionSnapshotIsCurrent ? currentExplicitLiked : explicitLikedIDs
+        var resolvedExplicitReadLater = collectionSnapshotIsCurrent ? currentExplicitReadLater : explicitReadLaterIDs
+        let inFlightLikedSeries = CollectionAssignment.inFlightSeriesIDs(collectionID: SystemCollectionID.liked)
+        let inFlightReadLaterSeries = CollectionAssignment.inFlightSeriesIDs(collectionID: SystemCollectionID.readLater)
+        for seriesID in inFlightLikedSeries { resolvedLikedSeriesFlags[seriesID] = likedSeriesFlags[seriesID] }
+        for seriesID in inFlightReadLaterSeries { resolvedReadLaterSeriesFlags[seriesID] = readLaterSeriesFlags[seriesID] }
         if collectionSnapshotIsCurrent {
             for pendingID in CollectionAssignment.inFlightLikedIDs {
                 if explicitLikedIDs.contains(pendingID) {
+                    resolvedExplicitLiked.insert(pendingID)
+                } else {
+                    resolvedExplicitLiked.remove(pendingID)
+                }
+                if effectiveLikedIDs.contains(pendingID) {
                     resolvedLiked.insert(pendingID)
                 } else {
                     resolvedLiked.remove(pendingID)
@@ -137,11 +165,32 @@ final class LibrarySession {
             }
             for pendingID in CollectionAssignment.inFlightReadLaterIDs {
                 if explicitReadLaterIDs.contains(pendingID) {
+                    resolvedExplicitReadLater.insert(pendingID)
+                } else {
+                    resolvedExplicitReadLater.remove(pendingID)
+                }
+                if effectiveReadLaterIDs.contains(pendingID) {
                     resolvedReadLater.insert(pendingID)
                 } else {
                     resolvedReadLater.remove(pendingID)
                 }
             }
+            var resolvedLikedState = (resolvedExplicit: resolvedExplicitLiked, effective: resolvedLiked)
+            Self.reconcileOptimisticSeriesMembership(
+                seriesIDs: inFlightLikedSeries, flags: resolvedLikedSeriesFlags,
+                previousFlags: likedSeriesFlags, explicitIDs: explicitLikedIDs,
+                state: &resolvedLikedState
+            )
+            var resolvedReadLaterState = (resolvedExplicit: resolvedExplicitReadLater, effective: resolvedReadLater)
+            Self.reconcileOptimisticSeriesMembership(
+                seriesIDs: inFlightReadLaterSeries, flags: resolvedReadLaterSeriesFlags,
+                previousFlags: readLaterSeriesFlags, explicitIDs: explicitReadLaterIDs,
+                state: &resolvedReadLaterState
+            )
+            resolvedExplicitLiked = resolvedLikedState.resolvedExplicit
+            resolvedLiked = resolvedLikedState.effective
+            resolvedExplicitReadLater = resolvedReadLaterState.resolvedExplicit
+            resolvedReadLater = resolvedReadLaterState.effective
         }
 
         let visibilityChanged = cachedSkippedIDs != currentSkipped
@@ -155,12 +204,20 @@ final class LibrarySession {
         // Custom-collection edits made through a path that forgets to call
         // `bumpCollectionVersion()` are still detected here. The live version
         // moves; the pinned version used by the visible results does not.
-        let collectionChanged = explicitLikedIDs != resolvedLiked
-            || explicitReadLaterIDs != resolvedReadLater
+        let collectionChanged = explicitLikedIDs != resolvedExplicitLiked
+            || explicitReadLaterIDs != resolvedExplicitReadLater
+            || effectiveLikedIDs != resolvedLiked
+            || effectiveReadLaterIDs != resolvedReadLater
+            || likedSeriesFlags != resolvedLikedSeriesFlags
+            || readLaterSeriesFlags != resolvedReadLaterSeriesFlags
             || collectionMembershipByName != newMembershipByName
 
-        explicitLikedIDs = resolvedLiked
-        explicitReadLaterIDs = resolvedReadLater
+        explicitLikedIDs = resolvedExplicitLiked
+        explicitReadLaterIDs = resolvedExplicitReadLater
+        effectiveLikedIDs = resolvedLiked
+        effectiveReadLaterIDs = resolvedReadLater
+        likedSeriesFlags = resolvedLikedSeriesFlags
+        readLaterSeriesFlags = resolvedReadLaterSeriesFlags
         cachedSkippedIDs = currentSkipped
         cachedSeriesOrMergedIDs = currentSeriesOrMerged
         cachedAO3PublisherIDs = currentAO3PublisherIDs
@@ -171,6 +228,58 @@ final class LibrarySession {
 
         if visibilityChanged { bumpVisibilityVersion() }
         if collectionChanged { bumpCollectionVersion() }
+    }
+
+    private static func reconcileOptimisticSeriesMembership(
+        seriesIDs: Set<Int>,
+        flags: [Int: SeriesCollectionFlag],
+        previousFlags: [Int: SeriesCollectionFlag],
+        explicitIDs: Set<Int>,
+        state: inout (resolvedExplicit: Set<Int>, effective: Set<Int>)
+    ) {
+        let affected = seriesIDs.reduce(into: Set<Int>()) { result, seriesID in
+            result.formUnion(flags[seriesID]?.memberIDs ?? [])
+            result.formUnion(previousFlags[seriesID]?.memberIDs ?? [])
+        }
+        for calibreID in affected {
+            if explicitIDs.contains(calibreID) {
+                state.resolvedExplicit.insert(calibreID)
+            } else {
+                state.resolvedExplicit.remove(calibreID)
+            }
+            let covered = flags.values.contains { $0.memberIDs.contains(calibreID) && !$0.exclusions.contains(calibreID) }
+            if state.resolvedExplicit.contains(calibreID) || covered {
+                state.effective.insert(calibreID)
+            } else {
+                state.effective.remove(calibreID)
+            }
+        }
+    }
+
+    func seriesLikeState(for series: SeriesGroup, collectionID: String) -> SeriesLikeState {
+        let flags = collectionID == SystemCollectionID.readLater ? readLaterSeriesFlags : likedSeriesFlags
+        let effective = collectionID == SystemCollectionID.readLater ? effectiveReadLaterIDs : effectiveLikedIDs
+        let memberIDs = Set(series.works.map(\.id))
+        if let seriesID = series.seriesID, let flag = flags[seriesID] {
+            return SeriesPressPlanner.state(flagIsSet: true, exclusions: flag.exclusions,
+                                            memberIDs: memberIDs, effectiveIDs: effective)
+        }
+        return SeriesPressPlanner.state(flagIsSet: false, exclusions: [],
+                                        memberIDs: memberIDs, effectiveIDs: effective)
+    }
+
+    func recomputeEffectiveFlags(collectionID: String, calibreIDs: Set<Int>) {
+        let flags = collectionID == SystemCollectionID.readLater ? readLaterSeriesFlags : likedSeriesFlags
+        let explicit = collectionID == SystemCollectionID.readLater ? explicitReadLaterIDs : explicitLikedIDs
+        for id in calibreIDs {
+            let covered = flags.values.contains { $0.memberIDs.contains(id) && !$0.exclusions.contains(id) }
+            let effective = explicit.contains(id) || covered
+            if collectionID == SystemCollectionID.readLater {
+                if effective { effectiveReadLaterIDs.insert(id) } else { effectiveReadLaterIDs.remove(id) }
+            } else {
+                if effective { effectiveLikedIDs.insert(id) } else { effectiveLikedIDs.remove(id) }
+            }
+        }
     }
 
     /// True while a library is open and ready to query.
@@ -313,6 +422,7 @@ final class LibrarySession {
     private func completeCoordinatedSeriesSync(generation: Int) async {
         guard seriesSyncCoordinator.complete(generation: generation) else { return }
         await syncSeriesOrMergedCollection()
+        try? await metaDB?.collectUnreferencedSeries()
     }
 
     // MARK: - External change detection
@@ -432,10 +542,14 @@ final class LibrarySession {
             visibilityVersion = 0
             collectionVersion = 0
             explicitLikedIDs = []
+            effectiveLikedIDs = []
+            likedSeriesFlags = [:]
             cachedSkippedIDs = []
             cachedSeriesOrMergedIDs = []
             cachedAO3PublisherIDs = []
             explicitReadLaterIDs = []
+            effectiveReadLaterIDs = []
+            readLaterSeriesFlags = [:]
             cachedAnthologyIDs = []
             cachedDuplicateLoserIDs = []
             LibraryRegistry.shared.register(url)
@@ -593,9 +707,13 @@ final class LibrarySession {
         visibilityVersion = 0
         collectionVersion = 0
         explicitLikedIDs = []
+        effectiveLikedIDs = []
+        likedSeriesFlags = [:]
         cachedSkippedIDs = []
         cachedSeriesOrMergedIDs = []
         explicitReadLaterIDs = []
+        effectiveReadLaterIDs = []
+        readLaterSeriesFlags = [:]
         cachedAO3PublisherIDs = []
         cachedAnthologyIDs = []
         cachedDuplicateLoserIDs = []
@@ -986,7 +1104,8 @@ final class LibrarySession {
                 await MainActor.run {
                     let gen = self.beginCoordinatedSeriesSync(awaiting: 2)
                     self.seedCalibreSeriesCache(seriesSyncGeneration: gen)
-                    self.startAO3Extraction(forceAll: true, seriesSyncGeneration: gen)
+                    // The person is watching the progress bar, so run at user-initiated priority.
+                    self.startAO3Extraction(forceAll: true, seriesSyncGeneration: gen, priority: .userInitiated)
                 }
             } catch {
                 #if DEBUG
@@ -1002,7 +1121,8 @@ final class LibrarySession {
     /// data. False keeps the old behavior where extraction's completion is one
     /// of the awaited completions (re-extract).
     private func startAO3Extraction(forceAll: Bool = false, seriesSyncGeneration: Int? = nil,
-                                    followsSeedSync: Bool = false) {
+                                    followsSeedSync: Bool = false,
+                                    priority: TaskPriority = .utility) {
         extractionTask?.cancel()
         let generation = seriesSyncGeneration ?? beginCoordinatedSeriesSync(awaiting: 1)
         guard let library, let metaDB else {
@@ -1015,7 +1135,7 @@ final class LibrarySession {
         extractionProgress.total = 0
         extractionProgress.isRunning = true
 
-        extractionTask = Task(priority: .background) { [weak self, library, metaDB] in
+        extractionTask = Task(priority: priority) { [weak self, library, metaDB] in
             // Skip the scan when nothing changed since a run that finished with
             // nothing left to extract. `forceAll` (re-extract) always scans.
             let fingerprint = await library.libraryFingerprint()
@@ -1075,8 +1195,8 @@ final class LibrarySession {
             // first. Anything not flushed simply gets re-attempted on next launch,
             // since `missing` above is always recomputed from what's actually in the
             // DB — there is no separate "resume point" to track.
-            let batchSize = 10
-            let flushInterval: TimeInterval = 2
+            let batchSize = ExtractionBatchPolicy.batchSize
+            let flushInterval = ExtractionBatchPolicy.flushInterval
             var pendingSuccess: [(AO3MetadataRecord, Int)] = []
             var pendingFailure: [AO3ExtractionDiagnostic] = []
             var pendingIndexed: [(BookIndexRecord, Int)] = []
@@ -1116,8 +1236,10 @@ final class LibrarySession {
             // independent task in the group below. Identical logic to the former
             // serial loop body — only the fan-out changed, not what each book does.
             enum ExtractionOutcome {
-                case success(AO3MetadataRecord, BookIndexRecord, Int)
-                case indexed(BookIndexRecord, AO3ExtractionDiagnostic)     // parsed fine, no AO3 preface found
+                // A nil `BookIndexRecord` means "keep the stored book_index row" (re-extract of an
+                // already indexed book that has no AO3 stated word count).
+                case success(AO3MetadataRecord, BookIndexRecord?, Int)
+                case indexed(BookIndexRecord?, AO3ExtractionDiagnostic)     // parsed fine, no AO3 preface found
                 case failure(AO3ExtractionDiagnostic)
             }
 
@@ -1126,8 +1248,14 @@ final class LibrarySession {
             // every available core on a large library risks memory pressure rather
             // than a proportional speedup. 8 is a conservative starting cap.
             let concurrency = max(1, min(ProcessInfo.processInfo.activeProcessorCount, 8))
+            // Re-extract only: books that already have a book_index row are not recounted.
+            // `clearAO3Metadata()` leaves book_index alone, so their stored word count stays valid.
+            let reuseIndexIDs: Set<Int> = forceAll ? indexed : []
             var nextIndex = 0
             var completedCount = 0
+            #if DEBUG
+            let runStartedAt = Date()
+            #endif
 
             @Sendable
             func extractOneBook(id: Int) async -> ExtractionOutcome {
@@ -1136,22 +1264,45 @@ final class LibrarySession {
                 var diagnosticEPUB: URL?
                 var spineItemsChecked: Int?
                 var indexedRecord: BookIndexRecord?
+                var bookParsed = false
                 // epubURL is an actor-isolated (async) CalibreLibrary call now, and
                 // autoreleasepool's closure is synchronous, so resolve it first —
                 // the CPU-bound parse/extract work below never touches `library`.
+                let urlSignpost = LaunchSignposts.begin("extraction.book.epubURL")
                 let epub = await library.epubURL(calibreID: id)
+                LaunchSignposts.end("extraction.book.epubURL", urlSignpost)
                 let metadata: AO3MetadataRecord?
                 if let epub {
                     diagnosticEPUB = epub
                     metadata = autoreleasepool { () -> AO3MetadataRecord? in
+                        var parser = EPUBParser(epubURL: epub)
+                        var archiveForCount: Archive?
+                        var statedWords: Int?
+                        // §7.3 (Phase 6): book_index gets a row for every book where parse()
+                        // succeeds, AO3 or not. Decided once, on every exit path (AO3 hit, no
+                        // preface, thrown error): AO3's stated word count when there is one,
+                        // otherwise keep the stored row on re-extract, otherwise count the text.
+                        defer {
+                            if bookParsed {
+                                if let statedWords {
+                                    indexedRecord = makeBookIndexRecord(from: parser, wordCount: statedWords)
+                                } else if reuseIndexIDs.contains(id) {
+                                    indexedRecord = nil
+                                } else {
+                                    let words = LaunchSignposts.measure("extraction.book.wordCount") {
+                                        archiveForCount.flatMap { countWords(in: parser, archive: $0) }
+                                    }
+                                    indexedRecord = makeBookIndexRecord(from: parser, wordCount: words)
+                                }
+                            }
+                        }
                         do {
-                            var parser = EPUBParser(epubURL: epub)
-                            try parser.parse()
-                            // §7.3 (Phase 6): book_index gets a row for every book where
-                            // parse() succeeds, AO3 or not — build it here, before the
-                            // preface scan below, so it's available regardless of which
-                            // branch (AO3 preface found or not) this book takes.
-                            indexedRecord = buildBookIndexRecord(from: parser)
+                            try LaunchSignposts.measure("extraction.book.parse") { try parser.parse(skipTOC: true) }
+                            bookParsed = true
+                            // One archive handle for the whole book; spine items are read raw
+                            // (no reader sanitising) and each is parsed by SwiftSoup once.
+                            let archive = try parser.openArchive()
+                            archiveForCount = archive
                             // AO3 EPUBs always place the preface (dl.tags metadata block) in
                             // spine[0]. Try it first as the fast path; scan up to 8 items
                             // for external generators (FicLab, FicHub, FanFicFare) where title,
@@ -1160,18 +1311,17 @@ final class LibrarySession {
                             var detectedNonAO3Reason: String?
                             for item in parser.spine.prefix(8) {
                                 checked += 1
-                                let html = try parser.html(for: item, userCSS: "")
-                                if let doc = try? SwiftSoup.parse(html) {
-                                    if let res = FanFicFareParser.parse(document: doc), case .nonAO3Source(_, let archive) = res {
-                                        detectedNonAO3Reason = "non-AO3 source (\(archive))"
-                                    } else if let res = FicLabParser.parse(document: doc), case .nonAO3Source(_, let archive) = res {
-                                        detectedNonAO3Reason = "non-AO3 source (\(archive))"
-                                    } else if let res = FicHubParser.parse(document: doc), case .nonAO3Source(_, let archive) = res {
-                                        detectedNonAO3Reason = "non-AO3 source (\(archive))"
-                                    }
+                                let html = try parser.rawXHTML(for: item, archive: archive)
+                                guard let doc = try? SwiftSoup.parse(html) else { continue }
+                                if let res = FanFicFareParser.parse(document: doc), case .nonAO3Source(_, let source) = res {
+                                    detectedNonAO3Reason = "non-AO3 source (\(source))"
+                                } else if let res = FicLabParser.parse(document: doc), case .nonAO3Source(_, let source) = res {
+                                    detectedNonAO3Reason = "non-AO3 source (\(source))"
+                                } else if let res = FicHubParser.parse(document: doc), case .nonAO3Source(_, let source) = res {
+                                    detectedNonAO3Reason = "non-AO3 source (\(source))"
                                 }
 
-                                if var metadata = AO3MetadataExtractor.extract(from: html) {
+                                if var metadata = AO3MetadataExtractor.extract(from: doc) {
                                     spineItemsChecked = checked
                                     let prefaceIndex = checked - 1
 
@@ -1185,8 +1335,9 @@ final class LibrarySession {
                                     let bylineRangeEnd = min(prefaceIndex + 3, parser.spine.count)
                                     for candidateIndex in (prefaceIndex + 1)..<bylineRangeEnd {
                                         let candidate = parser.spine[candidateIndex]
-                                        guard let chapterHTML = try? parser.html(for: candidate, userCSS: "") else { continue }
-                                        let bylineAuthors = AO3MetadataExtractor.parseAuthors(from: chapterHTML)
+                                        guard let chapterHTML = try? parser.rawXHTML(for: candidate, archive: archive),
+                                              let chapterDoc = try? SwiftSoup.parse(chapterHTML) else { continue }
+                                        let bylineAuthors = AO3MetadataExtractor.parseAuthors(from: chapterDoc)
                                         if !bylineAuthors.isEmpty {
                                             metadata.authors = bylineAuthors
                                             break
@@ -1205,6 +1356,7 @@ final class LibrarySession {
                                             AO3AuthorEntry(username: $0, pseud: nil, profileURL: nil, source: .opfCreator)
                                         }
                                     }
+                                    statedWords = metadata.wordCount
                                     return metadata
                                 }
                             }
@@ -1232,20 +1384,18 @@ final class LibrarySession {
                             AO3AuthorEntry(username: $0, pseud: nil, profileURL: nil, source: .calibre)
                         }
                     }
-                    // indexedRecord is always set here: metadata is only non-nil when
-                    // parse() succeeded above, and indexedRecord is built unconditionally
-                    // right after parse() succeeds, before metadata can be returned. Guarded
-                    // rather than force-unwrapped per Invariant 12 (overview.md): if that
-                    // ordering is ever broken by a future refactor, this book is skipped
-                    // (logged) instead of crashing the whole extraction batch.
-                    guard let indexedRecord else {
+                    // bookParsed is always true here: metadata is only non-nil when parse()
+                    // succeeded above. Guarded rather than force-unwrapped per Invariant 12
+                    // (overview.md): if that is ever broken by a future refactor, this book is
+                    // skipped (logged) instead of crashing the whole extraction batch.
+                    guard bookParsed else {
                         #if DEBUG
-                        print("extractOneBook: indexedRecord unexpectedly nil for id \(id) despite non-nil metadata; skipping")
+                        print("extractOneBook: bookParsed unexpectedly false for id \(id) despite non-nil metadata; skipping")
                         #endif
                         return .failure(AO3ExtractionDiagnostic(
                             calibreID: id,
                             status: "failed",
-                            reason: "internal inconsistency: indexedRecord missing after successful parse",
+                            reason: "internal inconsistency: book not parsed despite extracted metadata",
                             epubPath: diagnosticEPUB?.path,
                             epubFilename: diagnosticEPUB?.lastPathComponent,
                             spineItemsChecked: spineItemsChecked,
@@ -1263,7 +1413,7 @@ final class LibrarySession {
                         spineItemsChecked: spineItemsChecked,
                         attemptedAt: ISO8601DateFormatter().string(from: Date())
                     )
-                    if let indexedRecord {
+                    if bookParsed {
                         return .indexed(indexedRecord, diagnostic)
                     } else {
                         return .failure(diagnostic)
@@ -1285,9 +1435,9 @@ final class LibrarySession {
                     switch result {
                     case .success(let metadata, let indexRecord, let id):
                         pendingSuccess.append((metadata, id))
-                        pendingIndexed.append((indexRecord, id))
+                        if let indexRecord { pendingIndexed.append((indexRecord, id)) }
                     case .indexed(let record, let diagnostic):
-                        pendingIndexed.append((record, diagnostic.calibreID))
+                        if let record { pendingIndexed.append((record, diagnostic.calibreID)) }
                         pendingFailure.append(diagnostic)
                     case .failure(let diagnostic):
                         pendingFailure.append(diagnostic)
@@ -1307,14 +1457,25 @@ final class LibrarySession {
                     DispatchQueue.main.async { [weak self] in
                         self?.extractionProgress.completed += 1
                     }
+                    // Refill the slot before a possible flush so the group stays at
+                    // `concurrency` books in flight while the transaction commits.
+                    addNextTask()
                     // Flush and yield every batchSize books, or every flushInterval
                     // seconds if a batch of slow-parsing EPUBs takes longer than that,
                     // so read queries can cut in and a quit mid-run loses little.
-                    if completedCount.isMultiple(of: batchSize) || Date().timeIntervalSince(lastFlushAt) >= flushInterval {
+                    if ExtractionBatchPolicy.shouldFlush(completedCount: completedCount,
+                                                         secondsSinceLastFlush: Date().timeIntervalSince(lastFlushAt),
+                                                         batchSize: batchSize, flushInterval: flushInterval) {
                         await flushBatch()
                         await Task.yield()
+                        #if DEBUG
+                        let elapsed = Date().timeIntervalSince(runStartedAt)
+                        if elapsed > 0 {
+                            print(String(format: "[LibrarySession] extraction %d/%d books, %.1f books/s",
+                                         completedCount, missing.count, Double(completedCount) / elapsed))
+                        }
+                        #endif
                     }
-                    addNextTask()
                 }
             }
             // Flush any remaining records.
@@ -1483,30 +1644,33 @@ final class LibrarySession {
 }
 
 /// §7.3 (Phase 6): builds a `BookIndexRecord` from an already-`parse()`d
-/// `EPUBParser` — called from `extractOneBook` at the point a book parses
-/// fine but has no AO3 preface. Word count is computed by summing
-/// `plainText(for:)` across the spine (the reader's own existing text
-/// machinery, not a second extraction path); per-item failures are skipped
-/// rather than aborting the whole count, and `wordCount` is nil only if
-/// every spine item failed to yield text.
-private func buildBookIndexRecord(from parser: EPUBParser) -> BookIndexRecord {
-    var totalWords = 0
-    var anySucceeded = false
-    for item in parser.spine {
-        guard let text = try? parser.plainText(for: item) else { continue }
-        anySucceeded = true
-        totalWords += text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
-    }
+/// `EPUBParser`. The OPF fields come from the parse pass; `wordCount` is supplied by
+/// the caller (AO3's stated count, a text count from `countWords`, or nil).
+private func makeBookIndexRecord(from parser: EPUBParser, wordCount: Int?) -> BookIndexRecord {
     let subject = parser.opfSubjects.isEmpty ? nil : parser.opfSubjects.joined(separator: ", ")
     return BookIndexRecord(
         title: parser.title.isEmpty ? nil : parser.title,
         description: parser.opfDescription,
-        wordCount: anySucceeded ? totalWords : nil,
+        wordCount: wordCount,
         pubDate: parser.opfDate,
         publisher: parser.opfPublisher,
         subject: subject,
         indexedAt: ISO8601DateFormatter().string(from: Date())
     )
+}
+
+/// Word count over the spine's markup using one already-open archive (no per-chapter
+/// reopen, no regex). Per-item read failures are skipped; nil only if no item was readable.
+private func countWords(in parser: EPUBParser, archive: Archive) -> Int? {
+    var total = 0
+    var anyRead = false
+    for item in parser.spine {
+        guard let entry = archive[item.href],
+              let data = EPUBParser.extract(entry, from: archive) else { continue }
+        anyRead = true
+        total += EPUBWordCounter.wordCount(inMarkup: data)
+    }
+    return anyRead ? total : nil
 }
 
 /// Resolution state of a `fulltext:` phrase in `LibrarySession`.

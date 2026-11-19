@@ -157,7 +157,10 @@ final class EmailLibraryViewController: NSViewController {
         sidebarVC.onContextMenuSetLiked = { [weak self] books, liked in
             guard let self else { return }
             Task {
-                try? await self.session.collectionStore?.setLiked(calibreIDs: books.map(\.id), liked: liked)
+                _ = try? await self.session.collectionStore?.setWorkFlags(
+                    collectionID: SystemCollectionID.liked,
+                    desired: Dictionary(uniqueKeysWithValues: books.map { ($0.id, liked) })
+                )
                 await self.displayController.refreshVisibilitySnapshots(resetPage: false)
             }
         }
@@ -170,19 +173,32 @@ final class EmailLibraryViewController: NSViewController {
         sidebarVC.onToggleReadLater = { [weak self] books in
             self?.toggleReadLater(for: books)
         }
+        sidebarVC.onToggleSeriesLiked = { [weak self] series in
+            guard let self else { return }
+            CollectionAssignment.toggleLiked(series: series, session: self.session) {
+                await self.displayController.refreshVisibilitySnapshots(resetPage: false)
+            }
+        }
+        sidebarVC.onToggleSeriesReadLater = { [weak self] series in
+            guard let self else { return }
+            CollectionAssignment.toggleReadLater(series: series, session: self.session) {
+                await self.displayController.refreshVisibilitySnapshots(resetPage: false)
+            }
+        }
         sidebarVC.onContextMenuReadLater = { [weak self] books in
             guard let self else { return }
             Task {
-                try? await self.session.collectionStore?.bulkAdd(calibreIDs: books.map(\.id), to: SystemCollectionID.readLater)
+                _ = try? await self.session.collectionStore?.setWorkFlags(
+                    collectionID: SystemCollectionID.readLater,
+                    desired: Dictionary(uniqueKeysWithValues: books.map { ($0.id, true) })
+                )
                 await self.displayController.refreshVisibilitySnapshots(resetPage: false)
             }
         }
         sidebarVC.onContextMenuSkip = { [weak self] books in
             guard let self else { return }
             Task {
-                for book in books {
-                    try? await self.session.collectionStore?.skipBook(calibreID: book.id)
-                }
+                try? await self.session.collectionStore?.skip(calibreIDs: books.map(\.id))
                 await self.displayController.refreshVisibilitySnapshots(resetPage: false)
             }
         }
@@ -257,6 +273,8 @@ final class EmailLibraryViewController: NSViewController {
             _ = self.displayController.rebuildDegraded
             _ = self.session.effectiveLikedIDs
             _ = self.session.effectiveReadLaterIDs
+            _ = self.session.likedSeriesFlags
+            _ = self.session.readLaterSeriesFlags
             _ = self.session.collectionMembershipByName
         } onChange: { [weak self] in
             DispatchQueue.main.async {
@@ -275,6 +293,8 @@ final class EmailLibraryViewController: NSViewController {
         sidebar.searchMatchBadges = displayController.searchMatchBadges
         sidebar.likedIDs = session.effectiveLikedIDs
         sidebar.readLaterIDs = session.effectiveReadLaterIDs
+        sidebar.likedSeriesFlags = session.likedSeriesFlags
+        sidebar.readLaterSeriesFlags = session.readLaterSeriesFlags
         sidebar.collectionMembership = session.collectionMembershipByName
         sidebar.rebuildDegraded = displayController.rebuildDegraded
         sidebar.activeCollectionID = activeCollectionID
@@ -410,7 +430,14 @@ final class EmailLibraryViewController: NSViewController {
         Task {
             guard let collections = try? await session.collectionStore?.collections(),
                   let match = collections.first(where: { $0.name == collectionName }) else { return }
-            try? await session.collectionStore?.bulkRemove(calibreIDs: calibreIDs, from: match.id)
+            if match.id == SystemCollectionID.liked || match.id == SystemCollectionID.readLater {
+                _ = try? await session.collectionStore?.setWorkFlags(
+                    collectionID: match.id,
+                    desired: Dictionary(uniqueKeysWithValues: calibreIDs.map { ($0, false) })
+                )
+            } else {
+                try? await session.collectionStore?.bulkRemove(calibreIDs: calibreIDs, from: match.id)
+            }
             CollectionAssignment.didAssign(session: session) { [weak self] in
                 Task {
                     await self?.displayController.refreshVisibilitySnapshots(resetPage: false)

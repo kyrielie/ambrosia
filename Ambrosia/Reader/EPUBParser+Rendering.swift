@@ -1,5 +1,6 @@
 import Foundation
 import SwiftSoup
+import ZIPFoundation
 
 // MARK: - EPUBParser rendering (html/mergedHTML/plainText)
 //
@@ -226,6 +227,20 @@ extension EPUBParser {
     }
 
     // MARK: - plainText(for:)
+
+    /// Raw, unsanitised XHTML of a spine item, read from an archive the caller already
+    /// opened. For metadata extraction only: it skips `sanitise`, which rewrites the
+    /// preface and title page for display (removing `p.message`, headings and the
+    /// `div.byline` wrapper depending on the AO3 layout preference). The reader keeps
+    /// using `html(for:)`.
+    func rawXHTML(for item: SpineItem, archive: Archive) throws -> String {
+        guard let entry = archive[item.href],
+              let data  = Self.extract(entry, from: archive)
+        else { throw EPUBError.missingSpineItem(item.href) }
+        return String(data: data, encoding: .utf8)
+            ?? String(data: data, encoding: .isoLatin1)
+            ?? ""
+    }
 
     /// Returns the plain text (no HTML tags) of a spine item.
     /// Character lengths are UTF-16 code units — matches the JS TreeWalker

@@ -8,6 +8,8 @@ extension NSToolbarItem.Identifier {
     static let readerNavigation = NSToolbarItem.Identifier("ambrosia.reader.navigation")
     static let readerLike       = NSToolbarItem.Identifier("ambrosia.reader.like")
     static let readerReadLater  = NSToolbarItem.Identifier("ambrosia.reader.readlater")
+    static let readerSeriesLike  = NSToolbarItem.Identifier("ambrosia.reader.serieslike")
+    static let readerSeriesReadLater = NSToolbarItem.Identifier("ambrosia.reader.seriesreadlater")
     static let readerAppearance = NSToolbarItem.Identifier("ambrosia.reader.appearance")
     static let readerInfo       = NSToolbarItem.Identifier("ambrosia.reader.info")
 }
@@ -51,6 +53,8 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
     private var nextButton: NSButton?
     private var likeButton: NSButton?
     private var readLaterButton: NSButton?
+    private var seriesLikeButton: NSButton?
+    private var seriesReadLaterButton: NSButton?
     private var appearanceButton: NSButton?
 
     var tocButtonRef: NSButton? { tocButton }
@@ -281,7 +285,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
     // MARK: - NSToolbarDelegate
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [
+        var identifiers: [NSToolbarItem.Identifier] = [
             .readerTOC,
             .readerSearch,
             .flexibleSpace,
@@ -292,6 +296,12 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
             .readerInfo,
             .readerAppearance
         ]
+        if case .series = target {
+            let index = identifiers.firstIndex(of: .readerLike) ?? 5
+            identifiers.insert(.readerSeriesLike, at: index)
+            identifiers.insert(.readerSeriesReadLater, at: index + 1)
+        }
+        return identifiers
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -301,6 +311,8 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
             .readerNavigation,
             .readerLike,
             .readerReadLater,
+            .readerSeriesLike,
+            .readerSeriesReadLater,
             .readerInfo,
             .readerAppearance,
             .flexibleSpace,
@@ -326,6 +338,12 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
 
         case .readerReadLater:
             return makeReadLaterItem(identifier)
+
+        case .readerSeriesLike:
+            return makeSeriesLikeItem(identifier)
+
+        case .readerSeriesReadLater:
+            return makeSeriesReadLaterItem(identifier)
 
         case .readerAppearance:
             return makeAppearanceItem(identifier)
@@ -435,6 +453,40 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         button.isBordered = false
         self.readLaterButton = button
 
+        item.view = button
+        return item
+    }
+
+    private func makeSeriesLikeItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = "Like Series"
+        item.toolTip = "Like this series"
+        let button = NSButton(
+            image: NSImage(systemSymbolName: "star", accessibilityDescription: "Like Series")?
+                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
+            target: self,
+            action: #selector(seriesLikeClicked)
+        )
+        button.bezelStyle = .accessoryBarAction
+        button.isBordered = false
+        self.seriesLikeButton = button
+        item.view = button
+        return item
+    }
+
+    private func makeSeriesReadLaterItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = "Read Later Series"
+        item.toolTip = "Add Series to Read Later"
+        let button = NSButton(
+            image: NSImage(systemSymbolName: "bookmark", accessibilityDescription: "Read Later Series")?
+                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
+            target: self,
+            action: #selector(seriesReadLaterClicked)
+        )
+        button.bezelStyle = .accessoryBarAction
+        button.isBordered = false
+        self.seriesReadLaterButton = button
         item.view = button
         return item
     }
@@ -607,6 +659,23 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
 
         guard let session = AppDelegate.shared?.session else { return }
         let calibreID = readerVC.activeCalibreID
+        if case .series(let series) = target {
+            window?.subtitle = series.works.first(where: { $0.id == calibreID })?.displayTitle ?? series.seriesName
+            let state = session.seriesLikeState(for: series, collectionID: SystemCollectionID.liked)
+            let symbol = state == .full ? "star.fill" : (state == .partial ? "star.leadinghalf.filled" : "star")
+            seriesLikeButton?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Like Series")?
+                .withSymbolConfiguration(Self.toolbarSymbolConfig)
+            seriesLikeButton?.contentTintColor = state == .full ? .systemYellow : (state == .partial ? .systemOrange : nil)
+            seriesLikeButton?.toolTip = state == .full ? "Unlike Series" : "Like Series"
+            let readLaterState = session.seriesLikeState(for: series, collectionID: SystemCollectionID.readLater)
+            let bookmark = readLaterState == .none ? "bookmark" : "bookmark.fill"
+            seriesReadLaterButton?.image = NSImage(systemSymbolName: bookmark, accessibilityDescription: "Read Later Series")?
+                .withSymbolConfiguration(Self.toolbarSymbolConfig)
+            seriesReadLaterButton?.contentTintColor = readLaterState == .full ? .systemOrange : (readLaterState == .partial ? .systemOrange : nil)
+            seriesReadLaterButton?.toolTip = readLaterState == .full ? "Remove Series from Read Later" : "Add Series to Read Later"
+        } else {
+            window?.subtitle = ""
+        }
 
         let isLiked = session.effectiveLikedIDs.contains(calibreID)
         if let likeButton {
@@ -631,11 +700,29 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         withObservationTracking {
             _ = AppDelegate.shared?.session.effectiveLikedIDs
             _ = AppDelegate.shared?.session.effectiveReadLaterIDs
+            _ = AppDelegate.shared?.session.likedSeriesFlags
+            _ = AppDelegate.shared?.session.readLaterSeriesFlags
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.updateToolbarState()
                 self?.scheduleSessionObservation()
             }
+        }
+    }
+
+    @objc private func seriesLikeClicked() {
+        guard case .series(let series) = target,
+              let session = AppDelegate.shared?.session else { return }
+        CollectionAssignment.toggleLiked(series: series, session: session) {
+            await session.refreshCollectionSnapshots()
+        }
+    }
+
+    @objc private func seriesReadLaterClicked() {
+        guard case .series(let series) = target,
+              let session = AppDelegate.shared?.session else { return }
+        CollectionAssignment.toggleReadLater(series: series, session: session) {
+            await session.refreshCollectionSnapshots()
         }
     }
 }

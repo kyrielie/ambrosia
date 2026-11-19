@@ -15,8 +15,13 @@ extension AO3MetadataExtractor {
     /// Returns an empty array if no byline is present, so callers can treat
     /// "not found on this spine item" and "found but empty" identically.
     static func parseAuthors(from html: String) -> [AO3AuthorEntry] {
-        guard let doc = try? SwiftSoup.parse(html),
-              let byline = try? doc.select("div.byline").first()
+        guard let doc = try? SwiftSoup.parse(html) else { return [] }
+        return parseAuthors(from: doc)
+    }
+
+    /// Same as `parseAuthors(from:)` for an already parsed document.
+    static func parseAuthors(from doc: Document) -> [AO3AuthorEntry] {
+        guard let byline = try? doc.select("div.byline").first()
         else { return [] }
 
         guard let authorLinks = try? byline.select("a[rel=author]"), !authorLinks.isEmpty() else {

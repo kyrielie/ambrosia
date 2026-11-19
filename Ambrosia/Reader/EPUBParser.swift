@@ -111,7 +111,10 @@ struct EPUBParser {
 
     /// Parses container.xml → OPF → spine + title.
     /// Must be called before html(for:), mergedHTML(), or plainText(for:).
-    mutating func parse() throws {
+    ///
+    /// `skipTOC`: metadata extraction never reads `toc`, so it passes `true` to skip
+    /// the extra TOC entry read and XML parse. The default keeps reader behavior.
+    mutating func parse(skipTOC: Bool = false) throws {
         let archive = try openArchive()
 
         // container.xml → OPF path
@@ -152,7 +155,7 @@ struct EPUBParser {
         guard !items.isEmpty else { throw EPUBError.emptySpine }
         spine = items
 
-        toc = Self.parseTOC(archive: archive, opfParser: opfParser, spine: spine, opfBasePath: opfBasePath)
+        toc = skipTOC ? [] : Self.parseTOC(archive: archive, opfParser: opfParser, spine: spine, opfBasePath: opfBasePath)
     }
 
     // MARK: - Shared archive helpers

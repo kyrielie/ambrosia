@@ -78,8 +78,8 @@ struct AO3ExtractionDiagnostic: Identifiable, Codable, Equatable, Sendable {
 struct BookIndexRecord: Codable, Equatable, Sendable {
     let title: String?
     let description: String?
-    /// Computed by summing word counts across the spine's plain text
-    /// (`EPUBParser.plainText(for:)`); nil if uncountable.
+    /// AO3's stated word count (`AO3MetadataRecord.wordCount`) when the book has one;
+    /// otherwise counted from the spine markup by `EPUBWordCounter`; nil if uncountable.
     let wordCount: Int?
     /// dc:date, captured as raw text — not validated/parsed as ISO-8601.
     let pubDate: String?
@@ -92,8 +92,19 @@ struct BookIndexRecord: Codable, Equatable, Sendable {
 enum AO3MetadataExtractor {
     static func extract(from html: String) -> AO3MetadataRecord? {
         do {
-            let doc = try SwiftSoup.parse(html)
+            return extract(from: try SwiftSoup.parse(html))
+        } catch {
+            #if DEBUG
+            print("[AO3MetadataExtractor] Parse failed: \(error)")
+            #endif
+            return nil
+        }
+    }
 
+    /// Same as `extract(from:)` for a caller that already parsed the document, so a
+    /// spine item is parsed once instead of once per detector.
+    static func extract(from doc: Document) -> AO3MetadataRecord? {
+        do {
             // 1. Native AO3 preface fast path (dl.tags)
             if let meta = try doc.select("dl.tags").first() {
                 return parseNativeAO3(doc: doc, meta: meta)

@@ -53,19 +53,27 @@ final class AmbrosiaMetaDBMigrationTests: XCTestCase {
     }
 
     func testSchemaMigrationsBridgeIsIdempotent() throws {
-        // A fresh database migrates straight to the current schema_migrations
-        // rows without ever having gone through the legacy PRAGMA user_version
-        // gate, so all four named migrations (the two legacy-bridged ones plus
-        // 2025_drop_ao3_author_username and 2026_04_01_migrate_legacy_swiftdata_to_sqlite)
-        // must be recorded as applied exactly once even though
-        // createSchemaMigrations/bridgeLegacyUserVersionMigrations and the
-        // migrations themselves all run in the same first pass.
+        // The remaining named migrations are the AO3 author cleanup and the
+        // legacy SwiftData import. Series data is now rebuilt by Re-extract.
         let db = try Connection(.inMemory)
         try AmbrosiaMetaDB.runMigrations(db: db)
         try AmbrosiaMetaDB.runMigrations(db: db)
 
         let count = (try? db.scalar("SELECT COUNT(*) FROM schema_migrations")) as? Int64 ?? -1
-        XCTAssertEqual(count, 4, "Expected exactly the four known migrations recorded, with no duplicates")
+        XCTAssertEqual(count, 2, "Expected only the two remaining named migrations")
+    }
+
+    func testSeriesSchemaIsCreatedAndForeignKeysAreValid() throws {
+        let db = try Connection(.inMemory)
+        try AmbrosiaMetaDB.runMigrations(db: db)
+        try AmbrosiaMetaDB.runMigrations(db: db)
+        for table in ["series", "series_cache", "series_collection_members", "series_collection_exclusions"] {
+            let exists = (try db.scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table) as? Int64) ?? 0
+            XCTAssertEqual(exists, 1, "missing table \(table)")
+        }
+        let view = (try db.scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='view' AND name='effective_collection_members'") as? Int64) ?? 0
+        XCTAssertEqual(view, 1)
+        XCTAssertEqual(try db.prepare("PRAGMA foreign_key_check").map { $0 }.count, 0)
     }
 
     func testLegacyTagSeedTablesArePurgedOnMigration() throws {

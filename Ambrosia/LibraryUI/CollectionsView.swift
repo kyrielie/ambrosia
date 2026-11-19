@@ -518,7 +518,14 @@ struct CollectionsView: View {
         let ids = Array(selectedWorkIDs)
         selectedWorkIDs.removeAll()
         Task {
-            try? await session.collectionStore?.bulkRemove(calibreIDs: ids, from: collectionID)
+            if collectionID == SystemCollectionID.liked || collectionID == SystemCollectionID.readLater {
+                _ = try? await session.collectionStore?.setWorkFlags(
+                    collectionID: collectionID,
+                    desired: Dictionary(uniqueKeysWithValues: ids.map { ($0, false) })
+                )
+            } else {
+                try? await session.collectionStore?.bulkRemove(calibreIDs: ids, from: collectionID)
+            }
             session.bumpCollectionVersion()
             await reload()
         }
@@ -589,7 +596,13 @@ struct CollectionsView: View {
 
     private func removeBookFromCollection(calibreID: Int, collectionID: String) {
         Task {
-            try? await session.collectionStore?.bulkRemove(calibreIDs: [calibreID], from: collectionID)
+            if collectionID == SystemCollectionID.liked || collectionID == SystemCollectionID.readLater {
+                _ = try? await session.collectionStore?.setWorkFlags(
+                    collectionID: collectionID, desired: [calibreID: false]
+                )
+            } else {
+                try? await session.collectionStore?.bulkRemove(calibreIDs: [calibreID], from: collectionID)
+            }
             session.bumpCollectionVersion()
             await reload()
         }

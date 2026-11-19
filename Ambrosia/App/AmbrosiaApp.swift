@@ -508,6 +508,15 @@ struct AmbrosiaApp: App {
                 }
                 .disabled(!readerMenuState.isReaderFocused)
 
+                if readerMenuState.isSeriesReader {
+                    Button(readerMenuState.seriesLikeState == .full ? "Unlike Series" : "Like Series") {
+                        NSApp.sendAction(#selector(ReaderViewController.toggleLikeCurrentSeries(_:)), to: nil, from: nil)
+                    }
+                    Button(readerMenuState.seriesReadLaterState == .full ? "Remove Series from Read Later" : "Add Series to Read Later") {
+                        NSApp.sendAction(#selector(ReaderViewController.toggleReadLaterCurrentSeries(_:)), to: nil, from: nil)
+                    }
+                }
+
                 Divider()
 
                 // Clears the shared, in-memory-only remembered reader window

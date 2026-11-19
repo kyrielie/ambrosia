@@ -20,10 +20,12 @@ Four LRU caches (`LRUCache<Key, Value>`, a bounded dictionary + insertion-order 
 `LibrarySession.visibilityVersion` tracks Skip, series-or-merged, publisher,
 anthology, and duplicate-loser visibility sets. `collectionVersion` tracks
 Like, Read Later, and collection assignment changes. `LibraryDisplayController`
-captures `pinnedCollectionVersion` when the user changes the query, search,
-sort, or grouping. A membership press updates session-backed icons but leaves
-the active result IDs, page, and scroll in place; the next query application
-uses the latest collection version. `refreshCollectionSnapshots` also bumps
+captures both `pinnedCollectionVersion` and the collection membership map when
+the user changes the query, search, sort, or grouping. The version remains a
+cache-key accelerator; the captured map is the data snapshot used by visible
+collection-rule evaluation. A membership press updates session-backed icons
+but leaves the active result IDs, page, and scroll in place; the next query
+application pins the latest map and version. `refreshCollectionSnapshots` also bumps
 `collectionVersion` when `collectionMembershipByName` changes, so a custom
 collection edit from a path that does not call `bumpCollectionVersion()` is
 still detected. Skip and other visibility refreshes re-apply the filter and
@@ -35,6 +37,17 @@ membership live when the popup loads, so they are not reloaded on a Like.
 `sortedIDsCache` holds the full sorted id list for one grouped title-sorted view (`groupAwareTitleSortedPage`), so paging within a view costs a slice plus `booksForIDs` instead of a fresh materialize-and-sort. It is read through `LRUCache.get`, which refreshes recency (the subscript does not). A same-key sort already running is joined through `sortedIDsInFlight` rather than started twice, and `sortedIDsGeneration` stops a sort that began before `invalidateSortedIDs()` from storing a stale result. `wordCountSortedPage`, `kudosSortedPage` and `randomSortedPage` are not split yet.
 
 `CalibreLibrary.clearQueryCaches()` empties `pageCache`, `countCache`, `groupAwareCountCache` and `sortedIDsCache` together; `updateAO3MetaCaches` and the app-activation change check (`session-model.md`) both call it. The same check clears `filterResultCache` and `ruleMatchCache` on the session.
+
+## Page-load measurement
+
+The app emits `page.query` for the foreground page request, `page.rebuildMetadata`
+for row/group hydration, `pageCache.hit` for page-cache hits, and separate
+`collection.*.effectiveView` / `collection.*.explicitRows` intervals for
+effective versus explicit collection reads. Use these in Instruments Points of
+Interest before adding adjacent-page preloading. Page turns currently wait for
+row metadata hydration, so ID-only preloading is not assumed to improve the
+visible latency. Preloading remains unimplemented until a profile shows that
+neighbor-page fetch time is a material part of the wait.
 
 Notes and known rough edges:
 

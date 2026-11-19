@@ -248,7 +248,7 @@ actor CalibreLibrary {
         }
     }
 
-    func allCalibreSeriesEntries() -> [SeriesCacheEntry] {
+    func allCalibreSeriesEntries() -> [SeriesCacheWriteInput] {
         calibreSeriesEntries(bookIDsAfter: nil, through: nil)
     }
 
@@ -258,7 +258,7 @@ actor CalibreLibrary {
     /// (not row count) never splits one book's memberships across two chunks.
     /// Ordered by book, then series name, so a book with several series keeps
     /// the same winner under insert-if-absent as the old global `s.name` order.
-    func calibreSeriesEntries(bookIDsAfter lower: Int?, through upper: Int?) -> [SeriesCacheEntry] {
+    func calibreSeriesEntries(bookIDsAfter lower: Int?, through upper: Int?) -> [SeriesCacheWriteInput] {
         var bounds = ""
         if let lower { bounds += " AND b.id > \(lower)" }
         if let upper { bounds += " AND b.id <= \(upper)" }
@@ -296,7 +296,7 @@ actor CalibreLibrary {
                 #endif
                 return nil
             }
-            return SeriesCacheEntry(
+            return SeriesCacheWriteInput(
                 calibreID: Int(idBind),
                 seriesName: name,
                 seriesIndex: Int(rawIndex),
@@ -623,7 +623,7 @@ actor CalibreLibrary {
             offset: offset,
             limit: limit
         )
-        if let cached = pageCache[cacheKey] { return cached }
+        if let cached = pageCache[cacheKey] { LaunchSignposts.event("pageCache.hit"); return cached }
         // 1. Fetch all matching IDs (no author/tag/comment hydration), then
         // apply the visibility policy (skip/series-grouping/AO3-publisher-only/
         // anthology) once, here, instead of callers pre-intersecting restrictIDs
@@ -700,7 +700,7 @@ actor CalibreLibrary {
             offset: offset,
             limit: limit
         )
-        if let cached = pageCache[cacheKey] { return cached }
+        if let cached = pageCache[cacheKey] { LaunchSignposts.event("pageCache.hit"); return cached }
         // 1. Fetch all matching IDs (no author/tag/comment hydration), then
         // apply the visibility policy (skip/series-grouping/AO3-publisher-only/
         // anthology) once, here, instead of callers pre-intersecting restrictIDs
@@ -836,7 +836,7 @@ actor CalibreLibrary {
             offset: offset,
             limit: limit
         )
-        if let cached = pageCache[cacheKey] { return cached }
+        if let cached = pageCache[cacheKey] { LaunchSignposts.event("pageCache.hit"); return cached }
 
         let sortedIDs = await groupAwareTitleSortedIDs(key: cacheKey.sortedKey, ascending: ascending, pageQuery)
         let start = min(offset, sortedIDs.count)
@@ -993,7 +993,7 @@ actor CalibreLibrary {
             offset: offset,
             limit: limit
         )
-        if let cached = pageCache[cacheKey] { return cached }
+        if let cached = pageCache[cacheKey] { LaunchSignposts.event("pageCache.hit"); return cached }
         let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
                                                 filterTagExpansions: filterTagExpansions)
         let matchedIDs = await SeriesMatchExpansion.expand(
@@ -1048,7 +1048,7 @@ actor CalibreLibrary {
             offset: offset,
             limit: limit
         )
-        if let cached = pageCache[cacheKey] { return cached }
+        if let cached = pageCache[cacheKey] { LaunchSignposts.event("pageCache.hit"); return cached }
 
         let rawMatchedIDs = fetchAllMatchingIDs(
             query: query,
@@ -1231,6 +1231,7 @@ actor CalibreLibrary {
             limit: limit
         )
         if let cached = pageCache[cacheKey] {
+            LaunchSignposts.event("pageCache.hit")
             LibraryFilterDebug.log("books.cacheHit", ["rows": cached.page.count])
             return cached.page
         }

@@ -85,4 +85,96 @@ final class CollectionStoreTests: XCTestCase {
         XCTAssertEqual(failedExtraction?.isSystem, true)
         XCTAssertEqual(failedExtraction?.kind, "automated")
     }
+
+    func testSeriesMembershipAppearsInEffectiveWorkReadsButNotExplicitRows() async throws {
+        try await metaDB.run("""
+            INSERT INTO series (series_id, series_key, name, calibre_series_id, created_at)
+            VALUES (1, 'calibre:91', 'Test Series', 91, '2026-01-01T00:00:00Z')
+            """)
+        try await metaDB.run("INSERT INTO series_cache (calibre_id, series_id, series_index) VALUES (10, 1, 1), (11, 1, 2)")
+        try await metaDB.run("""
+            INSERT INTO series_collection_members (collection_id, series_id, added_at)
+            VALUES (?, 1, '2026-02-01T00:00:00Z')
+            """, [SystemCollectionID.liked])
+
+        let liked = try await store.likedIDs()
+        let members = Set(try await store.members(of: SystemCollectionID.liked))
+        let byID = try await store.membershipByCollectionID()
+        let explicit = Set(try await store.explicitMembers(of: SystemCollectionID.liked))
+        XCTAssertEqual(liked, [10, 11])
+        XCTAssertEqual(members, [10, 11])
+        XCTAssertEqual(byID[SystemCollectionID.liked], [10, 11])
+        XCTAssertEqual(explicit, [])
+        let dates = try await store.memberAddedDates(for: SystemCollectionID.liked)
+        XCTAssertEqual(dates.count, 2)
+        XCTAssertEqual(dates[10], ISO8601DateFormatter().date(from: "2026-02-01T00:00:00Z"))
+
+        let exclusionDelta = try await store.setWorkFlags(collectionID: SystemCollectionID.liked, desired: [10: false])
+        XCTAssertEqual(exclusionDelta.toRemove, [10])
+        let unlikedMembers = Set(try await store.members(of: SystemCollectionID.liked))
+        XCTAssertEqual(unlikedMembers, [11])
+        let explicitAfterUnlike = Set(try await store.explicitMembers(of: SystemCollectionID.liked))
+        XCTAssertTrue(explicitAfterUnlike.isEmpty)
+        let exclusionCount = try await metaDB.scalar("SELECT COUNT(*) FROM series_collection_exclusions") as? Int64
+        XCTAssertEqual(exclusionCount, 1)
+
+        _ = try await store.setWorkFlags(collectionID: SystemCollectionID.liked, desired: [10: true])
+        let relikedMembers = Set(try await store.members(of: SystemCollectionID.liked))
+        let explicitReliked = Set(try await store.explicitMembers(of: SystemCollectionID.liked))
+        XCTAssertEqual(relikedMembers, [10, 11])
+        XCTAssertEqual(explicitReliked, [10])
+    }
+
+    func testSkipExcludesCoveredReadLaterWorkAndAddsSkippedMembershipAtomically() async throws {
+        try await metaDB.run("""
+            INSERT INTO series (series_id, series_key, name, calibre_series_id, created_at)
+            VALUES (7, 'calibre:97', 'Read Later Series', 97, '2026-01-01T00:00:00Z')
+            """)
+        try await metaDB.run("INSERT INTO series_cache (calibre_id, series_id, series_index) VALUES (70, 7, 1), (71, 7, 2)")
+        try await metaDB.run("""
+            INSERT INTO series_collection_members (collection_id, series_id, added_at)
+            VALUES (?, 7, '2026-02-01T00:00:00Z')
+            """, [SystemCollectionID.readLater])
+        try await store.skip(calibreIDs: [70])
+
+        let readLaterMembers = Set(try await store.members(of: SystemCollectionID.readLater))
+        let skippedMembers = Set(try await store.members(of: SystemCollectionID.skipped))
+        XCTAssertEqual(readLaterMembers, [71])
+        XCTAssertEqual(skippedMembers, [70])
+        let exclusionCount = try await metaDB.scalar("""
+            SELECT COUNT(*) FROM series_collection_exclusions
+            WHERE collection_id = ? AND calibre_id = 70
+            """, [SystemCollectionID.readLater]) as? Int64
+        XCTAssertEqual(exclusionCount, 1)
+    }
+
+    func testSeriesFlagActionsOperateOnOnlyTheirSeries() async throws {
+        try await metaDB.run("""
+            INSERT INTO series (series_id, series_key, name, calibre_series_id, created_at)
+            VALUES (8, 'calibre:98', 'Flaggable', 98, '2026-01-01T00:00:00Z'),
+                   (9, 'calibre:99', 'Other', 99, '2026-01-01T00:00:00Z')
+            """)
+        try await metaDB.run("INSERT INTO series_cache (calibre_id, series_id, series_index) VALUES (80, 8, 1), (81, 8, 2), (81, 9, 1), (82, 9, 2)")
+        let delta = try await store.applySeriesActions(collectionID: SystemCollectionID.liked, seriesID: 8, actions: [.setFlag])
+        XCTAssertEqual(delta.toAdd, [80, 81])
+        let afterSet = Set(try await store.members(of: SystemCollectionID.liked))
+        XCTAssertEqual(afterSet, [80, 81])
+
+        _ = try await store.applySeriesActions(collectionID: SystemCollectionID.liked, seriesID: 8, actions: [.clearFlag])
+        let afterClear = Set(try await store.members(of: SystemCollectionID.liked))
+        XCTAssertTrue(afterClear.isEmpty)
+    }
+
+    func testNameOnlySeriesCannotBeFlaggedAtStoreLayer() async throws {
+        try await metaDB.run("""
+            INSERT INTO series (series_id, series_key, name, name_key, created_at)
+            VALUES (10, 'calibre-name:Unnamed', 'Unnamed', 'unnamed', '2026-01-01T00:00:00Z')
+            """)
+        do {
+            _ = try await store.applySeriesActions(collectionID: SystemCollectionID.liked, seriesID: 10, actions: [.setFlag])
+            XCTFail("name-only series should not accept a persisted flag")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("Name-only"))
+        }
+    }
 }

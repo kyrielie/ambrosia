@@ -34,6 +34,8 @@ final class EmailSidebarViewController: NSViewController,
     var onContextMenuRemoveFromCollection: (([CalibreBook], String) -> Void)?
     var onToggleLiked: (([CalibreBook]) -> Void)?
     var onToggleReadLater: (([CalibreBook]) -> Void)?
+    var onToggleSeriesLiked: ((SeriesGroup) -> Void)?
+    var onToggleSeriesReadLater: ((SeriesGroup) -> Void)?
 
     // MARK: - Dependencies
 
@@ -47,6 +49,8 @@ final class EmailSidebarViewController: NSViewController,
     var ao3Metadata: [Int: AO3MetadataRecord] = [:] { didSet { reloadVisibleRows() } }
     var likedIDs: Set<Int> = [] { didSet { reloadVisibleRows() } }
     var readLaterIDs: Set<Int> = [] { didSet { reloadVisibleRows() } }
+    var likedSeriesFlags: [Int: SeriesCollectionFlag] = [:] { didSet { reloadVisibleRows() } }
+    var readLaterSeriesFlags: [Int: SeriesCollectionFlag] = [:] { didSet { reloadVisibleRows() } }
     var searchMatchBadges: [Int: SearchMatchBadge] = [:] { didSet { reloadVisibleRows() } }
     /// Collection snapshot for building context menu submenus. Key = name, value = member calibreIDs.
     var collectionMembership: [String: Set<Int>] = [:] { didSet { reloadVisibleRows() } }
@@ -204,16 +208,36 @@ final class EmailSidebarViewController: NSViewController,
                 isInReadLater: readLaterIDs.contains(items[row].primaryBook.id),
                 collectionPills: manualCollectionPills(for: items[row]),
                 showCollectionPills: ReaderPreferences.shared.emailPillsShowCollections,
-                searchBadge: searchMatchBadges[items[row].primaryBook.id]
+                searchBadge: searchMatchBadges[items[row].primaryBook.id],
+                likeState: seriesState(items[row], flags: likedSeriesFlags, effectiveIDs: likedIDs),
+                readLaterState: seriesState(items[row], flags: readLaterSeriesFlags, effectiveIDs: readLaterIDs)
             ),
-            onToggleLiked: { [weak self] books in
-                self?.onToggleLiked?(books)
+            onToggleLiked: { [weak self] item in
+                if case .series(let series) = item {
+                    self?.onToggleSeriesLiked?(series)
+                } else {
+                    self?.onToggleLiked?(item.contextBooks)
+                }
             },
-            onToggleReadLater: { [weak self] books in
-                self?.onToggleReadLater?(books)
+            onToggleReadLater: { [weak self] item in
+                if case .series(let series) = item {
+                    self?.onToggleSeriesReadLater?(series)
+                } else {
+                    self?.onToggleReadLater?(item.contextBooks)
+                }
             }
         )
         return cell
+    }
+
+    private func seriesState(_ item: LibraryItem, flags: [Int: SeriesCollectionFlag], effectiveIDs: Set<Int>) -> SeriesLikeState? {
+        guard case .series(let series) = item else { return nil }
+        let memberIDs = Set(series.works.map(\.id))
+        if let seriesID = series.seriesID, let flag = flags[seriesID] {
+            return SeriesPressPlanner.state(flagIsSet: true, exclusions: flag.exclusions,
+                                            memberIDs: memberIDs, effectiveIDs: effectiveIDs)
+        }
+        return SeriesPressPlanner.state(flagIsSet: false, exclusions: [], memberIDs: memberIDs, effectiveIDs: effectiveIDs)
     }
 
     private func manualCollectionPills(for item: LibraryItem) -> [String] {
@@ -506,10 +530,11 @@ final class EmailBookCellView: NSTableCellView {
     private let likeButton = NSButton()
     private let readLaterButton = NSButton()
     private var representedContextBooks: [CalibreBook] = []
+    private var representedItem: LibraryItem?
     private var isLocallyLiked: Bool = false
     private var isLocallyReadLater: Bool = false
-    private var onToggleLiked: (([CalibreBook]) -> Void)?
-    private var onToggleReadLater: (([CalibreBook]) -> Void)?
+    private var onToggleLiked: ((LibraryItem) -> Void)?
+    private var onToggleReadLater: ((LibraryItem) -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -650,12 +675,14 @@ final class EmailBookCellView: NSTableCellView {
         var collectionPills: [String]
         var showCollectionPills: Bool
         var searchBadge: SearchMatchBadge?
+        var likeState: SeriesLikeState?
+        var readLaterState: SeriesLikeState?
     }
 
     func configure(
         content: RowContent,
-        onToggleLiked: @escaping ([CalibreBook]) -> Void,
-        onToggleReadLater: @escaping ([CalibreBook]) -> Void
+        onToggleLiked: @escaping (LibraryItem) -> Void,
+        onToggleReadLater: @escaping (LibraryItem) -> Void
     ) {
         let item = content.item
         let readPercent = content.readPercent
@@ -665,12 +692,13 @@ final class EmailBookCellView: NSTableCellView {
         let collectionPills = content.collectionPills
         let showCollectionPills = content.showCollectionPills
         representedContextBooks = item.contextBooks
+        representedItem = item
         self.onToggleLiked = onToggleLiked
         self.onToggleReadLater = onToggleReadLater
         self.isLocallyLiked = isLiked
         self.isLocallyReadLater = isInReadLater
-        updateLikeButtonVisuals(liked: isLiked)
-        updateReadLaterButtonVisuals(readLater: isInReadLater)
+        updateLikeButtonVisuals(state: content.likeState ?? (isLiked ? .full : .none))
+        updateReadLaterButtonVisuals(state: content.readLaterState ?? (isInReadLater ? .full : .none))
         switch item {
         case .book(let book):
             titleLabel.stringValue = book.displayTitle
@@ -731,33 +759,36 @@ final class EmailBookCellView: NSTableCellView {
         }
     }
 
-    private func updateLikeButtonVisuals(liked: Bool) {
-        likeButton.image = NSImage(systemSymbolName: liked ? "star.fill" : "star", accessibilityDescription: liked ? "Unlike" : "Like")?
+    private func updateLikeButtonVisuals(state: SeriesLikeState) {
+        let liked = state == .full
+        let symbol = state == .full ? "star.fill" : (state == .partial ? "star.leadinghalf.filled" : "star")
+        likeButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: liked ? "Unlike" : "Like")?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 16, weight: .regular))
-        likeButton.contentTintColor = liked ? .systemYellow : .secondaryLabelColor
+        likeButton.contentTintColor = state == .full ? .systemYellow : (state == .partial ? .systemOrange : .secondaryLabelColor)
     }
 
-    private func updateReadLaterButtonVisuals(readLater: Bool) {
+    private func updateReadLaterButtonVisuals(state: SeriesLikeState) {
+        let readLater = state == .full
         readLaterButton.image = NSImage(
-            systemSymbolName: readLater ? "bookmark.fill" : "bookmark",
+            systemSymbolName: state == .none ? "bookmark" : "bookmark.fill",
             accessibilityDescription: readLater ? "Remove from Read Later" : "Add to Read Later"
         )?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 16, weight: .regular))
-        readLaterButton.contentTintColor = readLater ? .controlAccentColor : .secondaryLabelColor
+        readLaterButton.contentTintColor = state == .full ? .controlAccentColor : (state == .partial ? .systemOrange : .secondaryLabelColor)
     }
 
     @objc private func toggleLiked() {
         guard !representedContextBooks.isEmpty else { return }
         isLocallyLiked.toggle()
-        updateLikeButtonVisuals(liked: isLocallyLiked)
-        onToggleLiked?(representedContextBooks)
+        updateLikeButtonVisuals(state: isLocallyLiked ? .none : .full)
+        if let representedItem { onToggleLiked?(representedItem) }
     }
 
     @objc private func toggleReadLaterAction() {
         guard !representedContextBooks.isEmpty else { return }
         isLocallyReadLater.toggle()
-        updateReadLaterButtonVisuals(readLater: isLocallyReadLater)
-        onToggleReadLater?(representedContextBooks)
+        updateReadLaterButtonVisuals(state: isLocallyReadLater ? .none : .full)
+        if let representedItem { onToggleReadLater?(representedItem) }
     }
 
     private func configureCollectionPills(_ names: [String]) {

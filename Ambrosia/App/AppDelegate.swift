@@ -147,6 +147,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ReaderMenuState.shared.canGoNextPage = focused && (rvc?.canGoNext ?? false)
         ReaderMenuState.shared.canGoPreviousChapter = focused && (rvc?.canGoPreviousChapter ?? false)
         ReaderMenuState.shared.canGoNextChapter = focused && (rvc?.canGoNextChapter ?? false)
+        if let rvc, case .series(let series) = rvc.target, let session {
+            ReaderMenuState.shared.isSeriesReader = focused
+            ReaderMenuState.shared.seriesLikeState = session.seriesLikeState(for: series, collectionID: SystemCollectionID.liked)
+            ReaderMenuState.shared.seriesReadLaterState = session.seriesLikeState(for: series, collectionID: SystemCollectionID.readLater)
+        } else {
+            ReaderMenuState.shared.isSeriesReader = false
+            ReaderMenuState.shared.seriesLikeState = .none
+            ReaderMenuState.shared.seriesReadLaterState = .none
+        }
     }
 
     var hasActiveReader: Bool {
@@ -463,8 +472,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func openLibraryAtURL(_ url: URL) {
-        showLibraryWindow()
+    func openLibraryAtURL(_ url: URL, activateLibraryWindow: Bool = true) {
+        let prefsVisible = PreferencesWindowController.shared.window?.isVisible == true
+        if activateLibraryWindow && !prefsVisible {
+            showLibraryWindow()
+        }
 
         let dbPath = url.appendingPathComponent("metadata.db").path
         if FileManager.default.isReadableFile(atPath: dbPath) {
@@ -472,7 +484,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 await self.session.open(url: url)
                 await MainActor.run {
-                    self.showLibraryWindow()
+                    if activateLibraryWindow && !prefsVisible {
+                        self.showLibraryWindow()
+                    } else if prefsVisible {
+                        self.libraryWindowController?.showWindow(nil)
+                        PreferencesWindowController.shared.window?.makeKeyAndOrderFront(nil)
+                    }
                 }
             }
             return
@@ -641,6 +658,9 @@ final class ReaderMenuState {
     var canGoNextPage: Bool = false
     var canGoPreviousChapter: Bool = false
     var canGoNextChapter: Bool = false
+    var isSeriesReader: Bool = false
+    var seriesLikeState: SeriesLikeState = .none
+    var seriesReadLaterState: SeriesLikeState = .none
 }
 
 @MainActor

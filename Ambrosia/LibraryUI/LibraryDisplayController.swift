@@ -91,6 +91,7 @@ final class LibraryDisplayController {
     private var lastObservedReloadToken: String?
     private var lastObservedLibraryHash: String?
     private(set) var pinnedCollectionVersion: Int
+    private(set) var pinnedCollectionMembership: [String: Set<Int>]
 
     // MARK: - Initialization
 
@@ -98,6 +99,7 @@ final class LibraryDisplayController {
         self.session = session
         self.toolbarState = toolbarState
         self.pinnedCollectionVersion = session.collectionVersion
+        self.pinnedCollectionMembership = session.pinnableCollectionMembership()
         self.queryController = LibraryQueryController(surfaceLabel: "displayController")
         self.lastObservedSearchText = toolbarState.searchText
         self.lastObservedSortField = toolbarState.sortField
@@ -507,6 +509,7 @@ final class LibraryDisplayController {
 
     private func pinCollectionSnapshot() {
         pinnedCollectionVersion = session.collectionVersion
+        pinnedCollectionMembership = session.pinnableCollectionMembership()
     }
 
     var activeFullTextPhrase: String? {
@@ -663,7 +666,8 @@ final class LibraryDisplayController {
                 let baseIDs = narrowing.base.calibreIDs
                 guard let evaluated = await evaluator.evaluate(expression: deltaExpression,
                                                                fulltextMap: fulltextMap,
-                                                               candidates: Set(baseIDs)) else { return }
+                                                               candidates: Set(baseIDs),
+                                                               collectionMapOverride: self.pinnedCollectionMembership) else { return }
                 let deltaSet = Set(evaluated.result.calibreIDs)
                 let narrowedIDs = baseIDs.filter { deltaSet.contains($0) }
                 guard self.toolbarState.libraryFilterApplicationToken == token, !Task.isCancelled else { return }
@@ -690,7 +694,9 @@ final class LibraryDisplayController {
             let fulltextMap = LibraryQueryHelpers.fulltextMap(values: fulltextRules.map(\.value)) {
                 self.session.cachedFulltextIDs(for: $0)
             }
-            guard let evaluated = await evaluator.evaluate(expression: expression, fulltextMap: fulltextMap) else {
+            guard let evaluated = await evaluator.evaluate(expression: expression,
+                                                           fulltextMap: fulltextMap,
+                                                           collectionMapOverride: pinnedCollectionMembership) else {
                 return
             }
             let finalResult = evaluated.result
@@ -804,6 +810,9 @@ final class LibraryDisplayController {
             isLoading = false
             return
         }
+
+        let pageQuerySignpost = LaunchSignposts.begin("page.query")
+        defer { LaunchSignposts.end("page.query", pageQuerySignpost) }
 
         var loadedPageBooks: [CalibreBook] = []
         var pageHasMore = false
@@ -1046,6 +1055,8 @@ final class LibraryDisplayController {
         rebuildTask = Task {
             let degraded = false
             let pageIDs = pageBooks.map(\.id)
+            let rebuildSignpost = LaunchSignposts.begin("page.rebuildMetadata")
+            defer { LaunchSignposts.end("page.rebuildMetadata", rebuildSignpost) }
 
             async let pageMetadataTask = metaDB.ao3Metadata(for: pageIDs)
             async let pageDiagnosticsTask = metaDB.ao3ExtractionDiagnostics(for: pageIDs)
