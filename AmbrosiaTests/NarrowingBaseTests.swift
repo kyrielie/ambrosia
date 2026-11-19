@@ -46,7 +46,7 @@ final class NarrowingBaseTests: XCTestCase {
         let first = tag("A"), second = tag("B")
         session.rememberFilterResult(FilterResult(calibreIDs: [1], totalCount: 1),
                                      for: expression([first]), visibilitySignature: "v")
-        session.bumpMembershipVersion()
+        session.bumpVisibilityVersion()
         XCTAssertNil(session.narrowingBase(for: expression([first, second]), visibilitySignature: "v"))
     }
 

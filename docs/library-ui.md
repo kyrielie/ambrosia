@@ -28,16 +28,16 @@ AmbrosiaApp
 
 ## Modes
 
-- List: SwiftUI AO3-style rows with title, series, authors, tags, stats, description, and pagination. Querying, filtering, sorting, paging, series grouping, and metadata hydration are managed by `LibraryDisplayController.swift`. `LibraryRootView.swift` acts as a declarative presentation shell; row rendering is split out into `BookListRow.swift` and `SeriesListRow.swift`; shared layout and series-grouping helpers (`FlowLayout`, `isAnthology`, `missingIndices`, `parseISODate`, `logMissingVisibleWorkMetadata`) live in `FlowLayout.swift`. These helpers and the row-support types (`LibraryStats`, `LibraryStatsRow`, `TagPillDisplay`) are intentionally `internal`, not `private`, because more than one row file depends on them — see Invariant 16. Action buttons (Liked, Read Later) feature instantaneous optimistic local state toggling with 24×24 pt hit areas. Reading progress (% read) is placed compactly inline inside the stats row (`LibraryStatsRow`) to prevent vertical row jitter during loading.
+- List: SwiftUI AO3-style rows with title, series, authors, tags, stats, description, and pagination. Querying, filtering, sorting, paging, series grouping, and metadata hydration are managed by `LibraryDisplayController.swift`. `LibraryRootView.swift` acts as a declarative presentation shell; row rendering is split out into `BookListRow.swift` and `SeriesListRow.swift`; shared layout and series-grouping helpers (`FlowLayout`, `isAnthology`, `missingIndices`, `parseISODate`, `logMissingVisibleWorkMetadata`) live in `FlowLayout.swift`. These helpers and the row-support types (`LibraryStats`, `LibraryStatsRow`, `TagPillDisplay`) are intentionally `internal`, not `private`, because more than one row file depends on them — see Invariant 16. Action buttons (Liked, Read Later) update optimistically with 24×24 pt hit areas; persistence, version invalidation, and refresh are debounced and batched per collection. Reading progress (% read) is placed compactly inline inside the stats row (`LibraryStatsRow`) to prevent vertical row jitter during loading.
 - Email: AppKit split view with table sidebar and SwiftUI detail pane, also powered by `LibraryDisplayController.swift`.
 - Ranking: `ActivityFeedView` (reading activity feed), designed with a compact, native AppKit layout with subtle separators and condensed 2/3-line entries wasting no unnecessary white space. `BookState` already has ELO fields for a future ranking surface.
 
 ## Row height bounds
 
-List-mode rows are self-sizing `List` rows, so unbounded content makes row height unpredictable. Book rows bound it as follows:
+List-mode rows are self-sizing, so unbounded content makes row height unpredictable. Book and series rows share `RowDescriptionContent` and `RowDescriptionPreview`:
 
-- `BookListRow.descriptionRow` renders `RowDescriptionLimit.capped(displayComment)` with `.lineLimit(RowDescriptionLimit.lines)`. Limits: 1,500 characters and 10 lines (an AO3 summary is at most 1,250 characters). Truncation happens in the view only; `CalibreBook.displayComment` is unchanged because `isDescriptionAnthology` reads it. Narrow windows or many paragraph breaks can clip at line 10; that is accepted.
-- `SeriesListRow` keeps its existing 4 line description limit.
+- Individual previews are capped at 1,500 characters and 10 rendered lines. Series previews use final `SeriesGroup.works` order, label each work, cap each description at 400 characters, and cap the combined preview at 1,500 characters and 10 lines (ellipsis included in each character limit). Empty descriptions are omitted. Full descriptions remain unchanged in `CalibreBook.displayComment`.
+- A `More…` button appears when the character cap or rendered-line cap truncates the preview. Line clipping is measured against a hidden unconstrained text copy only for longer previews. The popover shows the full description; series entries retain their work headings and support text selection. The preview stays line-bounded, so long descriptions do not expand the row without limit.
 - Tag pills are capped at `TagPillDisplay.maxVisible` (30) per `BookListRow` and `TagPillDisplay.maxVisibleSeries` (30) per `SeriesListRow` (a series row shows the union of its works' tags, so it needs its own knob); the rest collapse into one non-interactive "+N" pill whose help text lists the hidden labels. Pill order from `TagPillDisplay.make` / `makeForSeries` puts rating, fandom, relationship and character first, so those survive. Set either to `Int.max` to disable. There is no per-row expand state, because a row that grows on click reintroduces height variance.
 - Ungrouped page loads assign `items` and `ao3Metadata` (plus `ao3ExtractionDiagnostics`, `singletonSeriesWarnings`, `rebuildDegraded`) together in one `MainActor.run`, via `rebuildUngroupedItems`, so rows do not render bare and then grow when metadata arrives. This mirrors the grouped `rebuildTask`. `items` is not cleared beforehand, so the previous page stays visible until the swap. A page turn therefore waits for the metadata query before showing rows.
 - `rebuildItems()` owns the page metadata fetch for non-empty pages in both modes; `loadPage` no longer calls `loadAO3MetadataForCurrentPage()` after it (that was a duplicate fetch in grouped mode, confirmed by reading the grouped `rebuildTask`). The loader is still called for empty-result branches, by the extraction-refresh `onChange`, and from `rebuildItems()`'s synchronous fallback (no metaDB or library) when the page is non-empty.
@@ -73,6 +73,8 @@ The macOS menu bar adapts to whether the user is browsing the library or reading
 
 In List View, rows (`BookListRow`, `SeriesListRow`) are intentionally **non-selectable** to allow frictionless scrolling and single-click interaction with tags, authors, and bookmark/star toggles without row highlight artifacts. Selection is supported only in Email View's sidebar table.
 
+Double-clicking blank row space opens a work or series in Reader. The row-open gesture is attached behind row content so buttons and tag/author controls remain independent. Applying an already-active tag or author rule is a no-op and does not reapply the query.
+
 Book and series rows support macOS right-click / secondary-click context menus across all library modes (`BookListRow`, `SeriesListRow`, and `EmailSidebarViewController`):
 - **Reveal in Finder**: Resolves the book's EPUB file URL via `CalibreLibrary.epubURL(for:)` and highlights it in macOS Finder (`AppDelegate.revealInFinder`).
 - Collection assignments (Read Later, Liked, Skipped, Finished, In Progress, custom collections).
@@ -84,11 +86,12 @@ All modal library dialogs (`CollectionsView`, `ReadingGoalView`, `ErrorLogView`,
 
 ## Filter Drawer Dismissal
 
-The filter drawer sheet (`FilterDrawerView`) supports seamless cancellation and dismissal:
-- Close button in header with `.help("Close (Esc)")` and `.keyboardShortcut(.cancelAction)`.
+The filter drawer sheet (`FilterDrawerView`) is presented by one zero-size hosting view owned by `LibraryViewController`, shared across list, email, and ranking modes. Inactive mode views stay mounted, so attaching a sheet to each surface would create competing presenters for the shared `showFilterDrawer` state.
+
+The filter drawer supports cancellation and dismissal:
+- Close button in header with `.help("Close (Esc)")`; the shared `.preventInitialButtonFocus()` modifier clears the automatic initial button highlight, and Escape is handled by `.onExitCommand` rather than assigning a keyboard shortcut to the X button.
 - Dedicated **Cancel** button in the footer alongside Apply and Clear All.
-- Container-level `.onExitCommand` to guarantee Esc dismisses the sheet reliably.
-- Explicit `toolbarState.showFilterDrawer = false` synchronization on apply/clear to prevent stuck drawer presentation.
+- Close, Cancel, Apply, Clear All, and Escape all dismiss through one owner callback that sets `showFilterDrawer = false`; the sheet does not mix environment dismissal with presentation-state changes.
 
 - System collections live in `ambrosia_meta.db`.
 - `Series or Merged` is system-maintained from `series_cache` and anthology detection.

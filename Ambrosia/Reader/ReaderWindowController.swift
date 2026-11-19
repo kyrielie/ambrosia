@@ -608,7 +608,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         guard let session = AppDelegate.shared?.session else { return }
         let calibreID = readerVC.activeCalibreID
 
-        let isLiked = session.cachedLikedIDs.contains(calibreID)
+        let isLiked = session.effectiveLikedIDs.contains(calibreID)
         if let likeButton {
             let symbol = isLiked ? "heart.fill" : "heart"
             likeButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Like")?
@@ -617,7 +617,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
             likeButton.toolTip = isLiked ? "Liked (Click to unlike)" : "Like this work"
         }
 
-        let isReadLater = session.cachedReadLaterIDs.contains(calibreID)
+        let isReadLater = session.effectiveReadLaterIDs.contains(calibreID)
         if let readLaterButton {
             let symbol = isReadLater ? "bookmark.fill" : "bookmark"
             readLaterButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Read Later")?
@@ -629,8 +629,8 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
 
     private func scheduleSessionObservation() {
         withObservationTracking {
-            _ = AppDelegate.shared?.session.cachedLikedIDs
-            _ = AppDelegate.shared?.session.cachedReadLaterIDs
+            _ = AppDelegate.shared?.session.effectiveLikedIDs
+            _ = AppDelegate.shared?.session.effectiveReadLaterIDs
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.updateToolbarState()

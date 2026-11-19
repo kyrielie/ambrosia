@@ -98,11 +98,40 @@ actor CollectionStore {
         }
     }
 
+    func setLiked(states: [Int: Bool]) async throws {
+        try await setMembershipStates(states, in: SystemCollectionID.liked)
+    }
+
     func setReadLater(calibreIDs: [Int], inReadLater: Bool) async throws {
         if inReadLater {
             try await bulkAdd(calibreIDs: calibreIDs, to: SystemCollectionID.readLater)
         } else {
             try await bulkRemove(calibreIDs: calibreIDs, from: SystemCollectionID.readLater)
+        }
+    }
+
+    func setReadLater(states: [Int: Bool]) async throws {
+        try await setMembershipStates(states, in: SystemCollectionID.readLater)
+    }
+
+    private func setMembershipStates(_ states: [Int: Bool], in collectionID: String) async throws {
+        let adding = states.compactMap { $0.value ? $0.key : nil }.sorted()
+        let removing = states.compactMap { $0.value ? nil : $0.key }.sorted()
+        guard !adding.isEmpty || !removing.isEmpty else { return }
+        let addedAt = ISO8601DateFormatter().string(from: Date())
+        try await db.transaction { db in
+            for calibreID in removing {
+                try db.run(
+                    "DELETE FROM collection_members WHERE collection_id = ? AND calibre_id = ?",
+                    [collectionID, calibreID]
+                )
+            }
+            for calibreID in adding {
+                try db.run(
+                    "INSERT OR IGNORE INTO collection_members VALUES (?, ?, ?)",
+                    [collectionID, calibreID, addedAt]
+                )
+            }
         }
     }
 

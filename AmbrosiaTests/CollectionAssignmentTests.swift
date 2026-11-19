@@ -29,38 +29,100 @@ final class CollectionAssignmentTests: XCTestCase {
 
         // Rapid click 1: add to Read Later
         CollectionAssignment.toggleReadLater(calibreIDs: [bookID], session: session)
-        XCTAssertTrue(session.cachedReadLaterIDs.contains(bookID))
+        XCTAssertTrue(session.explicitReadLaterIDs.contains(bookID))
 
         // Rapid click 2: remove from Read Later
         CollectionAssignment.toggleReadLater(calibreIDs: [bookID], session: session)
-        XCTAssertFalse(session.cachedReadLaterIDs.contains(bookID))
+        XCTAssertFalse(session.explicitReadLaterIDs.contains(bookID))
 
         // Rapid click 3: add to Read Later
         CollectionAssignment.toggleReadLater(calibreIDs: [bookID], session: session)
-        XCTAssertTrue(session.cachedReadLaterIDs.contains(bookID))
+        XCTAssertTrue(session.explicitReadLaterIDs.contains(bookID))
 
         // Wait for debouncer (200ms) to settle and write to store
         try await Task.sleep(nanoseconds: 500_000_000)
 
         let members = try await store.members(of: SystemCollectionID.readLater)
         XCTAssertTrue(members.contains(bookID))
-        XCTAssertTrue(session.cachedReadLaterIDs.contains(bookID))
+        XCTAssertTrue(session.explicitReadLaterIDs.contains(bookID))
 
         // Rapid toggle off (off, on, off)
         CollectionAssignment.toggleReadLater(calibreIDs: [bookID], session: session)
-        XCTAssertFalse(session.cachedReadLaterIDs.contains(bookID))
+        XCTAssertFalse(session.explicitReadLaterIDs.contains(bookID))
 
         CollectionAssignment.toggleReadLater(calibreIDs: [bookID], session: session)
-        XCTAssertTrue(session.cachedReadLaterIDs.contains(bookID))
+        XCTAssertTrue(session.explicitReadLaterIDs.contains(bookID))
 
         CollectionAssignment.toggleReadLater(calibreIDs: [bookID], session: session)
-        XCTAssertFalse(session.cachedReadLaterIDs.contains(bookID))
+        XCTAssertFalse(session.explicitReadLaterIDs.contains(bookID))
 
         try await Task.sleep(nanoseconds: 500_000_000)
 
         let membersAfter = try await store.members(of: SystemCollectionID.readLater)
         XCTAssertFalse(membersAfter.contains(bookID))
-        XCTAssertFalse(session.cachedReadLaterIDs.contains(bookID))
+        XCTAssertFalse(session.explicitReadLaterIDs.contains(bookID))
+    }
+
+    func testMultiWorkLikeTogglePersistsAndRefreshesAsOneBatch() async throws {
+        guard let store = session.collectionStore else {
+            XCTFail("CollectionStore was nil")
+            return
+        }
+
+        let calibreIDs = Array(1_001...1_050)
+        var refreshCount = 0
+        CollectionAssignment.toggleLiked(calibreIDs: calibreIDs, session: session) {
+            refreshCount += 1
+        }
+
+        XCTAssertTrue(Set(calibreIDs).isSubset(of: session.explicitLikedIDs))
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        XCTAssertEqual(refreshCount, 1)
+        let persistedIDs = Set(try await store.likedIDs())
+        XCTAssertTrue(Set(calibreIDs).isSubset(of: persistedIDs))
+    }
+
+    func testEffectiveMembershipCurrentlyMatchesExplicitMembership() {
+        session.explicitLikedIDs = [7, 8]
+        session.explicitReadLaterIDs = [9]
+        XCTAssertEqual(session.effectiveLikedIDs, session.explicitLikedIDs)
+        XCTAssertEqual(session.effectiveReadLaterIDs, session.explicitReadLaterIDs)
+    }
+
+    func testOverlappingRapidBatchesPersistFinalPerWorkStates() async throws {
+        guard let store = session.collectionStore else {
+            XCTFail("CollectionStore was nil")
+            return
+        }
+
+        var refreshCount = 0
+        CollectionAssignment.toggleLiked(calibreIDs: [1_101, 1_102], session: session) {
+            refreshCount += 1
+        }
+        CollectionAssignment.toggleLiked(calibreIDs: [1_101], session: session) {
+            refreshCount += 1
+        }
+
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        let persistedIDs = Set(try await store.likedIDs())
+        XCTAssertFalse(persistedIDs.contains(1_101))
+        XCTAssertTrue(persistedIDs.contains(1_102))
+        XCTAssertEqual(refreshCount, 1)
+    }
+
+    func testLikeToggleBumpsCollectionVersionWithoutChangingVisibilityVersion() async throws {
+        let isolatedSession = LibrarySession()
+        let visibilityBefore = isolatedSession.visibilityVersion
+        let collectionBefore = isolatedSession.collectionVersion
+        CollectionAssignment.toggleLiked(calibreIDs: [1_201], session: isolatedSession)
+        XCTAssertEqual(isolatedSession.collectionVersion, collectionBefore + 1)
+
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        XCTAssertEqual(isolatedSession.visibilityVersion, visibilityBefore)
+        XCTAssertEqual(isolatedSession.collectionVersion, collectionBefore + 1)
     }
 
     func testCompletedBooksCountUnitesThreeSourcesAndDeduplicates() async throws {

@@ -587,17 +587,17 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     // MARK: - NSSearchFieldDelegate
 
     /// Called on every keypress via the field's action (target/action set above).
+    /// The field text is a draft until Return or a suggestion is selected.
+    /// `toolbarState.searchText` is the committed query observed by the list,
+    /// so writing each edit there starts result paging while the user types.
     @objc private func searchFieldChanged(_ sender: NSSearchField) {
         let text = sender.stringValue
-        // Update searchText immediately for display, but page load is debounced
-        // inside BookGridItem / EmailLibraryViewController (0.4 s).
-        toolbarState?.searchText = text
-        if text.trimmingCharacters(in: .whitespaces).isEmpty && !(toolbarState?.hasActiveFilter ?? false) {
-            toolbarState?.clearRelevanceSortIfNeeded()
-        }
-
         if text.isEmpty {
             closeSuggestionPanel()
+            // Clearing the field is an explicit request to clear the committed
+            // search; nonempty draft text remains uncommitted until Return or
+            // an autocomplete row is chosen.
+            toolbarState?.searchText = ""
         } else {
             suggestionDebouncer.schedule { [weak self] in
                 self?.refreshSuggestions(for: text)
@@ -705,7 +705,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             clearSearchField()
             commitFilterRule(rule)
         } else {
-            // Plain text, semantic, or fulltext: commit immediately to toolbarState
+            // Plain text, semantic, or fulltext: commit the draft query.
             toolbarState?.searchText = text
         }
 

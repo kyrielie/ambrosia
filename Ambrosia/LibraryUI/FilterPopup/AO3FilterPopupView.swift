@@ -20,7 +20,7 @@ struct AO3FilterPopupView: View {
     @Bindable var state: AO3FilterPopupState
     let toolbarState: LibraryToolbarState
     let facetController: AO3FilterFacetController
-    /// Snapshot of `LibrarySession.membershipVersion` at the time this view
+    /// Snapshot of `LibrarySession.visibilityVersion` at the time this view
     /// was installed. Passed straight through to
     /// `AO3FilterFacetController.topFacets`/`topRatingFacets` as the cache
     /// key for the whole-library facet baseline -- a plain value, not
@@ -28,7 +28,7 @@ struct AO3FilterPopupView: View {
     /// mid-session membership change is meant to invalidate the *next*
     /// popup open/reopen (a fresh `AO3FilterPopupWindowController` rebuild),
     /// not repaint the popup that's already on screen.
-    let membershipVersion: Int
+    let visibilityVersion: Int
     // §9: Invoked after apply() writes to toolbarState, so the owning
     // AO3FilterPopupWindowController can resync state.capturedDigest and
     // rebuild facetController.baseIDs against the newly-applied expression.
@@ -163,19 +163,19 @@ struct AO3FilterPopupView: View {
     // silently failing past SQLite's default 999-parameter limit (the
     // `try?` in AmbrosiaMetaDB.topFacets swallowed the error and returned
     // `[]`). The controller now detects that "wholly unconstrained" case and
-    // uses an ID-list-free query instead, cached per membershipVersion.
+    // uses an ID-list-free query instead, cached per visibilityVersion.
     private func refreshFacets() {
         facetRefreshTask?.cancel()
         facetDebouncer.schedule {
             facetRefreshTask = Task { @MainActor in
-                async let ratingFacetsTask = facetController.topRatingFacets(state: state, membershipVersion: membershipVersion)
+                async let ratingFacetsTask = facetController.topRatingFacets(state: state, visibilityVersion: visibilityVersion)
 
                 let newFacets: [AO3FacetField: [(name: String, count: Int)]] =
                     await withTaskGroup(of: (AO3FacetField, [(name: String, count: Int)]).self) { group in
                         for field in AO3FacetField.allCases {
                             group.addTask {
                                 let entries = await facetController.topFacets(
-                                    for: field, state: state, limit: limit(for: field), membershipVersion: membershipVersion
+                                    for: field, state: state, limit: limit(for: field), visibilityVersion: visibilityVersion
                                 )
                                 return (field, entries)
                             }
@@ -204,7 +204,7 @@ struct AO3FilterPopupView: View {
         facetLimits[field] = limit(for: field) + Self.facetPageSize
         Task {
             let entries = await facetController.topFacets(
-                for: field, state: state, limit: limit(for: field), membershipVersion: membershipVersion
+                for: field, state: state, limit: limit(for: field), visibilityVersion: visibilityVersion
             )
             guard !Task.isCancelled else { return }
             facets[field] = entries

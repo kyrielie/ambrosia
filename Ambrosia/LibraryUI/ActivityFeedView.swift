@@ -22,22 +22,8 @@ struct ActivityFeedView: View {
             Divider()
             content
         }
-        // Toolbar actions — same bindings used by list/email views.
-        .sheet(isPresented: filterDrawerBinding) {
-            FilterDrawerView(
-                expression: Binding(
-                    get: { toolbarState.filterExpression },
-                    set: { toolbarState.filterExpression = $0 }
-                ),
-                onApply: {
-                    toolbarState.showFilterDrawer = false
-                },
-                onClear: {
-                    toolbarState.filterExpression = FilterExpression()
-                    toolbarState.showFilterDrawer = false
-                }
-            )
-        }
+        // Filter presentation is hosted once by LibraryViewController, shared
+        // across list, email, and ranking modes.
         .onChange(of: toolbarState.triggerExport) { _, triggered in
             // The activity view has no book list; silently reset the flag.
             // Export is handled by whichever content view owns the current book list.
@@ -50,15 +36,6 @@ struct ActivityFeedView: View {
             if triggered { toolbarState.triggerAnnotationExport = false }
         }
         .task { await load() }
-    }
-
-    // MARK: Toolbar sheet bindings
-
-    private var filterDrawerBinding: Binding<Bool> {
-        Binding(
-            get: { toolbarState.showFilterDrawer },
-            set: { toolbarState.showFilterDrawer = $0 }
-        )
     }
 
     // MARK: Header

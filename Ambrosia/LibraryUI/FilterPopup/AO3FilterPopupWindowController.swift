@@ -37,7 +37,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
     static func open(anchorWindow: NSWindow,
                      toolbarState: LibraryToolbarState,
                      dependencies: LibraryDependencies,
-                     membershipVersion: Int) {
+                     visibilityVersion: Int) {
         let metaDB = dependencies.metaDB
         let library = dependencies.library
         let ftsLibrary = dependencies.ftsLibrary
@@ -51,7 +51,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
             DispatchQueue.main.async { existing.window?.makeFirstResponder(nil) }
             existing.loadTask?.cancel()
             existing.loadTask = Task {
-                await existing.refreshIfDigestChanged(toolbarState: toolbarState, membershipVersion: membershipVersion)
+                await existing.refreshIfDigestChanged(toolbarState: toolbarState, visibilityVersion: visibilityVersion)
             }
             return
         }
@@ -68,7 +68,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
             )
             guard !Task.isCancelled else { return }
             wc.installContent(state: wc.state, toolbarState: toolbarState,
-                              facetController: facetController, membershipVersion: membershipVersion)
+                              facetController: facetController, visibilityVersion: visibilityVersion)
         }
     }
 
@@ -118,7 +118,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     private func installContent(state: AO3FilterPopupState, toolbarState: LibraryToolbarState,
-                                facetController: AO3FilterFacetController, membershipVersion: Int) {
+                                facetController: AO3FilterFacetController, visibilityVersion: Int) {
         hostingController.rootView = AnyView(
             VStack(spacing: 0) {
                 HStack {
@@ -138,7 +138,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
                     .padding(.top, 8)
                 }
                 AO3FilterPopupView(state: state, toolbarState: toolbarState, facetController: facetController,
-                                   membershipVersion: membershipVersion,
+                                   visibilityVersion: visibilityVersion,
                                    onApply: { [weak self] in self?.applyDidCommit(toolbarState: toolbarState) })
             }
         )
@@ -211,7 +211,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
     /// Discards checkbox state if the underlying search/filter changed since
     /// this popup's state was captured, and rebuilds a fresh facet
     /// controller/view against the new base filter.
-    private func refreshIfDigestChanged(toolbarState: LibraryToolbarState, membershipVersion: Int) async {
+    private func refreshIfDigestChanged(toolbarState: LibraryToolbarState, visibilityVersion: Int) async {
         let liveDigest = AO3FilterPopupDigest.current(toolbarState: toolbarState)
         guard liveDigest != state.capturedDigest else { return }
         guard let session = AppDelegate.shared?.session,
@@ -223,7 +223,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
         )
         guard !Task.isCancelled else { return }
         installContent(state: state, toolbarState: toolbarState, facetController: facetController,
-                       membershipVersion: membershipVersion)
+                       visibilityVersion: visibilityVersion)
     }
 
     // §9: Runs after AO3FilterPopupView.apply() writes a fresh expression to
@@ -258,7 +258,7 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
             )
             guard !Task.isCancelled else { return }
             installContent(state: state, toolbarState: toolbarState, facetController: facetController,
-                           membershipVersion: session.membershipVersion)
+                           visibilityVersion: session.visibilityVersion)
         }
     }
 

@@ -14,6 +14,8 @@ class LibraryViewController: NSViewController {
 
     /// Tracks the hosting view for list mode so we can toggle isHidden on mode switch.
     private var listHostingView: NSHostingView<AnyView>?
+    /// Single presentation host for the shared filter drawer across all modes.
+    private var filterSheetHost: NSHostingView<LibraryFilterSheetHost>?
     /// Tracks the view controller for email mode so we can toggle isHidden on mode switch.
     private var emailVC: EmailLibraryViewController?
     /// Tracks ranking view controller if created.
@@ -51,6 +53,7 @@ class LibraryViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         applyLibraryAppearance()
+        installFilterSheetHost()
         applyViewMode(toolbarState.viewMode)
         startObservingViewMode()
         startObservingAppearance()
@@ -63,6 +66,27 @@ class LibraryViewController: NSViewController {
         view.appearance = appearance
         children.forEach { $0.view.appearance = appearance }
         listHostingView?.appearance = appearance
+        filterSheetHost?.appearance = appearance
+    }
+
+    private func installFilterSheetHost() {
+        let root = LibraryFilterSheetHost(
+            toolbarState: toolbarState,
+            session: session,
+            displayController: displayController
+        )
+        let host = NSHostingView(rootView: root)
+        host.sizingOptions = []
+        host.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
+        host.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.widthAnchor.constraint(equalToConstant: 0),
+            host.heightAnchor.constraint(equalToConstant: 0),
+            host.topAnchor.constraint(equalTo: view.topAnchor),
+            host.leadingAnchor.constraint(equalTo: view.leadingAnchor)
+        ])
+        filterSheetHost = host
     }
 
     private func startObservingAppearance() {
@@ -183,6 +207,41 @@ class LibraryViewController: NSViewController {
                 self.scheduleViewModeObservation()
             }
         }
+    }
+}
+
+private struct LibraryFilterSheetHost: View {
+    let toolbarState: LibraryToolbarState
+    let session: LibrarySession
+    let displayController: LibraryDisplayController
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .sheet(isPresented: Binding(
+                get: { toolbarState.showFilterDrawer },
+                set: { toolbarState.showFilterDrawer = $0 }
+            )) {
+                FilterDrawerView(
+                    expression: Binding(
+                        get: { toolbarState.filterExpression },
+                        set: { toolbarState.filterExpression = $0 }
+                    ),
+                    onApply: {
+                        displayController.applyFilterRules()
+                    },
+                    onClear: {
+                        toolbarState.filterExpression = FilterExpression()
+                        toolbarState.activeFilterResult = nil
+                        toolbarState.cancelLibraryFilterApplication()
+                        displayController.scheduleLoadPage()
+                    },
+                    onDismiss: { toolbarState.showFilterDrawer = false }
+                )
+                .environment(toolbarState)
+                .environment(session)
+                .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
+            }
     }
 }
 

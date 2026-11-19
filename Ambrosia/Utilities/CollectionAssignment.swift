@@ -2,9 +2,9 @@ import Foundation
 
 /// Coordinates collection membership mutations and rapid toggle actions across all surfaces
 /// (`ReaderWindowController`, `LibraryRootView`, `EmailLibraryViewController`), ensuring:
-/// 1. Synchronous optimistic updates of `session.cachedLikedIDs` / `session.cachedReadLaterIDs`.
-/// 2. Asynchronous persistence via `CollectionStore` debounced per book to prevent racing writes.
-/// 3. Invalidation of filter caches via `session.bumpMembershipVersion()`.
+/// 1. Synchronous optimistic updates of `session.explicitLikedIDs` / `session.explicitReadLaterIDs`.
+/// 2. Asynchronous persistence via one debounced batch per collection to prevent racing writes.
+/// 3. Invalidation of collection-dependent filter caches.
 /// 4. Execution of post-change UI refresh closures after rapid toggling settles.
 @MainActor
 enum CollectionAssignment {
@@ -12,11 +12,15 @@ enum CollectionAssignment {
     private(set) static var inFlightReadLaterIDs: Set<Int> = []
     private(set) static var inFlightLikedIDs: Set<Int> = []
 
-    private static var readLaterDebounceTasks: [Int: Task<Void, Never>] = [:]
-    private static var likedDebounceTasks: [Int: Task<Void, Never>] = [:]
+    private static var readLaterDebounceTask: Task<Void, Never>?
+    private static var likedDebounceTask: Task<Void, Never>?
+    private static var pendingReadLaterIDs: Set<Int> = []
+    private static var pendingLikedIDs: Set<Int> = []
+    private static var pendingReadLaterRefresh: (() async -> Void)?
+    private static var pendingLikedRefresh: (() async -> Void)?
 
     static func didAssign(session: LibrarySession, onRefresh: () -> Void) {
-        session.bumpMembershipVersion()
+        session.bumpCollectionVersion()
         onRefresh()
     }
 
@@ -27,28 +31,31 @@ enum CollectionAssignment {
         onRefresh: (() async -> Void)? = nil
     ) {
         guard !calibreIDs.isEmpty else { return }
-        let shouldLike = !calibreIDs.allSatisfy { session.cachedLikedIDs.contains($0) }
+        let shouldLike = !calibreIDs.allSatisfy { session.explicitLikedIDs.contains($0) }
         if shouldLike {
-            for id in calibreIDs { session.cachedLikedIDs.insert(id) }
+            for id in calibreIDs { session.explicitLikedIDs.insert(id) }
         } else {
-            for id in calibreIDs { session.cachedLikedIDs.remove(id) }
+            for id in calibreIDs { session.explicitLikedIDs.remove(id) }
         }
+        session.noteOptimisticCollectionMutation()
 
-        for id in calibreIDs {
-            inFlightLikedIDs.insert(id)
-            likedDebounceTasks[id]?.cancel()
-            likedDebounceTasks[id] = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                guard !Task.isCancelled else { return }
-                let finalLiked = session.cachedLikedIDs.contains(id)
-                try? await session.collectionStore?.setLiked(calibreIDs: [id], liked: finalLiked)
-                inFlightLikedIDs.remove(id)
-                likedDebounceTasks.removeValue(forKey: id)
-                session.bumpMembershipVersion()
-                if let onRefresh {
-                    await onRefresh()
-                }
-            }
+        pendingLikedIDs.formUnion(calibreIDs)
+        inFlightLikedIDs.formUnion(calibreIDs)
+        if let onRefresh { pendingLikedRefresh = onRefresh }
+        likedDebounceTask?.cancel()
+        likedDebounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else { return }
+
+            let ids = pendingLikedIDs
+            pendingLikedIDs.subtract(ids)
+            let refresh = pendingLikedRefresh
+            pendingLikedRefresh = nil
+            let states = Dictionary(uniqueKeysWithValues: ids.map { ($0, session.explicitLikedIDs.contains($0)) })
+            try? await session.collectionStore?.setLiked(states: states)
+            session.noteCollectionMutationPersisted()
+            inFlightLikedIDs.subtract(ids.subtracting(pendingLikedIDs))
+            await refresh?()
         }
     }
 
@@ -59,28 +66,31 @@ enum CollectionAssignment {
         onRefresh: (() async -> Void)? = nil
     ) {
         guard !calibreIDs.isEmpty else { return }
-        let shouldAdd = !calibreIDs.allSatisfy { session.cachedReadLaterIDs.contains($0) }
+        let shouldAdd = !calibreIDs.allSatisfy { session.explicitReadLaterIDs.contains($0) }
         if shouldAdd {
-            for id in calibreIDs { session.cachedReadLaterIDs.insert(id) }
+            for id in calibreIDs { session.explicitReadLaterIDs.insert(id) }
         } else {
-            for id in calibreIDs { session.cachedReadLaterIDs.remove(id) }
+            for id in calibreIDs { session.explicitReadLaterIDs.remove(id) }
         }
+        session.noteOptimisticCollectionMutation()
 
-        for id in calibreIDs {
-            inFlightReadLaterIDs.insert(id)
-            readLaterDebounceTasks[id]?.cancel()
-            readLaterDebounceTasks[id] = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                guard !Task.isCancelled else { return }
-                let finalReadLater = session.cachedReadLaterIDs.contains(id)
-                try? await session.collectionStore?.setReadLater(calibreIDs: [id], inReadLater: finalReadLater)
-                inFlightReadLaterIDs.remove(id)
-                readLaterDebounceTasks.removeValue(forKey: id)
-                session.bumpMembershipVersion()
-                if let onRefresh {
-                    await onRefresh()
-                }
-            }
+        pendingReadLaterIDs.formUnion(calibreIDs)
+        inFlightReadLaterIDs.formUnion(calibreIDs)
+        if let onRefresh { pendingReadLaterRefresh = onRefresh }
+        readLaterDebounceTask?.cancel()
+        readLaterDebounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else { return }
+
+            let ids = pendingReadLaterIDs
+            pendingReadLaterIDs.subtract(ids)
+            let refresh = pendingReadLaterRefresh
+            pendingReadLaterRefresh = nil
+            let states = Dictionary(uniqueKeysWithValues: ids.map { ($0, session.explicitReadLaterIDs.contains($0)) })
+            try? await session.collectionStore?.setReadLater(states: states)
+            session.noteCollectionMutationPersisted()
+            inFlightReadLaterIDs.subtract(ids.subtracting(pendingReadLaterIDs))
+            await refresh?()
         }
     }
 }

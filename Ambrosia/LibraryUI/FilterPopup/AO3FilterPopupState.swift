@@ -168,12 +168,16 @@ final class AO3FilterPopupState {
 /// state should be kept (search/filter unchanged since last open/Apply) or
 /// discarded (search/filter changed underneath it). Reuses
 /// `FilterResultCacheKey`'s `expressionDigest` construction rather than
-/// inventing a second hashing scheme; `membershipVersion` is irrelevant here
+/// inventing a second hashing scheme; the versions are irrelevant here
 /// (that field tracks book-list membership, not filter identity) so it is
 /// passed as a throwaway constant.
 enum AO3FilterPopupDigest {
     static func current(toolbarState: LibraryToolbarState) -> String {
-        let key = FilterResultCacheKey(expression: toolbarState.filterExpression, membershipVersion: 0)
+        let key = FilterResultCacheKey(
+            expression: toolbarState.filterExpression,
+            visibilityVersion: 0,
+            pinnedCollectionVersion: 0
+        )
         return key.expressionDigest + "||" + toolbarState.searchText
     }
 }

@@ -28,7 +28,7 @@ final class EmailLibraryViewController: NSViewController {
 
     // MARK: - Popovers & Sheets
 
-    private var filterSheetHost: NSHostingView<FilterSheetCarrier>?
+    private var toolbarActionHost: NSHostingView<EmailToolbarActionCarrier>?
     private var collectionPickerPopover: NSPopover?
     private var preferenceCancellables: Set<AnyCancellable> = []
 
@@ -110,11 +110,11 @@ final class EmailLibraryViewController: NSViewController {
         super.viewDidLoad()
         toolbarState.isEmailReaderSidebarVisible = false
         buildSplitView()
-        addFilterSheetHost()
         startObservingPreferences()
         startObservingToolbarToggles()
         startObservingDisplayController()
         syncSidebarFromDisplayController()
+        addToolbarActionHost()
 
         NotificationCenter.default.publisher(for: .librarySnapshotsDidBecomeReady)
             .receive(on: DispatchQueue.main)
@@ -158,7 +158,6 @@ final class EmailLibraryViewController: NSViewController {
             guard let self else { return }
             Task {
                 try? await self.session.collectionStore?.setLiked(calibreIDs: books.map(\.id), liked: liked)
-                self.session.bumpMembershipVersion()
                 await self.displayController.refreshVisibilitySnapshots(resetPage: false)
             }
         }
@@ -175,7 +174,6 @@ final class EmailLibraryViewController: NSViewController {
             guard let self else { return }
             Task {
                 try? await self.session.collectionStore?.bulkAdd(calibreIDs: books.map(\.id), to: SystemCollectionID.readLater)
-                self.session.bumpMembershipVersion()
                 await self.displayController.refreshVisibilitySnapshots(resetPage: false)
             }
         }
@@ -185,7 +183,6 @@ final class EmailLibraryViewController: NSViewController {
                 for book in books {
                     try? await self.session.collectionStore?.skipBook(calibreID: book.id)
                 }
-                self.session.bumpMembershipVersion()
                 await self.displayController.refreshVisibilitySnapshots(resetPage: false)
             }
         }
@@ -258,8 +255,9 @@ final class EmailLibraryViewController: NSViewController {
             _ = self.displayController.bookStates
             _ = self.displayController.ao3Metadata
             _ = self.displayController.rebuildDegraded
-            _ = self.session.cachedLikedIDs
-            _ = self.session.cachedReadLaterIDs
+            _ = self.session.effectiveLikedIDs
+            _ = self.session.effectiveReadLaterIDs
+            _ = self.session.collectionMembershipByName
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -275,8 +273,8 @@ final class EmailLibraryViewController: NSViewController {
         sidebar.bookStates = displayController.bookStates
         sidebar.ao3Metadata = displayController.ao3Metadata
         sidebar.searchMatchBadges = displayController.searchMatchBadges
-        sidebar.likedIDs = session.cachedLikedIDs
-        sidebar.readLaterIDs = session.cachedReadLaterIDs
+        sidebar.likedIDs = session.effectiveLikedIDs
+        sidebar.readLaterIDs = session.effectiveReadLaterIDs
         sidebar.collectionMembership = session.collectionMembershipByName
         sidebar.rebuildDegraded = displayController.rebuildDegraded
         sidebar.activeCollectionID = activeCollectionID
@@ -362,31 +360,30 @@ final class EmailLibraryViewController: NSViewController {
         view.appearance = appearance
         splitVC?.view.appearance = appearance
         sidebarVC?.view.appearance = appearance
-        filterSheetHost?.appearance = appearance
+        toolbarActionHost?.appearance = appearance
         sidebarVC?.reloadAppearance()
     }
 
-    // MARK: - Filter Sheet Host & Collection Picker
+    // MARK: - Toolbar Actions & Collection Picker
 
-    private func addFilterSheetHost() {
-        let carrier = FilterSheetCarrier(
+    private func addToolbarActionHost() {
+        let carrier = EmailToolbarActionCarrier(
             toolbarState: toolbarState,
             session: session,
-            displayController: displayController,
-            emailVC: self
+            displayController: displayController
         )
-        let hv = NSHostingView(rootView: carrier)
-        hv.sizingOptions = []
-        hv.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
-        hv.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(hv)
+        let host = NSHostingView(rootView: carrier)
+        host.sizingOptions = []
+        host.appearance = ReaderPreferences.shared.resolvedLibraryNSAppearance
+        host.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(host)
         NSLayoutConstraint.activate([
-            hv.widthAnchor.constraint(equalToConstant: 0),
-            hv.heightAnchor.constraint(equalToConstant: 0),
-            hv.topAnchor.constraint(equalTo: view.topAnchor),
-            hv.leadingAnchor.constraint(equalTo: view.leadingAnchor)
+            host.widthAnchor.constraint(equalToConstant: 0),
+            host.heightAnchor.constraint(equalToConstant: 0),
+            host.topAnchor.constraint(equalTo: view.topAnchor),
+            host.leadingAnchor.constraint(equalTo: view.leadingAnchor)
         ])
-        filterSheetHost = hv
+        toolbarActionHost = host
     }
 
     private func showCollectionPicker(for calibreIDs: [Int], relativeTo rect: NSRect, of anchorView: NSView) {
@@ -456,7 +453,7 @@ final class EmailLibraryViewController: NSViewController {
                     shouldBeMember: false
                 )
             }
-            session.bumpMembershipVersion()
+            session.bumpCollectionVersion()
             displayController.refreshBookStates()
         }
     }
@@ -481,7 +478,7 @@ final class EmailLibraryViewController: NSViewController {
                     shouldBeMember: false
                 )
             }
-            session.bumpMembershipVersion()
+            session.bumpCollectionVersion()
             displayController.refreshBookStates()
         }
     }
@@ -797,42 +794,16 @@ final class EmailLibraryViewController: NSViewController {
     }
 }
 
-// MARK: - FilterSheetCarrier
+// MARK: - EmailToolbarActionCarrier
 
-struct FilterSheetCarrier: View {
+struct EmailToolbarActionCarrier: View {
     let toolbarState: LibraryToolbarState
     let session: LibrarySession
     let displayController: LibraryDisplayController
-    weak var emailVC: EmailLibraryViewController?
 
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
-            .sheet(isPresented: Binding(
-                get: { toolbarState.showFilterDrawer },
-                set: { toolbarState.showFilterDrawer = $0 }
-            )) {
-                FilterDrawerView(
-                    expression: Binding(
-                        get: { toolbarState.filterExpression },
-                        set: { toolbarState.filterExpression = $0 }
-                    ),
-                    onApply: {
-                        displayController.applyFilterRules()
-                        toolbarState.showFilterDrawer = false
-                    },
-                    onClear: {
-                        toolbarState.filterExpression = FilterExpression()
-                        toolbarState.activeFilterResult = nil
-                        toolbarState.cancelLibraryFilterApplication()
-                        displayController.scheduleLoadPage()
-                        toolbarState.showFilterDrawer = false
-                    }
-                )
-                .environment(toolbarState)
-                .environment(session)
-                .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
-            }
             .onChange(of: toolbarState.triggerExport) {
                 if toolbarState.triggerExport {
                     ExportManager.presentExportPanel(

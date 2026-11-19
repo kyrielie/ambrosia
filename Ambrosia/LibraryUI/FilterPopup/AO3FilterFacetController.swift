@@ -37,10 +37,10 @@ final class AO3FilterFacetController {
     private let statusMap: [AO3CompletionStatus: Set<Int>]
 
     /// Process-lifetime cache of the "nothing active at all" facet baseline,
-    /// keyed on `LibrarySession.membershipVersion`. Only ever populated/read
+    /// keyed on `LibrarySession.visibilityVersion`. Only ever populated/read
     /// when `isWhollyUnconstrained` is true, i.e. when it's actually safe to
     /// treat one session's whole-library counts as reusable across popup
-    /// opens -- `membershipVersion` is bumped whenever anything that could
+    /// opens -- `visibilityVersion` is bumped whenever anything that could
     /// change these counts changes (import, liked/skipped/status edits), so
     /// this doesn't go stale mid-session the way a launch-only cache would.
     private static var wholeLibraryFacetCache: [AO3FacetField: (version: Int, entries: [(name: String, count: Int)])] = [:]
@@ -185,19 +185,19 @@ final class AO3FilterFacetController {
     }
 
     /// Entry point for `AO3FilterPopupView`'s tag-facet queries. Routes to
-    /// the cheap unconstrained + membershipVersion-cached path when nothing
+    /// the cheap unconstrained + visibilityVersion-cached path when nothing
     /// is narrowing this facet at all, and falls back to the existing
     /// scoped-and-uncached path as soon as any filter/selection applies.
     func topFacets(for field: AO3FacetField, state: AO3FilterPopupState,
-                   limit: Int, membershipVersion: Int) async -> [(name: String, count: Int)] {
+                   limit: Int, visibilityVersion: Int) async -> [(name: String, count: Int)] {
         if isWhollyUnconstrained(ignoring: field, state: state) {
             if let cached = Self.wholeLibraryFacetCache[field],
-               cached.version == membershipVersion, cached.entries.count >= limit {
+               cached.version == visibilityVersion, cached.entries.count >= limit {
                 return Array(cached.entries.prefix(limit))
             }
             let raw = await metaDB.topFacetsUnconstrained(for: field, limit: limit)
             let canonicalized = await metaDB.canonicalize(raw)
-            Self.wholeLibraryFacetCache[field] = (membershipVersion, canonicalized)
+            Self.wholeLibraryFacetCache[field] = (visibilityVersion, canonicalized)
             return canonicalized
         }
         let ids = await scopedIDs(ignoring: field, state: state)
@@ -205,15 +205,15 @@ final class AO3FilterFacetController {
         return await metaDB.canonicalize(raw)
     }
 
-    /// Rating counterpart to `topFacets(for:state:limit:membershipVersion:)`.
-    func topRatingFacets(state: AO3FilterPopupState, membershipVersion: Int) async -> [(name: String, count: Int)] {
+    /// Rating counterpart to `topFacets(for:state:limit:visibilityVersion:)`.
+    func topRatingFacets(state: AO3FilterPopupState, visibilityVersion: Int) async -> [(name: String, count: Int)] {
         let ratingScopedState = ratingExcludedState(state)
         if isWhollyUnconstrained(ignoring: nil, state: ratingScopedState) {
-            if let cached = Self.wholeLibraryRatingCache, cached.version == membershipVersion {
+            if let cached = Self.wholeLibraryRatingCache, cached.version == visibilityVersion {
                 return cached.entries
             }
             let entries = await metaDB.topRatingFacetsUnconstrained()
-            Self.wholeLibraryRatingCache = (membershipVersion, entries)
+            Self.wholeLibraryRatingCache = (visibilityVersion, entries)
             return entries
         }
         let ids = await scopedIDs(ignoring: nil, state: ratingScopedState)

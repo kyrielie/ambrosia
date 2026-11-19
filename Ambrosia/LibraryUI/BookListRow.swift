@@ -1,6 +1,12 @@
 import SwiftUI
 import AppKit
 
+struct RowOpenDoubleClickShield: ViewModifier {
+    func body(content: Content) -> some View {
+        content.highPriorityGesture(TapGesture(count: 2).onEnded {})
+    }
+}
+
 // MARK: - Book list row
 
 struct BookListRow: View, Equatable {
@@ -121,9 +127,7 @@ struct BookListRow: View, Equatable {
         // extend the frame to keep the double-click hit area full width.
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .simultaneousGesture(
-            TapGesture(count: 2).onEnded(onOpen)
-        )
+        .onTapGesture(count: 2, perform: onOpen)
         .contextMenu {
             Button("Open") {
                 onOpen()
@@ -185,6 +189,7 @@ struct BookListRow: View, Equatable {
                     .contentShape(Rectangle())
             })
             .buttonStyle(.borderless)
+            .modifier(RowOpenDoubleClickShield())
             .help(effectiveReadLater ? "Remove from Read Later" : "Add to Read Later")
             Button(action: {
                 let next = !effectiveLiked
@@ -198,6 +203,7 @@ struct BookListRow: View, Equatable {
                     .contentShape(Rectangle())
             })
             .buttonStyle(.borderless)
+            .modifier(RowOpenDoubleClickShield())
             .help(effectiveLiked ? "Unlike" : "Like")
         }
     }
@@ -237,6 +243,7 @@ struct BookListRow: View, Equatable {
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
+                    .modifier(RowOpenDoubleClickShield())
                     .help("Filter by \(author)")
                     if author != book.authors.last {
                         Text("·").foregroundStyle(.tertiary).font(.subheadline)
@@ -259,6 +266,7 @@ struct BookListRow: View, Equatable {
                         tagPill(pill.label, color: pill.color, isSelected: false)
                     }
                     .buttonStyle(.plain)
+                    .modifier(RowOpenDoubleClickShield())
                     .help("Filter by \(pill.label)")
                 }
                 if capped.hiddenCount > 0 {
@@ -285,11 +293,7 @@ struct BookListRow: View, Equatable {
     @ViewBuilder
     private var descriptionRow: some View {
         if let comment = book.displayComment, !comment.isEmpty {
-            Text(RowDescriptionLimit.capped(comment))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(RowDescriptionLimit.lines)
-                .fixedSize(horizontal: false, vertical: true)
+            RowDescriptionPreview(content: .single(comment))
         }
     }
 
@@ -550,10 +554,187 @@ enum RowDescriptionLimit {
 
     /// O(limit), not O(n): never counts the whole string.
     static func capped(_ text: String, limit: Int = characters) -> String {
+        guard limit > 0 else { return "" }
         let head = text.prefix(limit + 1)
         guard head.count > limit else { return text }
-        return String(head.prefix(limit))
+        return String(head.prefix(limit - 1))
             .trimmingCharacters(in: .whitespacesAndNewlines) + "\u{2026}"
+    }
+}
+
+struct RowDescriptionContent: Equatable {
+    struct Section: Equatable {
+        let title: String?
+        let text: String
+    }
+
+    static let perWorkCharacterLimit = 400
+
+    let sections: [Section]
+    let fullText: String
+    let previewText: String
+    let isCharacterTruncated: Bool
+
+    init(sections: [Section], perSectionCharacterLimit: Int? = nil) {
+        let visibleSections = sections.filter {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        self.sections = visibleSections
+        self.fullText = Self.render(visibleSections, characterLimit: nil)
+        self.previewText = RowDescriptionLimit.capped(
+            Self.render(visibleSections, characterLimit: perSectionCharacterLimit)
+        )
+        self.isCharacterTruncated = self.previewText != self.fullText
+    }
+
+    static func single(_ text: String) -> RowDescriptionContent {
+        RowDescriptionContent(sections: [Section(title: nil, text: text)])
+    }
+
+    static func series(works: [CalibreBook]) -> RowDescriptionContent {
+        RowDescriptionContent(
+            sections: works.compactMap { work in
+                guard let text = work.displayComment else { return nil }
+                return Section(title: work.displayTitle, text: text)
+            },
+            perSectionCharacterLimit: perWorkCharacterLimit
+        )
+    }
+
+    private static func render(_ sections: [Section], characterLimit: Int?) -> String {
+        sections.map { section in
+            let text: String
+            if let characterLimit {
+                text = RowDescriptionLimit.capped(section.text, limit: characterLimit)
+            } else {
+                text = section.text
+            }
+            if let title = section.title {
+                return "\(title)\n\(text)"
+            }
+            return text
+        }
+        .joined(separator: "\n\n")
+    }
+}
+
+private enum RowDescriptionMeasurement: Hashable {
+    case preview
+    case full
+}
+
+private struct RowDescriptionHeightPreferenceKey: PreferenceKey {
+    static let defaultValue: [RowDescriptionMeasurement: CGFloat] = [:]
+
+    static func reduce(
+        value: inout [RowDescriptionMeasurement: CGFloat],
+        nextValue: () -> [RowDescriptionMeasurement: CGFloat]
+    ) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+struct RowDescriptionPreview: View {
+    let content: RowDescriptionContent
+
+    @State private var isLineTruncated = false
+    @State private var showFullDescription = false
+
+    private var needsMeasurement: Bool {
+        guard !content.isCharacterTruncated else { return false }
+        return content.previewText.count >= 120 || content.previewText.contains("\n")
+    }
+
+    private var showsMore: Bool {
+        content.isCharacterTruncated || isLineTruncated
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(content.previewText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(RowDescriptionLimit.lines)
+                .fixedSize(horizontal: false, vertical: true)
+                .background {
+                    GeometryReader { geometry in
+                        Color.clear.preference(
+                            key: RowDescriptionHeightPreferenceKey.self,
+                            value: [.preview: geometry.size.height]
+                        )
+                    }
+                }
+
+            if showsMore {
+                HStack {
+                    Spacer(minLength: 0)
+                    Button("More…") { showFullDescription = true }
+                        .font(.caption2)
+                        .buttonStyle(.borderless)
+                        .help("Show full description")
+                        .accessibilityLabel("Show full description")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .topLeading) {
+            if needsMeasurement {
+                VStack(alignment: .leading, spacing: 0) {
+                    measuredText(content.previewText, key: .preview, lineLimit: RowDescriptionLimit.lines)
+                    measuredText(content.fullText, key: .full)
+                }
+                .hidden()
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+            }
+        }
+        .onPreferenceChange(RowDescriptionHeightPreferenceKey.self) { heights in
+            guard needsMeasurement,
+                  let previewHeight = heights[.preview],
+                  let fullHeight = heights[.full] else { return }
+            isLineTruncated = fullHeight > previewHeight + 0.5
+        }
+        .onChange(of: content) { _, _ in
+            isLineTruncated = false
+        }
+        .popover(isPresented: $showFullDescription, arrowEdge: .trailing) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array(content.sections.enumerated()), id: \.offset) { entry in
+                        let section = entry.element
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let title = section.title {
+                                Text(title).font(.headline)
+                            }
+                            Text(section.text)
+                                .textSelection(.enabled)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(16)
+            }
+            .frame(width: 480, height: 420)
+        }
+    }
+
+    private func measuredText(
+        _ text: String,
+        key: RowDescriptionMeasurement,
+        lineLimit: Int? = nil
+    ) -> some View {
+        Text(text)
+            .font(.caption)
+            .lineLimit(lineLimit)
+            .fixedSize(horizontal: false, vertical: true)
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(
+                        key: RowDescriptionHeightPreferenceKey.self,
+                        value: [key: geometry.size.height]
+                    )
+                }
+            }
     }
 }
 

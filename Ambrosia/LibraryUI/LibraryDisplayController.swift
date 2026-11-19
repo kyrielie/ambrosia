@@ -90,12 +90,14 @@ final class LibraryDisplayController {
     private var lastObservedFilterExpression: FilterExpression = FilterExpression()
     private var lastObservedReloadToken: String?
     private var lastObservedLibraryHash: String?
+    private(set) var pinnedCollectionVersion: Int
 
     // MARK: - Initialization
 
     init(session: LibrarySession, toolbarState: LibraryToolbarState) {
         self.session = session
         self.toolbarState = toolbarState
+        self.pinnedCollectionVersion = session.collectionVersion
         self.queryController = LibraryQueryController(surfaceLabel: "displayController")
         self.lastObservedSearchText = toolbarState.searchText
         self.lastObservedSortField = toolbarState.sortField
@@ -165,24 +167,29 @@ final class LibraryDisplayController {
     }
 
     private func handleToolbarStateChange() {
+        var queryChanged = false
         if toolbarState.sortField != lastObservedSortField {
             lastObservedSortField = toolbarState.sortField
+            pinCollectionSnapshot()
             offsetState.resetForNewFilter()
-            scheduleLoadPage()
+            queryChanged = true
         }
         if toolbarState.ascending != lastObservedAscending {
             lastObservedAscending = toolbarState.ascending
+            pinCollectionSnapshot()
             offsetState.resetForNewFilter()
-            scheduleLoadPage()
+            queryChanged = true
         }
         if toolbarState.reshuffleToken != lastObservedReshuffleToken {
             lastObservedReshuffleToken = toolbarState.reshuffleToken
-            scheduleLoadPage()
+            pinCollectionSnapshot()
+            queryChanged = true
         }
         if toolbarState.groupBySeries != lastObservedGroupBySeries {
             lastObservedGroupBySeries = toolbarState.groupBySeries
+            pinCollectionSnapshot()
             offsetState.resetForNewFilter()
-            scheduleLoadPage()
+            queryChanged = true
         }
         if toolbarState.filterExpression != lastObservedFilterExpression {
             lastObservedFilterExpression = toolbarState.filterExpression
@@ -192,9 +199,11 @@ final class LibraryDisplayController {
             } else {
                 scheduleLoadPage()
             }
+            queryChanged = false
         }
         if toolbarState.searchText != lastObservedSearchText {
             lastObservedSearchText = toolbarState.searchText
+            pinCollectionSnapshot()
             offsetState.resetForNewFilter()
             if toolbarState.consumeSearchTextReloadSuppression() {
                 LibraryFilterDebug.log("searchText.suppressed", [
@@ -208,6 +217,9 @@ final class LibraryDisplayController {
                 }
             }
         }
+        if queryChanged {
+            reloadForPinnedQuery()
+        }
         let currentToken = toolbarState.activeFilterResult?.reloadToken
         if currentToken != lastObservedReloadToken {
             lastObservedReloadToken = currentToken
@@ -216,6 +228,14 @@ final class LibraryDisplayController {
                 offsetState.resetForNewFilter()
                 scheduleLoadPage()
             }
+        }
+    }
+
+    private func reloadForPinnedQuery() {
+        if toolbarState.filterExpression.hasCompleteRules {
+            applyFilterRules()
+        } else {
+            scheduleLoadPage()
         }
     }
 
@@ -241,6 +261,9 @@ final class LibraryDisplayController {
             : SearchQueryParser.parse(toolbarState.searchText).tagTerms
         if tagTerms != Array(resolvedTagExpansions.keys).sorted() {
             resolveTagExpansionsIfNeeded()
+        }
+        if toolbarState.filterExpression.hasCompleteRules {
+            applyFilterRules()
         }
         let token = toolbarState.beginLibraryFilterApplication()
         Task {
@@ -455,7 +478,9 @@ final class LibraryDisplayController {
     }
 
     func addOrReplaceRule(_ rule: FilterRule) {
+        let previousExpression = toolbarState.filterExpression
         LibraryQueryHelpers.addOrReplaceRule(rule, in: &toolbarState.filterExpression)
+        guard toolbarState.filterExpression != previousExpression else { return }
         applyFilterRules()
     }
 
@@ -464,7 +489,9 @@ final class LibraryDisplayController {
     }
 
     func refreshVisibilitySnapshots(resetPage: Bool = true) async {
+        let previousVisibilityVersion = session.visibilityVersion
         await session.refreshCollectionSnapshots()
+        guard resetPage || session.visibilityVersion != previousVisibilityVersion else { return }
         let shouldReset = resetPage || !keepsPageOnMembershipChange
         if shouldReset { offsetState.resetForNewFilter() }
         if toolbarState.filterExpression.hasCompleteRules {
@@ -476,6 +503,10 @@ final class LibraryDisplayController {
 
     private var keepsPageOnMembershipChange: Bool {
         !shouldGroupSeriesRows && toolbarState.sortField != .random
+    }
+
+    private func pinCollectionSnapshot() {
+        pinnedCollectionVersion = session.collectionVersion
     }
 
     var activeFullTextPhrase: String? {
@@ -512,6 +543,8 @@ final class LibraryDisplayController {
     // MARK: - Filter Application (Unified 3-Branch Execution)
 
     func applyFilterRules(resetPage: Bool = true) {
+        pinCollectionSnapshot()
+        let pinnedCollectionVersionAtStart = pinnedCollectionVersion
         let applyStart = LibraryFilterDebug.now()
         fullTextTask?.cancel()
         fullTextTask = nil
@@ -575,7 +608,11 @@ final class LibraryDisplayController {
         }
 
         // Branch B: LRU Cache
-        if let cached = session.cachedFilterResult(for: expression, visibilitySignature: filterVisibilitySignature) {
+        if let cached = session.cachedFilterResult(
+            for: expression,
+            visibilitySignature: filterVisibilitySignature,
+            pinnedCollectionVersion: pinnedCollectionVersionAtStart
+        ) {
             toolbarState.activeFilterResult = cached
             toolbarState.clearPendingFullTextSearch()
             toolbarState.cancelLibraryFilterApplication()
@@ -612,7 +649,11 @@ final class LibraryDisplayController {
 
         // Incremental Narrowing Optimization
         if IncrementalFilterFlag.isEnabled,
-           let narrowing = session.narrowingBase(for: expression, visibilitySignature: filterVisibilitySignature) {
+           let narrowing = session.narrowingBase(
+            for: expression,
+            visibilitySignature: filterVisibilitySignature,
+            pinnedCollectionVersion: pinnedCollectionVersionAtStart
+           ) {
             filterComputeTask = Task {
                 let delta = narrowing.delta
                 let deltaExpression = IncrementalFilterPlanner.deltaExpression(for: delta)
@@ -632,6 +673,7 @@ final class LibraryDisplayController {
                 self.session.rememberFilterResult(
                     narrowed, for: expression,
                     visibilitySignature: self.filterVisibilitySignature,
+                    pinnedCollectionVersion: pinnedCollectionVersionAtStart,
                     bookTagsRevision: bookTagsRevisionAtStart
                 )
                 self.toolbarState.clearPendingFullTextSearch()
@@ -684,6 +726,7 @@ final class LibraryDisplayController {
             self.commitSearchActivityLogEntry(resultCount: cacheableResult.totalCount ?? visibleFilteredIDs.count)
             self.session.rememberFilterResult(
                 cacheableResult, for: expression, visibilitySignature: visibilitySignature,
+                pinnedCollectionVersion: pinnedCollectionVersionAtStart,
                 bookTagsRevision: bookTagsRevisionAtStart
             )
             self.toolbarState.clearPendingFullTextSearch()
@@ -778,7 +821,8 @@ final class LibraryDisplayController {
                     restrictIDs: resolveRestrictIDs(query: query),
                     visibility: currentVisibilityPolicy,
                     filterTagExpansions: cachedFilterTagExpansions,
-                    visibilityVersion: session.membershipVersion,
+                    visibilityVersion: session.visibilityVersion,
+                    pinnedCollectionVersion: pinnedCollectionVersion,
                     metaDB: session.metaDB,
                     rankedIDs: rankedIDs
                 )
@@ -795,7 +839,8 @@ final class LibraryDisplayController {
                     restrictIDs: resolveRestrictIDs(query: query),
                     visibility: currentVisibilityPolicy,
                     filterTagExpansions: cachedFilterTagExpansions,
-                    visibilityVersion: session.membershipVersion
+                    visibilityVersion: session.visibilityVersion,
+                    pinnedCollectionVersion: pinnedCollectionVersion,
                 )
             )
             loadedPageBooks = page
@@ -809,7 +854,8 @@ final class LibraryDisplayController {
                     restrictIDs: resolveRestrictIDs(query: query),
                     visibility: currentVisibilityPolicy,
                     filterTagExpansions: cachedFilterTagExpansions,
-                    visibilityVersion: session.membershipVersion
+                    visibilityVersion: session.visibilityVersion,
+                    pinnedCollectionVersion: pinnedCollectionVersion,
                 )
             )
             loadedPageBooks = page
@@ -824,7 +870,8 @@ final class LibraryDisplayController {
                     restrictIDs: resolveRestrictIDs(query: query),
                     visibility: currentVisibilityPolicy,
                     filterTagExpansions: cachedFilterTagExpansions,
-                    visibilityVersion: session.membershipVersion
+                    visibilityVersion: session.visibilityVersion,
+                    pinnedCollectionVersion: pinnedCollectionVersion,
                 )
             )
             loadedPageBooks = page
@@ -839,7 +886,8 @@ final class LibraryDisplayController {
                     restrictIDs: resolveRestrictIDs(query: query),
                     visibility: currentVisibilityPolicy,
                     filterTagExpansions: cachedFilterTagExpansions,
-                    visibilityVersion: session.membershipVersion,
+                    visibilityVersion: session.visibilityVersion,
+                    pinnedCollectionVersion: pinnedCollectionVersion,
                     metaDB: session.metaDB
                 )
             )
@@ -877,7 +925,8 @@ final class LibraryDisplayController {
                     query: query,
                     filter: nil,
                     filterTagExpansions: cachedFilterTagExpansions,
-                    visibilityVersion: session.membershipVersion
+                    visibilityVersion: session.visibilityVersion,
+                    pinnedCollectionVersion: pinnedCollectionVersion,
                 )
                 let visible = currentVisibilityPolicy.filter(raw)
                 pageHasMore = raw.count == pageFetchLimit || visible.count > pageSize
@@ -924,7 +973,8 @@ final class LibraryDisplayController {
                 query: query,
                 filter: filter,
                 filterTagExpansions: cachedFilterTagExpansions,
-                visibilityVersion: session.membershipVersion
+                visibilityVersion: session.visibilityVersion,
+                pinnedCollectionVersion: pinnedCollectionVersion,
             )
             let visible = currentVisibilityPolicy.filter(raw)
             let hasMore = raw.count == pageFetchLimit || visible.count > pageSize
@@ -960,7 +1010,8 @@ final class LibraryDisplayController {
                 query: query,
                 filter: filter,
                 filterTagExpansions: cachedFilterTagExpansions,
-                visibilityVersion: session.membershipVersion
+                visibilityVersion: session.visibilityVersion,
+                pinnedCollectionVersion: pinnedCollectionVersion,
             )
             guard !Task.isCancelled else { break }
             offset += raw.count
@@ -1127,7 +1178,8 @@ final class LibraryDisplayController {
             let count = await library.bookCount(
                 query: query,
                 filter: toolbarState.filterExpression,
-                filterTagExpansions: cachedFilterTagExpansions
+                filterTagExpansions: cachedFilterTagExpansions,
+                pinnedCollectionVersion: pinnedCollectionVersion
             )
             guard !Task.isCancelled else { return }
             if let current = toolbarState.activeFilterResult, current.isSQLBacked {
@@ -1152,7 +1204,8 @@ final class LibraryDisplayController {
         }
         groupAwareCountTask?.cancel()
         let policy = currentVisibilityPolicy
-        let version = session.membershipVersion
+        let version = session.visibilityVersion
+        let pinnedCollectionVersion = self.pinnedCollectionVersion
         let filterForSQL = toolbarState.activeFilterResult?.isSQLBacked == true ? toolbarState.filterExpression : nil
         let emptyQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
         let restrictIDs = resolveRestrictIDs(query: emptyQuery)
@@ -1165,7 +1218,8 @@ final class LibraryDisplayController {
                 restrictIDs: restrictIDs,
                 visibility: policy,
                 filterTagExpansions: tagExpansions,
-                visibilityVersion: version
+                visibilityVersion: version,
+                pinnedCollectionVersion: pinnedCollectionVersion
             ))
             guard !Task.isCancelled else { return }
             self.visibleTotalCount = count

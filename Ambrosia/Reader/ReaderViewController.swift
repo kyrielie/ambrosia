@@ -1657,7 +1657,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                     )
                 }
                 await MainActor.run {
-                    AppDelegate.shared?.session.bumpMembershipVersion()  // §7
+                    AppDelegate.shared?.session.bumpCollectionVersion()
                 }
             } catch {
                 #if DEBUG

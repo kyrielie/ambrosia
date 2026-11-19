@@ -8,6 +8,7 @@ the app-structure/UI shell these run inside, see `library-ui.md`.
 
 Search:
 
+- Nonempty text in the toolbar field remains a draft while the user types. It is committed to `LibraryToolbarState.searchText` only on Return or when an autocomplete suggestion is selected; those commits start result loading. Clearing the field immediately clears the committed query.
 - Raw text is parsed by `SearchQueryParser`.
 - Prefixes: `tag:`, `author:`, `title:`, `series:`, `status:`, `warning:`, `category:`, `fulltext:`, `words:`, `semantic:`.
 - Precision matching operators (Calibre search-bar syntax parity):

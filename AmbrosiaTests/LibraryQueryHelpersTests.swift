@@ -178,7 +178,26 @@ final class LibraryQueryHelpersTests: XCTestCase {
         var expression = FilterExpression()
         let rule = FilterRule(field: .tag, op: .contains, value: "Fluff")
         expression.groups[0].rules = [rule]
+        let originalExpression = expression
         LibraryQueryHelpers.addOrReplaceRule(rule, in: &expression)
-        XCTAssertEqual(expression.groups[0].rules.count, 1)
+        XCTAssertEqual(expression, originalExpression)
+    }
+
+    func testHasCompleteRuleMatchesSameValueRegardlessOfOperator() {
+        var expression = FilterExpression()
+        expression.groups[0].rules = [FilterRule(field: .tag, op: .contains, value: "Fluff")]
+
+        XCTAssertTrue(LibraryQueryHelpers.hasCompleteRule(field: .tag, value: "Fluff", in: expression))
+        XCTAssertTrue(LibraryQueryHelpers.hasCompleteRule(field: .tag, value: " fluff ", in: expression))
+        XCTAssertFalse(LibraryQueryHelpers.hasCompleteRule(field: .tag, value: "Angst", in: expression))
+        XCTAssertFalse(LibraryQueryHelpers.hasCompleteRule(field: .warning, value: "Fluff", in: expression))
+    }
+
+    func testTagPillRuleUsesExactMatch() {
+        let rule = FilterRuleFactory.tagPillRule(label: "Fluff", field: .tag)
+
+        XCTAssertEqual(rule.field, .tag)
+        XCTAssertEqual(rule.op, .equals)
+        XCTAssertEqual(rule.value, "Fluff")
     }
 }

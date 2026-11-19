@@ -1,16 +1,15 @@
 import XCTest
 @testable import Ambrosia
 
-// Cache keys must carry every input that changes cached contents. Toggling a
-// visibility preference changes no membership set, so `membershipVersion` and
-// `visibilityVersion` cannot distinguish the entries on their own.
+// Cache keys carry visibility and pinned collection inputs independently.
 @MainActor
 final class CacheKeyTests: XCTestCase {
 
-    private func pageKey(_ policy: LibraryVisibilityPolicy) -> PageCacheKey {
+    private func pageKey(_ policy: LibraryVisibilityPolicy, pinnedCollectionVersion: Int = 4) -> PageCacheKey {
         PageCacheKey(
             querySignature: "q", filterSignature: "f", tagExpansionsDigest: "",
-            visibilityVersion: 3, visibilitySignature: policy.cacheSignature,
+            visibilityVersion: 3, pinnedCollectionVersion: pinnedCollectionVersion,
+            visibilitySignature: policy.cacheSignature,
             sortField: .wordCount, ascending: true, randomSeed: 1, offset: 0, limit: 76
         )
     }
@@ -57,20 +56,34 @@ final class CacheKeyTests: XCTestCase {
         XCTAssertEqual(first.hashValue, second.hashValue)
     }
 
+    func testPageKeyDiffersWhenCollectionSnapshotIsRepinned() {
+        XCTAssertNotEqual(pageKey(.allowAll), pageKey(.allowAll, pinnedCollectionVersion: 5))
+    }
+
     func testFilterResultKeyDiffersByEachPref() {
-        let base = FilterResultCacheKey(expression: expression(), membershipVersion: 1, visibilitySignature: signature())
+        let base = FilterResultCacheKey(expression: expression(), visibilityVersion: 1, pinnedCollectionVersion: 1, visibilitySignature: signature())
         let variants = [
             signature(skip: false), signature(pub: true), signature(anth: true), signature(dup: true)
-        ].map { FilterResultCacheKey(expression: expression(), membershipVersion: 1, visibilitySignature: $0) }
+        ].map { FilterResultCacheKey(expression: expression(), visibilityVersion: 1, pinnedCollectionVersion: 1, visibilitySignature: $0) }
         for variant in variants { XCTAssertNotEqual(base, variant) }
         XCTAssertEqual(Set(variants + [base]).count, 5)
     }
 
     func testFilterResultKeyEqualForIdenticalInputs() {
-        let first = FilterResultCacheKey(expression: expression(), membershipVersion: 1, visibilitySignature: signature())
-        let second = FilterResultCacheKey(expression: expression(), membershipVersion: 1, visibilitySignature: signature())
+        let first = FilterResultCacheKey(expression: expression(), visibilityVersion: 1,
+                                         pinnedCollectionVersion: 2, visibilitySignature: signature())
+        let second = FilterResultCacheKey(expression: expression(), visibilityVersion: 1,
+                                          pinnedCollectionVersion: 2, visibilitySignature: signature())
         XCTAssertEqual(first, second)
         XCTAssertEqual(first.hashValue, second.hashValue)
+    }
+
+    func testFilterResultKeyDiffersWhenCollectionSnapshotIsRepinned() {
+        let first = FilterResultCacheKey(expression: expression(), visibilityVersion: 1,
+                                         pinnedCollectionVersion: 2, visibilitySignature: signature())
+        let second = FilterResultCacheKey(expression: expression(), visibilityVersion: 1,
+                                          pinnedCollectionVersion: 3, visibilitySignature: signature())
+        XCTAssertNotEqual(first, second)
     }
 
     func testSessionFilterCacheMissesAfterPrefChange() {
@@ -79,5 +92,20 @@ final class CacheKeyTests: XCTestCase {
         session.rememberFilterResult(result, for: expression(), visibilitySignature: signature())
         XCTAssertNotNil(session.cachedFilterResult(for: expression(), visibilitySignature: signature()))
         XCTAssertNil(session.cachedFilterResult(for: expression(), visibilitySignature: signature(anth: true)))
+    }
+
+    func testSessionFilterCacheUsesPinnedCollectionVersion() {
+        let session = LibrarySession()
+        let result = FilterResult(calibreIDs: [1], totalCount: 1)
+        session.rememberFilterResult(
+            result, for: expression(), visibilitySignature: signature(), pinnedCollectionVersion: 4
+        )
+
+        XCTAssertNotNil(session.cachedFilterResult(
+            for: expression(), visibilitySignature: signature(), pinnedCollectionVersion: 4
+        ))
+        XCTAssertNil(session.cachedFilterResult(
+            for: expression(), visibilitySignature: signature(), pinnedCollectionVersion: 5
+        ))
     }
 }

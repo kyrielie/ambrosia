@@ -197,7 +197,7 @@ final class FTSSearchViewModel {
 
 struct FTSSearchResultsView: View {
     @State private var viewModel = FTSSearchViewModel()
-    @State private var readLaterIDs: Set<Int> = AppDelegate.shared?.session.cachedReadLaterIDs ?? []
+    @State private var readLaterIDs: Set<Int> = AppDelegate.shared?.session.effectiveReadLaterIDs ?? []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -210,7 +210,7 @@ struct FTSSearchResultsView: View {
         .frame(minWidth: 550, minHeight: 450)
         .onAppear {
             if let session = AppDelegate.shared?.session {
-                readLaterIDs = session.cachedReadLaterIDs
+                readLaterIDs = session.effectiveReadLaterIDs
             }
         }
     }
@@ -408,8 +408,8 @@ struct FTSSearchResultsView: View {
     private func toggleReadLater(for book: CalibreBook) {
         guard let session = AppDelegate.shared?.session else { return }
         CollectionAssignment.toggleReadLater(calibreIDs: [book.id], session: session) {
-            self.readLaterIDs = session.cachedReadLaterIDs
+            self.readLaterIDs = session.effectiveReadLaterIDs
         }
-        self.readLaterIDs = session.cachedReadLaterIDs
+        self.readLaterIDs = session.effectiveReadLaterIDs
     }
 }

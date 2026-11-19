@@ -68,11 +68,11 @@ final class LibrarySession {
     // initialises its local @State directly from these so the first render
     // uses correct membership data and no flash occurs. Written back by the
     // view after each async refresh. Cleared on library open/close.
-    var cachedLikedIDs: Set<Int> = []
+    var explicitLikedIDs: Set<Int> = []
     var cachedSkippedIDs: Set<Int> = []
     var cachedSeriesOrMergedIDs: Set<Int> = []
     var cachedAO3PublisherIDs: Set<Int> = []
-    var cachedReadLaterIDs: Set<Int> = []
+    var explicitReadLaterIDs: Set<Int> = []
     var cachedAnthologyIDs: Set<Int> = []
 
     /// Non-winning calibre IDs of any AO3-work duplicate group (see
@@ -82,6 +82,12 @@ final class LibrarySession {
     /// participates in the same "did visibility change" diff as the other
     /// five sets.
     var cachedDuplicateLoserIDs: Set<Int> = []
+
+    /// Work-level membership currently equals explicit state. These accessors
+    /// give query and presentation code the effective-state vocabulary needed
+    /// before series-level inheritance is introduced.
+    var effectiveLikedIDs: Set<Int> { explicitLikedIDs }
+    var effectiveReadLaterIDs: Set<Int> { explicitReadLaterIDs }
 
     /// The path of the currently open library.
     private(set) var activePath: String?
@@ -100,14 +106,13 @@ final class LibrarySession {
     /// duplicated in LibraryRootView (`refreshBookStates()`) and
     /// EmailLibraryViewController (`refreshCollectionSnapshots()`), of which
     /// only the former reliably wrote all six `cachedX` sets back here — the
-    /// latter only wrote `cachedAnthologyIDs`. Diffs against the previous
-    /// cached values and bumps `membershipVersion` exactly once if anything
-    /// actually changed, so callers can rely on `membershipVersion` as an
-    /// accurate "did visibility change" signal instead of calling
-    /// `bumpMembershipVersion()` themselves after this returns.
+    /// latter only wrote `cachedAnthologyIDs`. Visibility sets and collection
+    /// membership are versioned separately so a Like press does not invalidate
+    /// the current result snapshot.
     func refreshCollectionSnapshots() async {
         let snapshotSignpost = LaunchSignposts.begin("refreshCollectionSnapshots")
         defer { LaunchSignposts.end("refreshCollectionSnapshots", snapshotSignpost) }
+        let snapshotRevisionAtStart = collectionSnapshotRevision
         guard let collectionStore else { return }
         let collections = (try? await collectionStore.collections()) ?? []
         let membershipByID = (try? await collectionStore.membershipByCollectionID()) ?? [:]
@@ -119,33 +124,36 @@ final class LibrarySession {
         let currentAnthologyIDs = await library?.anthologyBookIDs() ?? []
         let currentDuplicateLoserIDs = await library?.duplicateLoserBookIDs() ?? []
 
-        var resolvedLiked = currentLiked
-        var resolvedReadLater = currentReadLater
-        for pendingID in CollectionAssignment.inFlightLikedIDs {
-            if cachedLikedIDs.contains(pendingID) {
-                resolvedLiked.insert(pendingID)
-            } else {
-                resolvedLiked.remove(pendingID)
+        let collectionSnapshotIsCurrent = snapshotRevisionAtStart == collectionSnapshotRevision
+        var resolvedLiked = collectionSnapshotIsCurrent ? currentLiked : explicitLikedIDs
+        var resolvedReadLater = collectionSnapshotIsCurrent ? currentReadLater : explicitReadLaterIDs
+        if collectionSnapshotIsCurrent {
+            for pendingID in CollectionAssignment.inFlightLikedIDs {
+                if explicitLikedIDs.contains(pendingID) {
+                    resolvedLiked.insert(pendingID)
+                } else {
+                    resolvedLiked.remove(pendingID)
+                }
             }
-        }
-        for pendingID in CollectionAssignment.inFlightReadLaterIDs {
-            if cachedReadLaterIDs.contains(pendingID) {
-                resolvedReadLater.insert(pendingID)
-            } else {
-                resolvedReadLater.remove(pendingID)
+            for pendingID in CollectionAssignment.inFlightReadLaterIDs {
+                if explicitReadLaterIDs.contains(pendingID) {
+                    resolvedReadLater.insert(pendingID)
+                } else {
+                    resolvedReadLater.remove(pendingID)
+                }
             }
         }
 
-        let changed = cachedLikedIDs != resolvedLiked
-            || cachedReadLaterIDs != resolvedReadLater
-            || cachedSkippedIDs != currentSkipped
+        let visibilityChanged = cachedSkippedIDs != currentSkipped
             || cachedSeriesOrMergedIDs != currentSeriesOrMerged
             || cachedAO3PublisherIDs != currentAO3PublisherIDs
             || cachedAnthologyIDs != currentAnthologyIDs
             || cachedDuplicateLoserIDs != currentDuplicateLoserIDs
+        let collectionChanged = explicitLikedIDs != resolvedLiked
+            || explicitReadLaterIDs != resolvedReadLater
 
-        cachedLikedIDs = resolvedLiked
-        cachedReadLaterIDs = resolvedReadLater
+        explicitLikedIDs = resolvedLiked
+        explicitReadLaterIDs = resolvedReadLater
         cachedSkippedIDs = currentSkipped
         cachedSeriesOrMergedIDs = currentSeriesOrMerged
         cachedAO3PublisherIDs = currentAO3PublisherIDs
@@ -156,9 +164,8 @@ final class LibrarySession {
             (collection.name, membershipByID[collection.id] ?? [])
         })
 
-        if changed {
-            bumpMembershipVersion()
-        }
+        if visibilityChanged { bumpVisibilityVersion() }
+        if collectionChanged { bumpCollectionVersion() }
     }
 
     /// True while a library is open and ready to query.
@@ -264,9 +271,14 @@ final class LibrarySession {
     /// filed under the post-flush revision.
     private(set) var bookTagsRevision: Int = 0
 
-    // §7: Membership version — bump after any liked/skipped/status change to
-    // invalidate stale filter-result cache entries keyed on an older version.
-    var membershipVersion: Int = 0
+    /// Changes that affect which works are visible in the current result set.
+    var visibilityVersion: Int = 0
+    /// Live collection membership state. Display controllers pin this version
+    /// when a query is applied.
+    var collectionVersion: Int = 0
+    /// Invalidates membership reads that began before an optimistic update or
+    /// its persistence completed. This is separate from query cache versions.
+    private var collectionSnapshotRevision: Int = 0
 
     // §7: Insertion-order tracker for correct LRU eviction of the fulltext cache.
     // The old implementation used .keys.first which picks an arbitrary hash bucket.
@@ -412,12 +424,13 @@ final class LibrarySession {
             filterResultCache.removeAll()                    // §7
             ruleMatchCache.removeAll()
             bookTagsRevision = 0
-            membershipVersion = 0                            // §7
-            cachedLikedIDs = []
+            visibilityVersion = 0
+            collectionVersion = 0
+            explicitLikedIDs = []
             cachedSkippedIDs = []
             cachedSeriesOrMergedIDs = []
             cachedAO3PublisherIDs = []
-            cachedReadLaterIDs = []
+            explicitReadLaterIDs = []
             cachedAnthologyIDs = []
             cachedDuplicateLoserIDs = []
             LibraryRegistry.shared.register(url)
@@ -572,11 +585,12 @@ final class LibrarySession {
         filterResultCache.removeAll()                    // §7
         ruleMatchCache.removeAll()
         bookTagsRevision = 0
-        membershipVersion = 0                            // §7
-        cachedLikedIDs = []
+        visibilityVersion = 0
+        collectionVersion = 0
+        explicitLikedIDs = []
         cachedSkippedIDs = []
         cachedSeriesOrMergedIDs = []
-        cachedReadLaterIDs = []
+        explicitReadLaterIDs = []
         cachedAO3PublisherIDs = []
         cachedAnthologyIDs = []
         cachedDuplicateLoserIDs = []
@@ -728,9 +742,11 @@ final class LibrarySession {
     /// Look up a cached FilterResult. Returns nil on cache miss.
     /// `visibilitySignature` is `LibraryVisibilityPolicy.signature(...)` for the four
     /// preferences that were applied to the cached ID list.
-    func cachedFilterResult(for expression: FilterExpression, visibilitySignature: String) -> FilterResult? {
+    func cachedFilterResult(for expression: FilterExpression, visibilitySignature: String,
+                            pinnedCollectionVersion: Int? = nil) -> FilterResult? {
         let key = FilterResultCacheKey(expression: expression,
-                                       membershipVersion: membershipVersion,
+                                       visibilityVersion: visibilityVersion,
+                                       pinnedCollectionVersion: pinnedCollectionVersion ?? collectionVersion,
                                        visibilitySignature: visibilitySignature,
                                        bookTagsRevision: bookTagsRevision)
         return filterResultCache[key]
@@ -740,9 +756,11 @@ final class LibrarySession {
     /// `bookTagsRevision` is the value captured when the evaluation started; nil
     /// means the current one (for callers that did not span an await).
     func rememberFilterResult(_ result: FilterResult, for expression: FilterExpression,
-                              visibilitySignature: String, bookTagsRevision: Int? = nil) {
+                              visibilitySignature: String, pinnedCollectionVersion: Int? = nil,
+                              bookTagsRevision: Int? = nil) {
         let key = FilterResultCacheKey(expression: expression,
-                                       membershipVersion: membershipVersion,
+                                       visibilityVersion: visibilityVersion,
+                                       pinnedCollectionVersion: pinnedCollectionVersion ?? collectionVersion,
                                        visibilitySignature: visibilitySignature,
                                        bookTagsRevision: bookTagsRevision ?? self.bookTagsRevision)
         filterResultCache.set(result, for: key)
@@ -756,11 +774,13 @@ final class LibrarySession {
     /// explicit-ID results are ever stored in `filterResultCache`; the
     /// `isSQLBacked` check is a guard, not an expected case.
     func narrowingBase(for expression: FilterExpression,
-                       visibilitySignature: String) -> (base: FilterResult, delta: FilterRule)? {
+                       visibilitySignature: String,
+                       pinnedCollectionVersion: Int? = nil) -> (base: FilterResult, delta: FilterRule)? {
         var best: (base: FilterResult, delta: FilterRule)?
         for split in IncrementalFilterPlanner.splits(of: expression) {
             let key = FilterResultCacheKey(expression: split.base,
-                                           membershipVersion: membershipVersion,
+                                           visibilityVersion: visibilityVersion,
+                                           pinnedCollectionVersion: pinnedCollectionVersion ?? collectionVersion,
                                            visibilitySignature: visibilitySignature,
                                            bookTagsRevision: bookTagsRevision)
             guard let hit = filterResultCache[key], !hit.isSQLBacked else { continue }
@@ -781,9 +801,27 @@ final class LibrarySession {
     /// that depend on collection / liked / status membership data.
     /// Call after: liked/skipped toggle, series sync. An AO3 extraction flush does
     /// not bump this; it advances `bookTagsRevision` instead.
-    func bumpMembershipVersion(caller: String = #function) {
-        membershipVersion &+= 1   // wrapping add — no overflow crash
-        LaunchSignposts.membershipBump(caller: caller, newValue: membershipVersion)
+    func bumpVisibilityVersion(caller: String = #function) {
+        visibilityVersion &+= 1
+        LaunchSignposts.membershipBump(
+            caller: caller, visibilityVersion: visibilityVersion, collectionVersion: collectionVersion
+        )
+    }
+
+    func bumpCollectionVersion(caller: String = #function) {
+        collectionVersion &+= 1
+        LaunchSignposts.membershipBump(
+            caller: caller, visibilityVersion: visibilityVersion, collectionVersion: collectionVersion
+        )
+    }
+
+    func noteOptimisticCollectionMutation(caller: String = #function) {
+        collectionSnapshotRevision &+= 1
+        bumpCollectionVersion(caller: caller)
+    }
+
+    func noteCollectionMutationPersisted() {
+        collectionSnapshotRevision &+= 1
     }
 
     // MARK: - §4: Feed server lifecycle

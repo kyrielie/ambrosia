@@ -302,7 +302,7 @@ struct LibraryRootView: View {
             ao3Metadata: displayController.ao3Metadata[book.id],
             ao3ExtractionDiagnostic: displayController.ao3ExtractionDiagnostics[book.id],
             singletonSeriesWarnings: warningsOverride ?? (displayController.singletonSeriesWarnings[book.id] ?? []),
-            isLiked: session.cachedLikedIDs.contains(book.id),
+            isLiked: session.effectiveLikedIDs.contains(book.id),
             hideFanworksTagPill: prefs.hideFanworksTagPill,
             correctCalibreAmpEntities: prefs.correctCalibreAmpEntities,
             searchBadge: displayController.searchMatchBadges[book.id],
@@ -313,7 +313,7 @@ struct LibraryRootView: View {
                 displayController.addOrReplaceRule(FilterRule(field: .authorName, op: .equals, value: author))
             },
             onOpen: { open([book]) },
-            isInReadLater: session.cachedReadLaterIDs.contains(book.id),
+            isInReadLater: session.effectiveReadLaterIDs.contains(book.id),
             onReadLaterToggle: { toggleReadLater(for: book) },
             onLikeToggle: { toggleLike(for: book) },
             onReadLater: { addToReadLater([book]) },
@@ -339,13 +339,13 @@ struct LibraryRootView: View {
         SeriesListRow(
             series: series,
             hideFanworksTagPill: prefs.hideFanworksTagPill,
-            isLiked: series.works.allSatisfy { session.cachedLikedIDs.contains($0.id) },
+            isLiked: series.works.allSatisfy { session.effectiveLikedIDs.contains($0.id) },
             onTagTap: { tag, field in
                 addTagPillRule(tag: tag, field: field)
             },
             onLikeToggle: { toggleLike(for: series) },
             onOpen: { AppDelegate.shared?.openReaderWindow(target: .series(series)) },
-            isInReadLater: series.works.allSatisfy { session.cachedReadLaterIDs.contains($0.id) },
+            isInReadLater: series.works.allSatisfy { session.effectiveReadLaterIDs.contains($0.id) },
             onReadLaterToggle: { toggleReadLater(for: series) },
             onSkip: { skip(series.works) },
             onMarkRead: { markRead(series.works) },
@@ -367,7 +367,10 @@ struct LibraryRootView: View {
     }
 
     private func addTagPillRule(tag: String, field: FilterField) {
-        let rule = FilterRule(field: field, op: .contains, value: tag)
+        guard !LibraryQueryHelpers.hasCompleteRule(
+            field: field, value: tag, in: displayController.toolbarState.filterExpression
+        ) else { return }
+        let rule = FilterRuleFactory.tagPillRule(label: tag, field: field)
         displayController.addOrReplaceRule(rule)
     }
 
@@ -418,7 +421,6 @@ struct LibraryRootView: View {
         let ids = books.map(\.id)
         Task {
             try? await session.collectionStore?.bulkAdd(calibreIDs: ids, to: SystemCollectionID.readLater)
-            session.bumpMembershipVersion()
             await displayController.refreshVisibilitySnapshots(resetPage: false)
         }
     }
@@ -428,7 +430,6 @@ struct LibraryRootView: View {
             for book in books {
                 try? await session.collectionStore?.skipBook(calibreID: book.id)
             }
-            session.bumpMembershipVersion()
             await displayController.refreshVisibilitySnapshots(resetPage: false)
         }
     }
@@ -453,7 +454,7 @@ struct LibraryRootView: View {
                     shouldBeMember: false
                 )
             }
-            session.bumpMembershipVersion()
+            session.bumpCollectionVersion()
             displayController.refreshBookStates()
         }
     }
@@ -478,7 +479,7 @@ struct LibraryRootView: View {
                     shouldBeMember: false
                 )
             }
-            session.bumpMembershipVersion()
+            session.bumpCollectionVersion()
             displayController.refreshBookStates()
         }
     }
@@ -698,29 +699,6 @@ struct LibraryRootView: View {
 
     private func attachSheets<V: View>(to view: V) -> some View {
         view
-            .sheet(isPresented: Binding(
-                get: { toolbarState.showFilterDrawer },
-                set: { toolbarState.showFilterDrawer = $0 }
-            )) {
-                FilterDrawerView(
-                    expression: Binding(
-                        get: { toolbarState.filterExpression },
-                        set: { toolbarState.filterExpression = $0 }
-                    ),
-                    onApply: {
-                        toolbarState.showFilterDrawer = false
-                        displayController.applyFilterRules()
-                    },
-                    onClear: {
-                        toolbarState.showFilterDrawer = false
-                        toolbarState.filterExpression = FilterExpression()
-                        toolbarState.activeFilterResult = nil
-                        toolbarState.cancelLibraryFilterApplication()
-                        displayController.scheduleLoadPage()
-                    }
-                )
-                .preferredColorScheme(prefs.resolvedLibraryColorScheme)
-            }
             .sheet(isPresented: Binding(
                 get: { toolbarState.showDuplicateManager },
                 set: { toolbarState.showDuplicateManager = $0 }

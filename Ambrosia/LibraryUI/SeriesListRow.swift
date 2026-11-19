@@ -56,6 +56,7 @@ struct SeriesListRow: View, Equatable {
                     Image(systemName: series.missingIndices.isEmpty ? "list.number" : "exclamationmark.triangle.fill")
                 }
                 .buttonStyle(.borderless)
+                .modifier(RowOpenDoubleClickShield())
                 .help(series.missingIndices.isEmpty ? "Show series index" : "Missing works")
                 .popover(isPresented: $showIndex) { indexPopover }
                 Button(action: onReadLaterToggle) {
@@ -63,12 +64,14 @@ struct SeriesListRow: View, Equatable {
                         .foregroundStyle(isInReadLater ? Color.accentColor : Color.secondary)
                 }
                 .buttonStyle(.borderless)
+                .modifier(RowOpenDoubleClickShield())
                 .help(isInReadLater ? "Remove from Read Later" : "Add to Read Later")
                 Button(action: onLikeToggle) {
                     Image(systemName: isLiked ? "star.fill" : "star")
                         .foregroundStyle(isLiked ? Color.yellow : Color.secondary)
                 }
                 .buttonStyle(.borderless)
+                .modifier(RowOpenDoubleClickShield())
                 .help(isLiked ? "Unlike Series" : "Like Series")
             }
             Text(series.displayAuthors)
@@ -77,18 +80,16 @@ struct SeriesListRow: View, Equatable {
                 .lineLimit(1)
             LibraryStatsRow(stats: libraryStats)
             tagsRow
-            if !series.allDescriptions.isEmpty {
-                Text(series.allDescriptions.joined(separator: "\n\n"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(4)
+            let description = RowDescriptionContent.series(works: series.works)
+            if !description.sections.isEmpty {
+                RowDescriptionPreview(content: description)
             }
         }
         // Outside a List the row no longer stretches to the row width, so
         // extend the frame to keep the double-click hit area full width.
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .simultaneousGesture(TapGesture(count: 2).onEnded(onOpen))
+        .onTapGesture(count: 2, perform: onOpen)
         .contextMenu {
             Button("Open Series", action: onOpen)
             Button("Show Individual Works") { showIndex = true }
@@ -149,6 +150,7 @@ struct SeriesListRow: View, Equatable {
                         tagPill(pill.label, color: pill.color, isSelected: isSelected)
                     }
                     .buttonStyle(.plain)
+                    .modifier(RowOpenDoubleClickShield())
                     .help("Filter by \(pill.label)")
                 }
                 if capped.hiddenCount > 0 {

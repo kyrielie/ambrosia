@@ -47,8 +47,8 @@ final class RuleMatchCacheTests: XCTestCase {
     func testFilterResultKeysDifferingOnlyInRevisionAreUnequal() {
         var expr = FilterExpression()
         expr.groups = [FilterGroup(rules: [FilterRule(field: .tag, op: .contains, value: "a")], conjunction: .and)]
-        let first = FilterResultCacheKey(expression: expr, membershipVersion: 1, visibilitySignature: "s", bookTagsRevision: 0)
-        let second = FilterResultCacheKey(expression: expr, membershipVersion: 1, visibilitySignature: "s", bookTagsRevision: 1)
+        let first = FilterResultCacheKey(expression: expr, visibilityVersion: 1, pinnedCollectionVersion: 1, visibilitySignature: "s", bookTagsRevision: 0)
+        let second = FilterResultCacheKey(expression: expr, visibilityVersion: 1, pinnedCollectionVersion: 1, visibilitySignature: "s", bookTagsRevision: 1)
         XCTAssertNotEqual(first, second)
     }
 

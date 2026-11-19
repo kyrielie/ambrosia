@@ -126,7 +126,7 @@ final class PagingOffsetStateNavigationIntentTests: XCTestCase {
         }
     }
 
-    // MARK: - Reload (e.g. membershipVersion bump) is fully inert
+    // MARK: - Reload (e.g. membership or visibility version bump) is fully inert
 
     func testRevisitingAnAlreadyRecordedPageNeverMutatesFrontierOrRecordedEntries() {
         var state = PagingOffsetState()
@@ -138,7 +138,7 @@ final class PagingOffsetStateNavigationIntentTests: XCTestCase {
         let byPageBefore = state.rawSQLOffsetByPage
         let frontierBefore = state.rawSQLOffsetFrontier
 
-        // Go back to page 1 and "reload" it (membershipVersion bump, or a
+        // Go back to page 1 and "reload" it (version bump, or a
         // Previous click, or Next back to it -- all identical: currentPage
         // is already < rawSQLOffsetByPage.count, so this is a revisit).
         state.currentPage = 1

@@ -12,10 +12,18 @@ Four LRU caches (`LRUCache<Key, Value>`, a bounded dictionary + insertion-order 
 
 | Cache | Owner | Key | Limit | Cleared by |
 |---|---|---|---|---|
-| `filterResultCache` | `LibrarySession` | `FilterResultCacheKey` (expression digest + `membershipVersion` + visibility signature + `bookTagsRevision`) | 8 | library open/close; implicitly stale once `membershipVersion` moves on |
-| `pageCache` | `CalibreLibrary` | `PageCacheKey` (a `SortedIDsCacheKey` plus offset and limit) | 48 | `updateAO3MetaCaches` (after every AO3 extraction batch); implicitly stale once `visibilityVersion`/`randomSeed` move on |
-| `countCache` / `groupAwareCountCache` | `CalibreLibrary` | analogous to `PageCacheKey`, minus offset/limit/sort | 48 each | same as `pageCache` |
-| `sortedIDsCache` | `CalibreLibrary` | `SortedIDsCacheKey` (query+filter+tagExpansion digests, `visibilityVersion`, `visibilitySignature`, sort, ascending, `randomSeed`; i.e. `PageCacheKey` minus offset and limit) | 4 | `updateAO3MetaCaches` via `invalidateSortedIDs()`; implicitly stale once `visibilityVersion`/`visibilitySignature`/`randomSeed` move on |
+| `filterResultCache` | `LibrarySession` | `FilterResultCacheKey` (expression digest + `visibilityVersion` + pinned collection version + visibility signature + `bookTagsRevision`) | 8 | library open/close; old results stop matching when visibility or the query’s collection pin changes |
+| `pageCache` | `CalibreLibrary` | `PageCacheKey` (a `SortedIDsCacheKey` plus offset and limit; includes `visibilityVersion` and pinned collection version) | 48 | `updateAO3MetaCaches` (after every AO3 extraction batch); implicitly stale once visibility, the query pin, or `randomSeed` changes |
+| `countCache` / `groupAwareCountCache` | `CalibreLibrary` | analogous to `PageCacheKey`, minus offset/limit/sort; grouped counts also carry both versions | 48 each | same as `pageCache` |
+| `sortedIDsCache` | `CalibreLibrary` | `SortedIDsCacheKey` (query+filter+tagExpansion digests, `visibilityVersion`, pinned collection version, `visibilitySignature`, sort, ascending, `randomSeed`; i.e. `PageCacheKey` minus offset and limit) | 4 | `updateAO3MetaCaches` via `invalidateSortedIDs()`; implicitly stale once visibility, the query pin, `visibilitySignature`, or `randomSeed` changes |
+
+`LibrarySession.visibilityVersion` tracks Skip, series-or-merged, publisher,
+anthology, and duplicate-loser visibility sets. `collectionVersion` tracks
+Like, Read Later, and collection assignment changes. `LibraryDisplayController`
+captures `pinnedCollectionVersion` when the user changes the query, search,
+sort, or grouping. A membership press updates session-backed icons but leaves
+the active result IDs, page, and scroll in place; the next query application
+uses the latest collection version.
 
 `sortedIDsCache` holds the full sorted id list for one grouped title-sorted view (`groupAwareTitleSortedPage`), so paging within a view costs a slice plus `booksForIDs` instead of a fresh materialize-and-sort. It is read through `LRUCache.get`, which refreshes recency (the subscript does not). A same-key sort already running is joined through `sortedIDsInFlight` rather than started twice, and `sortedIDsGeneration` stops a sort that began before `invalidateSortedIDs()` from storing a stale result. `wordCountSortedPage`, `kudosSortedPage` and `randomSortedPage` are not split yet.
 

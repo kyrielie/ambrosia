@@ -46,7 +46,7 @@ The Series or Merged sync is gated only by the series seed (`SeriesSyncCoordinat
 
 `fulltext:` resolution: `resolveFulltextIDs(for:)` builds an `FTSQuery`, returns a cached result if there is one, otherwise calls `beginSearch()` on the FTS backend and awaits `searchBooks` inside `withTaskCancellationHandler`, so cancelling the calling task interrupts the running statement. After a `Task.isCancelled` check it compares the result's index stamp with the last one seen (clearing the cache on a change), then stores the ids. Failures and cancellations return `[]` and are never cached; failures set `lastFulltextError`. `resolvedQuery(_:)` is a thin wrapper that attaches the ids to a `SearchQuery`. `fulltextSearcherOverride` is a test seam (`FulltextSearching`). See `caching.md` and `calibre-fts.md`.
 
-Collection membership sets (`cachedLikedIDs`, `cachedSkippedIDs`, `cachedSeriesOrMergedIDs`, `cachedAO3PublisherIDs`, `cachedReadLaterIDs`) are cleared on open and on close. `close()` now resets all five, including `cachedReadLaterIDs`.
+Collection membership sets (`explicitLikedIDs`, `cachedSkippedIDs`, `cachedSeriesOrMergedIDs`, `cachedAO3PublisherIDs`, `explicitReadLaterIDs`) are cleared on open and on close. `effectiveLikedIDs` and `effectiveReadLaterIDs` currently equal the explicit sets; they name the read-side contract for future series inheritance. `visibilityVersion` tracks visibility-set changes; `collectionVersion` tracks Like, Read Later, and collection assignments. The list pins the collection version when applying a query so membership changes update state indicators without moving the current results. See `caching.md` for the cache-key contract.
 
 ---
 
@@ -55,7 +55,7 @@ Collection membership sets (`cachedLikedIDs`, `cachedSkippedIDs`, `cachedSeriesO
 
 `Ambrosia/Utilities/LaunchSignposts.swift` wraps `OSSignposter` (subsystem "Ambrosia", category "Launch") so launch and page-load timing can be measured in a **Release** build, where `LibraryFilterDebug.log` is compiled out. Open Instruments with the os_signpost instrument and filter on category "Launch".
 
-Intervals: `LibrarySession.open`, `refreshCollectionSnapshots`, `refreshAO3MetaCaches.bulkLoads`, `refreshAO3MetaCaches.pushToLibrary`, `extraction.scan`, `importAO3TagSeeds`, `seed.allCalibreSeriesEntries`, `seed.insertCalibreSeriesFallback`, `syncSeriesOrMerged`, `syncSeriesOrMerged.readCurrent`, `syncSeriesOrMerged.applyDelta`, `hydrateSnapshots`, `groupAwareTitleSortedPage.compute`, `loadPage`. Events: `membershipVersionBump` (the caller is also logged through `Logger`) and `firstListRebuild`.
+Intervals: `LibrarySession.open`, `refreshCollectionSnapshots`, `refreshAO3MetaCaches.bulkLoads`, `refreshAO3MetaCaches.pushToLibrary`, `extraction.scan`, `importAO3TagSeeds`, `seed.allCalibreSeriesEntries`, `seed.insertCalibreSeriesFallback`, `syncSeriesOrMerged`, `syncSeriesOrMerged.readCurrent`, `syncSeriesOrMerged.applyDelta`, `hydrateSnapshots`, `groupAwareTitleSortedPage.compute`, `loadPage`. Events: `membershipVersionBump` (logs both visibility and collection versions plus the caller) and `firstListRebuild`.
 
 Rules: pair `begin` and `end` with the same literal name; do not use a `defer` inside a closure that goes on to run unrelated work after the measured step (it would inflate the interval); keep signposts out of per-row loops.
 

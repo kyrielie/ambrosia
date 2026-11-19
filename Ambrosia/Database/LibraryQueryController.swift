@@ -27,7 +27,7 @@ struct PagingOffsetState {
     /// 1. The push happened unconditionally on every `loadPage()` call
     ///    through the grouped drain branch, including calls triggered by
     ///    Previous itself and by unrelated reloads (filter reapply,
-    ///    membershipVersion bumps from background AO3 extraction). Each
+    ///    visibilityVersion bumps from background AO3 extraction). Each
     ///    such call re-pushed the (already-stale) current offset, silently
     ///    duplicating entries and desyncing the stack's depth from
     ///    `currentPage`. A first fix attempted to gate the push by an

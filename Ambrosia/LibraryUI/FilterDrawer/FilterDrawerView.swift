@@ -6,15 +6,21 @@ struct FilterDrawerView: View {
     @Binding var expression: FilterExpression
     var onApply: () -> Void
     var onClear: () -> Void
-    @Environment(\.dismiss) private var dismiss
+    var onDismiss: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var draftExpression: FilterExpression
 
-    init(expression: Binding<FilterExpression>, onApply: @escaping () -> Void, onClear: @escaping () -> Void) {
+    init(
+        expression: Binding<FilterExpression>,
+        onApply: @escaping () -> Void,
+        onClear: @escaping () -> Void,
+        onDismiss: @escaping () -> Void
+    ) {
         self._expression = expression
         self.onApply = onApply
         self.onClear = onClear
+        self.onDismiss = onDismiss
         self._draftExpression = State(initialValue: expression.wrappedValue)
     }
 
@@ -26,11 +32,10 @@ struct FilterDrawerView: View {
                 Label("Filter Library", systemImage: "line.3.horizontal.decrease.circle")
                     .font(.headline)
                 Spacer()
-                Button { dismiss() } label: {
+                Button(action: onDismiss) {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
                 .buttonStyle(.borderless)
-                .keyboardShortcut(.cancelAction)
                 .help("Close (Esc)")
             }
             .padding([.horizontal, .top], 20)
@@ -104,6 +109,7 @@ struct FilterDrawerView: View {
                     }
                     expression = draftExpression
                     onClear()
+                    onDismiss()
                 } label: {
                     Label("Clear All", systemImage: "trash")
                 }
@@ -122,7 +128,7 @@ struct FilterDrawerView: View {
                 .buttonStyle(.borderless)
 
                 Button("Cancel") {
-                    dismiss()
+                    onDismiss()
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
@@ -131,7 +137,7 @@ struct FilterDrawerView: View {
                 Button("Apply") {
                     expression = draftExpression
                     onApply()
-                    dismiss()
+                    onDismiss()
                 }
                 .keyboardShortcut(.return)
                 .buttonStyle(.borderedProminent)
@@ -140,7 +146,8 @@ struct FilterDrawerView: View {
             .padding(20)
         }
         .frame(width: 540)
-        .onExitCommand { dismiss() }
+        .onExitCommand(perform: onDismiss)
+        .preventInitialButtonFocus()
     }
 }
 

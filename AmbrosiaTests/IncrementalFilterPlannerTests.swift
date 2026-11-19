@@ -99,8 +99,8 @@ final class IncrementalFilterPlannerTests: XCTestCase {
         guard let split = IncrementalFilterPlanner.splits(of: full).first(where: { $0.delta.value == "B" }) else {
             return XCTFail("missing split")
         }
-        XCTAssertEqual(FilterResultCacheKey(expression: split.base, membershipVersion: 3, visibilitySignature: "s"),
-                       FilterResultCacheKey(expression: onlyA, membershipVersion: 3, visibilitySignature: "s"))
+        XCTAssertEqual(FilterResultCacheKey(expression: split.base, visibilityVersion: 3, pinnedCollectionVersion: 3, visibilitySignature: "s"),
+                       FilterResultCacheKey(expression: onlyA, visibilityVersion: 3, pinnedCollectionVersion: 3, visibilitySignature: "s"))
     }
 
     func testDeltaExpressionIsASingleANDGroup() {

@@ -2,9 +2,8 @@ import Foundation
 
 // MARK: - LRU cache key
 
-/// Cache key for a FilterResult: the serialised expression + membership version.
-/// Two calls with identical filter rules but different membership states (e.g. the user
-/// just liked a book) must NOT share a cache entry. The cached ID lists also have the
+/// Cache key for a FilterResult: the serialised expression + visibility and pinned
+/// collection versions. The cached ID lists also have the
 /// four visibility preferences applied, so `visibilitySignature` is part of the key:
 /// toggling a preference changes no membership set, and stripped books cannot be
 /// restored from a list that already lacks them. `bookTagsRevision` ties a cached
@@ -12,14 +11,15 @@ import Foundation
 /// extraction pass invalidates it.
 struct FilterResultCacheKey: Hashable {
     let expressionDigest: String    // serialised rule descriptions (stable, cheap)
-    let membershipVersion: Int
+    let visibilityVersion: Int
+    let pinnedCollectionVersion: Int
     let visibilitySignature: String
     let bookTagsRevision: Int
 }
 
 extension FilterResultCacheKey {
-    init(expression: FilterExpression, membershipVersion: Int, visibilitySignature: String = "",
-         bookTagsRevision: Int = 0) {
+    init(expression: FilterExpression, visibilityVersion: Int, pinnedCollectionVersion: Int,
+         visibilitySignature: String = "", bookTagsRevision: Int = 0) {
         // Encode group index, within-group conjunction, and sorted rules per group.
         // Two expressions with the same rules but different grouping must not share
         // a cache entry — (A OR B) AND C ≠ A OR (B AND C).
@@ -31,7 +31,8 @@ extension FilterResultCacheKey {
             return "g\(groupIndex)[\(group.conjunction.rawValue):\(rules)]"
         }.joined(separator: "|") + "|gc:\(expression.groupConjunction.rawValue)"
         self.expressionDigest = digest
-        self.membershipVersion = membershipVersion
+        self.visibilityVersion = visibilityVersion
+        self.pinnedCollectionVersion = pinnedCollectionVersion
         self.visibilitySignature = visibilitySignature
         self.bookTagsRevision = bookTagsRevision
     }
@@ -47,6 +48,7 @@ struct SortedIDsCacheKey: Hashable {
     let filterSignature: String
     let tagExpansionsDigest: String
     let visibilityVersion: Int
+    var pinnedCollectionVersion: Int = 0
     /// `LibraryVisibilityPolicy.cacheSignature` for the sorted-page functions that
     /// apply the policy inside `CalibreLibrary`; empty where the caller filters.
     let visibilitySignature: String
@@ -72,7 +74,8 @@ struct PageCacheKey: Hashable {
     }
 
     init(querySignature: String, filterSignature: String, tagExpansionsDigest: String,
-         visibilityVersion: Int, visibilitySignature: String, sortField: SortField,
+         visibilityVersion: Int, pinnedCollectionVersion: Int = 0,
+         visibilitySignature: String, sortField: SortField,
          ascending: Bool, randomSeed: UInt64, offset: Int, limit: Int) {
         self.init(
             sortedKey: SortedIDsCacheKey(
@@ -80,6 +83,7 @@ struct PageCacheKey: Hashable {
                 filterSignature: filterSignature,
                 tagExpansionsDigest: tagExpansionsDigest,
                 visibilityVersion: visibilityVersion,
+                pinnedCollectionVersion: pinnedCollectionVersion,
                 visibilitySignature: visibilitySignature,
                 sortField: sortField,
                 ascending: ascending,
@@ -97,6 +101,7 @@ struct CountCacheKey: Hashable {
     let filterSignature: String
     let tagExpansionsDigest: String
     let visibilityVersion: Int
+    var pinnedCollectionVersion: Int = 0
 }
 
 /// Stable, order-independent digest of a resolved tag-synonym expansion
@@ -121,6 +126,7 @@ struct GroupAwareCountCacheKey: Hashable {
     let filterSignature: String
     let tagExpansionsDigest: String
     let visibilityVersion: Int
+    var pinnedCollectionVersion: Int = 0
     let showSkippedCollection: Bool
     let hideNonAO3PublisherBooks: Bool
     let hideAnthologyBooks: Bool

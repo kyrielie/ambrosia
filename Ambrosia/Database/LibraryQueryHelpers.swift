@@ -99,4 +99,16 @@ enum LibraryQueryHelpers {
         }
         expression.groups[0].rules.append(rule)
     }
+
+    static func hasCompleteRule(field: FilterField, value: String, in expression: FilterExpression) -> Bool {
+        let normalizedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return expression.groups
+            .flatMap(\.rules)
+            .contains {
+                $0.isComplete
+                    && $0.field == field
+                    && $0.value.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .localizedCaseInsensitiveCompare(normalizedValue) == .orderedSame
+            }
+    }
 }

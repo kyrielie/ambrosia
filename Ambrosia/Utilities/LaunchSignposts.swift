@@ -35,10 +35,11 @@ enum LaunchSignposts {
         signposter.emitEvent(name, id: signposter.makeSignpostID())
     }
 
-    /// Records one `membershipVersion` bump with its caller, so the number of
-    /// page-cache invalidations during open can be counted.
-    static func membershipBump(caller: String, newValue: Int) {
-        event("membershipVersionBump")
-        logger.info("membershipVersion -> \(newValue, privacy: .public) from \(caller, privacy: .public)")
+    /// Records a visibility or collection version bump with both current values.
+    static func membershipBump(caller: String, visibilityVersion: Int, collectionVersion: Int) {
+        event("visibilityCollectionVersionBump")
+        logger.info(
+            "membership versions visibility=\(visibilityVersion, privacy: .public) collection=\(collectionVersion, privacy: .public) from \(caller, privacy: .public)"
+        )
     }
 }

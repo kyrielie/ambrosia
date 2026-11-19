@@ -113,8 +113,8 @@ final class CacheTypesKeyShapeTests: XCTestCase {
         expression.groups = [FilterGroup(rules: [FilterRule(field: .tag, op: .equals, value: "fluff")], conjunction: .and)]
         expression.groupConjunction = .and
 
-        let keyV1 = FilterResultCacheKey(expression: expression, membershipVersion: 1)
-        let keyV2 = FilterResultCacheKey(expression: expression, membershipVersion: 2)
+        let keyV1 = FilterResultCacheKey(expression: expression, visibilityVersion: 1, pinnedCollectionVersion: 1)
+        let keyV2 = FilterResultCacheKey(expression: expression, visibilityVersion: 2, pinnedCollectionVersion: 2)
         XCTAssertNotEqual(keyV1, keyV2)
     }
 }

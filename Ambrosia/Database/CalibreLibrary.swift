@@ -180,9 +180,9 @@ actor CalibreLibrary {
     // Invalidation:
     //  - Library switch/close: free, this whole actor instance is replaced.
     //  - Membership change (like/skip/read-later/collection/series sync): the
-    //    caller passes the current LibrarySession.membershipVersion into every
-    //    cached method below as part of the key, so a stale entry simply never
-    //    matches once the version has moved on.
+    //    caller passes the current visibility version and pinned collection
+    //    version into cached methods below, so stale entries never match after
+    //    a visibility change or a user-applied query snapshot change.
     //  - AO3 extraction batch completes: updateAO3MetaCaches(...) clears both
     //    caches directly (same actor, no version plumbing needed).
     //  - Random reshuffle: covered by randomSeed being part of the key.
@@ -592,6 +592,7 @@ actor CalibreLibrary {
         var visibility: LibraryVisibilityPolicy = .allowAll
         var filterTagExpansions: [String: [String]] = [:]
         var visibilityVersion: Int = 0
+        var pinnedCollectionVersion: Int = 0
         var metaDB: AmbrosiaMetaDB?
         var rankedIDs: [Int]?
     }
@@ -614,6 +615,7 @@ actor CalibreLibrary {
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
             tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
             visibilityVersion: visibilityVersion,
+            pinnedCollectionVersion: pageQuery.pinnedCollectionVersion,
             visibilitySignature: visibility.cacheSignature,
             sortField: .wordCount,
             ascending: ascending,
@@ -690,6 +692,7 @@ actor CalibreLibrary {
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
             tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
             visibilityVersion: visibilityVersion,
+            pinnedCollectionVersion: pageQuery.pinnedCollectionVersion,
             visibilitySignature: visibility.cacheSignature,
             sortField: .kudos,
             ascending: ascending,
@@ -825,6 +828,7 @@ actor CalibreLibrary {
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
             tagExpansionsDigest: tagExpansionsDigest(pageQuery.filterTagExpansions),
             visibilityVersion: pageQuery.visibilityVersion,
+            pinnedCollectionVersion: pageQuery.pinnedCollectionVersion,
             visibilitySignature: pageQuery.visibility.cacheSignature,
             sortField: .title,
             ascending: ascending,
@@ -943,6 +947,7 @@ actor CalibreLibrary {
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
             tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
             visibilityVersion: visibilityVersion,
+            pinnedCollectionVersion: pageQuery.pinnedCollectionVersion,
             showSkippedCollection: visibility.showSkippedCollection,
             hideNonAO3PublisherBooks: visibility.hideNonAO3PublisherBooks,
             hideAnthologyBooks: visibility.hideAnthologyBooks,
@@ -980,6 +985,7 @@ actor CalibreLibrary {
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
             tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
             visibilityVersion: visibilityVersion,
+            pinnedCollectionVersion: pageQuery.pinnedCollectionVersion,
             visibilitySignature: visibility.cacheSignature,
             sortField: .random,
             ascending: true,
@@ -1034,6 +1040,7 @@ actor CalibreLibrary {
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
             tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
             visibilityVersion: visibilityVersion,
+            pinnedCollectionVersion: pageQuery.pinnedCollectionVersion,
             visibilitySignature: visibility.cacheSignature,
             sortField: .relevance,
             ascending: ascending,
@@ -1202,7 +1209,8 @@ actor CalibreLibrary {
         query: SearchQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: []),
         filter: FilterExpression? = nil,
         filterTagExpansions: [String: [String]] = [:],
-        visibilityVersion: Int = 0
+        visibilityVersion: Int = 0,
+        pinnedCollectionVersion: Int = 0
     ) -> [CalibreBook] {
         // §Phase3: this is the hot path hit on every page load/switch when no
         // explicit ID set is active (the scenario the page cache targets —
@@ -1214,6 +1222,7 @@ actor CalibreLibrary {
             filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
             tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
             visibilityVersion: visibilityVersion,
+            pinnedCollectionVersion: pinnedCollectionVersion,
             visibilitySignature: "",   // caller (the view) applies visibility to the raw page
             sortField: sort,
             ascending: ascending,

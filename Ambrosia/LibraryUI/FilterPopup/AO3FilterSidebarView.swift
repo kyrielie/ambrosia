@@ -52,7 +52,7 @@ struct AO3FilterSidebarView: View {
                     state: state,
                     toolbarState: toolbarState,
                     facetController: facetController,
-                    membershipVersion: session.membershipVersion,
+                    visibilityVersion: session.visibilityVersion,
                     onApply: {
                         handleApply()
                     }
@@ -90,7 +90,7 @@ struct AO3FilterSidebarView: View {
         .task(id: toolbarState.searchText) {
             await reloadFacetController()
         }
-        .task(id: session.membershipVersion) {
+        .task(id: session.visibilityVersion) {
             await reloadFacetController()
         }
     }
@@ -156,7 +156,7 @@ struct AO3FilterSidebarView: View {
                 ftsLibrary: session.ftsLibrary,
                 collectionStore: session.collectionStore
             ),
-            membershipVersion: session.membershipVersion
+            visibilityVersion: session.visibilityVersion
         )
     }
 }

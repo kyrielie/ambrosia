@@ -88,7 +88,7 @@ struct CollectionsView: View {
             Button("Delete", role: .destructive) {
                 Task {
                     try? await session.collectionStore?.deleteCollection(id: collection.id)
-                    session.bumpMembershipVersion()
+                    session.bumpCollectionVersion()
                     if renamingID == collection.id { renamingID = nil }
                     if selectedCollectionID == collection.id { selectedCollectionID = nil }
                     await reload()
@@ -166,14 +166,14 @@ struct CollectionsView: View {
                         name: "Read Later",
                         icon: "bookmark.fill",
                         color: .accentColor,
-                        count: session.cachedReadLaterIDs.count
+                        count: session.effectiveReadLaterIDs.count
                     )
                     smartRow(
                         id: SystemCollectionID.liked,
                         name: "Liked Works",
                         icon: "heart.fill",
                         color: .pink,
-                        count: session.cachedLikedIDs.count
+                        count: session.effectiveLikedIDs.count
                     )
                 }
 
@@ -225,7 +225,7 @@ struct CollectionsView: View {
             guard !ids.isEmpty else { return }
             Task { @MainActor in
                 try? await session.collectionStore?.bulkAdd(calibreIDs: ids, to: targetCollectionID)
-                session.bumpMembershipVersion()
+                session.bumpCollectionVersion()
                 await reload()
             }
         }
@@ -519,7 +519,7 @@ struct CollectionsView: View {
         selectedWorkIDs.removeAll()
         Task {
             try? await session.collectionStore?.bulkRemove(calibreIDs: ids, from: collectionID)
-            session.bumpMembershipVersion()
+            session.bumpCollectionVersion()
             await reload()
         }
     }
@@ -544,10 +544,10 @@ struct CollectionsView: View {
 
     private func resolveCollectionMeta(for id: String) -> (name: String, memberIDs: Set<Int>, isSystem: Bool) {
         if id == SystemCollectionID.readLater {
-            return ("Read Later", session.cachedReadLaterIDs, true)
+            return ("Read Later", session.effectiveReadLaterIDs, true)
         }
         if id == SystemCollectionID.liked {
-            return ("Liked Works", session.cachedLikedIDs, true)
+            return ("Liked Works", session.effectiveLikedIDs, true)
         }
         if let col = collections.first(where: { $0.id == id }) {
             return (col.name, membership[col.id] ?? [], false)
@@ -590,7 +590,7 @@ struct CollectionsView: View {
     private func removeBookFromCollection(calibreID: Int, collectionID: String) {
         Task {
             try? await session.collectionStore?.bulkRemove(calibreIDs: [calibreID], from: collectionID)
-            session.bumpMembershipVersion()
+            session.bumpCollectionVersion()
             await reload()
         }
     }
@@ -712,7 +712,7 @@ struct CollectionsView: View {
         let ids = selectedCalibreIDs
         Task {
             if let created = try? await session.collectionStore?.createCollection(name: trimmed, calibreIDs: ids) {
-                session.bumpMembershipVersion()
+                session.bumpCollectionVersion()
                 await reload()
                 selectedCollectionID = created.id
             }
@@ -738,7 +738,7 @@ struct CollectionsView: View {
             } else {
                 try? await session.collectionStore?.bulkAdd(calibreIDs: selectedCalibreIDs, to: collection.id)
             }
-            session.bumpMembershipVersion()
+            session.bumpCollectionVersion()
             await reload()
         }
     }
@@ -878,7 +878,7 @@ struct CollectionSearchPickerView: View {
             } else {
                 try? await session.collectionStore?.bulkAdd(calibreIDs: calibreIDs, to: collection.id)
             }
-            session.bumpMembershipVersion()
+            session.bumpCollectionVersion()
             await reload()
             await onChange?()
         }
@@ -887,7 +887,7 @@ struct CollectionSearchPickerView: View {
     private func createCollection(named name: String) {
         Task {
             _ = try? await session.collectionStore?.createCollection(name: name, calibreIDs: calibreIDs)
-            session.bumpMembershipVersion()
+            session.bumpCollectionVersion()
             searchText = ""
             await reload()
             await onChange?()
