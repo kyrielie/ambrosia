@@ -769,8 +769,8 @@ struct LibraryRootView: View {
                         let progressAlert = NSAlert()
                         progressAlert.messageText = "Exporting EPUBs…"
                         progressAlert.informativeText = "Copying 0 of \(count)"
-                        progressAlert.addButton(withTitle: "")
-                        progressAlert.buttons.first?.isHidden = true
+                        let okButton = progressAlert.addButton(withTitle: "OK")
+                        okButton.isEnabled = false
                         let progressBar = NSProgressIndicator()
                         progressBar.style = .bar
                         progressBar.isIndeterminate = false
@@ -780,11 +780,15 @@ struct LibraryRootView: View {
                         progressBar.frame = NSRect(x: 0, y: 0, width: 300, height: 20)
                         progressAlert.accessoryView = progressBar
 
-                        var sheetDismissed = false
-                        let win = NSApp.keyWindow ?? NSApp.mainWindow
+                        let win = AppDelegate.shared?.libraryWindowController?.window ?? NSApp.mainWindow ?? NSApp.keyWindow
+                        exportLogger.info("Starting EPUB export UI session. Target window resolved: \(win != nil)")
                         if let win {
+                            if let existingSheet = win.attachedSheet {
+                                exportLogger.warning("Dismissing pre-existing sheet before attaching export progress sheet")
+                                win.endSheet(existingSheet)
+                            }
                             progressAlert.beginSheetModal(for: win) { _ in
-                                sheetDismissed = true
+                                exportLogger.info("Export progress sheet callback invoked (dismissed)")
                             }
                         }
 
@@ -806,8 +810,7 @@ struct LibraryRootView: View {
                                 destination: destination,
                                 ao3Map: ao3Map,
                                 groupBySeries: toolbarState.groupBySeries,
-                                seriesEntries: seriesEntriesByBook,
-                                modernizeEPUB3: prefs.enableAdvancedEPUBExport
+                                seriesEntries: seriesEntriesByBook
                             ),
                             progress: { done in
                                 Task { @MainActor in
@@ -817,16 +820,25 @@ struct LibraryRootView: View {
                             }
                         )
 
-                        if let win, win.attachedSheet != nil {
-                            win.endSheet(progressAlert.window)
-                            var attempts = 0
-                            while !sheetDismissed && win.attachedSheet != nil && attempts < 20 {
-                                attempts += 1
-                                try? await Task.sleep(nanoseconds: 50_000_000)
+                        await MainActor.run {
+                            exportLogger.info("Export completed (\(copied) copied, \(skipped.count) skipped). Updating alert in-place.")
+                            if skipped.isEmpty {
+                                progressAlert.messageText = "Export Complete"
+                                let sfx = copied == 1 ? "" : "s"
+                                progressAlert.informativeText = "Successfully exported \(copied) EPUB\(sfx) to:\n\(destination.path)"
+                                progressAlert.alertStyle = .informational
+                            } else {
+                                progressAlert.messageText = "Export Finished with Warnings"
+                                let skippedList = skipped.prefix(8).joined(separator: "\n")
+                                let more = skipped.count > 8 ? "\n… and \(skipped.count - 8) more." : ""
+                                let sfx = copied == 1 ? "" : "s"
+                                progressAlert.informativeText = "Copied \(copied) EPUB\(sfx).\n\nCould not copy:\n\(skippedList)\(more)"
+                                progressAlert.alertStyle = .warning
                             }
+                            progressBar.isHidden = true
+                            okButton.isEnabled = true
+                            okButton.keyEquivalent = "\r"
                         }
-
-                        ExportManager.presentEPUBExportSummary(copied: copied, skipped: skipped, on: win)
                     }
                 }
             }

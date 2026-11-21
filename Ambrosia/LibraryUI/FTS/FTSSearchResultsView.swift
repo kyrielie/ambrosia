@@ -1,5 +1,15 @@
-import SwiftUI
+// SPDX-License-Identifier: GPL-3.0-only
 import AppKit
+import SwiftUI
+
+// MARK: - Search Mode
+
+enum FTSSearchMode: String, CaseIterable, Identifiable {
+    case lexical = "Exact (FTS5)"
+    case semantic = "Semantic (Passages)"
+
+    var id: String { rawValue }
+}
 
 // MARK: - Search Scope
 
@@ -10,7 +20,7 @@ enum FTSSearchScope: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-// MARK: - Result Item
+// MARK: - Result Items
 
 struct FTSResultItem: Identifiable {
     let id: Int
@@ -20,16 +30,25 @@ struct FTSResultItem: Identifiable {
     var isLoadingSnippets: Bool
 }
 
+struct SemanticResultItem: Identifiable {
+    let id: Int
+    let book: CalibreBook
+    var ao3Metadata: AO3MetadataRecord?
+    var passage: SemanticPassageMatch
+}
+
 // MARK: - View Model
 
 @Observable
 @MainActor
 final class FTSSearchViewModel {
+    var mode: FTSSearchMode = .lexical
     var queryText: String = ""
     var scope: FTSSearchScope = .filtered
     private(set) var isSearching: Bool = false
     private(set) var isStreamingSnippets: Bool = false
     private(set) var results: [FTSResultItem] = []
+    private(set) var passageResults: [SemanticResultItem] = []
     private(set) var totalOccurrences: Int = 0
     private(set) var errorMessage: String?
     private(set) var hasSearched: Bool = false
@@ -38,6 +57,16 @@ final class FTSSearchViewModel {
     private var snippetStreamTask: Task<Void, Never>?
 
     func performSearch() {
+        if mode == .semantic {
+            performSemanticSearch()
+        } else {
+            performLexicalSearch()
+        }
+    }
+
+    // MARK: - Lexical FTS5 Search
+
+    private func performLexicalSearch() {
         let trimmed = queryText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             results = []
@@ -117,7 +146,6 @@ final class FTSSearchViewModel {
                 self.results = initialItems
                 self.isSearching = false
 
-                // Phase 2: Asynchronous streaming of multi-snippets
                 self.streamSnippets(query: query, token: token, ftsLibrary: ftsLibrary)
             } catch is CancellationError {
                 // Cancelled by a new search
@@ -156,6 +184,128 @@ final class FTSSearchViewModel {
                 }
                 self.results[index].isLoadingSnippets = false
                 self.totalOccurrences = runningTotal
+            }
+            self.isStreamingSnippets = false
+        }
+    }
+
+    // MARK: - Semantic Passage Search
+
+    private func performSemanticSearch() {
+        let trimmed = queryText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            passageResults = []
+            hasSearched = false
+            errorMessage = nil
+            return
+        }
+
+        searchTask?.cancel()
+        snippetStreamTask?.cancel()
+
+        guard let session = AppDelegate.shared?.session else {
+            errorMessage = "No active library session."
+            return
+        }
+
+        guard let passageDB = session.passageDB else {
+            errorMessage = "Semantic passage database (ambrosia_semantic_passages.db) not found for this library. "
+                + "Generate it using scripts/ambrosia_embed_cli.py or copy it into the library folder."
+            return
+        }
+
+        guard let calibreLibrary = session.library else {
+            errorMessage = "Calibre library is unavailable."
+            return
+        }
+
+        errorMessage = nil
+        isSearching = true
+        isStreamingSnippets = false
+        hasSearched = true
+        passageResults = []
+
+        searchTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let embedder = PassageQueryEmbedder.shared
+                guard await embedder.isModelAvailable else {
+                    self.errorMessage = "CoreML embedding model (Qwen3-Embedding-0.6B) is not installed in Application Support/Ambrosia/Models/."
+                    self.isSearching = false
+                    return
+                }
+
+                let queryVector = try await embedder.embed(query: trimmed)
+                guard !Task.isCancelled else { return }
+
+                var restrictIDs: Set<Int>?
+                if self.scope == .filtered {
+                    restrictIDs = await self.currentFilterIDs()
+                }
+
+                let matches = try await passageDB.search(
+                    queryVector: queryVector,
+                    topK: 50,
+                    minSimilarity: 0.15,
+                    restrictBookIDs: restrictIDs
+                )
+
+                guard !Task.isCancelled else { return }
+
+                let bookIDs = Array(Set(matches.map { $0.calibreID }))
+                let fetchedBooks = await calibreLibrary.booksForIDs(bookIDs)
+                let bookMap = Dictionary(uniqueKeysWithValues: fetchedBooks.map { ($0.id, $0) })
+                let ao3Map = (try? await session.metaDB?.ao3Metadata(for: bookIDs)) ?? [:]
+
+                var initialItems: [SemanticResultItem] = []
+                for match in matches {
+                    guard let book = bookMap[match.calibreID] else { continue }
+                    initialItems.append(SemanticResultItem(
+                        id: match.id,
+                        book: book,
+                        ao3Metadata: ao3Map[book.id],
+                        passage: match
+                    ))
+                }
+
+                self.passageResults = initialItems
+                self.isSearching = false
+
+                self.streamPassageExcerpts()
+            } catch is CancellationError {
+                // Cancelled
+            } catch {
+                if !Task.isCancelled {
+                    self.errorMessage = "Semantic passage search failed: \(error.localizedDescription)"
+                    self.isSearching = false
+                }
+            }
+        }
+    }
+
+    private func streamPassageExcerpts() {
+        guard let pathStr = LibraryRegistry.shared.activePath else { return }
+        let libraryRoot = URL(fileURLWithPath: pathStr)
+
+        snippetStreamTask = Task { [weak self] in
+            guard let self else { return }
+            self.isStreamingSnippets = true
+
+            for index in 0..<self.passageResults.count {
+                guard !Task.isCancelled else { break }
+                let item = self.passageResults[index]
+                if let epubURL = item.book.epubURL(libraryRoot: libraryRoot) {
+                    let excerpt = PassageSnippetExtractor.extractPassage(
+                        epubURL: epubURL,
+                        spineIndex: item.passage.spineIndex,
+                        startOffset: item.passage.startOffset,
+                        endOffset: item.passage.endOffset
+                    )
+                    guard !Task.isCancelled else { break }
+                    if let excerpt, !excerpt.isEmpty {
+                        self.passageResults[index].passage.extractedText = excerpt
+                    }
+                }
             }
             self.isStreamingSnippets = false
         }
@@ -218,12 +368,26 @@ struct FTSSearchResultsView: View {
     // MARK: - Top Control Bar
 
     private var topControlBar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
+            Picker("Mode", selection: $viewModel.mode) {
+                ForEach(FTSSearchMode.allCases) { searchMode in
+                    Text(searchMode.rawValue).tag(searchMode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .onChange(of: viewModel.mode) { _, _ in
+                if viewModel.hasSearched {
+                    viewModel.performSearch()
+                }
+            }
+
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(.secondary)
 
-                TextField("Search book body text (e.g. \"dialogue phrase\", tag:angst)...", text: $viewModel.queryText)
+                TextField(placeholderText, text: $viewModel.queryText)
                     .textFieldStyle(.plain)
                     .onSubmit {
                         viewModel.performSearch()
@@ -273,6 +437,15 @@ struct FTSSearchResultsView: View {
         .padding(12)
     }
 
+    private var placeholderText: String {
+        switch viewModel.mode {
+        case .lexical:
+            return "Search book text (e.g. \"dialogue phrase\", tag:angst)..."
+        case .semantic:
+            return "Search narrative tropes, emotions, or scenes (e.g. \"duel in the snow\")..."
+        }
+    }
+
     // MARK: - Status Summary Bar
 
     private var statusSummaryBar: some View {
@@ -280,24 +453,38 @@ struct FTSSearchResultsView: View {
             if viewModel.isSearching {
                 ProgressView()
                     .controlSize(.small)
-                Text("Searching full-text index…")
+                Text(viewModel.mode == .semantic ? "Computing semantic passage matches…" : "Searching full-text index…")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else if viewModel.isStreamingSnippets {
                 ProgressView()
                     .controlSize(.small)
-                Text("Extracting passages (\(viewModel.totalOccurrences) matches found)…")
+                let streamLabel = viewModel.mode == .semantic
+                    ? "Extracting scene paragraphs from EPUBs…"
+                    : "Extracting passages (\(viewModel.totalOccurrences) matches found)…"
+                Text(streamLabel)
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else if viewModel.hasSearched {
-                let bookCount = viewModel.results.count
-                let bookLabel = bookCount == 1 ? "1 book" : "\(bookCount) books"
-                let matchLabel = viewModel.totalOccurrences == 1 ? "1 match" : "\(viewModel.totalOccurrences) matches"
-                Text("\(bookLabel) found (\(matchLabel))")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                if viewModel.mode == .semantic {
+                    let count = viewModel.passageResults.count
+                    let label = count == 1 ? "1 matching scene found" : "\(count) matching scenes found"
+                    Text(label)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    let bookCount = viewModel.results.count
+                    let bookLabel = bookCount == 1 ? "1 book" : "\(bookCount) books"
+                    let matchLabel = viewModel.totalOccurrences == 1 ? "1 match" : "\(viewModel.totalOccurrences) matches"
+                    Text("\(bookLabel) found (\(matchLabel))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             } else {
-                Text("Enter terms or phrases to search book bodies across your Calibre library.")
+                let defaultPrompt = viewModel.mode == .semantic
+                    ? "Search scenes, narrative moments, or conceptual tropes across your library."
+                    : "Enter terms or phrases to search book bodies across your Calibre library."
+                Text(defaultPrompt)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -327,7 +514,62 @@ struct FTSSearchResultsView: View {
             .padding()
         } else if !viewModel.hasSearched {
             emptyPromptView
-        } else if viewModel.results.isEmpty && !viewModel.isSearching {
+        } else if viewModel.mode == .semantic {
+            semanticContentArea
+        } else {
+            lexicalContentArea
+        }
+    }
+
+    // MARK: - Semantic Results List
+
+    @ViewBuilder
+    private var semanticContentArea: some View {
+        if viewModel.passageResults.isEmpty && !viewModel.isSearching {
+            VStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 32))
+                    .foregroundColor(.secondary)
+                Text("No matching scenes found for \"\(viewModel.queryText)\".")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding()
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    ForEach(viewModel.passageResults) { item in
+                        PassageTypographicCardView(
+                            book: item.book,
+                            ao3Metadata: item.ao3Metadata,
+                            passage: item.passage,
+                            isReadLater: readLaterIDs.contains(item.book.id),
+                            onToggleReadLater: {
+                                toggleReadLater(for: item.book)
+                            },
+                            onOpenBook: {
+                                openBook(item.book, passage: item.passage)
+                            },
+                            onSelectInLibrary: {
+                                selectInLibrary(item.book)
+                            },
+                            onJumpToPassage: { match in
+                                openBook(item.book, passage: match)
+                            }
+                        )
+                    }
+                }
+                .padding(14)
+            }
+        }
+    }
+
+    // MARK: - Lexical Results List
+
+    @ViewBuilder
+    private var lexicalContentArea: some View {
+        if viewModel.results.isEmpty && !viewModel.isSearching {
             VStack(spacing: 8) {
                 Image(systemName: "doc.text.magnifyingglass")
                     .font(.system(size: 32))
@@ -370,14 +612,16 @@ struct FTSSearchResultsView: View {
 
     private var emptyPromptView: some View {
         VStack(spacing: 12) {
-            Image(systemName: "text.book.closed")
+            Image(systemName: viewModel.mode == .semantic ? "sparkles" : "text.book.closed")
                 .font(.system(size: 38))
                 .foregroundColor(.secondary.opacity(0.8))
 
-            Text("Full-Text Search")
+            Text(viewModel.mode == .semantic ? "Semantic Passage Search" : "Full-Text Search")
                 .font(.headline)
 
-            Text("Search full EPUB text across books in your library.\nSupports exact phrases with \"quotes\" and wildcard prefixes like run*.")
+            Text(viewModel.mode == .semantic
+                 ? "Search scenes, narrative arcs, and conceptual tropes.\nReturns ranked passages matching narrative themes across your entire library."
+                 : "Search full EPUB text across books in your library.\nSupports exact phrases with \"quotes\" and wildcard prefixes like run*.")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -392,6 +636,14 @@ struct FTSSearchResultsView: View {
         AppDelegate.shared?.openReaderWindow(
             book: book,
             jumpToSnippet: snippet,
+            searchQuery: viewModel.queryText
+        )
+    }
+
+    private func openBook(_ book: CalibreBook, passage: SemanticPassageMatch) {
+        AppDelegate.shared?.openReaderWindow(
+            book: book,
+            jumpToPassage: passage,
             searchQuery: viewModel.queryText
         )
     }

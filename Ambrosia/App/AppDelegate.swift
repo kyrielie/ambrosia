@@ -374,6 +374,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func openReaderWindow(
         book: CalibreBook,
         jumpToSnippet: FTSOccurrenceSnippet? = nil,
+        jumpToPassage: SemanticPassageMatch? = nil,
         searchQuery: String? = nil
     ) {
         guard let pathStr = LibraryRegistry.shared.activePath else {
@@ -400,7 +401,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case .inbuilt:
             // ReaderWindowController.open is the single source of truth for
             // deduplication (keyed by book.id) and window lifecycle.
-            ReaderWindowController.open(book: book, jumpToSnippet: jumpToSnippet, searchQuery: searchQuery)
+            ReaderWindowController.open(
+                book: book,
+                jumpToSnippet: jumpToSnippet,
+                jumpToPassage: jumpToPassage,
+                searchQuery: searchQuery
+            )
         case .systemDefault:
             NSWorkspace.shared.open(epubURL)
         case .customApp:
@@ -424,11 +430,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func openReaderWindow(
         target: ReadingTarget,
         jumpToSnippet: FTSOccurrenceSnippet? = nil,
+        jumpToPassage: SemanticPassageMatch? = nil,
         searchQuery: String? = nil
     ) {
         switch target {
         case .singleBook(let book):
-            openReaderWindow(book: book, jumpToSnippet: jumpToSnippet, searchQuery: searchQuery)
+            openReaderWindow(book: book, jumpToSnippet: jumpToSnippet, jumpToPassage: jumpToPassage, searchQuery: searchQuery)
         case .series(let series):
             guard let pathStr = LibraryRegistry.shared.activePath else {
                 showOpenError("No library open.")

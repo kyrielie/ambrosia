@@ -23,7 +23,9 @@ final class LibraryStorageCalculatorTests: XCTestCase {
             epubsSizeBytes: 0,
             calibreDBSizeBytes: 0,
             ftsDBSizeBytes: 0,
-            ambrosiaMetaDBSizeBytes: 0
+            ambrosiaMetaDBSizeBytes: 0,
+            semanticVectorsSizeBytes: 0,
+            passageDBSizeBytes: 0
         )
 
         let props = breakdown.proportions
@@ -31,6 +33,8 @@ final class LibraryStorageCalculatorTests: XCTestCase {
         XCTAssertEqual(props.calibre, 0)
         XCTAssertEqual(props.fts, 0)
         XCTAssertEqual(props.ambrosia, 0)
+        XCTAssertEqual(props.semantic, 0)
+        XCTAssertEqual(props.passages, 0)
         XCTAssertEqual(breakdown.totalSizeBytes, 0)
     }
 
@@ -38,16 +42,20 @@ final class LibraryStorageCalculatorTests: XCTestCase {
         let breakdown = LibraryStorageBreakdown(
             epubsSizeBytes: 500,
             calibreDBSizeBytes: 200,
-            ftsDBSizeBytes: 200,
-            ambrosiaMetaDBSizeBytes: 100
+            ftsDBSizeBytes: 100,
+            ambrosiaMetaDBSizeBytes: 100,
+            semanticVectorsSizeBytes: 50,
+            passageDBSizeBytes: 50
         )
 
         XCTAssertEqual(breakdown.totalSizeBytes, 1000)
         let props = breakdown.proportions
         XCTAssertEqual(props.epubs, 0.5, accuracy: 0.001)
         XCTAssertEqual(props.calibre, 0.2, accuracy: 0.001)
-        XCTAssertEqual(props.fts, 0.2, accuracy: 0.001)
+        XCTAssertEqual(props.fts, 0.1, accuracy: 0.001)
         XCTAssertEqual(props.ambrosia, 0.1, accuracy: 0.001)
+        XCTAssertEqual(props.semantic, 0.05, accuracy: 0.001)
+        XCTAssertEqual(props.passages, 0.05, accuracy: 0.001)
     }
 
     func testFormattedSizeStrings() {
@@ -55,7 +63,9 @@ final class LibraryStorageCalculatorTests: XCTestCase {
             epubsSizeBytes: 1024 * 1024 * 10, // 10 MB
             calibreDBSizeBytes: 1024 * 500, // 500 KB
             ftsDBSizeBytes: 0,
-            ambrosiaMetaDBSizeBytes: 2048
+            ambrosiaMetaDBSizeBytes: 2048,
+            semanticVectorsSizeBytes: 1024,
+            passageDBSizeBytes: 4096
         )
 
         XCTAssertFalse(breakdown.formattedTotalSize.isEmpty)
@@ -63,6 +73,8 @@ final class LibraryStorageCalculatorTests: XCTestCase {
         XCTAssertFalse(breakdown.formattedCalibreDBSize.isEmpty)
         XCTAssertFalse(breakdown.formattedFTSDBSize.isEmpty)
         XCTAssertFalse(breakdown.formattedAmbrosiaMetaDBSize.isEmpty)
+        XCTAssertFalse(breakdown.formattedSemanticVectorsSize.isEmpty)
+        XCTAssertFalse(breakdown.formattedPassageDBSize.isEmpty)
     }
 
     func testCalculateOnSyntheticFolderWithEPUBFiles() async throws {
@@ -119,13 +131,17 @@ final class LibraryStorageCalculatorTests: XCTestCase {
             epubsSizeBytes: 100,
             calibreDBSizeBytes: 20,
             ftsDBSizeBytes: 30,
-            ambrosiaMetaDBSizeBytes: 10
+            ambrosiaMetaDBSizeBytes: 10,
+            semanticVectorsSizeBytes: 5,
+            passageDBSizeBytes: 15
         )
         let b2 = LibraryStorageBreakdown(
             epubsSizeBytes: 200,
             calibreDBSizeBytes: 40,
             ftsDBSizeBytes: 60,
-            ambrosiaMetaDBSizeBytes: 20
+            ambrosiaMetaDBSizeBytes: 20,
+            semanticVectorsSizeBytes: 10,
+            passageDBSizeBytes: 25
         )
 
         let combined = LibraryStorageBreakdown.combining([b1, b2])
@@ -134,6 +150,22 @@ final class LibraryStorageCalculatorTests: XCTestCase {
         XCTAssertEqual(combined.calibreDBSizeBytes, 60)
         XCTAssertEqual(combined.ftsDBSizeBytes, 90)
         XCTAssertEqual(combined.ambrosiaMetaDBSizeBytes, 30)
-        XCTAssertEqual(combined.totalSizeBytes, 480)
+        XCTAssertEqual(combined.semanticVectorsSizeBytes, 15)
+        XCTAssertEqual(combined.passageDBSizeBytes, 40)
+        XCTAssertEqual(combined.totalSizeBytes, 535)
+    }
+
+    func testCalculateWithPassageDatabase() async throws {
+        let libURL = tempDir.appendingPathComponent("MockLibraryWithPassages")
+        try FileManager.default.createDirectory(at: libURL, withIntermediateDirectories: true)
+
+        let passageDB = libURL.appendingPathComponent("ambrosia_semantic_passages.db")
+        try Data(repeating: 0x55, count: 8192).write(to: passageDB)
+        let walFile = libURL.appendingPathComponent("ambrosia_semantic_passages.db-wal")
+        try Data(repeating: 0x55, count: 2048).write(to: walFile)
+
+        let breakdown = await LibraryStorageCalculator.calculate(for: libURL)
+        XCTAssertEqual(breakdown.passageDBSizeBytes, 10240)
+        XCTAssertEqual(breakdown.totalSizeBytes, 10240)
     }
 }

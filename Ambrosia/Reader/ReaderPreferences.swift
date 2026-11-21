@@ -635,7 +635,7 @@ final class ReaderPreferences: ObservableObject {
         static let enableFullTextSearch        = true
         static let enableSemanticSearch        = true
         static let defaultSearchSortToRelevance = true
-        static let enableAdvancedEPUBExport    = true
+        static let enableAdvancedEPUBExport    = false
         static let libraryColorMode            = LibraryColorMode.systemDefault
         static let libraryAppearanceMode       = LibraryAppearanceMode.system
         static let libraryLightBackgroundColor = "#FFFFFF"

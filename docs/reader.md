@@ -93,6 +93,10 @@ Known limitation (paginated mode): `paginatedColumnCSS` bakes `paddingH`, `paddi
 ---
 
 
+**Passage & FTS Snippet Navigation:** `ReaderViewController` supports deep-linking into specific book text locations:
+- `jumpToSnippet(_:query:)`: Jumps to a lexical full-text search match, scrolling to the approximate percentage in the book and triggering `window.find()` or `window.ambrosiaNavigateToOffset`.
+- `jumpToPassage(_:)`: Jumps to a semantic passage match (`SemanticPassageMatch`). In paginated mode, switches to the exact `spineIndex` if needed, navigates to the exact UTF-16 `charOffset` via `window.ambrosiaNavigateToOffset`, and triggers `window.ambrosiaGlowPassage(offset, length, anchorPhrase)`. This inserts a transient glowing accent highlight that fades out cleanly after 3.5 seconds without mutating persistent DOM state. In continuous scroll mode, scrolls directly to `charOffset` and highlights the passage.
+
 ---
 
 ## Key invariants

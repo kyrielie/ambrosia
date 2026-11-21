@@ -26,17 +26,20 @@ It owns:
 
 - `library: CalibreLibrary?`
 - `ftsLibrary: CalibreFTSLibrary?`
+- `passageDB: PassageDatabase?`
 - `metaDB: AmbrosiaMetaDB?`
 - `collectionStore: CollectionStore?`
 - `extractionProgress`
 - active path, total count, collection membership caches, filter result LRU cache, FTS LRU cache
+- `hasPassageIndex` and `reloadPassageDB()` for managing connection state to `ambrosia_semantic_passages.db`
+- `hasSemanticIndex` verifying on-disk presence of `semantic_vectors.bin` for active library before enabling semantic suggestions
 
 On library open it:
 
 1. Clears `snapshotsReady` (before `library` is assigned, because `isOpen` turning true is what schedules the list's first load).
 2. Opens `metadata.db` read-only.
 3. Opens/creates per-library `ambrosia_meta.db`.
-4. Opens optional `full-text-search.db` (`CalibreFTSLibrary`, native or `likeFallback` mode; see `calibre-fts.md`).
+4. Opens optional `full-text-search.db` (`CalibreFTSLibrary`, native or `likeFallback` mode; see `calibre-fts.md`) and optional `ambrosia_semantic_passages.db` (`PassageDatabase`, 2GB `mmap_size`, Accelerate SIMD vector scoring).
 5. Registers the library path and index record, loads search history, repoints feed prefs and the feed server.
 6. **Hydrates snapshots** (`hydrateSnapshots`): bulk-loads the five AO3 maps from `AmbrosiaMetaDB` and pushes them into `CalibreLibrary` (which recomputes the duplicate-loser set from them), then runs `refreshCollectionSnapshots()` to load the persisted Series or Merged, skipped, anthology, publisher, liked and read-later sets. Order matters because duplicate losers derive from the AO3 caches.
 7. Sets `snapshotsReady = true` and posts `.librarySnapshotsDidBecomeReady`. `LibraryRootView` and `EmailLibraryViewController` hold their first `loadPage` until then, then seed their local sets from the session and load once.

@@ -874,8 +874,7 @@ struct EmailToolbarActionCarrier: View {
                             libraryRoot: libraryRoot,
                             ao3Map: ao3Map,
                             groupBySeries: toolbarState.groupBySeries,
-                            seriesEntries: seriesEntriesByBook,
-                            modernizeEPUB3: ReaderPreferences.shared.enableAdvancedEPUBExport
+                            seriesEntries: seriesEntriesByBook
                         )
                     }
                     toolbarState.triggerEPUBExport = false

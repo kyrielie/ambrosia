@@ -1,11 +1,9 @@
 # EPUB Export & Modernization
 
 ## Overview
-Ambrosia provides two export paths for books in a Calibre library:
-1. **Direct Copy (Archival Default)**: Performs a 1:1 byte-faithful copy of the source EPUB file directly from the Calibre library, preserving original assets and structure.
-2. **Modernized EPUB 3 Export (Gated via Preference)**: Normalizes legacy EPUB 2 files into modern EPUB 3.0 packages with rich metadata, semantic structural markup, and polished e-reader stylesheets, while keeping the author's written content strictly unaltered.
-
-Governed by `ReaderPreferences.shared.enableAdvancedEPUBExport`.
+Ambrosia decouples library file export from post-processing normalization:
+1. **In-App Direct Copy (Archival Export)**: Performs a 1:1 byte-faithful copy of the source EPUB file directly from the Calibre library, preserving original assets and structure with high-speed parallel copying, series folder grouping, and collision/overwrite handling.
+2. **Decoupled EPUB 3 Modernizer (`scripts/modernize_epubs.py`)**: A standalone CLI tool that processes an exported folder of EPUBs, normalizing legacy EPUB 2 files into modern EPUB 3.0 packages with rich metadata, semantic structural markup, and polished e-reader stylesheets, while keeping the author's written content strictly unaltered.
 
 ---
 
@@ -60,6 +58,8 @@ Because OPF metadata cannot reliably store multiple series in Calibre:
    - For standalone works (no series), `seriesIndexPrefix` is `nil`, ensuring standalone fics are placed directly in the destination folder without any spurious `00 - ` prefix.
 3. **Context-Sensitive OPF Series**:
    - In the generated `package.opf`, Ambrosia sets the primary `<meta name="calibre:series">` and EPUB 3 `<meta property="belongs-to-collection" id="series_01">` to match the active series directory the file is being exported into.
+4. **Parallelized Bounded Export Pipeline**:
+   - Bulk exports execute via `TaskGroup` bounded to `activeProcessorCount` with thread-safe unique destination resolution (`DestinationPlanner`), reducing export time by 4x–8x while throttling main-thread UI progress updates to every 25 files to eliminate runloop saturation.
 
 ---
 

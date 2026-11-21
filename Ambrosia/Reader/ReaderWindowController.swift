@@ -64,21 +64,25 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
     static func open(
         book: CalibreBook,
         jumpToSnippet: FTSOccurrenceSnippet? = nil,
+        jumpToPassage: SemanticPassageMatch? = nil,
         searchQuery: String? = nil
     ) {
-        open(target: .singleBook(book), jumpToSnippet: jumpToSnippet, searchQuery: searchQuery)
+        open(target: .singleBook(book), jumpToSnippet: jumpToSnippet, jumpToPassage: jumpToPassage, searchQuery: searchQuery)
     }
 
     @MainActor
     static func open(
         target: ReadingTarget,
         jumpToSnippet: FTSOccurrenceSnippet? = nil,
+        jumpToPassage: SemanticPassageMatch? = nil,
         searchQuery: String? = nil
     ) {
         if let existing = openWindows[target.windowKey] {
             existing.showWindow(nil)
             existing.window?.makeKeyAndOrderFront(nil)
-            if let snippet = jumpToSnippet {
+            if let passage = jumpToPassage {
+                existing.readerViewController?.jumpToPassage(passage)
+            } else if let snippet = jumpToSnippet {
                 existing.readerViewController?.jumpToSnippet(snippet, query: searchQuery)
             } else if let query = searchQuery, !query.isEmpty {
                 existing.readerViewController?.showLocalFind()
@@ -89,6 +93,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         let wc = ReaderWindowController(
             target: target,
             initialJumpSnippet: jumpToSnippet,
+            initialJumpPassage: jumpToPassage,
             initialSearchQuery: searchQuery
         )
         openWindows[target.windowKey] = wc
@@ -98,6 +103,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
     private init(
         target: ReadingTarget,
         initialJumpSnippet: FTSOccurrenceSnippet? = nil,
+        initialJumpPassage: SemanticPassageMatch? = nil,
         initialSearchQuery: String? = nil
     ) {
         self.target = target
@@ -122,6 +128,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         let vc = ReaderViewController(
             target: target,
             initialJumpSnippet: initialJumpSnippet,
+            initialJumpPassage: initialJumpPassage,
             initialSearchQuery: initialSearchQuery
         )
         self.readerViewController = vc

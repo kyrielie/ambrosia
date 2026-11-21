@@ -42,6 +42,9 @@ final class LibrarySession {
     /// Optional full-text-search connection. Nil if full-text-search.db doesn't exist.
     private(set) var ftsLibrary: CalibreFTSLibrary?
 
+    /// Optional semantic passage search database connection. Nil if ambrosia_semantic_passages.db doesn't exist.
+    private(set) var passageDB: PassageDatabase?
+
     /// On-device semantic search engine using Apple NaturalLanguage embeddings and SIMD.
     private(set) var semanticEngine: SemanticSearchEngine?
 
@@ -373,6 +376,30 @@ final class LibrarySession {
     private var fulltextSearcher: (any FulltextSearching)? { fulltextSearcherOverride ?? ftsLibrary }
     var hasFulltextIndex: Bool { fulltextSearcher != nil }
 
+    /// Whether this library has an active local semantic vector database.
+    var hasSemanticIndex: Bool {
+        guard let path = activePath else { return false }
+        let binPath = URL(fileURLWithPath: path).appendingPathComponent("semantic_vectors.bin").path
+        return FileManager.default.fileExists(atPath: binPath)
+    }
+
+    /// Whether this library has an active semantic passage database.
+    var hasPassageIndex: Bool { passageDB != nil }
+
+    /// Re-evaluates presence of `ambrosia_semantic_passages.db` and reconnects `passageDB`.
+    func reloadPassageDB() {
+        guard let url = activeURL else {
+            passageDB = nil
+            return
+        }
+        let passageURL = url.appendingPathComponent("ambrosia_semantic_passages.db")
+        if FileManager.default.fileExists(atPath: passageURL.path) {
+            passageDB = PassageDatabase(databaseURL: passageURL)
+        } else {
+            passageDB = nil
+        }
+    }
+
     // §7: True LRU cache for FilterResult (limit 8).
     var filterResultCache = LRUCache<FilterResultCacheKey, FilterResult>(limit: 8)
     /// Global per-rule tag match sets shared across `matchingIDs` calls (plan PR J).
@@ -525,6 +552,7 @@ final class LibrarySession {
             activePath = url.path
             totalCount = await newLibrary.bookCount()
             ftsLibrary = CalibreFTSLibrary(libraryURL: url)
+            passageDB = PassageDatabase(databaseURL: url.appendingPathComponent("ambrosia_semantic_passages.db"))
             let newSemanticEngine = SemanticSearchEngine(storageURL: url)
             semanticEngine = newSemanticEngine
             Task {
@@ -683,6 +711,7 @@ final class LibrarySession {
         missingLibraryName = nil
         library    = nil
         ftsLibrary = nil
+        passageDB  = nil
         semanticEngine = nil
         metaDB = nil
         collectionStore = nil
@@ -1081,6 +1110,7 @@ final class LibrarySession {
         extractionTask = nil
         library = nil
         ftsLibrary = nil
+        passageDB = nil
         metaDB = nil
         snapshotsReady = false
         NotificationCenter.default.post(name: .libraryVolumeDidDisconnect, object: nil)

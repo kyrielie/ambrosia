@@ -8,6 +8,7 @@ public struct LibraryStorageBreakdown: Sendable, Equatable {
     public let ftsDBSizeBytes: Int64
     public let ambrosiaMetaDBSizeBytes: Int64
     public let semanticVectorsSizeBytes: Int64
+    public let passageDBSizeBytes: Int64
     public let totalSizeBytes: Int64
 
     public init(
@@ -15,14 +16,17 @@ public struct LibraryStorageBreakdown: Sendable, Equatable {
         calibreDBSizeBytes: Int64,
         ftsDBSizeBytes: Int64,
         ambrosiaMetaDBSizeBytes: Int64,
-        semanticVectorsSizeBytes: Int64 = 0
+        semanticVectorsSizeBytes: Int64 = 0,
+        passageDBSizeBytes: Int64 = 0
     ) {
         self.epubsSizeBytes = epubsSizeBytes
         self.calibreDBSizeBytes = calibreDBSizeBytes
         self.ftsDBSizeBytes = ftsDBSizeBytes
         self.ambrosiaMetaDBSizeBytes = ambrosiaMetaDBSizeBytes
         self.semanticVectorsSizeBytes = semanticVectorsSizeBytes
-        self.totalSizeBytes = epubsSizeBytes + calibreDBSizeBytes + ftsDBSizeBytes + ambrosiaMetaDBSizeBytes + semanticVectorsSizeBytes
+        self.passageDBSizeBytes = passageDBSizeBytes
+        self.totalSizeBytes = epubsSizeBytes + calibreDBSizeBytes + ftsDBSizeBytes
+            + ambrosiaMetaDBSizeBytes + semanticVectorsSizeBytes + passageDBSizeBytes
     }
 
     private static let byteFormatter: ByteCountFormatter = {
@@ -39,6 +43,7 @@ public struct LibraryStorageBreakdown: Sendable, Equatable {
     public var formattedFTSDBSize: String { Self.byteFormatter.string(fromByteCount: ftsDBSizeBytes) }
     public var formattedAmbrosiaMetaDBSize: String { Self.byteFormatter.string(fromByteCount: ambrosiaMetaDBSizeBytes) }
     public var formattedSemanticVectorsSize: String { Self.byteFormatter.string(fromByteCount: semanticVectorsSizeBytes) }
+    public var formattedPassageDBSize: String { Self.byteFormatter.string(fromByteCount: passageDBSizeBytes) }
 
     public static func combining(_ breakdowns: [LibraryStorageBreakdown]) -> LibraryStorageBreakdown {
         LibraryStorageBreakdown(
@@ -46,18 +51,28 @@ public struct LibraryStorageBreakdown: Sendable, Equatable {
             calibreDBSizeBytes: breakdowns.reduce(0) { $0 + $1.calibreDBSizeBytes },
             ftsDBSizeBytes: breakdowns.reduce(0) { $0 + $1.ftsDBSizeBytes },
             ambrosiaMetaDBSizeBytes: breakdowns.reduce(0) { $0 + $1.ambrosiaMetaDBSizeBytes },
-            semanticVectorsSizeBytes: breakdowns.reduce(0) { $0 + $1.semanticVectorsSizeBytes }
+            semanticVectorsSizeBytes: breakdowns.reduce(0) { $0 + $1.semanticVectorsSizeBytes },
+            passageDBSizeBytes: breakdowns.reduce(0) { $0 + $1.passageDBSizeBytes }
         )
     }
 
-    public var proportions: (epubs: Double, fts: Double, calibre: Double, ambrosia: Double) {
-        guard totalSizeBytes > 0 else { return (0, 0, 0, 0) }
+    public var proportions: (
+        epubs: Double,
+        fts: Double,
+        calibre: Double,
+        ambrosia: Double,
+        semantic: Double,
+        passages: Double
+    ) {
+        guard totalSizeBytes > 0 else { return (0, 0, 0, 0, 0, 0) }
         let total = Double(totalSizeBytes)
         return (
             epubs: Double(epubsSizeBytes) / total,
             fts: Double(ftsDBSizeBytes) / total,
             calibre: Double(calibreDBSizeBytes) / total,
-            ambrosia: Double(ambrosiaMetaDBSizeBytes) / total
+            ambrosia: Double(ambrosiaMetaDBSizeBytes) / total,
+            semantic: Double(semanticVectorsSizeBytes) / total,
+            passages: Double(passageDBSizeBytes) / total
         )
     }
 }
@@ -82,13 +97,17 @@ public enum LibraryStorageCalculator {
         }
 
         let semanticVectorsSize = calculateSemanticVectorsSize(libraryURL: libraryURL)
+        let passageDBSize = calculateDatabaseSize(
+            baseFileURL: libraryURL.appendingPathComponent("ambrosia_semantic_passages.db")
+        )
 
         return LibraryStorageBreakdown(
             epubsSizeBytes: epubsSize,
             calibreDBSizeBytes: calibreDBSize,
             ftsDBSizeBytes: ftsDBSize,
             ambrosiaMetaDBSizeBytes: ambrosiaDBSize,
-            semanticVectorsSizeBytes: semanticVectorsSize
+            semanticVectorsSizeBytes: semanticVectorsSize,
+            passageDBSizeBytes: passageDBSize
         )
     }
 

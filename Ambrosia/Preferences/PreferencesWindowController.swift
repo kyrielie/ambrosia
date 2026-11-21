@@ -656,14 +656,20 @@ private struct LibraryTab: View {
             }
 
             Section {
-                Toggle("Enable Advanced EPUB 3 Export", isOn: $prefs.enableAdvancedEPUBExport)
+                HStack {
+                    Text("Export Mode")
+                    Spacer()
+                    Text("Direct Copy (Archival)")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.callout)
             } header: {
                 Label("EPUB Export", systemImage: "square.and.arrow.up").font(.headline)
             } footer: {
                 Text(
-                    "Restructures raw EPUBs into clean, standards-compliant EPUB 3 containers with " +
-                    "semantic HTML5 markup, normalized styles, and a rich AO3 metadata title page. " +
-                    "When disabled, exports original EPUB files unchanged."
+                    "Directly copies original EPUBs 1:1 preserving series organization and metadata. " +
+                    "To normalize exported EPUBs into modern EPUB 3 packages, use the decoupled " +
+                    "scripts/modernize_epubs.py command line tool."
                 )
                 .font(.caption).foregroundStyle(.secondary)
             }
@@ -944,6 +950,10 @@ private struct DataTab: View {
     @State private var semanticProgressTotal: Int = 0
     @State private var semanticIndexedCount: Int = 0
     @State private var semanticStorageBytes: Int64 = 0
+    @State private var passageDBStatus: PassageDatabaseStatus?
+    @State private var isQueryModelAvailable: Bool = false
+    @State private var passageActionMessage: String?
+    @State private var showClearPassageConfirmation: Bool = false
     @State private var libraryFootprints: [String: LibraryStorageBreakdown] = [:]
     @State private var showDiagnosticsSheet: Bool = false
     @State private var storageScope: StorageScope = .active
@@ -1336,12 +1346,132 @@ private struct DataTab: View {
             }
 
             Section {
-                Toggle("Enable Advanced EPUB 3 Export", isOn: $prefs.enableAdvancedEPUBExport)
+                if session.isOpen {
+                    HStack {
+                        Text("Passage Database")
+                        Spacer()
+                        if let status = passageDBStatus, status.isLoaded {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                let sizeStr = ByteCountFormatter.string(fromByteCount: status.storageBytes, countStyle: .file)
+                                Text("Available · \(status.chunkCount.formatted()) scenes (\(sizeStr))")
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            HStack(spacing: 4) {
+                                Image(systemName: "exclamationmark.circle.fill")
+                                    .foregroundStyle(.orange)
+                                Text("Not Found")
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                    .font(.callout)
 
+                    if let status = passageDBStatus, status.isLoaded {
+                        HStack {
+                            Text("Indexed Scope")
+                            Spacer()
+                            Text("\(status.bookCount.formatted()) of \(session.totalCount.formatted()) works")
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.callout)
+
+                        HStack {
+                            Text("Embedding Model")
+                            Spacer()
+                            let modelLabel = status.modelID.isEmpty ? "Qwen/Qwen3-Embedding-0.6B" : status.modelID
+                            Text("\(modelLabel) (\(status.dimension)-dim FP16)")
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.callout)
+                    }
+
+                    HStack {
+                        Text("CoreML Query Embedder")
+                        Spacer()
+                        if isQueryModelAvailable {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                Text("Ready (Neural Engine / Metal)")
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            HStack(spacing: 4) {
+                                Image(systemName: "exclamationmark.circle.fill")
+                                    .foregroundStyle(.orange)
+                                Text("Model Not Found")
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                    .font(.callout)
+
+                    HStack(spacing: 8) {
+                        if let status = passageDBStatus, status.isLoaded {
+                            Button("Reveal in Finder") {
+                                revealPassageDBInFinder()
+                            }
+                            .controlSize(.small)
+
+                            Button("Clear Database…") {
+                                showClearPassageConfirmation = true
+                            }
+                            .controlSize(.small)
+                            .disabled(DatabaseMaintenanceCoordinator.shared.isMaintenanceInProgress)
+                        } else {
+                            Button("Import Database…") {
+                                importPassageDatabase()
+                            }
+                            .controlSize(.small)
+                            .disabled(DatabaseMaintenanceCoordinator.shared.isMaintenanceInProgress)
+
+                            Button("Copy CLI Command") {
+                                copyIngestionCLICommand()
+                            }
+                            .controlSize(.small)
+                        }
+
+                        Button("Refresh") {
+                            Task {
+                                session.reloadPassageDB()
+                                await reloadPassageStatus()
+                                await reloadStorageBreakdown()
+                            }
+                        }
+                        .controlSize(.small)
+
+                        Spacer()
+
+                        if let passageActionMessage {
+                            Text(passageActionMessage)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.top, 2)
+                } else {
+                    Text("Open a library to view or manage its semantic passage database.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Label("Full-Text Semantic Search (Passages)", systemImage: "sparkle.magnifyingglass").font(.headline)
+            } footer: {
+                Text(
+                    "Stores packed Float16 passage vectors and chapter offset anchors in ambrosia_semantic_passages.db for fine-grained scene search. " +
+                    "Run scripts/ambrosia_embed_cli.py or package the library with scripts/pack_embed_task.sh to generate the database on another machine."
+                )
+                .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
                 HStack {
                     Text("Export Format")
                     Spacer()
-                    Text(prefs.enableAdvancedEPUBExport ? "Modern EPUB 3 (otwarchive)" : "Standard Copy (EPUB 2)")
+                    Text("Direct Copy (Archival EPUB)")
                         .foregroundStyle(.secondary)
                 }
                 .font(.callout)
@@ -1354,9 +1484,9 @@ private struct DataTab: View {
                 Label("EPUB Export", systemImage: "square.and.arrow.up").font(.headline)
             } footer: {
                 Text(
-                    "Advanced EPUB 3 export restructures raw EPUBs into clean, standards-compliant EPUB 3 containers " +
-                    "conforming to the epub-otwarchive specification with clean HTML5 markup, semantic tags, and a " +
-                    "rich metadata page. When disabled, original EPUB files are copied directly without modification."
+                    "Ambrosia exports original EPUB files directly 1:1 preserving series organization and metadata. " +
+                    "To normalize and modernize an exported folder into modern EPUB 3 containers conforming to " +
+                    "the epub-otwarchive specification, run scripts/modernize_epubs.py from terminal."
                 )
                 .font(.caption).foregroundStyle(.secondary)
             }
@@ -1373,6 +1503,7 @@ private struct DataTab: View {
             Task { await loadAvailableColumns() }
             Task { await reloadAO3ExtractionStatus() }
             Task { await reloadSemanticStatus() }
+            Task { await reloadPassageStatus() }
             Task { await reloadStorageBreakdown() }
             scheduleObservingExtraction()
         }
@@ -1385,11 +1516,24 @@ private struct DataTab: View {
                 await loadAvailableColumns()
                 await reloadAO3ExtractionStatus()
                 await reloadSemanticStatus()
+                await reloadPassageStatus()
                 await reloadStorageBreakdown()
             }
         }
         .sheet(isPresented: $showDiagnosticsSheet) {
             AO3ExtractionDiagnosticsSheet(session: session)
+        }
+        .confirmationDialog(
+            "Delete Semantic Passage Database?",
+            isPresented: $showClearPassageConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Database", role: .destructive) {
+                clearPassageDatabase()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This will delete ambrosia_semantic_passages.db and all computed passage vectors for this library.")
         }
     }
 
@@ -1461,6 +1605,16 @@ private struct DataTab: View {
                             .fill(Color.gray)
                             .frame(width: max(totalWidth * props.ambrosia, 4))
                     }
+                    if props.semantic > 0 {
+                        Rectangle()
+                            .fill(Color.indigo)
+                            .frame(width: max(totalWidth * props.semantic, 4))
+                    }
+                    if props.passages > 0 {
+                        Rectangle()
+                            .fill(Color.teal)
+                            .frame(width: max(totalWidth * props.passages, 4))
+                    }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 4))
             }
@@ -1498,6 +1652,16 @@ private struct DataTab: View {
                     size: breakdown.formattedSemanticVectorsSize,
                     color: .indigo,
                     icon: "sparkles"
+                )
+            }
+            if breakdown.passageDBSizeBytes > 0 {
+                storageRow(
+                    label: scope == .active
+                        ? "Semantic Passage Database (ambrosia_semantic_passages.db)"
+                        : "Semantic Passage Databases",
+                    size: breakdown.formattedPassageDBSize,
+                    color: .teal,
+                    icon: "text.quote"
                 )
             }
 
@@ -1544,6 +1708,15 @@ private struct DataTab: View {
                     .controlSize(.small)
                     .disabled(!session.isOpen || DatabaseMaintenanceCoordinator.shared.isMaintenanceInProgress)
                     .help("Deletes full-text-search.db to reclaim disk space.")
+
+                    if breakdown.passageDBSizeBytes > 0 {
+                        Button("Clear Passage DB") {
+                            showClearPassageConfirmation = true
+                        }
+                        .controlSize(.small)
+                        .disabled(!session.isOpen || DatabaseMaintenanceCoordinator.shared.isMaintenanceInProgress)
+                        .help("Deletes ambrosia_semantic_passages.db to reclaim disk space.")
+                    }
 
                     Button("Manage Duplicate Works…") {
                         AppDelegate.shared?.libraryWindowController?.toolbarStateForCommands?.showDuplicateManager = true
@@ -1629,6 +1802,7 @@ private struct DataTab: View {
                 let beforeBreakdown = await LibraryStorageCalculator.calculate(libraryURL: url)
                 _ = try? await Task.detached(priority: .userInitiated) {
                     try CalibreFTSWriter.compactAndVacuum(libraryURL: url)
+                    try PassageDatabase.compactAndVacuum(libraryURL: url)
                 }.value
                 if let metaDB = session.metaDB {
                     try? await metaDB.vacuumAndCheckpoint()
@@ -2029,6 +2203,87 @@ private struct DataTab: View {
             await reloadStorageBreakdown()
             semanticIndexMessage = "Semantic index cleared."
         }
+    }
+
+    private func reloadPassageStatus() async {
+        guard let db = session.passageDB else {
+            await MainActor.run {
+                self.passageDBStatus = nil
+            }
+            let modelAvail = await PassageQueryEmbedder.shared.isModelAvailable
+            await MainActor.run {
+                self.isQueryModelAvailable = modelAvail
+            }
+            return
+        }
+        let status = await db.status()
+        let modelAvail = await PassageQueryEmbedder.shared.isModelAvailable
+        await MainActor.run {
+            self.passageDBStatus = status
+            self.isQueryModelAvailable = modelAvail
+        }
+    }
+
+    private func revealPassageDBInFinder() {
+        guard let url = session.activeURL else { return }
+        let dbURL = url.appendingPathComponent("ambrosia_semantic_passages.db")
+        if FileManager.default.fileExists(atPath: dbURL.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([dbURL])
+        } else {
+            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: url.path)
+        }
+    }
+
+    private func importPassageDatabase() {
+        guard let targetDir = session.activeURL else { return }
+        let panel = NSOpenPanel()
+        panel.title = "Select ambrosia_semantic_passages.db"
+        panel.prompt = "Import Database"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [UTType(filenameExtension: "db") ?? .data]
+        if panel.runModal() == .OK, let sourceURL = panel.url {
+            let destURL = targetDir.appendingPathComponent("ambrosia_semantic_passages.db")
+            do {
+                if FileManager.default.fileExists(atPath: destURL.path) {
+                    try FileManager.default.removeItem(at: destURL)
+                }
+                try FileManager.default.copyItem(at: sourceURL, to: destURL)
+                passageActionMessage = "Successfully imported semantic passage database."
+                session.reloadPassageDB()
+                Task {
+                    await reloadPassageStatus()
+                    await reloadStorageBreakdown()
+                }
+            } catch {
+                passageActionMessage = "Failed to import database: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func clearPassageDatabase() {
+        guard let url = session.activeURL else { return }
+        let dbFile = url.appendingPathComponent("ambrosia_semantic_passages.db")
+        let walFile = url.appendingPathComponent("ambrosia_semantic_passages.db-wal")
+        let shmFile = url.appendingPathComponent("ambrosia_semantic_passages.db-shm")
+        try? FileManager.default.removeItem(at: dbFile)
+        try? FileManager.default.removeItem(at: walFile)
+        try? FileManager.default.removeItem(at: shmFile)
+        passageActionMessage = "Semantic passage database deleted."
+        session.reloadPassageDB()
+        Task {
+            await reloadPassageStatus()
+            await reloadStorageBreakdown()
+        }
+    }
+
+    private func copyIngestionCLICommand() {
+        guard let url = session.activeURL else { return }
+        let cmd = "python3 scripts/ambrosia_embed_cli.py --library \"\(url.path)\" --model Qwen/Qwen3-Embedding-0.6B --batch-size 32"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(cmd, forType: .string)
+        passageActionMessage = "Copied CLI command to clipboard."
     }
 }
 

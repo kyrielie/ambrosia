@@ -1222,18 +1222,26 @@ actor CalibreLibrary {
         var conditions: [String] = []
         var args: [Binding?] = []
 
-        if let ids = restrictIDs, !ids.isEmpty {
-            conditions.append(SQLIDList.clause(column: "b.id"))
-            args.append(SQLIDList.binding(ids))
+        if let ids = restrictIDs {
+            if ids.isEmpty {
+                conditions.append("0 = 1")
+            } else {
+                conditions.append(SQLIDList.clause(column: "b.id"))
+                args.append(SQLIDList.binding(ids))
+            }
         }
         let (qClause, qArgs) = whereClause(for: query)
         if !qClause.isEmpty {
             conditions.append(qClause)
             args.append(contentsOf: qArgs)
         }
-        if let filter, let (fClause, fArgs) = sqlFilterClause(for: filter, tagExpansions: filterTagExpansions) {
-            conditions.append(fClause)
-            args.append(contentsOf: fArgs)
+        if let filter {
+            if let (fClause, fArgs) = sqlFilterClause(for: filter, tagExpansions: filterTagExpansions) {
+                conditions.append(fClause)
+                args.append(contentsOf: fArgs)
+            } else if filter.hasCompleteRules {
+                conditions.append("0 = 1")
+            }
         }
         let whereSQL = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
         // §perf: Only join `comments` when a filter rule references the comment field.
@@ -1430,9 +1438,13 @@ actor CalibreLibrary {
         var args: [Binding?] = []
 
         // Restrict to explicit ID set (FilterResult path)
-        if let ids = restrictIDs, !ids.isEmpty {
-            conditions.append(SQLIDList.clause(column: "b.id"))
-            args.append(SQLIDList.binding(ids))
+        if let ids = restrictIDs {
+            if ids.isEmpty {
+                conditions.append("0 = 1")
+            } else {
+                conditions.append(SQLIDList.clause(column: "b.id"))
+                args.append(SQLIDList.binding(ids))
+            }
         }
 
         let (qClause, qArgs) = whereClause(for: query)
@@ -1440,9 +1452,13 @@ actor CalibreLibrary {
             conditions.append(qClause)
             args.append(contentsOf: qArgs)
         }
-        if let filter, let (fClause, fArgs) = sqlFilterClause(for: filter, tagExpansions: filterTagExpansions) {
-            conditions.append(fClause)
-            args.append(contentsOf: fArgs)
+        if let filter {
+            if let (fClause, fArgs) = sqlFilterClause(for: filter, tagExpansions: filterTagExpansions) {
+                conditions.append(fClause)
+                args.append(contentsOf: fArgs)
+            } else if filter.hasCompleteRules {
+                conditions.append("0 = 1")
+            }
         }
 
         let whereSQL = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")

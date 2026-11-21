@@ -158,8 +158,10 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private func startObservingFTSAvailability() {
         withObservationTracking {
             _ = ReaderPreferences.shared.enableFullTextSearch
+            _ = ReaderPreferences.shared.enableSemanticSearch
             _ = session?.activePath
             _ = session?.hasFulltextIndex
+            _ = session?.hasSemanticIndex
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.updateFTSSearchToolbarItemVisibility()
@@ -758,7 +760,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         guard let library = session?.library else { closeSuggestionPanel(); return }
         let hasTrailingPrefixWarning = SearchQueryParser.parse(text).hasTrailingPrefixWarning
         let hasFulltext = shouldShowFTSToolbarItem
-        let hasSemantic = session?.semanticEngine != nil && ReaderPreferences.shared.enableSemanticSearch
+        let hasSemantic = ReaderPreferences.shared.enableSemanticSearch && (session?.hasSemanticIndex ?? false)
         Task { [weak self] in
             let sections = await computeSectionedSuggestions(
                 for: text,

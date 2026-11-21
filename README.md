@@ -161,11 +161,49 @@ In **Settings ▸ Data**, Ambrosia provides a complete breakdown of disk space c
 - **Calibre Metadata (`metadata.db`)**: Calibre's core database (read-only).
 - **Full-Text Search (`full-text-search.db`)**: Calibre's FTS5 search index. Because FTS stores uncompressed body text alongside dual token indexes (`books_fts` and `books_fts_stemmed`), this file can grow to 2–3× the size of compressed EPUBs.
 - **Ambrosia Metadata (`ambrosia_meta.db`)**: Ambrosia's local database storing extracted AO3 metadata, reading history, collections, and bookmarks (~3–5 MB per library).
+- **Semantic Passage Database (`ambrosia_semantic_passages.db`)**: Optional SQLite database storing packed FP16 vector embeddings and chapter offset anchors for fine-grained narrative scene search (~2–3 GB for 4M+ chunks).
 
-Ambrosia provides three database management tools directly in Settings:
-- **Compact & Vacuum**: Merges fragmented FTS5 B-tree index segments (`INSERT INTO books_fts(books_fts) VALUES('optimize')`), truncates SQLite write-ahead logs (WAL), and executes `VACUUM` across both `full-text-search.db` and `ambrosia_meta.db` to reclaim unused disk space without altering any data.
+Ambrosia provides database management tools directly in Settings:
+- **Compact & Vacuum**: Merges fragmented FTS5 B-tree index segments (`INSERT INTO books_fts(books_fts) VALUES('optimize')`), truncates SQLite write-ahead logs (WAL), and executes `VACUUM` across `full-text-search.db`, `ambrosia_meta.db`, and `ambrosia_semantic_passages.db` to reclaim unused disk space without altering any data.
 - **Index Unindexed Works**: Matches Calibre's indexing workflow by scanning for newly added EPUBs that lack body text in `full-text-search.db` and indexes them in the background.
-- **Clear Search Index**: Deletes `full-text-search.db` and its companion WAL/SHM files to instantly reclaim disk space (often several hundred megabytes to gigabytes for large libraries). This is completely safe and non-destructive: your EPUBs, reading progress, and metadata remain untouched. You can rebuild the search index at any time using "Index Unindexed Works" or Calibre.
+- **Clear Search Index / Clear Passage DB**: Deletes search databases and companion WAL/SHM files to instantly reclaim disk space (often several hundred megabytes to gigabytes for large libraries). This is completely safe and non-destructive: your EPUBs, reading progress, and metadata remain untouched.
+
+## Optional Downloads & Data Assets
+
+Ambrosia supports optional local data assets and machine learning models to unlock advanced semantic search and canonical AO3 tag expansion:
+
+### 1. On-Device CoreML Passage Query Model (`Qwen3-Embedding-0.6B`)
+Used for full-text semantic passage search (`⇧⌘F` ▸ **Semantic (Passages)**). The compiled model executes query embedding locally on the Apple Neural Engine (ANE) or Metal GPU in ~8–15 ms without sending text over the network.
+
+- **Destination**: `~/Library/Application Support/Ambrosia/Models/Qwen3-Embedding-0.6B.mlmodelc`
+- **Format**: Pre-compiled CoreML model bundle (`.mlmodelc`, Float16, 1024 dimensions, ~1.14 GB)
+- **Model Source**: [neuradex/Qwen3-Embedding-0.6B-CoreML-ANE on Hugging Face](https://huggingface.co/neuradex/Qwen3-Embedding-0.6B-CoreML-ANE)
+- **Direct Download**:
+  ```bash
+  mkdir -p "$HOME/Library/Application Support/Ambrosia/Models/Qwen3-Embedding-0.6B.mlmodelc/analytics"
+  mkdir -p "$HOME/Library/Application Support/Ambrosia/Models/Qwen3-Embedding-0.6B.mlmodelc/weights"
+  
+  BASE_URL="https://huggingface.co/neuradex/Qwen3-Embedding-0.6B-CoreML-ANE/resolve/main/compiled/b1_s128.mlmodelc"
+  curl -L "$BASE_URL/metadata.json" -o "$HOME/Library/Application Support/Ambrosia/Models/Qwen3-Embedding-0.6B.mlmodelc/metadata.json"
+  curl -L "$BASE_URL/coremldata.bin" -o "$HOME/Library/Application Support/Ambrosia/Models/Qwen3-Embedding-0.6B.mlmodelc/coremldata.bin"
+  curl -L "$BASE_URL/model.mil" -o "$HOME/Library/Application Support/Ambrosia/Models/Qwen3-Embedding-0.6B.mlmodelc/model.mil"
+  curl -L "$BASE_URL/analytics/coremldata.bin" -o "$HOME/Library/Application Support/Ambrosia/Models/Qwen3-Embedding-0.6B.mlmodelc/analytics/coremldata.bin"
+  curl -L "$BASE_URL/weights/weight.bin" -o "$HOME/Library/Application Support/Ambrosia/Models/Qwen3-Embedding-0.6B.mlmodelc/weights/weight.bin"
+  ```
+
+### 2. Canonical AO3 Tag Seed Database (`ao3_tags.db`) *(Scaffolded / Coming Soon)*
+Enables instant tag autocomplete, synonym expansion, and metatag mapping across ~1.7M canonical AO3 tags, synonyms, and parent/child hierarchies without scraping or duplicate database ingestion.
+
+- **Configuration**: Select database path in **Settings ▸ Data ▸ AO3 Tag Synonyms**
+- **Format**: Read-only SQLite database (`ao3_tags.db`)
+- **Download**: [Download `ao3_tags.db.gz` (Placeholder Asset)](https://github.com/kyrielie/ambrosia/releases/download/assets/ao3_tags.db.gz) *(Asset release pending; you can point Settings to any existing AO3 tag seed SQLite database)*
+
+### 3. External Passage Ingestion CLI (`ambrosia_embed_task`)
+For large Calibre libraries, passage embeddings can be generated externally on a dedicated GPU (e.g. NVIDIA CUDA):
+- Use `scripts/pack_embed_task.sh -o /path/to/destination /path/to/calibre/` to stream a zero-temp archive for another machine.
+- Run `./run_embed.sh` on the target machine, which automatically verifies CUDA, downloads the base embedding model (`Qwen/Qwen3-Embedding-0.6B`), and generates `ambrosia_semantic_passages.db`.
+- Copy or import `ambrosia_semantic_passages.db` into your Calibre library folder or use **Settings ▸ Data ▸ Import Database…**.
+- See the complete step-by-step walkthrough in the [External Semantic Passage Indexing Guide](docs/guides/external-semantic-indexing-walkthrough.md).
 
 ## Privacy
 

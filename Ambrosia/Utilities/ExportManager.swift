@@ -1,5 +1,8 @@
 import Foundation
 import AppKit
+import OSLog
+
+let exportLogger = Logger(subsystem: "com.ambrosia.app", category: "Export")
 
 // MARK: - §3b: Tag export options
 
@@ -299,7 +302,28 @@ struct ExportManager {
         var groupBySeries: Bool
         var seriesEntries: [Int: [SeriesCacheEntry]] = [:]
         var filenameIDSource: ExportFilenameIDSource = .ao3ThenCalibre
-        var modernizeEPUB3: Bool = ReaderPreferences.shared.enableAdvancedEPUBExport
+        var overwriteExisting: Bool = true
+    }
+
+    final class DestinationPlanner: @unchecked Sendable {
+        private let lock = NSLock()
+        private var reservedPaths = Set<String>()
+
+        func uniqueDestination(for filename: String, in directory: URL) -> URL {
+            lock.lock()
+            defer { lock.unlock() }
+            let ext  = (filename as NSString).pathExtension
+            let stem = (filename as NSString).deletingPathExtension
+            var candidate = directory.appendingPathComponent(filename)
+            var suffix = 2
+            while FileManager.default.fileExists(atPath: candidate.path) || reservedPaths.contains(candidate.path) {
+                let newName = ext.isEmpty ? "\(stem)-\(suffix)" : "\(stem)-\(suffix).\(ext)"
+                candidate = directory.appendingPathComponent(newName)
+                suffix += 1
+            }
+            reservedPaths.insert(candidate.path)
+            return candidate
+        }
     }
 
     static func exportEPUBs(
@@ -313,86 +337,120 @@ struct ExportManager {
         let groupBySeries = options.groupBySeries
         let seriesEntries = options.seriesEntries
         let filenameIDSource = options.filenameIDSource
+        let planner = DestinationPlanner()
+
         return await Task.detached(priority: .userInitiated) {
+            let startTime = CFAbsoluteTimeGetCurrent()
             var copied = 0
             var skipped: [String] = []
+            let totalBooks = books.count
+            guard totalBooks > 0 else { return (0, []) }
 
-            for book in books {
-                guard let source = book.epubURL(libraryRoot: libraryRoot) else {
-                    skipped.append(book.displayTitle); progress(copied + skipped.count); continue
+            let maxConcurrent = min(4, max(2, ProcessInfo.processInfo.activeProcessorCount / 2))
+            let destPath = destination.path
+            let logMsg = "Starting direct EPUB export: \(totalBooks) books to '\(destPath)' " +
+                "(overwrite: \(options.overwriteExisting), concurrency: \(maxConcurrent))"
+            exportLogger.info("\(logMsg)")
+
+            if let attributes = try? FileManager.default.attributesOfFileSystem(forPath: destination.path),
+               let freeBytes = attributes[.systemFreeSize] as? Int64 {
+                let freeMB = freeBytes / (1024 * 1024)
+                exportLogger.info("Destination volume free space: \(freeMB) MB")
+                if freeMB < 500 {
+                    exportLogger.warning("Low disk space warning: destination volume has only \(freeMB) MB free")
                 }
-                let targetFolders: [(url: URL, seriesIndex: Int?, seriesName: String?)]
-                if groupBySeries, let entries = seriesEntries[book.id], !entries.isEmpty {
-                    // A book that's a member of more than one series (e.g. #1 of A and
-                    // #3 of B) gets copied into every one of its series' folders, not
-                    // just the first. Folder name includes the series id (AO3 id, else
-                    // Calibre series id) so two distinct series sharing a display name
-                    // don't collide into the same export folder (bug #3). Dedup on the
-                    // resulting folder name regardless, in case two entries somehow
-                    // still resolve to the same one.
-                    var seenFolderNames = Set<String>()
-                    targetFolders = entries.compactMap { entry -> (URL, Int?, String?)? in
-                        let sanitizedName = CalibreBook.sanitizedForFilename(entry.seriesName)
-                        let idSuffix = entry.ao3SeriesID ?? entry.calibreSeriesID.map(String.init) ?? ""
-                        let folderName = idSuffix.isEmpty ? sanitizedName : "\(sanitizedName)-\(idSuffix)"
-                        guard seenFolderNames.insert(folderName).inserted else { return nil }
-                        return (destination.appendingPathComponent(folderName), entry.seriesIndex, entry.seriesName)
+            }
+
+            func processSingleBook(_ book: CalibreBook) -> (copied: Bool, title: String) {
+                autoreleasepool {
+                    exportLogger.info("Starting export for [\(book.id)] '\(book.displayTitle)'")
+                    guard let source = book.epubURL(libraryRoot: libraryRoot) else {
+                        exportLogger.warning("Book ID \(book.id) ('\(book.displayTitle)') has no EPUB file at library root")
+                        return (false, book.displayTitle)
                     }
-                } else {
-                    // Standalone work or ungrouped export: save directly in destination
-                    // with no series index prefix. seriesIndex is nil so exportFilename
-                    // does not prepend an erroneous "00 - " prefix.
-                    targetFolders = [(destination, nil, nil)]
-                }
-
-                var copiedThisBook = false
-                for targetFolder in targetFolders {
-                    // Filename is computed per folder, not hoisted once outside this
-                    // loop: a book's index differs across series (#1 of A and #3 of
-                    // B), so the zero-padded prefix must match the specific folder
-                    // it's being copied into (bug #3, touch point 10).
-                    let filename = book.exportFilename(
-                        ao3: ao3Map[book.id],
-                        idSource: filenameIDSource,
-                        seriesIndexPrefix: targetFolder.seriesIndex
-                    )
-                    try? FileManager.default.createDirectory(at: targetFolder.url, withIntermediateDirectories: true)
-                    let dest = uniqueDestination(for: filename, in: targetFolder.url)
-                    if options.modernizeEPUB3 {
-                        do {
-                            let targetSeriesInfo: (name: String, index: Int)? = targetFolder.seriesName.map {
-                                (name: $0, index: targetFolder.seriesIndex ?? 1)
-                            }
-                            try AO3EPUB3Normalizer.normalize(
-                                sourceEPUB: source,
-                                destinationEPUB: dest,
-                                metadata: ao3Map[book.id],
-                                bookTitle: book.displayTitle,
-                                authors: book.authors,
-                                targetSeries: targetSeriesInfo
-                            )
-                            copiedThisBook = true
-                        } catch {
-                            // Fall back to direct copy if modernization fails
-                            do {
-                                try FileManager.default.copyItem(at: source, to: dest)
-                                copiedThisBook = true
-                            } catch { }
+                    let targetFolders: [(url: URL, seriesIndex: Int?, seriesName: String?)]
+                    if groupBySeries, let entries = seriesEntries[book.id], !entries.isEmpty {
+                        var seenFolderNames = Set<String>()
+                        targetFolders = entries.compactMap { entry -> (URL, Int?, String?)? in
+                            let sanitizedName = CalibreBook.sanitizedForFilename(entry.seriesName)
+                            let idSuffix = entry.ao3SeriesID ?? entry.calibreSeriesID.map(String.init) ?? ""
+                            let folderName = idSuffix.isEmpty ? sanitizedName : "\(sanitizedName)-\(idSuffix)"
+                            guard seenFolderNames.insert(folderName).inserted else { return nil }
+                            return (destination.appendingPathComponent(folderName), entry.seriesIndex, entry.seriesName)
                         }
                     } else {
+                        targetFolders = [(destination, nil, nil)]
+                    }
+
+                    var copiedThisBook = false
+                    for targetFolder in targetFolders {
+                        let filename = book.exportFilename(
+                            ao3: ao3Map[book.id],
+                            idSource: filenameIDSource,
+                            seriesIndexPrefix: targetFolder.seriesIndex
+                        )
+                        try? FileManager.default.createDirectory(at: targetFolder.url, withIntermediateDirectories: true)
+                        let dest = options.overwriteExisting
+                            ? targetFolder.url.appendingPathComponent(filename)
+                            : planner.uniqueDestination(for: filename, in: targetFolder.url)
+
+                        let isSameFile = (source.standardizedFileURL.path == dest.standardizedFileURL.path)
+                        if isSameFile {
+                            copiedThisBook = true
+                            continue
+                        }
+
+                        if options.overwriteExisting && FileManager.default.fileExists(atPath: dest.path) {
+                            try? FileManager.default.removeItem(at: dest)
+                        }
                         do {
                             try FileManager.default.copyItem(at: source, to: dest)
                             copiedThisBook = true
-                        } catch { }
+                        } catch let copyErr {
+                            exportLogger.error("Direct copy failed for book ID \(book.id) to '\(dest.path)': \(copyErr.localizedDescription)")
+                        }
+                    }
+                    exportLogger.info("Finished export for [\(book.id)] '\(book.displayTitle)' (copied: \(copiedThisBook))")
+                    return (copiedThisBook, book.displayTitle)
+                }
+            }
+
+            var iterator = books.makeIterator()
+            var processedCount = 0
+
+            await withTaskGroup(of: (Bool, String).self) { group in
+                for _ in 0..<maxConcurrent {
+                    if let nextBook = iterator.next() {
+                        group.addTask { processSingleBook(nextBook) }
                     }
                 }
-                if copiedThisBook {
-                    copied += 1
-                } else {
-                    skipped.append(book.displayTitle)
+
+                while let result = await group.next() {
+                    processedCount += 1
+                    if result.0 {
+                        copied += 1
+                    } else {
+                        skipped.append(result.1)
+                    }
+
+                    // Responsive UI progress callbacks
+                    if processedCount == 1 || processedCount % 5 == 0 || processedCount == totalBooks {
+                        progress(processedCount)
+                    }
+
+                    if processedCount == 1 || processedCount % 25 == 0 || processedCount == totalBooks {
+                        exportLogger.info("Export progress: \(processedCount)/\(totalBooks) (\(copied) copied, \(skipped.count) skipped)")
+                    }
+
+                    if let nextBook = iterator.next() {
+                        group.addTask { processSingleBook(nextBook) }
+                    }
                 }
-                progress(copied + skipped.count)
             }
+
+            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+            let durationStr = String(format: "%.2f", elapsed)
+            exportLogger.info("EPUB export finished in \(durationStr)s: \(copied) copied, \(skipped.count) skipped of \(totalBooks)")
             return (copied, skipped)
         }.value
     }
@@ -413,8 +471,7 @@ struct ExportManager {
                                        ao3Map: [Int: AO3MetadataRecord],
                                        groupBySeries: Bool = false,
                                        seriesEntries: [Int: [SeriesCacheEntry]] = [:],
-                                       filenameIDSource: ExportFilenameIDSource = .ao3ThenCalibre,
-                                       modernizeEPUB3: Bool = ReaderPreferences.shared.enableAdvancedEPUBExport) {
+                                       filenameIDSource: ExportFilenameIDSource = .ao3ThenCalibre) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -444,8 +501,7 @@ struct ExportManager {
                         ao3Map: ao3Map,
                         groupBySeries: groupBySeries,
                         seriesEntries: seriesEntries,
-                        filenameIDSource: filenameIDSource,
-                        modernizeEPUB3: modernizeEPUB3
+                        filenameIDSource: filenameIDSource
                     ),
                     progress: { _ in }
                 )
@@ -485,17 +541,21 @@ struct ExportManager {
         alert.addButton(withTitle: "OK")
 
         let targetWin = window ?? NSApp.keyWindow ?? NSApp.mainWindow
-        if let targetWin, targetWin.attachedSheet == nil {
-            alert.beginSheetModal(for: targetWin) { _ in }
-        } else {
-            DispatchQueue.main.async {
-                let win = window ?? NSApp.keyWindow ?? NSApp.mainWindow
-                if let win, win.attachedSheet == nil {
-                    alert.beginSheetModal(for: win) { _ in }
-                } else {
-                    alert.runModal()
+        if let targetWin {
+            if targetWin.attachedSheet == nil {
+                alert.beginSheetModal(for: targetWin) { _ in }
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    let win = window ?? NSApp.keyWindow ?? NSApp.mainWindow
+                    if let win, win.attachedSheet == nil {
+                        alert.beginSheetModal(for: win) { _ in }
+                    } else {
+                        alert.runModal()
+                    }
                 }
             }
+        } else {
+            alert.runModal()
         }
     }
 

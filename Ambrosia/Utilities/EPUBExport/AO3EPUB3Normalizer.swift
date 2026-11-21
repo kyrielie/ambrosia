@@ -44,6 +44,7 @@ enum AO3EPUB3Normalizer {
         // 1. Initialize EPUBParser to read spine and structure
         var parser = EPUBParser(epubURL: sourceEPUB)
         try parser.parse()
+        exportLogger.debug("Normalizing '\(bookTitle ?? "Untitled")': \(parser.spine.count) spine items")
 
         let title = metadata.flatMap { record in
             record.storyURL != nil ? bookTitle : nil
@@ -126,13 +127,17 @@ enum AO3EPUB3Normalizer {
             _ = doc.outputSettings().syntax(syntax: .xml)
 
             // Skip Calibre title page or empty spine items
-            let plainText = (try? doc.text()) ?? ""
-            if plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if rawHTML.contains("calibre_title_page") {
                 continue
+            }
+            if let body = doc.body() {
+                if body.children().isEmpty && ((try? body.text()) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    continue
+                }
             }
 
             let originalFilename = (spineItem.href as NSString).lastPathComponent
-            let isAO3PrefaceCard = (try? doc.select("#preface, dl.tags").first()) != nil
+            let isAO3PrefaceCard = (try? doc.getElementById("preface")) != nil || (try? doc.getElementsByClass("tags").first()) != nil
 
             if isAO3PrefaceCard && !foundPreface && parser.spine.count > 1 {
                 foundPreface = true
@@ -140,7 +145,7 @@ enum AO3EPUB3Normalizer {
                 spineToTargetMap[originalFilename] = targetFilename
                 spineToTargetMap[spineItem.href] = targetFilename
 
-                if let elementsWithId = try? doc.select("[id]") {
+                if let elementsWithId = try? doc.getElementsByAttribute("id") {
                     for el in elementsWithId {
                         if let id = try? el.attr("id"), !id.isEmpty {
                             idToTargetMap[id] = targetFilename
@@ -163,8 +168,10 @@ enum AO3EPUB3Normalizer {
                 spineToTargetMap[originalFilename] = targetFilename
                 spineToTargetMap[spineItem.href] = targetFilename
 
-                // Derive chapter title
-                let headingEl = try? doc.select("h1, h2, h3").first()
+                // Derive chapter title using direct tag lookup without slow CSS selectors
+                let headingEl = (try? doc.getElementsByTag("h1").first()) ??
+                    (try? doc.getElementsByTag("h2").first()) ??
+                    (try? doc.getElementsByTag("h3").first())
                 let chapTitle: String = {
                     if let heading = try? headingEl?.text(), !heading.isEmpty {
                         return heading
@@ -183,7 +190,7 @@ enum AO3EPUB3Normalizer {
                 // Remove extracted heading from document body so chapter headings are not duplicated
                 _ = try? headingEl?.remove()
 
-                if let elementsWithId = try? doc.select("[id]") {
+                if let elementsWithId = try? doc.getElementsByAttribute("id") {
                     for el in elementsWithId {
                         if let id = try? el.attr("id"), !id.isEmpty {
                             idToTargetMap[id] = targetFilename
@@ -204,9 +211,9 @@ enum AO3EPUB3Normalizer {
             }
         }
 
-        // Rewrite internal cross-references across all extracted documents
+        // Rewrite internal cross-references across all extracted documents using direct tag matching
         for item in spineDocItems {
-            if let links = try? item.doc.select("a[href]") {
+            if let links = try? item.doc.getElementsByTag("a") {
                 for link in links {
                     guard let href = try? link.attr("href"), !href.isEmpty else { continue }
                     if href.contains("://") || href.hasPrefix("mailto:") || href.hasPrefix("javascript:") {
@@ -234,7 +241,7 @@ enum AO3EPUB3Normalizer {
                 }
             }
 
-            if let images = try? item.doc.select("img[src]") {
+            if let images = try? item.doc.getElementsByTag("img") {
                 for img in images {
                     guard let src = try? img.attr("src"), !src.isEmpty else { continue }
                     if src.contains("://") || src.hasPrefix("data:") { continue }
@@ -319,133 +326,142 @@ enum AO3EPUB3Normalizer {
             additionalManifestItems: additionalManifestItems
         )).utf8)
 
-        // 4. Construct destination EPUB 3 zip archive
-        // Remove existing file at destination if present
+        // 4. Construct destination EPUB 3 zip archive in a temporary file to avoid corrupting or deleting source
+        let tempDestination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ambrosia_norm_\(UUID().uuidString).epub")
+        defer {
+            try? FileManager.default.removeItem(at: tempDestination)
+        }
+
+        do {
+            guard let destArchive = try? Archive(url: tempDestination, accessMode: .create, pathEncoding: nil) else {
+                throw NormalizerError.destinationArchiveCreationFailed
+            }
+
+            // OCF Rule: mimetype MUST be entry #1, stored uncompressed
+            let mimetypeData = Data("application/epub+zip".utf8)
+            try destArchive.addEntry(
+                with: "mimetype",
+                type: .file,
+                uncompressedSize: Int64(mimetypeData.count),
+                compressionMethod: .none
+            ) { position, size in
+                mimetypeData.subdata(in: Int(position)..<(Int(position) + size))
+            }
+
+            // Entry 2: META-INF/container.xml
+            try destArchive.addEntry(
+                with: "META-INF/container.xml",
+                type: .file,
+                uncompressedSize: Int64(containerXMLData.count),
+                compressionMethod: .deflate
+            ) { position, size in
+                containerXMLData.subdata(in: Int(position)..<(Int(position) + size))
+            }
+
+            // Entry 3: EPUB/content.opf
+            try destArchive.addEntry(
+                with: "EPUB/content.opf",
+                type: .file,
+                uncompressedSize: Int64(opfData.count),
+                compressionMethod: .deflate
+            ) { position, size in
+                opfData.subdata(in: Int(position)..<(Int(position) + size))
+            }
+
+            // Entry 4: EPUB/toc.xhtml
+            try destArchive.addEntry(
+                with: "EPUB/toc.xhtml",
+                type: .file,
+                uncompressedSize: Int64(tocData.count),
+                compressionMethod: .deflate
+            ) { position, size in
+                tocData.subdata(in: Int(position)..<(Int(position) + size))
+            }
+
+            // Entry 5: EPUB/toc.ncx
+            try destArchive.addEntry(
+                with: "EPUB/toc.ncx",
+                type: .file,
+                uncompressedSize: Int64(ncxData.count),
+                compressionMethod: .deflate
+            ) { position, size in
+                ncxData.subdata(in: Int(position)..<(Int(position) + size))
+            }
+
+            // Entry 6: EPUB/css/stylesheet.css
+            try destArchive.addEntry(
+                with: "EPUB/css/stylesheet.css",
+                type: .file,
+                uncompressedSize: Int64(stylesheetData.count),
+                compressionMethod: .deflate
+            ) { position, size in
+                stylesheetData.subdata(in: Int(position)..<(Int(position) + size))
+            }
+
+            // Entry 7: EPUB/css/page_styles.css
+            try destArchive.addEntry(
+                with: "EPUB/css/page_styles.css",
+                type: .file,
+                uncompressedSize: Int64(pageStylesData.count),
+                compressionMethod: .deflate
+            ) { position, size in
+                pageStylesData.subdata(in: Int(position)..<(Int(position) + size))
+            }
+
+            // Entry 8: EPUB/text/preface.xhtml or EPUB/text/imprint.xhtml
+            if let prefaceData {
+                try destArchive.addEntry(
+                    with: "EPUB/text/preface.xhtml",
+                    type: .file,
+                    uncompressedSize: Int64(prefaceData.count),
+                    compressionMethod: .deflate
+                ) { position, size in
+                    prefaceData.subdata(in: Int(position)..<(Int(position) + size))
+                }
+            } else if let imprintData {
+                try destArchive.addEntry(
+                    with: "EPUB/text/imprint.xhtml",
+                    type: .file,
+                    uncompressedSize: Int64(imprintData.count),
+                    compressionMethod: .deflate
+                ) { position, size in
+                    imprintData.subdata(in: Int(position)..<(Int(position) + size))
+                }
+            }
+
+            // Entry 9+: EPUB/text/chapter_*.xhtml
+            for chapter in chapters {
+                let chapHTML = AO3EPUB3Builder.buildChapter(chapter: chapter, language: language)
+                let chapData = Data(chapHTML.utf8)
+                try destArchive.addEntry(
+                    with: "EPUB/text/\(chapter.id).xhtml",
+                    type: .file,
+                    uncompressedSize: Int64(chapData.count),
+                    compressionMethod: .deflate
+                ) { position, size in
+                    chapData.subdata(in: Int(position)..<(Int(position) + size))
+                }
+            }
+
+            // Image entries
+            for img in imageEntries {
+                try destArchive.addEntry(
+                    with: "EPUB/\(img.path)",
+                    type: .file,
+                    uncompressedSize: Int64(img.data.count),
+                    compressionMethod: .deflate
+                ) { position, size in
+                    img.data.subdata(in: Int(position)..<(Int(position) + size))
+                }
+            }
+        }
+
+        // Safely move the verified archive to the destination path
         if FileManager.default.fileExists(atPath: destinationEPUB.path) {
             try? FileManager.default.removeItem(at: destinationEPUB)
         }
-
-        guard let destArchive = try? Archive(url: destinationEPUB, accessMode: .create, pathEncoding: nil) else {
-            throw NormalizerError.destinationArchiveCreationFailed
-        }
-
-        // OCF Rule: mimetype MUST be entry #1, stored uncompressed
-        let mimetypeData = Data("application/epub+zip".utf8)
-        try destArchive.addEntry(
-            with: "mimetype",
-            type: .file,
-            uncompressedSize: Int64(mimetypeData.count),
-            compressionMethod: .none
-        ) { position, size in
-            mimetypeData.subdata(in: Int(position)..<(Int(position) + size))
-        }
-
-        // Entry 2: META-INF/container.xml
-        try destArchive.addEntry(
-            with: "META-INF/container.xml",
-            type: .file,
-            uncompressedSize: Int64(containerXMLData.count),
-            compressionMethod: .deflate
-        ) { position, size in
-            containerXMLData.subdata(in: Int(position)..<(Int(position) + size))
-        }
-
-        // Entry 3: EPUB/content.opf
-        try destArchive.addEntry(
-            with: "EPUB/content.opf",
-            type: .file,
-            uncompressedSize: Int64(opfData.count),
-            compressionMethod: .deflate
-        ) { position, size in
-            opfData.subdata(in: Int(position)..<(Int(position) + size))
-        }
-
-        // Entry 4: EPUB/toc.xhtml
-        try destArchive.addEntry(
-            with: "EPUB/toc.xhtml",
-            type: .file,
-            uncompressedSize: Int64(tocData.count),
-            compressionMethod: .deflate
-        ) { position, size in
-            tocData.subdata(in: Int(position)..<(Int(position) + size))
-        }
-
-        // Entry 5: EPUB/toc.ncx
-        try destArchive.addEntry(
-            with: "EPUB/toc.ncx",
-            type: .file,
-            uncompressedSize: Int64(ncxData.count),
-            compressionMethod: .deflate
-        ) { position, size in
-            ncxData.subdata(in: Int(position)..<(Int(position) + size))
-        }
-
-        // Entry 6: EPUB/css/stylesheet.css
-        try destArchive.addEntry(
-            with: "EPUB/css/stylesheet.css",
-            type: .file,
-            uncompressedSize: Int64(stylesheetData.count),
-            compressionMethod: .deflate
-        ) { position, size in
-            stylesheetData.subdata(in: Int(position)..<(Int(position) + size))
-        }
-
-        // Entry 7: EPUB/css/page_styles.css
-        try destArchive.addEntry(
-            with: "EPUB/css/page_styles.css",
-            type: .file,
-            uncompressedSize: Int64(pageStylesData.count),
-            compressionMethod: .deflate
-        ) { position, size in
-            pageStylesData.subdata(in: Int(position)..<(Int(position) + size))
-        }
-
-        // Entry 8: EPUB/text/preface.xhtml or EPUB/text/imprint.xhtml
-        if let prefaceData {
-            try destArchive.addEntry(
-                with: "EPUB/text/preface.xhtml",
-                type: .file,
-                uncompressedSize: Int64(prefaceData.count),
-                compressionMethod: .deflate
-            ) { position, size in
-                prefaceData.subdata(in: Int(position)..<(Int(position) + size))
-            }
-        } else if let imprintData {
-            try destArchive.addEntry(
-                with: "EPUB/text/imprint.xhtml",
-                type: .file,
-                uncompressedSize: Int64(imprintData.count),
-                compressionMethod: .deflate
-            ) { position, size in
-                imprintData.subdata(in: Int(position)..<(Int(position) + size))
-            }
-        }
-
-        // Entry 9+: EPUB/text/chapter_*.xhtml
-        for chapter in chapters {
-            let chapHTML = AO3EPUB3Builder.buildChapter(chapter: chapter, language: language)
-            let chapData = Data(chapHTML.utf8)
-            try destArchive.addEntry(
-                with: "EPUB/text/\(chapter.id).xhtml",
-                type: .file,
-                uncompressedSize: Int64(chapData.count),
-                compressionMethod: .deflate
-            ) { position, size in
-                chapData.subdata(in: Int(position)..<(Int(position) + size))
-            }
-        }
-
-        // Image entries
-        for img in imageEntries {
-            try destArchive.addEntry(
-                with: "EPUB/\(img.path)",
-                type: .file,
-                uncompressedSize: Int64(img.data.count),
-                compressionMethod: .deflate
-            ) { position, size in
-                img.data.subdata(in: Int(position)..<(Int(position) + size))
-            }
-        }
+        try FileManager.default.moveItem(at: tempDestination, to: destinationEPUB)
     }
 }
 

@@ -332,6 +332,33 @@ private let _pjsNavigateAndHighlight: String = #"""
     }, 500);
     } catch (e) { /* surroundContents throws across element boundaries — ignore */ }
     };
+
+    window.ambrosiaGlowPassage = function (offset, length, anchorPhrase) {
+    var existing = document.getElementById('__ambrosia_passage_glow__');
+    if (existing) existing.parentNode.removeChild(existing);
+    var pos = _nodeAtChar(offset);
+    if (!pos) return;
+    var targetLength = (length > 0) ? Math.min(length, 300) : 100;
+    var endPos = _nodeAtChar(Math.min(offset + targetLength, _countAllChars()));
+    if (!endPos) return;
+    try {
+    var range = document.createRange();
+    range.setStart(pos.node, pos.localOffset);
+    if (endPos.node === pos.node) range.setEnd(endPos.node, endPos.localOffset);
+    else range.setEndAfter(pos.node);
+    var span = document.createElement('span');
+    span.id = '__ambrosia_passage_glow__';
+    span.style.cssText =
+    'background-color:rgba(255,200,0,0.40);box-shadow:0 0 8px rgba(255,200,0,0.5);border-radius:4px;transition:opacity 2.0s;opacity:1;';
+    range.surroundContents(span);
+    setTimeout(function () {
+    span.style.opacity = '0';
+    setTimeout(function () { if (span.parentNode) span.parentNode.removeChild(span); }, 2000);
+    }, 1500);
+    } catch (e) {
+    window.ambrosiaHighlight(offset);
+    }
+    };
     """#
 
 // MARK: - Metrics, internal helpers, IIFE close

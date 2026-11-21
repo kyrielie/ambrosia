@@ -280,6 +280,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     var onLocalFindStateChanged: ((LocalReaderFindState) -> Void)?
     var onOpenSearchSidebar: (() -> Void)?
     private var pendingFTSJump: (snippet: FTSOccurrenceSnippet, query: String?)?
+    private var pendingPassageJump: SemanticPassageMatch?
 
     // MARK: - Init
 
@@ -289,12 +290,18 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         super.init(nibName: nil, bundle: nil)
     }
 
-    init(target: ReadingTarget, initialJumpSnippet: FTSOccurrenceSnippet? = nil, initialSearchQuery: String? = nil) {
+    init(
+        target: ReadingTarget,
+        initialJumpSnippet: FTSOccurrenceSnippet? = nil,
+        initialJumpPassage: SemanticPassageMatch? = nil,
+        initialSearchQuery: String? = nil
+    ) {
         self.target = target
         self.book   = target.primaryBook
         if let initialJumpSnippet {
             self.pendingFTSJump = (initialJumpSnippet, initialSearchQuery)
         }
+        self.pendingPassageJump = initialJumpPassage
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -1062,6 +1069,10 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         if let pending = pendingFTSJump {
             pendingFTSJump = nil
             jumpToSnippet(pending.snippet, query: pending.query)
+        }
+        if let pendingPassage = pendingPassageJump {
+            pendingPassageJump = nil
+            jumpToPassage(pendingPassage)
         }
         onReaderContentReady?()
     }
@@ -2126,6 +2137,41 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     func currentAnnotationsForSidebar() -> [Annotation] {
         annotations
+    }
+
+    // MARK: - Jump to Semantic Passage
+
+    func jumpToPassage(_ passage: SemanticPassageMatch) {
+        guard isReaderContentReady else {
+            pendingPassageJump = passage
+            return
+        }
+
+        let targetSpine = passage.spineIndex
+        let offset = passage.startOffset
+        let length = passage.charLength
+        let escapedAnchor = passage.anchorPhrase.replacingOccurrences(of: "'", with: "\\'")
+
+        if currentMode == .paginated {
+            if targetSpine != currentSpineIndex {
+                pendingPassageJump = passage
+                loadSpineItem(index: targetSpine, restorePosition: .start)
+                return
+            }
+
+            let js = """
+            if (window.ambrosiaNavigateToOffset) { window.ambrosiaNavigateToOffset(\(offset)); }
+            if (window.ambrosiaGlowPassage) { window.ambrosiaGlowPassage(\(offset), \(length), '\(escapedAnchor)'); }
+            """
+            webView.evaluateJavaScript(js, completionHandler: nil)
+            savePaginatedProgress()
+        } else {
+            scrollToCharOffset(offset)
+            let js = """
+            if (window.ambrosiaGlowPassage) { window.ambrosiaGlowPassage(\(offset), \(length), '\(escapedAnchor)'); }
+            """
+            webView.evaluateJavaScript(js, completionHandler: nil)
+        }
     }
 
     // MARK: - Jump to FTS snippet
