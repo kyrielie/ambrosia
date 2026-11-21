@@ -67,6 +67,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private var suggestionHostingVC: NSHostingController<SearchSuggestionsView>?
     private var suggestionMouseMonitor: Any?
     private let suggestionDebouncer = DebounceTimer(delay: 0.2)
+    private var suggestionTask: Task<Void, Never>?
+    private var suggestionGeneration: Int = 0
 
     // MARK: - Init
 
@@ -285,8 +287,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private func scheduleSearchTextObservation() {
         withObservationTracking {
             _ = toolbarState?.searchText
-        } onChange: { [weak self] in
-            DispatchQueue.main.async {
+        } onChange: {
+            Task { @MainActor [weak self] in
                 guard let self, let toolbarState = self.toolbarState else { return }
                 if self.searchToolbarItem?.searchField.stringValue != toolbarState.searchText {
                     self.searchToolbarItem?.searchField.stringValue = toolbarState.searchText
@@ -581,8 +583,11 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             _ = session?.extractionProgress.completed
             _ = session?.extractionProgress.total
             _ = session?.extractionProgress.isRunning
-        } onChange: { [weak self] in
-            DispatchQueue.main.async { self?.updateCountLabel(); self?.scheduleCounting() }
+        } onChange: {
+            Task { @MainActor [weak self] in
+                self?.updateCountLabel()
+                self?.scheduleCounting()
+            }
         }
     }
 
@@ -757,24 +762,25 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     // MARK: - Suggestion panel
 
     private func refreshSuggestions(for text: String) {
+        suggestionTask?.cancel()
         guard let library = session?.library else { closeSuggestionPanel(); return }
         let hasTrailingPrefixWarning = SearchQueryParser.parse(text).hasTrailingPrefixWarning
         let hasFulltext = shouldShowFTSToolbarItem
         let hasSemantic = ReaderPreferences.shared.enableSemanticSearch && (session?.hasSemanticIndex ?? false)
-        Task { [weak self] in
+        suggestionGeneration += 1
+        let gen = suggestionGeneration
+        suggestionTask = Task { @MainActor [weak self] in
             let sections = await computeSectionedSuggestions(
                 for: text,
                 library: library,
                 hasFulltext: hasFulltext,
                 hasSemantic: hasSemantic
             )
-            await MainActor.run {
-                guard let self else { return }
-                if sections.allSatisfy({ $0.suggestions.isEmpty }) && !hasTrailingPrefixWarning {
-                    self.closeSuggestionPanel()
-                } else {
-                    self.showSuggestionPanel(sections: sections, hasTrailingPrefixWarning: hasTrailingPrefixWarning)
-                }
+            guard !Task.isCancelled, let self, gen == self.suggestionGeneration else { return }
+            if sections.allSatisfy({ $0.suggestions.isEmpty }) && !hasTrailingPrefixWarning {
+                self.closeSuggestionPanel()
+            } else {
+                self.showSuggestionPanel(sections: sections, hasTrailingPrefixWarning: hasTrailingPrefixWarning)
             }
         }
     }
@@ -935,6 +941,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     }
 
     private func closeSuggestionPanel() {
+        suggestionTask?.cancel()
+        suggestionTask = nil
         if let panel = suggestionPanel {
             panel.parent?.removeChildWindow(panel)
             panel.orderOut(nil)

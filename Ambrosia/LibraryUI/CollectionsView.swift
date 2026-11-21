@@ -576,7 +576,7 @@ struct CollectionsView: View {
         let idsArray = Array(memberIDs)
         async let booksTask = library.booksForIDs(idsArray)
         async let datesTask = session.collectionStore?.memberAddedDates(for: collectionID)
-        let states = session.metaDB?.bookStates(for: idsArray) ?? [:]
+        let states = await session.metaDB?.bookStates(for: idsArray) ?? [:]
         let (books, dates) = await (booksTask, (try? datesTask) ?? [:])
         let progressMap = states.mapValues { $0.totalReadPercent }
         await MainActor.run {

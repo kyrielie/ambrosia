@@ -169,7 +169,8 @@ public enum LibraryStorageCalculator {
                 options: [.skipsHiddenFiles]
             ) else { return 0 }
 
-            for case let fileURL as URL in enumerator where fileURL.pathExtension.lowercased() == "epub" {
+            while let fileURL = enumerator.nextObject() as? URL {
+                guard fileURL.pathExtension.lowercased() == "epub" else { continue }
                 if let vals = try? fileURL.resourceValues(forKeys: Set(keys)),
                    vals.isRegularFile == true,
                    let size = vals.fileSize {

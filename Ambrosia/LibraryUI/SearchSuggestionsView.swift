@@ -128,9 +128,23 @@ enum FilterRuleFactory {
 // MARK: - SearchSuggestion
 
 struct SearchSuggestion: Identifiable {
-    let id    = UUID()
+    let id = UUID()
     let kind: SuggestionKind
     let value: String
+    var tagType: SuggestionTagType?
+    var matchClass: SuggestionMatchClass
+
+    init(
+        kind: SuggestionKind,
+        value: String,
+        tagType: SuggestionTagType? = nil,
+        matchClass: SuggestionMatchClass = .substring
+    ) {
+        self.kind = kind
+        self.value = value
+        self.tagType = tagType
+        self.matchClass = matchClass
+    }
 
     /// The FilterRule this suggestion produces when committed.
     var asFilterRule: FilterRule {
@@ -152,7 +166,7 @@ private struct SuggestionRowView: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: suggestion.kind.icon)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(iconColor)
                     .frame(width: 16, alignment: .center)
                 Text(suggestion.value)
                     .lineLimit(1)
@@ -167,6 +181,31 @@ private struct SuggestionRowView: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityText)
+    }
+
+    private var iconColor: Color {
+        guard suggestion.kind == .tag, let type = suggestion.tagType else {
+            return .secondary
+        }
+        switch type {
+        case .relationship: return .pink
+        case .character:    return .blue
+        case .fandom:       return .indigo
+        case .freeform:     return .secondary
+        case .rating:       return .orange
+        case .warning:      return .red
+        case .category:     return .purple
+        case .unknown:      return .secondary
+        }
+    }
+
+    private var accessibilityText: String {
+        if suggestion.kind == .tag, let type = suggestion.tagType {
+            return "\(type.accessibilityLabel): \(suggestion.value)"
+        }
+        return "\(suggestion.kind.label): \(suggestion.value)"
     }
 }
 
@@ -272,16 +311,16 @@ func computeSectionedSuggestions(for searchText: String,
     // author: prefix → author completions only
     if let prefix = text.activePrefixValue(for: "author:") {
         guard !prefix.isEmpty else { return [] }
-        let suggestions = await library.authorSuggestions(prefix: prefix)
-            .map { SearchSuggestion(kind: .author, value: $0) }
+        let matches = await library.authorMatches(prefix: prefix)
+        let suggestions = matches.map { SearchSuggestion(kind: .author, value: $0.value, matchClass: $0.matchClass) }
         return suggestions.isEmpty ? [] : [SuggestionSection(kind: .author, suggestions: suggestions)]
     }
 
     // series: prefix → series completions only
     if let prefix = text.activePrefixValue(for: "series:") {
         guard !prefix.isEmpty else { return [] }
-        let suggestions = await library.seriesSuggestions(prefix: prefix)
-            .map { SearchSuggestion(kind: .series, value: $0) }
+        let matches = await library.seriesMatches(prefix: prefix)
+        let suggestions = matches.map { SearchSuggestion(kind: .series, value: $0.value, matchClass: $0.matchClass) }
         return suggestions.isEmpty ? [] : [SuggestionSection(kind: .series, suggestions: suggestions)]
     }
 
@@ -296,8 +335,10 @@ func computeSectionedSuggestions(for searchText: String,
     // tag: prefix → tag completions only
     if let prefix = text.activePrefixValue(for: "tag:") {
         guard !prefix.isEmpty else { return [] }
-        let suggestions = await library.tagSuggestions(prefix: prefix)
-            .map { SearchSuggestion(kind: .tag, value: $0) }
+        let matches = await library.tagMatches(prefix: prefix)
+        let suggestions = matches.map {
+            SearchSuggestion(kind: .tag, value: $0.value, tagType: $0.tagType, matchClass: $0.matchClass)
+        }
         return suggestions.isEmpty ? [] : [SuggestionSection(kind: .tag, suggestions: suggestions)]
     }
 
@@ -315,14 +356,19 @@ func computeSectionedSuggestions(for searchText: String,
     // Plain text (≥ 2 chars) → multi-section: semantic, fulltext, titles, authors, tags, series, status
     guard text.count >= 2 else { return [] }
 
-    let titleSugs  = await library.titleSuggestions(prefix: text, limit: 3)
-        .map { SearchSuggestion(kind: .title, value: $0) }
-    let authorSugs = await library.authorSuggestions(prefix: text, limit: 3)
-        .map { SearchSuggestion(kind: .author, value: $0) }
-    let tagSugs    = await library.tagSuggestions(prefix: text, limit: 4)
-        .map { SearchSuggestion(kind: .tag, value: $0) }
-    let seriesSugs = await library.seriesSuggestions(prefix: text, limit: 3)
-        .map { SearchSuggestion(kind: .series, value: $0) }
+    async let titlesFuture = library.titleSuggestions(prefix: text, limit: 3)
+    async let authorsFuture = library.authorMatches(prefix: text, limit: 3)
+    async let tagsFuture = library.tagMatches(prefix: text, limit: 4)
+    async let seriesFuture = library.seriesMatches(prefix: text, limit: 3)
+
+    let (titles, authorMatches, tagMatches, seriesMatches) = await (titlesFuture, authorsFuture, tagsFuture, seriesFuture)
+
+    let titleSugs = titles.map { SearchSuggestion(kind: .title, value: $0) }
+    let authorSugs = authorMatches.map { SearchSuggestion(kind: .author, value: $0.value, matchClass: $0.matchClass) }
+    let tagSugs = tagMatches.map {
+        SearchSuggestion(kind: .tag, value: $0.value, tagType: $0.tagType, matchClass: $0.matchClass)
+    }
+    let seriesSugs = seriesMatches.map { SearchSuggestion(kind: .series, value: $0.value, matchClass: $0.matchClass) }
     let statusSugs = statusSuggestions(prefix: text)
     let semanticSugs = hasSemantic ? [SearchSuggestion(kind: .semantic, value: text)] : []
     let fulltextSugs = hasFulltext ? [SearchSuggestion(kind: .fulltext, value: text)] : []

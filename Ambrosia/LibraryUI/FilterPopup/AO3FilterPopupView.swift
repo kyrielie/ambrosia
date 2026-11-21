@@ -168,30 +168,19 @@ struct AO3FilterPopupView: View {
         facetRefreshTask?.cancel()
         facetDebouncer.schedule {
             facetRefreshTask = Task { @MainActor in
-                async let ratingFacetsTask = facetController.topRatingFacets(state: state, visibilityVersion: visibilityVersion)
-
-                let newFacets: [AO3FacetField: [(name: String, count: Int)]] =
-                    await withTaskGroup(of: (AO3FacetField, [(name: String, count: Int)]).self) { group in
-                        for field in AO3FacetField.allCases {
-                            group.addTask {
-                                let entries = await facetController.topFacets(
-                                    for: field, state: state, limit: limit(for: field), visibilityVersion: visibilityVersion
-                                )
-                                return (field, entries)
-                            }
-                        }
-                        var result: [AO3FacetField: [(name: String, count: Int)]] = [:]
-                        for await (field, entries) in group {
-                            result[field] = entries
-                        }
-                        return result
-                    }
-
+                let ratingFacetsResult = await facetController.topRatingFacets(state: state, visibilityVersion: visibilityVersion)
                 guard !Task.isCancelled else { return }
+
+                var newFacets: [AO3FacetField: [(name: String, count: Int)]] = [:]
+                for field in AO3FacetField.allCases {
+                    let entries = await facetController.topFacets(
+                        for: field, state: state, limit: limit(for: field), visibilityVersion: visibilityVersion
+                    )
+                    guard !Task.isCancelled else { return }
+                    newFacets[field] = entries
+                }
+
                 facets = newFacets
-
-                let ratingFacetsResult = await ratingFacetsTask
-                guard !Task.isCancelled else { return }
                 ratingFacets = ratingFacetsResult
             }
         }

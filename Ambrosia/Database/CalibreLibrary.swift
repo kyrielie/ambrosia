@@ -81,6 +81,9 @@ actor CalibreLibrary {
     /// books" preference is on.
     private(set) var duplicateLoserIDCache: Set<Int> = []
 
+    /// In-memory cache for fast, nonisolated autocomplete suggestions across tags, authors, and series.
+    nonisolated let suggestionStore = SuggestionStore()
+
     /// §6: Seeded random sort seed. Stable within a session; refreshed on library open
     /// or when the user explicitly requests a new shuffle.
     private(set) var randomSeed: UInt64 = UInt64.random(in: 0 ... UInt64.max)
@@ -117,6 +120,7 @@ actor CalibreLibrary {
         db = fresh
         dbIdentity = current
         clearQueryCaches()
+        suggestionStore.invalidate()
         return true
     }
 

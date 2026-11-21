@@ -537,62 +537,60 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         self.importProgressController = progressController
         progressController.showScanningState(folderURL: url)
 
-        Task.detached(priority: .userInitiated) { [weak self, weak progressController] in
-            let epubs = EPUBFolderScanner.scan(rootURL: url)
-            await MainActor.run {
-                guard let self else { return }
-                if epubs.isEmpty {
-                    progressController?.close()
-                    self.importProgressController = nil
-                    let alert = NSAlert()
-                    alert.messageText = "Not a Calibre Library"
-                    alert.informativeText = "No readable metadata.db or EPUB files found in \"\(url.lastPathComponent)\"."
-                    alert.alertStyle = .warning
-                    if let win = self.libraryWindowController?.window, win.isVisible {
-                        alert.beginSheetModal(for: win)
-                    } else {
-                        alert.runModal()
-                    }
-                    return
-                }
-
-                let count = epubs.count
-                let sfx = count == 1 ? "" : "s"
+        Task { @MainActor [weak self, weak progressController] in
+            let epubs = await Task.detached(priority: .userInitiated) {
+                EPUBFolderScanner.scan(rootURL: url)
+            }.value
+            guard let self else { return }
+            if epubs.isEmpty {
+                progressController?.close()
+                self.importProgressController = nil
                 let alert = NSAlert()
-                alert.messageText = "Set Up Ambrosia Library"
-                alert.informativeText = "Ambrosia found \(count) EPUB file\(sfx) in \"\(url.lastPathComponent)\". "
-                    + "Would you like to set up a library here?"
-                alert.addButton(withTitle: "Set Up Library")
-                alert.addButton(withTitle: "Cancel")
-                alert.alertStyle = .informational
+                alert.messageText = "Not a Calibre Library"
+                alert.informativeText = "No readable metadata.db or EPUB files found in \"\(url.lastPathComponent)\"."
+                alert.alertStyle = .warning
+                if let win = self.libraryWindowController?.window, win.isVisible {
+                    _ = await alert.beginSheetModal(for: win)
+                } else {
+                    alert.runModal()
+                }
+                return
+            }
 
-                let handleAlertResponse = { (response: NSApplication.ModalResponse) in
-                    if response == .alertFirstButtonReturn {
-                        progressController?.startIngestion(folderURL: url, epubs: epubs, createDB: true) { [weak self] success in
-                            self?.importProgressController = nil
-                            if success {
-                                Task {
-                                    await self?.session.open(url: url)
-                                    await MainActor.run {
-                                        self?.showLibraryWindow()
-                                    }
-                                }
+            let count = epubs.count
+            let sfx = count == 1 ? "" : "s"
+            let alert = NSAlert()
+            alert.messageText = "Set Up Ambrosia Library"
+            alert.informativeText = "Ambrosia found \(count) EPUB file\(sfx) in \"\(url.lastPathComponent)\". "
+                + "Would you like to set up a library here?"
+            alert.addButton(withTitle: "Set Up Library")
+            alert.addButton(withTitle: "Cancel")
+            alert.alertStyle = .informational
+
+            let handleAlertResponse = { (response: NSApplication.ModalResponse) in
+                if response == .alertFirstButtonReturn {
+                    progressController?.startIngestion(folderURL: url, epubs: epubs, createDB: true) { [weak self] success in
+                        self?.importProgressController = nil
+                        if success {
+                            Task { @MainActor [weak self] in
+                                await self?.session.open(url: url)
+                                self?.showLibraryWindow()
                             }
                         }
-                    } else {
-                        progressController?.close()
-                        self.importProgressController = nil
-                    }
-                }
-
-                if let win = self.libraryWindowController?.window, win.isVisible {
-                    alert.beginSheetModal(for: win) { response in
-                        handleAlertResponse(response)
                     }
                 } else {
-                    let response = alert.runModal()
+                    progressController?.close()
+                    self.importProgressController = nil
+                }
+            }
+
+            if let win = self.libraryWindowController?.window, win.isVisible {
+                alert.beginSheetModal(for: win) { response in
                     handleAlertResponse(response)
                 }
+            } else {
+                let response = alert.runModal()
+                handleAlertResponse(response)
             }
         }
     }
@@ -723,7 +721,9 @@ final class ReaderMenuController: NSObject {
                 object: nil,
                 queue: .main
             ) { _ in
-                AppDelegate.shared?.updateReaderMenuState()
+                MainActor.assumeIsolated {
+                    AppDelegate.shared?.updateReaderMenuState()
+                }
             })
         }
 

@@ -351,7 +351,7 @@ public enum CalibreLibraryWriter {
     }
 
     private static func extractCover(epubURL: URL, parser: EPUBParser) -> Data? {
-        guard let archive = try? Archive(url: epubURL, accessMode: .read) else { return nil }
+        guard let archive = try? Archive(url: epubURL, accessMode: .read, pathEncoding: nil) else { return nil }
 
         // 1. Check if manifest has an entry with cover-image property (EPUB3) or id "cover" / "cover-image"
         var candidateHrefs: [String] = []

@@ -276,8 +276,8 @@ final class EmailLibraryViewController: NSViewController {
             _ = self.session.likedSeriesFlags
             _ = self.session.readLaterSeriesFlags
             _ = self.session.collectionMembershipByName
-        } onChange: { [weak self] in
-            DispatchQueue.main.async {
+        } onChange: {
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.syncSidebarFromDisplayController()
                 self.observeDisplayController()
@@ -311,8 +311,8 @@ final class EmailLibraryViewController: NSViewController {
             _ = self.toolbarState.toggleEmailSidebar
             _ = self.toolbarState.toggleEmailReaderSidebar
             _ = self.toolbarState.showEmailReaderSidebar
-        } onChange: { [weak self] in
-            DispatchQueue.main.async {
+        } onChange: {
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.handleToolbarToggles()
                 self.scheduleToolbarToggleObservation()

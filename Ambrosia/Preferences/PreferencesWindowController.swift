@@ -1767,19 +1767,19 @@ private struct DataTab: View {
         guard let url = session.activeURL else { return }
         ftsActionMessage = "Indexing works in background…"
         Task {
-            var isCancelled = false
+            let cancellation = IngestionCancellation()
             await DatabaseMaintenanceCoordinator.shared.withMaintenance(
                 kind: .indexingFTS,
                 detail: url.lastPathComponent,
                 onCancel: {
-                    isCancelled = true
+                    cancellation.cancel()
                 },
                 work: {
                     let count = (try? await Task.detached(priority: .userInitiated) {
-                        try CalibreFTSWriter.indexLibrary(at: url, isCancelled: { isCancelled })
+                        try CalibreFTSWriter.indexLibrary(at: url, isCancelled: { cancellation.isCancelled })
                     }.value) ?? 0
 
-                    ftsActionMessage = isCancelled
+                    ftsActionMessage = cancellation.isCancelled
                         ? "Indexing cancelled (\(count) works indexed)."
                         : "Indexing complete (\(count) works indexed)."
                     if let url = session.activeURL {

@@ -12,7 +12,7 @@ struct FilterValueTextField: View {
     var metaDB: AmbrosiaMetaDB?
     let onSelect: (String) -> Void
 
-    @State private var suggestions: [String] = []
+    @State private var suggestions: [SuggestionMatch] = []
     @State private var showSuggestions = false
     @State private var fetchTask: Task<Void, Never>?
     /// Most recently selected suggestion value. scheduleFetch skips queries
@@ -52,10 +52,10 @@ struct FilterValueTextField: View {
                     onSelect: { selected in
                         fetchTask?.cancel()
                         fetchTask = nil
-                        lastSelectedValue = selected
+                        lastSelectedValue = selected.value
                         showSuggestions = false
                         suggestions = []
-                        onSelect(selected)
+                        onSelect(selected.value)
                     }
                 )
                 .frame(width: 0, height: 0)
@@ -88,28 +88,18 @@ struct FilterValueTextField: View {
 
         let capturedField = field
         let capturedLimit = Self.suggestionLimit
-        let capturedMetaDB = metaDB
 
         fetchTask = Task.detached(priority: .userInitiated) {
             guard !Task.isCancelled else { return }
-            let results: [String]
+            let results: [SuggestionMatch]
             switch capturedField {
             case .tag:
-                if let capturedMetaDB {
-                    let tagsWithCount = await capturedMetaDB.searchTags(query: trimmed, field: .freeform, limit: capturedLimit)
-                    results = tagsWithCount.map(\.name)
-                } else {
-                    results = await library.tagSuggestions(prefix: trimmed, limit: capturedLimit)
-                }
+                results = await library.tagMatches(prefix: trimmed, limit: capturedLimit)
             case .authorName:
-                if let capturedMetaDB {
-                    let authorsWithCount = await capturedMetaDB.searchTags(query: trimmed, field: .author, limit: capturedLimit)
-                    results = authorsWithCount.map(\.name)
-                } else {
-                    results = await library.authorSuggestions(prefix: trimmed, limit: capturedLimit)
-                }
+                results = await library.authorMatches(prefix: trimmed, limit: capturedLimit)
             case .title:
-                results = await library.titleSuggestions(prefix: trimmed, limit: capturedLimit)
+                let titles = await library.titleSuggestions(prefix: trimmed, limit: capturedLimit)
+                results = titles.map { SuggestionMatch(value: $0, matchClass: .substring) }
             default:
                 results = []
             }
@@ -140,10 +130,10 @@ struct FilterValueTextField: View {
 
 private struct SuggestionAnchorView: NSViewRepresentable {
 
-    let suggestions: [String]
+    let suggestions: [SuggestionMatch]
     let showSuggestions: Bool
     let field: FilterField
-    let onSelect: (String) -> Void
+    let onSelect: (SuggestionMatch) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -191,20 +181,20 @@ private struct SuggestionAnchorView: NSViewRepresentable {
         deinit { removeMouseMonitor() }
 
         func show(
-            suggestions: [String],
+            suggestions: [SuggestionMatch],
             field: FilterField,
             anchorView: NSView,
-            onSelect: @escaping (String) -> Void
+            onSelect: @escaping (SuggestionMatch) -> Void
         ) {
             let content = FilterSuggestionListView(
                 suggestions: suggestions,
                 field: field,
-                onSelect: { [weak self] value in
+                onSelect: { [weak self] match in
                     #if DEBUG
-                    print("[FilterSuggestions] suggestion selected: '\(value)' — hiding panel")
+                    print("[FilterSuggestions] suggestion selected: '\(match.value)' — hiding panel")
                     #endif
                     self?.hide()
-                    onSelect(value)
+                    onSelect(match)
                 }
             )
 
@@ -372,20 +362,20 @@ private struct SuggestionAnchorView: NSViewRepresentable {
 
 private struct FilterSuggestionListView: View {
 
-    let suggestions: [String]
+    let suggestions: [SuggestionMatch]
     let field: FilterField
-    let onSelect: (String) -> Void
+    let onSelect: (SuggestionMatch) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(suggestions.enumerated()), id: \.offset) { index, value in
-                Button { onSelect(value) } label: {
+            ForEach(Array(suggestions.enumerated()), id: \.offset) { index, match in
+                Button { onSelect(match) } label: {
                     HStack(spacing: 8) {
                         Image(systemName: fieldIcon)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(iconColor(for: match))
                             .frame(width: 14, alignment: .center)
-                        Text(value)
+                        Text(match.value)
                             .lineLimit(1)
                             .foregroundStyle(.primary)
                         Spacer()
@@ -395,6 +385,8 @@ private struct FilterSuggestionListView: View {
                     .padding(.vertical, 6)
                 }
                 .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(accessibilityText(for: match))
                 if index < suggestions.count - 1 {
                     Divider().padding(.leading, 32)
                 }
@@ -420,5 +412,28 @@ private struct FilterSuggestionListView: View {
         case .title:      return "book"
         default:          return "magnifyingglass"
         }
+    }
+
+    private func iconColor(for match: SuggestionMatch) -> Color {
+        guard field == .tag, let type = match.tagType else {
+            return .secondary
+        }
+        switch type {
+        case .relationship: return .pink
+        case .character:    return .blue
+        case .fandom:       return .indigo
+        case .freeform:     return .secondary
+        case .rating:       return .orange
+        case .warning:      return .red
+        case .category:     return .purple
+        case .unknown:      return .secondary
+        }
+    }
+
+    private func accessibilityText(for match: SuggestionMatch) -> String {
+        if field == .tag, let type = match.tagType {
+            return "\(type.accessibilityLabel): \(match.value)"
+        }
+        return "\(fieldIcon): \(match.value)"
     }
 }

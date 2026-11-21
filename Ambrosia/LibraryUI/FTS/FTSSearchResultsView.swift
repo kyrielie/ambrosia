@@ -114,7 +114,7 @@ final class FTSSearchViewModel {
         searchTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let token = await ftsLibrary.beginSearch()
+                let token = ftsLibrary.beginSearch()
                 let bookSet = try await ftsLibrary.searchBooks(query, token: token)
                 var matchedIDs = bookSet.bookIDs
 

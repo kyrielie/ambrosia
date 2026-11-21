@@ -159,8 +159,8 @@ final class LibraryDisplayController {
             _ = self.toolbarState.filterExpression
             _ = self.toolbarState.searchText
             _ = self.toolbarState.activeFilterResult?.reloadToken
-        } onChange: { [weak self] in
-            DispatchQueue.main.async {
+        } onChange: {
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.handleToolbarStateChange()
                 self.scheduleToolbarObservation()

@@ -509,6 +509,8 @@ final class LibrarySession {
         filterResultCache.removeAll()
         ruleMatchCache.removeAll()
         await library.clearQueryCaches()
+        library.suggestionStore.invalidate()
+        warmSuggestionSnapshots()
         let newCount = await library.bookCount()
         guard self.library === library else { return }
         totalCount = newCount
@@ -693,6 +695,35 @@ final class LibrarySession {
         let seriesSyncGen = beginCoordinatedSeriesSync(awaiting: 1)
         startAO3Extraction(seriesSyncGeneration: seriesSyncGen, followsSeedSync: true)
         seedCalibreSeriesCache(seriesSyncGeneration: seriesSyncGen)
+        warmSuggestionSnapshots()
+    }
+
+    /// Builds fast in-memory suggestion snapshots for tags, authors, and series off-actor.
+    func warmSuggestionSnapshots() {
+        guard let library, let metaDB else { return }
+        let calibreRoot = library.root
+        let generation = library.suggestionStore.currentGeneration
+        Task.detached(priority: .utility) { [weak library, weak metaDB] in
+            guard let library, let metaDB else { return }
+            let tagTypes = await metaDB.allTagTypes()
+            guard library.suggestionStore.currentGeneration == generation else { return }
+            do {
+                let snapshots = try SuggestionSnapshotBuilder.buildSnapshots(
+                    calibreRoot: calibreRoot,
+                    tagTypes: tagTypes
+                )
+                library.suggestionStore.publish(
+                    tags: snapshots.tags,
+                    authors: snapshots.authors,
+                    series: snapshots.series,
+                    generation: generation
+                )
+            } catch {
+                #if DEBUG
+                print("[LibrarySession] Failed to build suggestion snapshots: \(error)")
+                #endif
+            }
+        }
     }
 
     func close() {

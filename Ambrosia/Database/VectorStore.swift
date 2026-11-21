@@ -49,16 +49,15 @@ public enum VectorStore {
     }
 
     /// Evaluates cosine similarities for all rows in matrix against a unit-normalized query vector
-    /// using Apple Accelerate BLAS `cblas_sgemv`.
+    /// using Apple Accelerate `vDSP_mmul`.
     public static func cosineSimilarities(matrix: EmbeddingMatrix, query: [Float]) -> [Float] {
         guard matrix.rows > 0, matrix.dimension == query.count else { return [] }
         var scores = [Float](repeating: 0, count: matrix.rows)
-        cblas_sgemv(
-            CblasRowMajor, CblasNoTrans,
-            Int32(matrix.rows), Int32(matrix.dimension),
-            1.0, matrix.values, Int32(matrix.dimension),
+        vDSP_mmul(
+            matrix.values, 1,
             query, 1,
-            0.0, &scores, 1
+            &scores, 1,
+            vDSP_Length(matrix.rows), 1, vDSP_Length(matrix.dimension)
         )
         return scores
     }

@@ -200,8 +200,8 @@ class LibraryViewController: NSViewController {
     private func scheduleViewModeObservation() {
         withObservationTracking {
             _ = toolbarState.viewMode
-        } onChange: { [weak self] in
-            DispatchQueue.main.async {
+        } onChange: {
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.applyViewMode(self.toolbarState.viewMode)
                 self.scheduleViewModeObservation()

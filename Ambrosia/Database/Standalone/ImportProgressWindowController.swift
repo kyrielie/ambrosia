@@ -124,63 +124,57 @@ final class ImportProgressWindowController: NSWindowController {
         progressBar.doubleValue = 0
 
         let token = self.cancellation
-        Task.detached(priority: .userInitiated) { [weak self] in
+        Task { @MainActor [weak self] in
             let isCancelledClosure = { () -> Bool in
                 token.isCancelled
             }
 
             // Step 1: Create empty DB if requested
             if createDB {
-                await MainActor.run {
-                    self?.titleLabel.stringValue = "Creating Library Database…"
-                    self?.statusLabel.stringValue = "Initializing Calibre schema…"
-                }
+                self?.titleLabel.stringValue = "Creating Library Database…"
+                self?.statusLabel.stringValue = "Initializing Calibre schema…"
                 do {
-                    try CalibreLibraryCreator.createEmptyLibrary(at: folderURL, overwrite: false)
+                    try await Task.detached(priority: .userInitiated) {
+                        _ = try CalibreLibraryCreator.createEmptyLibrary(at: folderURL, overwrite: false)
+                    }.value
                 } catch {
-                    await MainActor.run {
-                        self?.showErrorAlert(error)
-                        self?.close()
-                        completion(false)
-                    }
+                    self?.showErrorAlert(error)
+                    self?.close()
+                    completion(false)
                     return
                 }
             }
 
             // Step 2: Metadata Extraction & DB insertion
-            await MainActor.run {
-                self?.titleLabel.stringValue = "Extracting Metadata…"
-                self?.progressBar.maxValue = Double(epubs.count)
-                self?.progressBar.doubleValue = 0
-            }
+            self?.titleLabel.stringValue = "Extracting Metadata…"
+            self?.progressBar.maxValue = Double(epubs.count)
+            self?.progressBar.doubleValue = 0
 
-            _ = try? CalibreLibraryWriter.importEPUBs(
-                epubs: epubs,
-                into: folderURL,
-                batchSize: 25,
-                progress: { [weak self] info in
-                    Task { @MainActor [weak self] in
-                        self?.progressBar.doubleValue = Double(info.current)
-                        self?.statusLabel.stringValue = "(\(info.current)/\(info.total)) \(info.currentTitle)"
-                    }
-                },
-                isCancelled: isCancelledClosure
-            )
+            _ = try? await Task.detached(priority: .userInitiated) {
+                try CalibreLibraryWriter.importEPUBs(
+                    epubs: epubs,
+                    into: folderURL,
+                    batchSize: 25,
+                    progress: { info in
+                        Task { @MainActor [weak self] in
+                            self?.progressBar.doubleValue = Double(info.current)
+                            self?.statusLabel.stringValue = "(\(info.current)/\(info.total)) \(info.currentTitle)"
+                        }
+                    },
+                    isCancelled: isCancelledClosure
+                )
+            }.value
 
             if token.isCancelled {
-                await MainActor.run {
-                    self?.close()
-                    completion(false)
-                }
+                self?.close()
+                completion(false)
                 return
             }
 
             // Step 3: FTS Indexing
-            await MainActor.run {
-                self?.titleLabel.stringValue = "Building Full-Text Search…"
-                self?.statusLabel.stringValue = "Indexing book text for instant search…"
-                self?.progressBar.doubleValue = 0
-            }
+            self?.titleLabel.stringValue = "Building Full-Text Search…"
+            self?.statusLabel.stringValue = "Indexing book text for instant search…"
+            self?.progressBar.doubleValue = 0
 
             _ = try? await DatabaseMaintenanceCoordinator.shared.withMaintenance(
                 kind: .indexingFTS,
@@ -189,25 +183,25 @@ final class ImportProgressWindowController: NSWindowController {
                     token.cancel()
                 },
                 work: {
-                    try CalibreFTSWriter.indexLibrary(
-                        at: folderURL,
-                        batchSize: 10,
-                        progress: { [weak self] info in
-                            Task { @MainActor [weak self] in
-                                self?.progressBar.doubleValue = Double(info.current)
-                                self?.statusLabel.stringValue = "(\(info.current)/\(info.total)) \(info.currentTitle)"
-                            }
-                        },
-                        isCancelled: isCancelledClosure
-                    )
+                    try await Task.detached(priority: .userInitiated) {
+                        try CalibreFTSWriter.indexLibrary(
+                            at: folderURL,
+                            batchSize: 10,
+                            progress: { info in
+                                Task { @MainActor [weak self] in
+                                    self?.progressBar.doubleValue = Double(info.current)
+                                    self?.statusLabel.stringValue = "(\(info.current)/\(info.total)) \(info.currentTitle)"
+                                }
+                            },
+                            isCancelled: isCancelledClosure
+                        )
+                    }.value
                 }
             )
 
-            await MainActor.run { [weak self] in
-                let wasCancelled = token.isCancelled
-                self?.close()
-                completion(!wasCancelled)
-            }
+            let wasCancelled = token.isCancelled
+            self?.close()
+            completion(!wasCancelled)
         }
     }
 

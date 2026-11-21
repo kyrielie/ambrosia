@@ -98,7 +98,7 @@ actor AmbrosiaMetaDB {
         }
         #endif
         try Self.runMigrations(db: db)
-        try? db.run("INSERT OR REPLACE INTO library_state (key, value) VALUES (?, ?)", ["library_path", libraryURL.path])
+        _ = try? db.run("INSERT OR REPLACE INTO library_state (key, value) VALUES (?, ?)", ["library_path", libraryURL.path])
     }
 
     public static var baseDirectoryOverride: URL?
@@ -2605,6 +2605,23 @@ actor AmbrosiaMetaDB {
         }
     }
 
+    /// Returns a mapping of tag_name -> SuggestionTagType for all tags in book_tags.
+    /// Used by SuggestionSnapshotBuilder to layer AO3 tag classifications onto Calibre tags.
+    func allTagTypes() -> [String: SuggestionTagType] {
+        let sql = "SELECT tag_name, tag_type FROM book_tags GROUP BY tag_name, tag_type"
+        guard let rows = try? readDB.prepare(sql).map({ $0 }) else { return [:] }
+        var result: [String: SuggestionTagType] = [:]
+        result.reserveCapacity(rows.count)
+        for row in rows {
+            guard let name = row[0] as? String, let rawType = row[1] as? String else { continue }
+            let tagType = SuggestionTagType.from(rawType: rawType)
+            if tagType != .unknown {
+                result[name] = tagType
+            }
+        }
+        return result
+    }
+
     /// Contextual tag search for autocomplete and tag selection popovers.
     /// Fast indexed lookup over `book_tags` / `book_authors` with fallback to `ao3_metadata`.
     func searchTags(
@@ -2677,8 +2694,15 @@ actor AmbrosiaMetaDB {
             var conditions: [String] = ["bt.tag_type = ?"]
             var bindings: [Binding?] = [field.rawValue]
             if !trimmed.isEmpty {
-                conditions.append("bt.tag_name LIKE ?")
-                bindings.append("%\(trimmed)%")
+                let entities = (field == .relationship) ? RelationshipQuery.splitEntities(trimmed) : [trimmed]
+                for entity in entities where !entity.isEmpty {
+                    let escaped = entity
+                        .replacingOccurrences(of: "\\", with: "\\\\")
+                        .replacingOccurrences(of: "%", with: "\\%")
+                        .replacingOccurrences(of: "_", with: "\\_")
+                    conditions.append("bt.tag_name LIKE ? ESCAPE '\\'")
+                    bindings.append("%\(escaped)%")
+                }
             }
             if !fandomContext.isEmpty && field != .fandom {
                 let placeholders = fandomContext.map { _ in "?" }.joined(separator: ", ")

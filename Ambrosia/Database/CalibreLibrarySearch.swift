@@ -136,150 +136,131 @@ extension CalibreLibrary {
 
     // MARK: - Autocomplete suggestion queries
 
-    func tagSuggestions(prefix: String, limit: Int = 8) -> [String] {
+    /// Returns structured tag matches with match class, tag type, and link frequency.
+    /// Fast nonisolated path reads from `suggestionStore` snapshot off-actor.
+    nonisolated func tagMatches(prefix: String, limit: Int = 8) async -> [SuggestionMatch] {
         let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
-        // Tier 1 & 2: Substring matches from SQLite ordered by frequency
-        let needle = trimmed.lowercased()
+        if let snapshot = suggestionStore.tagSnapshot {
+            return snapshot.search(query: trimmed, limit: limit)
+        }
+        return await _tagSuggestionsFallback(prefix: trimmed, limit: limit)
+    }
+
+    /// Backwards-compatible tag suggestions returning string values.
+    nonisolated func tagSuggestions(prefix: String, limit: Int = 8) async -> [String] {
+        let matches = await tagMatches(prefix: prefix, limit: limit)
+        return matches.map(\.value)
+    }
+
+    /// Returns structured author matches with match class and link frequency.
+    nonisolated func authorMatches(prefix: String, limit: Int = 8) async -> [SuggestionMatch] {
+        let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        if let snapshot = suggestionStore.authorSnapshot {
+            return snapshot.search(query: trimmed, limit: limit)
+        }
+        return await _authorSuggestionsFallback(prefix: trimmed, limit: limit)
+    }
+
+    /// Backwards-compatible author suggestions returning string values.
+    nonisolated func authorSuggestions(prefix: String, limit: Int = 8) async -> [String] {
+        let matches = await authorMatches(prefix: prefix, limit: limit)
+        return matches.map(\.value)
+    }
+
+    /// Returns structured series matches with match class and link frequency.
+    nonisolated func seriesMatches(prefix: String, limit: Int = 8) async -> [SuggestionMatch] {
+        let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        if let snapshot = suggestionStore.seriesSnapshot {
+            return snapshot.search(query: trimmed, limit: limit)
+        }
+        return await _seriesSuggestionsFallback(prefix: trimmed, limit: limit)
+    }
+
+    /// Backwards-compatible series suggestions returning string values.
+    nonisolated func seriesSuggestions(prefix: String, limit: Int = 8) async -> [String] {
+        let matches = await seriesMatches(prefix: prefix, limit: limit)
+        return matches.map(\.value)
+    }
+
+    /// Title suggestions querying SQLite directly with LIKE metacharacter escaping.
+    func titleSuggestions(prefix: String, limit: Int = 8) -> [String] {
+        let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let escaped = Self.escapeLikePattern(trimmed.lowercased())
+        let sql = "SELECT title FROM books WHERE LOWER(title) LIKE ? ESCAPE '\\' ORDER BY title LIMIT ?"
+        let rows = (try? db.prepare(sql, ["%\(escaped)%" as Binding?, limit as Binding?]).map { $0 }) ?? []
+        return rows.compactMap { $0[0] as? String }
+    }
+
+    // MARK: - Isolated SQLite Fallbacks (used during initial warm-up)
+
+    private func _tagSuggestionsFallback(prefix: String, limit: Int) -> [SuggestionMatch] {
+        let escaped = Self.escapeLikePattern(prefix.lowercased())
         let sql = """
             SELECT t.name, COUNT(btl.book) AS freq
             FROM tags t
             JOIN books_tags_link btl ON btl.tag = t.id
-            WHERE LOWER(t.name) LIKE ?
+            WHERE LOWER(t.name) LIKE ? ESCAPE '\\'
             GROUP BY t.id
             ORDER BY freq DESC
             LIMIT ?
             """
-        let rows = (try? db.prepare(sql, ["%\(needle)%" as Binding?, limit as Binding?]).map { $0 }) ?? []
-        var results = rows.compactMap { $0[0] as? String }
-
-        // Tier 3: Fuzzy / Acronym fallback if exact substring search produces fewer results than limit
-        if results.count < limit && needle.count >= 2 {
-            let existing = Set(results)
-            let candidateSql = """
-                SELECT t.name, COUNT(btl.book) AS freq
-                FROM tags t
-                JOIN books_tags_link btl ON btl.tag = t.id
-                GROUP BY t.id
-                ORDER BY freq DESC
-                LIMIT 250
-                """
-            let candidateRows = (try? db.prepare(candidateSql).map { $0 }) ?? []
-            var fuzzyCandidates: [(name: String, score: Double)] = []
-
-            for row in candidateRows {
-                guard let name = row[0] as? String, !existing.contains(name) else { continue }
-                let freq = (row[1] as? Int64).map(Int.init) ?? 1
-                let lowerName = name.lowercased()
-                let words = lowerName.split(separator: " ").map(String.init)
-
-                var matchedScore: Double = 0
-
-                // Check acronym (e.g. "au" -> "alternate universe")
-                if words.count > 1 {
-                    let initials = String(words.compactMap { $0.first })
-                    if initials == needle || initials.hasPrefix(needle) {
-                        matchedScore = 90
-                    }
-                }
-
-                // Check Damerau-Levenshtein distance against whole tag or individual words
-                if matchedScore == 0 {
-                    let wholeDist = Self.damerauLevenshtein(needle, lowerName, maxDistance: 2)
-                    if wholeDist <= 2 {
-                        matchedScore = Double(3 - wholeDist) * 30
-                    } else {
-                        for word in words where word.count >= 3 {
-                            let dist = Self.damerauLevenshtein(needle, word, maxDistance: 2)
-                            if dist <= 2 {
-                                matchedScore = max(matchedScore, Double(3 - dist) * 25)
-                            }
-                        }
-                    }
-                }
-
-                if matchedScore > 0 {
-                    let totalScore = matchedScore + log(Double(max(1, freq))) * 5.0
-                    fuzzyCandidates.append((name, totalScore))
-                }
-            }
-
-            fuzzyCandidates.sort { $0.score > $1.score }
-            for candidate in fuzzyCandidates {
-                if results.count >= limit { break }
-                results.append(candidate.name)
-            }
+        let rows = (try? db.prepare(sql, ["%\(escaped)%" as Binding?, limit as Binding?]).map { $0 }) ?? []
+        return rows.compactMap { row in
+            guard let name = row[0] as? String else { return nil }
+            let freq = (row[1] as? Int64).map(Int.init) ?? 1
+            return SuggestionMatch(value: name, matchClass: .substring, frequency: freq)
         }
-
-        return results
     }
 
-    private static func damerauLevenshtein(_ s1: String, _ s2: String, maxDistance: Int = 2) -> Int {
-        let sourceChars = Array(s1)
-        let targetChars = Array(s2)
-        let sourceLength = sourceChars.count
-        let targetLength = targetChars.count
-
-        if abs(sourceLength - targetLength) > maxDistance { return maxDistance + 1 }
-        if sourceLength == 0 { return targetLength }
-        if targetLength == 0 { return sourceLength }
-
-        var distanceMatrix = Array(repeating: Array(repeating: 0, count: targetLength + 1), count: sourceLength + 1)
-        for rowIdx in 0...sourceLength { distanceMatrix[rowIdx][0] = rowIdx }
-        for colIdx in 0...targetLength { distanceMatrix[0][colIdx] = colIdx }
-
-        for rowIdx in 1...sourceLength {
-            var minInRow = Int.max
-            for colIdx in 1...targetLength {
-                let cost = sourceChars[rowIdx - 1] == targetChars[colIdx - 1] ? 0 : 1
-                var val = min(
-                    distanceMatrix[rowIdx - 1][colIdx] + 1,
-                    distanceMatrix[rowIdx][colIdx - 1] + 1,
-                    distanceMatrix[rowIdx - 1][colIdx - 1] + cost
-                )
-                if rowIdx > 1 && colIdx > 1 &&
-                    sourceChars[rowIdx - 1] == targetChars[colIdx - 2] &&
-                    sourceChars[rowIdx - 2] == targetChars[colIdx - 1] {
-                    val = min(val, distanceMatrix[rowIdx - 2][colIdx - 2] + 1)
-                }
-                distanceMatrix[rowIdx][colIdx] = val
-                minInRow = min(minInRow, val)
-            }
-            if minInRow > maxDistance {
-                return maxDistance + 1
-            }
-        }
-        return distanceMatrix[sourceLength][targetLength]
-    }
-
-    func authorSuggestions(prefix: String, limit: Int = 8) -> [String] {
-        guard !prefix.isEmpty else { return [] }
+    private func _authorSuggestionsFallback(prefix: String, limit: Int) -> [SuggestionMatch] {
+        let escaped = Self.escapeLikePattern(prefix.lowercased())
         let sql = """
-            SELECT a.name FROM authors a
-            WHERE LOWER(a.name) LIKE ?
-            ORDER BY a.sort
+            SELECT a.name, COUNT(bal.book) AS freq
+            FROM authors a
+            JOIN books_authors_link bal ON bal.author = a.id
+            WHERE LOWER(a.name) LIKE ? ESCAPE '\\'
+            GROUP BY a.id
+            ORDER BY freq DESC
             LIMIT ?
             """
-        let rows = (try? db.prepare(sql, ["%\(prefix.lowercased())%" as Binding?,
-                                          limit as Binding?]).map { $0 }) ?? []
-        return rows.compactMap { $0[0] as? String }
+        let rows = (try? db.prepare(sql, ["%\(escaped)%" as Binding?, limit as Binding?]).map { $0 }) ?? []
+        return rows.compactMap { row in
+            guard let name = row[0] as? String else { return nil }
+            let freq = (row[1] as? Int64).map(Int.init) ?? 1
+            return SuggestionMatch(value: name, matchClass: .substring, frequency: freq)
+        }
     }
 
-    func titleSuggestions(prefix: String, limit: Int = 8) -> [String] {
-        guard !prefix.isEmpty else { return [] }
-        let sql = "SELECT title FROM books WHERE LOWER(title) LIKE ? ORDER BY title LIMIT ?"
-        let rows = (try? db.prepare(sql, ["%\(prefix.lowercased())%" as Binding?,
-                                          limit as Binding?]).map { $0 }) ?? []
-        return rows.compactMap { $0[0] as? String }
+    private func _seriesSuggestionsFallback(prefix: String, limit: Int) -> [SuggestionMatch] {
+        let escaped = Self.escapeLikePattern(prefix.lowercased())
+        let sql = """
+            SELECT s.name, COUNT(bsl.book) AS freq
+            FROM series s
+            JOIN books_series_link bsl ON bsl.series = s.id
+            WHERE LOWER(s.name) LIKE ? ESCAPE '\\'
+            GROUP BY s.id
+            ORDER BY freq DESC
+            LIMIT ?
+            """
+        let rows = (try? db.prepare(sql, ["%\(escaped)%" as Binding?, limit as Binding?]).map { $0 }) ?? []
+        return rows.compactMap { row in
+            guard let name = row[0] as? String else { return nil }
+            let freq = (row[1] as? Int64).map(Int.init) ?? 1
+            return SuggestionMatch(value: name, matchClass: .substring, frequency: freq)
+        }
     }
 
-    func seriesSuggestions(prefix: String, limit: Int = 8) -> [String] {
-        guard !prefix.isEmpty else { return [] }
-        let sql = "SELECT name FROM series WHERE LOWER(name) LIKE ? ORDER BY name LIMIT ?"
-        let rows = (try? db.prepare(sql, ["%\(prefix.lowercased())%" as Binding?,
-                                          limit as Binding?]).map { $0 }) ?? []
-        return rows.compactMap { $0[0] as? String }
+    private static func escapeLikePattern(_ pattern: String) -> String {
+        pattern
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_")
     }
-
 }
