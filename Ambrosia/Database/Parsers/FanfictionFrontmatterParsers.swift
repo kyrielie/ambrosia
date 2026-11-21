@@ -50,8 +50,8 @@ enum FanFicFareParser {
             return nil
         }
 
-        let workID = firstMatch(in: href, pattern: #"/works/([0-9]+)"#)
-        let storyURL = href.hasPrefix("http") ? href : "https://archiveofourown.org\(href)"
+        let workID = AO3MetadataExtractor.parseWorkID(fromHref: href)
+        let storyURL = AO3MetadataExtractor.absoluteAO3URL(href)
 
         var authors: [AO3AuthorEntry] = []
         let authorLinks = (try? doc.select("a.authorlink, a[href*='/users/']").array()) ?? []
@@ -219,8 +219,8 @@ enum FicLabParser {
             return nil
         }
 
-        let workID = firstMatch(in: href, pattern: #"/works/([0-9]+)"#)
-        let storyURL = href.hasPrefix("http") ? href : "https://archiveofourown.org\(href)"
+        let workID = AO3MetadataExtractor.parseWorkID(fromHref: href)
+        let storyURL = AO3MetadataExtractor.absoluteAO3URL(href)
 
         var authors: [AO3AuthorEntry] = []
         var rating: String?
@@ -336,8 +336,8 @@ enum FicHubParser {
             return nil
         }
 
-        let workID = firstMatch(in: href, pattern: #"/works/([0-9]+)"#)
-        let storyURL = href.hasPrefix("http") ? href : "https://archiveofourown.org\(href)"
+        let workID = AO3MetadataExtractor.parseWorkID(fromHref: href)
+        let storyURL = AO3MetadataExtractor.absoluteAO3URL(href)
 
         var authors: [AO3AuthorEntry] = []
         if let authorP = try? doc.select("p:contains(By:)").first()?.text() {

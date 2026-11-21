@@ -1133,14 +1133,34 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         let requestedFilename = url.lastPathComponent
         let fragment = url.fragment
 
+        // Determine if this is a same-document or bare-fragment link
+        let isBaseDir: Bool = {
+            guard workImageBaseURLs.indices.contains(ref.workIndex) else { return false }
+            let baseURL = workImageBaseURLs[ref.workIndex]
+            let basePath = baseURL.standardized.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let urlPath = url.standardized.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return basePath == urlPath || url.path.isEmpty || url.path == "/"
+        }()
+
+        let currentLocalIndex = ref.localIndex
+        let currentItemFilename = URL(fileURLWithPath: workParser.spine[currentLocalIndex].href).lastPathComponent
+        let isCurrentDocument = isBaseDir || requestedFilename == currentItemFilename || requestedFilename.isEmpty
+
         // A TOC/footnote link inside one EPUB only ever references files
         // within that same work's own manifest, so the search is scoped to
         // the currently active work — no cross-work link resolution needed.
-        guard let localTargetIndex = workParser.spine.firstIndex(where: {
-            URL(fileURLWithPath: $0.href).lastPathComponent == requestedFilename
-        }), let targetIndex = spineMap.globalIndex(workIndex: ref.workIndex, localIndex: localTargetIndex) else {
-            return
-        }
+        let resolvedTargetIndex: Int? = {
+            if let localIndex = workParser.spine.firstIndex(where: {
+                URL(fileURLWithPath: $0.href).lastPathComponent == requestedFilename
+            }) {
+                return spineMap.globalIndex(workIndex: ref.workIndex, localIndex: localIndex)
+            } else if isCurrentDocument || fragment != nil {
+                return currentSpineIndex
+            }
+            return nil
+        }()
+
+        guard let targetIndex = resolvedTargetIndex else { return }
 
         switch currentMode {
         case .paginated:

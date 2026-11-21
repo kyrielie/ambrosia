@@ -30,6 +30,8 @@ Ambrosia organizes its architectural documentation across three tiers:
 
 | Plan File | Roadmap Phase & Scope | Target Subsystem | Related Topic Doc |
 | :--- | :--- | :--- | :--- |
+| [`database-performance-and-query-pipeline-plan.md`](database-performance-and-query-pipeline-plan.md) | **Database Optimization (Active)**<br/>Database Performance, Universal Paging Cache & AO3 Decoupling | `Ambrosia/Database/` &bull; `Ambrosia/LibraryUI/` | [docs/caching.md](~/Documents/Applications/ambrosia/docs/caching.md) &bull; [docs/calibre-library.md](~/Documents/Applications/ambrosia/docs/calibre-library.md) |
+| [`epub-repair-and-archival-normalization-plan.md`](epub-repair-and-archival-normalization-plan.md) | **Archival Integrity (Active)**<br/>EPUB Repair, Archival Normalization & Calibre Zero-Corruption Architecture | `Ambrosia/Utilities/` &bull; `Ambrosia/Database/` &bull; `Ambrosia/LibraryUI/` | [docs/epub-export.md](~/Documents/Applications/ambrosia/docs/epub-export.md) &bull; [docs/calibre-library.md](~/Documents/Applications/ambrosia/docs/calibre-library.md) |
 | [`epub-import-and-safe-trashing-plan.md`](~/Documents/Applications/ambrosia/docs/plans/epub-import-and-safe-trashing-plan.md) | **Phase 7 / 15 (Active)**<br/>EPUB Drag-and-Drop Import, Pre-Triage & Safe Reversible Trashing | `Ambrosia/Database/` &bull; `Ambrosia/LibraryUI/` | [docs/calibre-library.md](~/Documents/Applications/ambrosia/docs/calibre-library.md) |
 | [`fanfiction-archive-export-plan.md`](~/Documents/Applications/ambrosia/docs/plans/fanfiction-archive-export-plan.md) | **Unscheduled proposal**<br/>Library Sharing, Bundled Collections & Archive Export | `Ambrosia/Exporters/` &bull; `Ambrosia/Collections/` | [docs/metadb-and-migrations.md](~/Documents/Applications/ambrosia/docs/metadb-and-migrations.md) |
 | [`fulltext-semantic-search-and-external-ingestion-plan.md`](~/Documents/Applications/ambrosia/docs/plans/fulltext-semantic-search-and-external-ingestion-plan.md) | **Phase 12 Extension (Proposed)**<br/>Full-Text Corpus Semantic Search & External Headless Ingestion | `Ambrosia/Database/` &bull; `Ambrosia/LibraryUI/FTS/` &bull; `scripts/` | [docs/search-and-filter.md](~/Documents/Applications/ambrosia/docs/search-and-filter.md) &bull; [docs/calibre-fts.md](~/Documents/Applications/ambrosia/docs/calibre-fts.md) |
@@ -44,6 +46,7 @@ Ambrosia organizes its architectural documentation across three tiers:
 
 ### Recently closed plans
 
+- [`ao3-metadata-extraction-consolidation-plan.md`](finished/ao3-metadata-extraction-consolidation-plan.md): Consolidated `parseWorkID`, shared `absoluteAO3URL`, and unified `findBylineAuthors` scanning across native AO3, external frontmatter engines, and library writers.
 - [`ambrosia_formatting_prompt_future.md`](finished/ambrosia_formatting_prompt_future.md): Superseded design brief based on older reader and preference assumptions.
 - [`ao3-epub3-export-modernization-plan.md`](finished/ao3-epub3-export-modernization-plan.md): EPUB 3 normalization is implemented and wired into export.
 - [`incremental-filter-evaluation-plan.md`](finished/incremental-filter-evaluation-plan.md): Implemented behind the release gate documented in `docs/search-and-filter.md`.

@@ -159,7 +159,7 @@ enum AO3MetadataExtractor {
             if let link = try doc.select("p.message a[href*=\\/works\\/], p.message a[href*=works]").first() {
                 let href = try link.attr("href")
                 record.storyURL = absoluteAO3URL(href).replacingOccurrences(of: "http://", with: "https://")
-                record.workID = firstMatch(in: href, pattern: #"/works/([0-9]+)"#)
+                record.workID = parseWorkID(fromHref: href)
             } else {
                 let work = try firstHrefMatching(in: doc, pattern: #"/works/([0-9]+)"#)
                 record.storyURL = work.href.map(absoluteAO3URL)
@@ -352,7 +352,18 @@ enum AO3MetadataExtractor {
         return String(string[range])
     }
 
-    private static func absoluteAO3URL(_ href: String) -> String {
+    private static let workIDRegex = try? NSRegularExpression(pattern: #"/works/([0-9]+)"#)
+
+    /// Numeric work ID from a `/works/<digits>` path segment, or nil. Pure regex; does not
+    /// validate the host. Callers keep their own guards.
+    static func parseWorkID(fromHref href: String) -> String? {
+        guard let match = workIDRegex?.firstMatch(in: href, range: NSRange(href.startIndex..., in: href)),
+              match.numberOfRanges > 1,
+              let range = Range(match.range(at: 1), in: href) else { return nil }
+        return String(href[range])
+    }
+
+    static func absoluteAO3URL(_ href: String) -> String {
         href.hasPrefix("http") ? href : "https://archiveofourown.org\(href)"
     }
 

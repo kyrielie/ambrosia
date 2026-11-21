@@ -20,6 +20,7 @@ doc(s) relevant to your task**, not this whole index cover-to-cover.
 - **Row-selection behavior (multiselect, arrow-key navigation) specifically** → `docs/library-ui.md` (and see `docs/collections-management-selection-verification-checklist.md`, a still-open manual-verification checklist — see "Dangling references" below)
 - **AO3 preface metadata extraction, tag canonicalization/synonyms** → `docs/ao3-metadata-extraction.md` (and see `docs/ao3_epub_html_reference.md` for the raw HTML shape this extractor parses; that file is local-only, see "Local-only files" below)
 - **`EPUBParser` (zip/OPF/spine parsing, merged HTML, offset contract)** → `docs/epub-parsing.md`
+- **EPUB export & modernization (EPUB 3 normalization, Calibre series handling, credits)** → `docs/epub-export.md`
 - **`ReaderViewController`/`ReaderWindowController`, scroll vs. paginated mode, the CSS preference pipeline** → `docs/reader.md`
 - **Highlights, point annotations, `HighlightBridge`** → `docs/annotations.md`
 - **`LocalFeedServer`, `RSSPublishView`, the served RSS/JSON-feed/OPML routes** → `docs/local-feed-server.md` (and see historical `docs/plans/finished/ambrosia-feed-transfer-phase0-findings.md` for the `.sqlite`/large-collection transfer route)

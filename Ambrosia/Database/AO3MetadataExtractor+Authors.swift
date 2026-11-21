@@ -60,4 +60,25 @@ extension AO3MetadataExtractor {
             return AO3AuthorEntry(username: username, pseud: pseud, profileURL: profileURL, source: .byline)
         }
     }
+
+    /// Scans up to `window` spine items after `prefaceIndex` for a chapter byline and returns the
+    /// first non-empty author list, or [] if none. `loadHTML` receives a spine index.
+    static func findBylineAuthors(
+        spineCount: Int,
+        after prefaceIndex: Int,
+        window: Int = 2,
+        loadHTML: (Int) -> String?
+    ) -> [AO3AuthorEntry] {
+        guard prefaceIndex >= 0 else { return [] }
+        let bylineRangeEnd = min(prefaceIndex + 1 + window, spineCount)
+        guard (prefaceIndex + 1) < bylineRangeEnd else { return [] }
+        for candidateIndex in (prefaceIndex + 1)..<bylineRangeEnd {
+            guard let html = loadHTML(candidateIndex) else { continue }
+            let authors = parseAuthors(from: html)
+            if !authors.isEmpty {
+                return authors
+            }
+        }
+        return []
+    }
 }

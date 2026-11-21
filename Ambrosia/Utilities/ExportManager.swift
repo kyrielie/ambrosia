@@ -321,7 +321,7 @@ struct ExportManager {
                 guard let source = book.epubURL(libraryRoot: libraryRoot) else {
                     skipped.append(book.displayTitle); progress(copied + skipped.count); continue
                 }
-                let targetFolders: [(url: URL, seriesIndex: Int)]
+                let targetFolders: [(url: URL, seriesIndex: Int?, seriesName: String?)]
                 if groupBySeries, let entries = seriesEntries[book.id], !entries.isEmpty {
                     // A book that's a member of more than one series (e.g. #1 of A and
                     // #3 of B) gets copied into every one of its series' folders, not
@@ -331,19 +331,18 @@ struct ExportManager {
                     // resulting folder name regardless, in case two entries somehow
                     // still resolve to the same one.
                     var seenFolderNames = Set<String>()
-                    targetFolders = entries.compactMap { entry -> (URL, Int)? in
+                    targetFolders = entries.compactMap { entry -> (URL, Int?, String?)? in
                         let sanitizedName = CalibreBook.sanitizedForFilename(entry.seriesName)
                         let idSuffix = entry.ao3SeriesID ?? entry.calibreSeriesID.map(String.init) ?? ""
                         let folderName = idSuffix.isEmpty ? sanitizedName : "\(sanitizedName)-\(idSuffix)"
                         guard seenFolderNames.insert(folderName).inserted else { return nil }
-                        return (destination.appendingPathComponent(folderName), entry.seriesIndex)
+                        return (destination.appendingPathComponent(folderName), entry.seriesIndex, entry.seriesName)
                     }
                 } else {
-                    // seriesIndex is never read here: seriesIndexPrefix passed to
-                    // exportFilename below is gated on groupBySeries, and per bug #3
-                    // touch point 9, the prefix only applies within series-grouped
-                    // export folders — ungrouped/single-book export is unaffected.
-                    targetFolders = [(destination, 0)]
+                    // Standalone work or ungrouped export: save directly in destination
+                    // with no series index prefix. seriesIndex is nil so exportFilename
+                    // does not prepend an erroneous "00 - " prefix.
+                    targetFolders = [(destination, nil, nil)]
                 }
 
                 var copiedThisBook = false
@@ -355,18 +354,22 @@ struct ExportManager {
                     let filename = book.exportFilename(
                         ao3: ao3Map[book.id],
                         idSource: filenameIDSource,
-                        seriesIndexPrefix: groupBySeries ? targetFolder.seriesIndex : nil
+                        seriesIndexPrefix: targetFolder.seriesIndex
                     )
                     try? FileManager.default.createDirectory(at: targetFolder.url, withIntermediateDirectories: true)
                     let dest = uniqueDestination(for: filename, in: targetFolder.url)
                     if options.modernizeEPUB3 {
                         do {
+                            let targetSeriesInfo: (name: String, index: Int)? = targetFolder.seriesName.map {
+                                (name: $0, index: targetFolder.seriesIndex ?? 1)
+                            }
                             try AO3EPUB3Normalizer.normalize(
                                 sourceEPUB: source,
                                 destinationEPUB: dest,
                                 metadata: ao3Map[book.id],
                                 bookTitle: book.displayTitle,
-                                authors: book.authors
+                                authors: book.authors,
+                                targetSeries: targetSeriesInfo
                             )
                             copiedThisBook = true
                         } catch {
@@ -466,7 +469,7 @@ struct ExportManager {
     }
 
     @MainActor
-    static func presentEPUBExportSummary(copied: Int, skipped: [String]) {
+    static func presentEPUBExportSummary(copied: Int, skipped: [String], on window: NSWindow? = nil) {
         let alert = NSAlert()
         if skipped.isEmpty {
             alert.messageText = "Export Complete"
@@ -479,7 +482,21 @@ struct ExportManager {
             alert.informativeText = "Copied \(copied) EPUB\(copied == 1 ? "" : "s").\n\nCould not copy:\n\(skippedList)\(more)"
             alert.alertStyle = .warning
         }
-        alert.runModal()
+        alert.addButton(withTitle: "OK")
+
+        let targetWin = window ?? NSApp.keyWindow ?? NSApp.mainWindow
+        if let targetWin, targetWin.attachedSheet == nil {
+            alert.beginSheetModal(for: targetWin) { _ in }
+        } else {
+            DispatchQueue.main.async {
+                let win = window ?? NSApp.keyWindow ?? NSApp.mainWindow
+                if let win, win.attachedSheet == nil {
+                    alert.beginSheetModal(for: win) { _ in }
+                } else {
+                    alert.runModal()
+                }
+            }
+        }
     }
 
     // MARK: - Helpers

@@ -1,6 +1,8 @@
 import Foundation
 
 /// Constructs EPUB 3.0 compliant XML and XHTML5 assets matching the `epub-otwarchive` specification.
+/// Credit: Based on research and templates by Timothy Cyrus (tcyrus, https://archiveofourown.org/works/89438831)
+/// and Nectar's EPUB 3.3 generation engine.
 enum AO3EPUB3Builder {
 
     struct ChapterItem: Sendable, Equatable {
@@ -24,7 +26,7 @@ enum AO3EPUB3Builder {
         <?xml version="1.0" encoding="UTF-8"?>
         <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
             <rootfiles>
-                <rootfile full-path="OEBPS/package.opf" media-type="application/oebps-package+xml"/>
+                <rootfile full-path="EPUB/content.opf" media-type="application/oebps-package+xml"/>
             </rootfiles>
         </container>
         """
@@ -39,8 +41,10 @@ enum AO3EPUB3Builder {
         var metadata: AO3MetadataRecord?
         var language: String
         var chapters: [ChapterItem]
+        var hasImprint: Bool
         var hasPreface: Bool
         var hasAfterword: Bool
+        var primarySeries: (name: String, index: Int)?
         var additionalManifestItems: [(id: String, href: String, mediaType: String, properties: String?)]
 
         init(
@@ -50,8 +54,10 @@ enum AO3EPUB3Builder {
             metadata: AO3MetadataRecord? = nil,
             language: String = "en",
             chapters: [ChapterItem] = [],
+            hasImprint: Bool = true,
             hasPreface: Bool = false,
             hasAfterword: Bool = false,
+            primarySeries: (name: String, index: Int)? = nil,
             additionalManifestItems: [(id: String, href: String, mediaType: String, properties: String?)] = []
         ) {
             self.title = title
@@ -60,8 +66,10 @@ enum AO3EPUB3Builder {
             self.metadata = metadata
             self.language = language
             self.chapters = chapters
+            self.hasImprint = hasImprint
             self.hasPreface = hasPreface
             self.hasAfterword = hasAfterword
+            self.primarySeries = primarySeries
             self.additionalManifestItems = additionalManifestItems
         }
     }
@@ -94,40 +102,55 @@ enum AO3EPUB3Builder {
 
         var subjectTags: [String] = []
         if let rating = options.metadata?.rating, !rating.isEmpty {
-            subjectTags.append("<dc:subject>Rating -- \(escapeXML(rating))</dc:subject>")
+            subjectTags.append("<dc:subject>\(escapeXML(rating))</dc:subject>")
         }
         for warning in options.metadata?.warnings ?? [] {
-            subjectTags.append("<dc:subject>Archive Warning -- \(escapeXML(warning))</dc:subject>")
+            subjectTags.append("<dc:subject>\(escapeXML(warning))</dc:subject>")
         }
         for fandom in options.metadata?.fandoms ?? [] {
-            subjectTags.append("<dc:subject>Fandom -- \(escapeXML(fandom))</dc:subject>")
+            subjectTags.append("<dc:subject>\(escapeXML(fandom))</dc:subject>")
         }
         for rel in options.metadata?.relationships ?? [] {
-            subjectTags.append("<dc:subject>Relationship -- \(escapeXML(rel))</dc:subject>")
+            subjectTags.append("<dc:subject>\(escapeXML(rel))</dc:subject>")
         }
         for char in options.metadata?.characters ?? [] {
-            subjectTags.append("<dc:subject>Character -- \(escapeXML(char))</dc:subject>")
+            subjectTags.append("<dc:subject>\(escapeXML(char))</dc:subject>")
         }
         for tag in options.metadata?.additionalTags ?? [] {
-            subjectTags.append("<dc:subject>Additional Tags -- \(escapeXML(tag))</dc:subject>")
+            subjectTags.append("<dc:subject>\(escapeXML(tag))</dc:subject>")
+        }
+
+        var seriesTags: [String] = []
+        let activeSeries = options.primarySeries ?? options.metadata?.series.first.map { ($0.name, $0.index) }
+        if let activeSeries {
+            seriesTags.append("<meta name=\"calibre:series\" content=\"\(escapeXML(activeSeries.name))\"/>")
+            seriesTags.append("<meta name=\"calibre:series_index\" content=\"\(activeSeries.index)\"/>")
+            seriesTags.append("<meta property=\"belongs-to-collection\" id=\"series_01\">\(escapeXML(activeSeries.name))</meta>")
+            seriesTags.append("<meta refines=\"#series_01\" property=\"collection-type\">series</meta>")
+            seriesTags.append("<meta refines=\"#series_01\" property=\"group-position\">\(activeSeries.index)</meta>")
         }
 
         var manifestItems: [String] = [
             "<item id=\"toc\" href=\"toc.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>",
-            "<item id=\"style\" href=\"stylesheet.css\" media-type=\"text/css\"/>",
-            "<item id=\"imprint\" href=\"imprint.xhtml\" media-type=\"application/xhtml+xml\"/>"
+            "<item id=\"ncx\" href=\"toc.ncx\" media-type=\"application/x-dtbncx+xml\"/>",
+            "<item id=\"style\" href=\"css/stylesheet.css\" media-type=\"text/css\"/>",
+            "<item id=\"page_styles\" href=\"css/page_styles.css\" media-type=\"text/css\"/>"
         ]
 
+        if options.hasImprint {
+            manifestItems.append("<item id=\"imprint\" href=\"text/imprint.xhtml\" media-type=\"application/xhtml+xml\"/>")
+        }
+
         if options.hasPreface {
-            manifestItems.append("<item id=\"preface\" href=\"preface.xhtml\" media-type=\"application/xhtml+xml\"/>")
+            manifestItems.append("<item id=\"preface\" href=\"text/preface.xhtml\" media-type=\"application/xhtml+xml\"/>")
         }
 
         for chapter in options.chapters {
-            manifestItems.append("<item id=\"\(chapter.id)\" href=\"\(chapter.id).xhtml\" media-type=\"application/xhtml+xml\"/>")
+            manifestItems.append("<item id=\"\(chapter.id)\" href=\"text/\(chapter.id).xhtml\" media-type=\"application/xhtml+xml\"/>")
         }
 
         if options.hasAfterword {
-            manifestItems.append("<item id=\"afterword\" href=\"afterword.xhtml\" media-type=\"application/xhtml+xml\"/>")
+            manifestItems.append("<item id=\"afterword\" href=\"text/afterword.xhtml\" media-type=\"application/xhtml+xml\"/>")
         }
 
         for item in options.additionalManifestItems {
@@ -135,9 +158,10 @@ enum AO3EPUB3Builder {
             manifestItems.append("<item id=\"\(item.id)\" href=\"\(item.href)\" media-type=\"\(item.mediaType)\"\(propAttr)/>")
         }
 
-        var spineItems: [String] = [
-            "<itemref idref=\"imprint\"/>"
-        ]
+        var spineItems: [String] = []
+        if options.hasImprint {
+            spineItems.append("<itemref idref=\"imprint\"/>")
+        }
         if options.hasPreface {
             spineItems.append("<itemref idref=\"preface\"/>")
         }
@@ -150,9 +174,9 @@ enum AO3EPUB3Builder {
 
         return """
         <?xml version="1.0" encoding="utf-8"?>
-        <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="url">
+        <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
             <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
-                <dc:identifier id="url">\(identifierURL)</dc:identifier>
+                <dc:identifier id="pub-id">\(identifierURL)</dc:identifier>
                 <dc:title id="title">\(escapeXML(options.title))</dc:title>
                 <dc:language>\(bcp47)</dc:language>
                 <dc:publisher id="pub">Archive of Our Own</dc:publisher>
@@ -161,11 +185,12 @@ enum AO3EPUB3Builder {
                 <meta property="dcterms:modified">\(modifiedTimestamp)</meta>
         \(creatorTags.joined(separator: "\n"))
         \(subjectTags.map { "        \($0)" }.joined(separator: "\n"))
+        \(seriesTags.map { "        \($0)" }.joined(separator: "\n"))
             </metadata>
             <manifest>
         \(manifestItems.map { "        \($0)" }.joined(separator: "\n"))
             </manifest>
-            <spine>
+            <spine toc="ncx">
         \(spineItems.map { "        \($0)" }.joined(separator: "\n"))
             </spine>
         </package>
@@ -178,6 +203,7 @@ enum AO3EPUB3Builder {
         title: String,
         chapters: [ChapterItem],
         language: String,
+        hasImprint: Bool = true,
         hasPreface: Bool = false,
         hasAfterword: Bool = false
     ) -> String {
@@ -186,16 +212,18 @@ enum AO3EPUB3Builder {
         var chapterListItems: [String] = []
         for chapter in chapters {
             chapterListItems.append("""
-                            <li><a href="\(chapter.id).xhtml">\(escapeXML(chapter.title))</a></li>
+                            <li><a href="text/\(chapter.id).xhtml">\(escapeXML(chapter.title))</a></li>
             """)
         }
 
-        var topLevelListItems: [String] = [
-            "            <li><a href=\"imprint.xhtml\">Imprint</a></li>"
-        ]
+        var topLevelListItems: [String] = []
+
+        if hasImprint {
+            topLevelListItems.append("            <li><a href=\"text/imprint.xhtml\">Imprint</a></li>")
+        }
 
         if hasPreface {
-            topLevelListItems.append("            <li><a href=\"preface.xhtml\">Preface</a></li>")
+            topLevelListItems.append("            <li><a href=\"text/preface.xhtml\">Preface</a></li>")
         }
 
         topLevelListItems.append("""
@@ -208,8 +236,10 @@ enum AO3EPUB3Builder {
         """)
 
         if hasAfterword {
-            topLevelListItems.append("            <li><a href=\"afterword.xhtml\">Afterword</a></li>")
+            topLevelListItems.append("            <li><a href=\"text/afterword.xhtml\">Afterword</a></li>")
         }
+
+        let titlePageTarget = hasPreface ? "text/preface.xhtml" : "text/imprint.xhtml"
 
         return """
         <?xml version="1.0" encoding="utf-8"?>
@@ -218,17 +248,86 @@ enum AO3EPUB3Builder {
         <head>
             <meta charset="utf-8"/>
             <title>Table of Contents</title>
-            <link rel="stylesheet" type="text/css" href="stylesheet.css"/>
+            <link rel="stylesheet" type="text/css" href="css/stylesheet.css"/>
+            <link rel="stylesheet" type="text/css" href="css/page_styles.css"/>
         </head>
-        <body>
-            <nav id="toc" epub:type="toc">
+        <body epub:type="frontmatter">
+            <nav id="toc" epub:type="toc" role="doc-toc">
                 <h1>Table of Contents</h1>
                 <ol>
         \(topLevelListItems.joined(separator: "\n"))
                 </ol>
             </nav>
+            <nav id="landmarks" epub:type="landmarks">
+                <h2>Landmarks</h2>
+                <ol>
+                    <li><a href="\(titlePageTarget)" epub:type="frontmatter">Title Page</a></li>
+                    <li><a href="text/\(chapters.first?.id ?? "chapter_1").xhtml" epub:type="bodymatter">Start of Content</a></li>
+                </ol>
+            </nav>
         </body>
         </html>
+        """
+    }
+
+    // MARK: - NCX Fallback Document
+
+    static func buildNCX(
+        title: String,
+        chapters: [ChapterItem],
+        workID: String?,
+        hasImprint: Bool = true,
+        hasPreface: Bool = false
+    ) -> String {
+        let identifierURL = workID.map { "https://archiveofourown.org/works/\($0)" }
+            ?? "urn:uuid:\(UUID().uuidString)"
+        var navPoints: [String] = []
+        var order = 1
+        if hasImprint {
+            navPoints.append("""
+            <navPoint id="np_\(order)" playOrder="\(order)">
+              <navLabel><text>Imprint</text></navLabel>
+              <content src="text/imprint.xhtml"/>
+            </navPoint>
+            """)
+            order += 1
+        }
+        if hasPreface {
+            navPoints.append("""
+            <navPoint id="np_\(order)" playOrder="\(order)">
+              <navLabel><text>Preface</text></navLabel>
+              <content src="text/preface.xhtml"/>
+            </navPoint>
+            """)
+            order += 1
+        }
+        for chap in chapters {
+            navPoints.append("""
+            <navPoint id="np_\(order)" playOrder="\(order)">
+              <navLabel><text>\(escapeXML(chap.title))</text></navLabel>
+              <content src="text/\(chap.id).xhtml"/>
+            </navPoint>
+            """)
+            order += 1
+        }
+
+        return """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+          <head>
+            <meta name="dtb:uid" content="\(identifierURL)"/>
+            <meta name="dtb:depth" content="2"/>
+            <meta name="dtb:generator" content="Ambrosia"/>
+            <meta name="dtb:totalPageCount" content="0"/>
+            <meta name="dtb:maxPageNumber" content="0"/>
+          </head>
+          <docTitle>
+            <text>\(escapeXML(title))</text>
+          </docTitle>
+          <navMap>
+        \(navPoints.joined(separator: "\n"))
+          </navMap>
+        </ncx>
         """
     }
 
@@ -293,10 +392,11 @@ enum AO3EPUB3Builder {
         <head>
             <meta charset="utf-8"/>
             <title>\(escapeXML(title))</title>
-            <link rel="stylesheet" type="text/css" href="stylesheet.css"/>
+            <link rel="stylesheet" type="text/css" href="../css/stylesheet.css"/>
+            <link rel="stylesheet" type="text/css" href="../css/page_styles.css"/>
         </head>
         <body epub:type="frontmatter">
-            <section class="imprint" epub:type="imprint">
+            <section class="imprint" id="imprint" epub:type="imprint">
                 <header>
                     <h1 class="title">\(escapeXML(title))</h1>
                     <div class="byline">by \(escapeXML(authorNames))</div>
@@ -313,10 +413,12 @@ enum AO3EPUB3Builder {
     // MARK: - Preface & Afterword
 
     static func buildPreface(
-        notes: String,
+        content: String,
         language: String
     ) -> String {
         let bcp47 = AO3LanguageMap.bcp47Tag(for: language)
+        let hasHeading = content.localizedCaseInsensitiveContains("<h1") || content.localizedCaseInsensitiveContains("<h2")
+        let headingHTML = hasHeading ? "" : "<h2>Preface</h2>\n"
         return """
         <?xml version="1.0" encoding="utf-8"?>
         <!DOCTYPE html>
@@ -324,18 +426,25 @@ enum AO3EPUB3Builder {
         <head>
             <meta charset="utf-8"/>
             <title>Preface</title>
-            <link rel="stylesheet" type="text/css" href="stylesheet.css"/>
+            <link rel="stylesheet" type="text/css" href="../css/stylesheet.css"/>
+            <link rel="stylesheet" type="text/css" href="../css/page_styles.css"/>
         </head>
         <body epub:type="frontmatter">
             <section class="preface" epub:type="preface">
-                <h2>Preface</h2>
-                <div class="notes">
-                    \(notes)
+                <div id="workskin" class="userstuff">
+                    \(headingHTML)\(content)
                 </div>
             </section>
         </body>
         </html>
         """
+    }
+
+    static func buildPreface(
+        notes: String,
+        language: String
+    ) -> String {
+        buildPreface(content: notes, language: language)
     }
 
     static func buildChapter(
@@ -360,7 +469,8 @@ enum AO3EPUB3Builder {
         <head>
             <meta charset="utf-8"/>
             <title>\(escapeXML(chapter.title))</title>
-            <link rel="stylesheet" type="text/css" href="stylesheet.css"/>
+            <link rel="stylesheet" type="text/css" href="../css/stylesheet.css"/>
+            <link rel="stylesheet" type="text/css" href="../css/page_styles.css"/>
         </head>
         <body epub:type="bodymatter">
             <section class="chapter" epub:type="chapter">
@@ -369,7 +479,9 @@ enum AO3EPUB3Builder {
                 </header>
                 \(notesHTML)
                 <main class="chapter-body" epub:type="bodymatter">
-                    \(chapter.htmlBody)
+                    <div id="workskin" class="userstuff">
+                        \(chapter.htmlBody)
+                    </div>
                 </main>
             </section>
         </body>
@@ -389,12 +501,13 @@ enum AO3EPUB3Builder {
         <head>
             <meta charset="utf-8"/>
             <title>Afterword</title>
-            <link rel="stylesheet" type="text/css" href="stylesheet.css"/>
+            <link rel="stylesheet" type="text/css" href="../css/stylesheet.css"/>
+            <link rel="stylesheet" type="text/css" href="../css/page_styles.css"/>
         </head>
         <body epub:type="backmatter">
-            <section class="afterword" epub:type="afterword">
+            <section class="afterword" id="afterword" epub:type="afterword">
                 <h2>Afterword</h2>
-                <div class="notes">
+                <div id="workskin" class="userstuff notes">
                     \(notes)
                 </div>
             </section>
@@ -403,7 +516,16 @@ enum AO3EPUB3Builder {
         """
     }
 
-    // MARK: - Stylesheet
+    // MARK: - Stylesheets
+
+    static func pageStylesCSS() -> String {
+        """
+        @page {
+            margin-bottom: 5pt;
+            margin-top: 5pt;
+        }
+        """
+    }
 
     static func ao3Stylesheet() -> String {
         """
@@ -414,64 +536,97 @@ enum AO3EPUB3Builder {
             margin: 1em;
             padding: 0;
             color: #111;
+            text-rendering: optimizeLegibility;
         }
-        h1, h2, h3, h4, h5, h6 {
+        body > section > header h1,
+        body > section > header h2,
+        body > section > header h3,
+        body > section > header h4,
+        body > section > header h5,
+        body > section > header h6 {
             font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
             font-weight: 600;
             line-height: 1.25;
             margin-top: 1.5em;
             margin-bottom: 0.5em;
+            break-after: avoid;
+            page-break-after: avoid;
         }
-        h1.title {
+        body > section > header h1.title,
+        body > section > header h1 {
             font-size: 2em;
             margin-bottom: 0.2em;
             text-align: center;
         }
-        .byline {
+        .byline,
+        body > section > header .byline {
             font-size: 1.2em;
             font-style: italic;
             text-align: center;
             margin-bottom: 2em;
             color: #555;
         }
-        dl.tags {
+        p.message,
+        body > section > p.message {
+            text-align: center;
+            margin: 1em 0;
+        }
+        dl.tags,
+        body > section#imprint > dl.tags,
+        body > section.imprint > dl.tags,
+        body > section.preface dl.tags {
             display: grid;
             grid-template-columns: auto 1fr;
             gap: 0.4em 1em;
             font-size: 0.9em;
-            border-top: 1px solid #ccc;
-            border-bottom: 1px solid #ccc;
-            padding: 1em 0;
+            border: 1px solid #ccc;
+            padding: 1em;
             margin: 1.5em 0;
         }
-        dl.tags dt {
+        dl.tags dt,
+        body > section#imprint > dl.tags dt,
+        body > section.imprint > dl.tags dt,
+        body > section.preface dl.tags dt {
             font-weight: bold;
             color: #444;
         }
-        dl.tags dd {
+        dl.tags dd,
+        body > section#imprint > dl.tags dd,
+        body > section.imprint > dl.tags dd,
+        body > section.preface dl.tags dd {
             margin: 0;
         }
-        .chapter-header {
+        dl.tags dl.stats,
+        body > section#imprint > dl.tags dl.stats,
+        body > section.imprint > dl.tags dl.stats,
+        body > section.preface dl.tags dl.stats {
+            margin-top: 0;
+            margin-bottom: 0;
+        }
+        body > section.chapter > header.chapter-header {
             margin-bottom: 2em;
             text-align: center;
         }
-        .chapter-notes {
+        body > section.chapter > .chapter-notes {
             background-color: #f8f8f8;
             border-left: 3px solid #990000;
             padding: 0.8em 1.2em;
             margin: 1.5em 0;
             font-size: 0.95em;
         }
-        blockquote {
+        body > section.chapter > main.chapter-body > div#workskin.userstuff {
+            padding: 0;
+        }
+        div.userstuff p {
+            margin-top: 0;
+            margin-bottom: 1em;
+            text-align: justify;
+        }
+        div.userstuff blockquote {
             margin: 1em 2em;
             padding-left: 1em;
             border-left: 2px solid #ddd;
             font-style: italic;
-        }
-        p {
-            margin-top: 0;
-            margin-bottom: 1em;
-            text-align: justify;
         }
         nav#toc ol {
             list-style-type: none;
@@ -479,6 +634,40 @@ enum AO3EPUB3Builder {
         }
         nav#toc li {
             margin: 0.4em 0;
+        }
+        @media (prefers-color-scheme: dark) {
+            body {
+                background-color: #121212;
+                color: #e4e4e7;
+            }
+            .byline,
+            body > section > header .byline {
+                color: #a1a1aa;
+            }
+            dl.tags,
+            body > section#imprint > dl.tags,
+            body > section.imprint > dl.tags,
+            body > section.preface dl.tags {
+                border-color: #444;
+            }
+            dl.tags dt,
+            body > section#imprint > dl.tags dt,
+            body > section.imprint > dl.tags dt,
+            body > section.preface dl.tags dt {
+                color: #d4d4d8;
+            }
+            body > section.chapter > .chapter-notes {
+                background-color: #1e1e1e;
+                color: #e4e4e7;
+                border-left-color: #cc3333;
+            }
+            div.userstuff blockquote {
+                border-left-color: #555;
+                color: #d1d5db;
+            }
+            hr {
+                background: #444;
+            }
         }
         """
     }

@@ -770,6 +770,7 @@ struct LibraryRootView: View {
                         progressAlert.messageText = "Exporting EPUBs…"
                         progressAlert.informativeText = "Copying 0 of \(count)"
                         progressAlert.addButton(withTitle: "")
+                        progressAlert.buttons.first?.isHidden = true
                         let progressBar = NSProgressIndicator()
                         progressBar.style = .bar
                         progressBar.isIndeterminate = false
@@ -779,10 +780,12 @@ struct LibraryRootView: View {
                         progressBar.frame = NSRect(x: 0, y: 0, width: 300, height: 20)
                         progressAlert.accessoryView = progressBar
 
-                        var sheet: NSWindow?
-                        if let win = NSApp.keyWindow ?? NSApp.mainWindow {
-                            progressAlert.beginSheetModal(for: win) { _ in }
-                            sheet = win.attachedSheet
+                        var sheetDismissed = false
+                        let win = NSApp.keyWindow ?? NSApp.mainWindow
+                        if let win {
+                            progressAlert.beginSheetModal(for: win) { _ in
+                                sheetDismissed = true
+                            }
                         }
 
                         let ao3Map = LibraryQueryHelpers.indexed(rows.compactMap { row in
@@ -814,12 +817,16 @@ struct LibraryRootView: View {
                             }
                         )
 
-                        if let win = sheet?.sheetParent ?? NSApp.keyWindow ?? NSApp.mainWindow,
-                           let attachedSheet = win.attachedSheet {
-                            win.endSheet(attachedSheet)
+                        if let win, win.attachedSheet != nil {
+                            win.endSheet(progressAlert.window)
+                            var attempts = 0
+                            while !sheetDismissed && win.attachedSheet != nil && attempts < 20 {
+                                attempts += 1
+                                try? await Task.sleep(nanoseconds: 50_000_000)
+                            }
                         }
 
-                        ExportManager.presentEPUBExportSummary(copied: copied, skipped: skipped)
+                        ExportManager.presentEPUBExportSummary(copied: copied, skipped: skipped, on: win)
                     }
                 }
             }

@@ -93,4 +93,65 @@ final class AO3MetadataExtractorAuthorsTests: XCTestCase {
         XCTAssertEqual(authors[0].username, "testuser")
         XCTAssertNil(authors[0].pseud)
     }
+
+    // MARK: - findBylineAuthors window and scan semantics
+
+    func testFindBylineAuthorsFoundAtPrefacePlusOne() {
+        let chapter1 = "<div class=\"byline\">by <a rel=\"author\" href=\"/users/alice/pseuds/alice\">alice</a></div>"
+        let authors = AO3MetadataExtractor.findBylineAuthors(spineCount: 5, after: 0) { idx in
+            idx == 1 ? chapter1 : nil
+        }
+        XCTAssertEqual(authors.map(\.username), ["alice"])
+    }
+
+    func testFindBylineAuthorsFoundAtPrefacePlusTwo() {
+        let toc = "<div>Table of Contents</div>"
+        let chapter1 = "<div class=\"byline\">by <a rel=\"author\" href=\"/users/bob/pseuds/bob\">bob</a></div>"
+        let authors = AO3MetadataExtractor.findBylineAuthors(spineCount: 5, after: 0) { idx in
+            if idx == 1 { return toc }
+            if idx == 2 { return chapter1 }
+            return nil
+        }
+        XCTAssertEqual(authors.map(\.username), ["bob"])
+    }
+
+    func testFindBylineAuthorsNotFoundAtPrefacePlusThreeWithDefaultWindow() {
+        let toc = "<div>TOC</div>"
+        let intro = "<div>Intro</div>"
+        let chapter1 = "<div class=\"byline\">by <a rel=\"author\" href=\"/users/carol/pseuds/carol\">carol</a></div>"
+        let authors = AO3MetadataExtractor.findBylineAuthors(spineCount: 5, after: 0) { idx in
+            if idx == 1 { return toc }
+            if idx == 2 { return intro }
+            if idx == 3 { return chapter1 }
+            return nil
+        }
+        XCTAssertTrue(authors.isEmpty)
+    }
+
+    func testFindBylineAuthorsPrefaceIsLastSpineItemReturnsEmpty() {
+        var called = false
+        let authors = AO3MetadataExtractor.findBylineAuthors(spineCount: 3, after: 2) { _ in
+            called = true
+            return "<div class=\"byline\">by <a rel=\"author\" href=\"/users/dave/pseuds/dave\">dave</a></div>"
+        }
+        XCTAssertTrue(authors.isEmpty)
+        XCTAssertFalse(called)
+    }
+
+    func testFindBylineAuthorsNilLoadHTMLContinuesToNextCandidate() {
+        let chapter1 = "<div class=\"byline\">by <a rel=\"author\" href=\"/users/eve/pseuds/eve\">eve</a></div>"
+        let authors = AO3MetadataExtractor.findBylineAuthors(spineCount: 4, after: 0) { idx in
+            if idx == 1 { return nil }
+            if idx == 2 { return chapter1 }
+            return nil
+        }
+        XCTAssertEqual(authors.map(\.username), ["eve"])
+    }
+
+    func testFindBylineAuthorsNoBylineAnywhereReturnsEmpty() {
+        let authors = AO3MetadataExtractor.findBylineAuthors(spineCount: 5, after: 0) { _ in
+            "<p>Just plain text without byline</p>"
+        }
+        XCTAssertTrue(authors.isEmpty)
+    }
 }

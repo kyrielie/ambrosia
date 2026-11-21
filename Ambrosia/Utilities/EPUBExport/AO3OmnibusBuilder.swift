@@ -88,7 +88,7 @@ enum AO3OmnibusBuilder {
         }
 
         let omnibusTitle = series.seriesName + (isWIP ? " [WIP]" : "") + " (Omnibus)"
-        let language = metadataByID[series.works[0].id]?.language ?? "en"
+        let language = series.works.first.flatMap { metadataByID[$0.id]?.language } ?? "en"
         let bcp47 = AO3LanguageMap.bcp47Tag(for: language)
 
         // 3. Extract chapters and assets across all available books
@@ -160,12 +160,18 @@ enum AO3OmnibusBuilder {
                         ?? String(data: entryData, encoding: .isoLatin1)
                         ?? ""
                     let doc = try SwiftSoup.parse(rawHTML)
-                    let bodyHTML = (try? doc.body()?.html()) ?? ""
                     let text = (try? doc.text()) ?? ""
                     if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
 
+                    // Skip member work preface metadata card (the omnibus has its own series imprint)
+                    let isAO3PrefaceCard = (try? doc.select("#preface, dl.tags").first()) != nil
+                    if isAO3PrefaceCard && parser.spine.count > 1 {
+                        continue
+                    }
+
+                    let headingEl = try? doc.select("h1, h2, h3").first()
                     let chapTitle: String = {
-                        if let heading = try? doc.select("h1, h2, h3").first()?.text(), !heading.isEmpty {
+                        if let heading = try? headingEl?.text(), !heading.isEmpty {
                             return heading
                         }
                         if parser.spine.count == 1 {
@@ -173,6 +179,11 @@ enum AO3OmnibusBuilder {
                         }
                         return "Chapter \(chapterNum)"
                     }()
+                    if let headingID = try? headingEl?.attr("id"), !headingID.isEmpty {
+                        _ = try? headingEl?.before("<span id=\"\(headingID)\"></span>")
+                    }
+                    _ = try? headingEl?.remove()
+                    let bodyHTML = (try? doc.body()?.html()) ?? ""
 
                     chapters.append(AO3EPUB3Builder.ChapterItem(
                         id: "part\(partIndex)_chap\(chapterNum)",
@@ -224,14 +235,14 @@ enum AO3OmnibusBuilder {
 
         // 4. Build Omnibus TOC
         var tocListItems: [String] = [
-            "            <li><a href=\"imprint.xhtml\">Series Imprint &amp; Notes</a></li>"
+            "            <li><a href=\"text/imprint.xhtml\">Series Imprint &amp; Notes</a></li>"
         ]
 
         for part in parts {
             var partChapterItems: [String] = []
             for chap in part.chapters {
                 partChapterItems.append("""
-                                <li><a href="\(chap.id).xhtml">\(escapeXML(chap.title))</a></li>
+                                <li><a href="text/\(chap.id).xhtml">\(escapeXML(chap.title))</a></li>
                 """)
             }
 
@@ -245,7 +256,7 @@ enum AO3OmnibusBuilder {
             """)
         }
 
-        tocListItems.append("            <li><a href=\"afterword.xhtml\">Series Afterword &amp; Statistics</a></li>")
+        tocListItems.append("            <li><a href=\"text/afterword.xhtml\">Series Afterword &amp; Statistics</a></li>")
 
         let tocContent = """
         <?xml version="1.0" encoding="utf-8"?>
@@ -254,7 +265,8 @@ enum AO3OmnibusBuilder {
         <head>
             <meta charset="utf-8"/>
             <title>\(escapeXML(omnibusTitle))</title>
-            <link rel="stylesheet" type="text/css" href="stylesheet.css"/>
+            <link rel="stylesheet" type="text/css" href="css/stylesheet.css"/>
+            <link rel="stylesheet" type="text/css" href="css/page_styles.css"/>
         </head>
         <body>
             <nav id="toc" epub:type="toc">
@@ -276,7 +288,8 @@ enum AO3OmnibusBuilder {
         <head>
             <meta charset="utf-8"/>
             <title>\(escapeXML(omnibusTitle))</title>
-            <link rel="stylesheet" type="text/css" href="stylesheet.css"/>
+            <link rel="stylesheet" type="text/css" href="../css/stylesheet.css"/>
+            <link rel="stylesheet" type="text/css" href="../css/page_styles.css"/>
         </head>
         <body epub:type="frontmatter">
             <section class="imprint" epub:type="imprint">
@@ -306,7 +319,8 @@ enum AO3OmnibusBuilder {
         <head>
             <meta charset="utf-8"/>
             <title>Series Afterword</title>
-            <link rel="stylesheet" type="text/css" href="stylesheet.css"/>
+            <link rel="stylesheet" type="text/css" href="../css/stylesheet.css"/>
+            <link rel="stylesheet" type="text/css" href="../css/page_styles.css"/>
         </head>
         <body epub:type="backmatter">
             <section class="afterword" epub:type="afterword">
@@ -383,7 +397,7 @@ enum AO3OmnibusBuilder {
         // OPF
         let opfData = Data(opfContent.utf8)
         try destArchive.addEntry(
-            with: "OEBPS/package.opf",
+            with: "EPUB/content.opf",
             type: .file,
             uncompressedSize: Int64(opfData.count),
             compressionMethod: .deflate
@@ -394,7 +408,7 @@ enum AO3OmnibusBuilder {
         // TOC
         let tocData = Data(tocContent.utf8)
         try destArchive.addEntry(
-            with: "OEBPS/toc.xhtml",
+            with: "EPUB/toc.xhtml",
             type: .file,
             uncompressedSize: Int64(tocData.count),
             compressionMethod: .deflate
@@ -405,7 +419,7 @@ enum AO3OmnibusBuilder {
         // Stylesheet
         let styleData = Data(AO3EPUB3Builder.ao3Stylesheet().utf8)
         try destArchive.addEntry(
-            with: "OEBPS/stylesheet.css",
+            with: "EPUB/css/stylesheet.css",
             type: .file,
             uncompressedSize: Int64(styleData.count),
             compressionMethod: .deflate
@@ -413,10 +427,21 @@ enum AO3OmnibusBuilder {
             styleData.subdata(in: Int(pos)..<(Int(pos) + size))
         }
 
+        // Page Styles
+        let pageStylesData = Data(AO3EPUB3Builder.pageStylesCSS().utf8)
+        try destArchive.addEntry(
+            with: "EPUB/css/page_styles.css",
+            type: .file,
+            uncompressedSize: Int64(pageStylesData.count),
+            compressionMethod: .deflate
+        ) { pos, size in
+            pageStylesData.subdata(in: Int(pos)..<(Int(pos) + size))
+        }
+
         // Imprint
         let imprintData = Data(imprintContent.utf8)
         try destArchive.addEntry(
-            with: "OEBPS/imprint.xhtml",
+            with: "EPUB/text/imprint.xhtml",
             type: .file,
             uncompressedSize: Int64(imprintData.count),
             compressionMethod: .deflate
@@ -427,7 +452,7 @@ enum AO3OmnibusBuilder {
         // Afterword
         let afterwordData = Data(afterwordContent.utf8)
         try destArchive.addEntry(
-            with: "OEBPS/afterword.xhtml",
+            with: "EPUB/text/afterword.xhtml",
             type: .file,
             uncompressedSize: Int64(afterwordData.count),
             compressionMethod: .deflate
@@ -440,7 +465,7 @@ enum AO3OmnibusBuilder {
             let chapHTML = AO3EPUB3Builder.buildChapter(chapter: chapter, language: language)
             let chapData = Data(chapHTML.utf8)
             try destArchive.addEntry(
-                with: "OEBPS/\(chapter.id).xhtml",
+                with: "EPUB/text/\(chapter.id).xhtml",
                 type: .file,
                 uncompressedSize: Int64(chapData.count),
                 compressionMethod: .deflate
@@ -452,7 +477,7 @@ enum AO3OmnibusBuilder {
         // Images
         for img in allImageEntries {
             try destArchive.addEntry(
-                with: "OEBPS/\(img.path)",
+                with: "EPUB/\(img.path)",
                 type: .file,
                 uncompressedSize: Int64(img.data.count),
                 compressionMethod: .deflate

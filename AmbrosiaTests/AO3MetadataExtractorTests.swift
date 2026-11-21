@@ -261,6 +261,22 @@ final class AO3MetadataExtractorTests: XCTestCase {
         XCTAssertEqual(record?.chapterTotal, 1)
     }
 
+    // MARK: - Work ID and URL helpers
+
+    func testParseWorkIDVariants() {
+        XCTAssertEqual(AO3MetadataExtractor.parseWorkID(fromHref: "https://archiveofourown.org/works/123456"), "123456")
+        XCTAssertEqual(AO3MetadataExtractor.parseWorkID(fromHref: "http://archiveofourown.org/works/999?view_adult=true"), "999")
+        XCTAssertEqual(AO3MetadataExtractor.parseWorkID(fromHref: "/works/123/chapters/456"), "123")
+        XCTAssertEqual(AO3MetadataExtractor.parseWorkID(fromHref: "https://archiveofourown.org/works/777#comments"), "777")
+        XCTAssertNil(AO3MetadataExtractor.parseWorkID(fromHref: "https://archiveofourown.org/works/"))
+        XCTAssertNil(AO3MetadataExtractor.parseWorkID(fromHref: "https://www.fanfiction.net/s/123456/1/"))
+    }
+
+    func testAbsoluteAO3URL() {
+        XCTAssertEqual(AO3MetadataExtractor.absoluteAO3URL("/works/123"), "https://archiveofourown.org/works/123")
+        XCTAssertEqual(AO3MetadataExtractor.absoluteAO3URL("https://archiveofourown.org/works/123"), "https://archiveofourown.org/works/123")
+    }
+
     // MARK: - Fixtures
 
     private func minimalStatsPair() -> String {

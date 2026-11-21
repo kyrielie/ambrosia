@@ -4,6 +4,8 @@ import ZIPFoundation
 
 /// Orchestrates the normalization and packaging of raw AO3 / Calibre EPUB 2 files
 /// into standards-compliant EPUB 3.0 containers adhering to the `epub-otwarchive` spec.
+/// Credit: Based on research and templates by Timothy Cyrus (tcyrus, https://archiveofourown.org/works/89438831)
+/// and Nectar's EPUB 3.3 generation engine.
 enum AO3EPUB3Normalizer {
 
     enum NormalizerError: LocalizedError {
@@ -32,7 +34,8 @@ enum AO3EPUB3Normalizer {
         destinationEPUB: URL,
         metadata: AO3MetadataRecord?,
         bookTitle: String? = nil,
-        authors: [String] = []
+        authors: [String] = [],
+        targetSeries: (name: String, index: Int)? = nil
     ) throws {
         guard let sourceArchive = try? Archive(url: sourceEPUB, accessMode: .read, pathEncoding: nil) else {
             throw NormalizerError.sourceArchiveUnreadable
@@ -64,6 +67,7 @@ enum AO3EPUB3Normalizer {
         // 2. Extract chapters and images from the source archive
         var chapters: [AO3EPUB3Builder.ChapterItem] = []
         var imageEntries: [(path: String, data: Data, mediaType: String)] = []
+        var extractedPrefaceHTML: String?
 
         // Extract images and assets
         let imageExtensions: [String: String] = [
@@ -89,8 +93,23 @@ enum AO3EPUB3Normalizer {
             }
         }
 
-        // Extract text chapters from spine
+        // Intermediate representation of spine documents for normalization, deduplication, and link rewriting
+        struct SpineDocItem {
+            let originalHref: String
+            let originalFilename: String
+            let targetFilename: String
+            let isPreface: Bool
+            let doc: SwiftSoup.Document
+            let chapTitle: String
+            let chapterID: String
+        }
+
+        var spineDocItems: [SpineDocItem] = []
+        var spineToTargetMap: [String: String] = [:]
+        var idToTargetMap: [String: String] = [:]
+        var foundPreface = false
         var chapterIndex = 1
+
         for spineItem in parser.spine {
             guard let entry = sourceArchive[spineItem.href] else { continue }
             var entryData = Data()
@@ -104,31 +123,136 @@ enum AO3EPUB3Normalizer {
                 ?? ""
 
             let doc = try SwiftSoup.parse(rawHTML)
-            let bodyHTML = (try? doc.body()?.html()) ?? ""
+            _ = doc.outputSettings().syntax(syntax: .xml)
 
-            // Skip Calibre title page or preface-only spine items if empty or pure metadata card
+            // Skip Calibre title page or empty spine items
             let plainText = (try? doc.text()) ?? ""
             if plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 continue
             }
 
-            // Derive chapter title
-            let chapTitle: String = {
-                if let heading = try? doc.select("h1, h2, h3").first()?.text(), !heading.isEmpty {
-                    return heading
-                }
-                if parser.spine.count == 1 {
-                    return title
-                }
-                return "Chapter \(chapterIndex)"
-            }()
+            let originalFilename = (spineItem.href as NSString).lastPathComponent
+            let isAO3PrefaceCard = (try? doc.select("#preface, dl.tags").first()) != nil
 
-            chapters.append(AO3EPUB3Builder.ChapterItem(
-                id: "chapter_\(chapterIndex)",
-                title: chapTitle,
-                htmlBody: bodyHTML
-            ))
-            chapterIndex += 1
+            if isAO3PrefaceCard && !foundPreface && parser.spine.count > 1 {
+                foundPreface = true
+                let targetFilename = "preface.xhtml"
+                spineToTargetMap[originalFilename] = targetFilename
+                spineToTargetMap[spineItem.href] = targetFilename
+
+                if let elementsWithId = try? doc.select("[id]") {
+                    for el in elementsWithId {
+                        if let id = try? el.attr("id"), !id.isEmpty {
+                            idToTargetMap[id] = targetFilename
+                        }
+                    }
+                }
+
+                spineDocItems.append(SpineDocItem(
+                    originalHref: spineItem.href,
+                    originalFilename: originalFilename,
+                    targetFilename: targetFilename,
+                    isPreface: true,
+                    doc: doc,
+                    chapTitle: "Preface",
+                    chapterID: "preface"
+                ))
+            } else {
+                let targetFilename = "chapter_\(chapterIndex).xhtml"
+                let chapterID = "chapter_\(chapterIndex)"
+                spineToTargetMap[originalFilename] = targetFilename
+                spineToTargetMap[spineItem.href] = targetFilename
+
+                // Derive chapter title
+                let headingEl = try? doc.select("h1, h2, h3").first()
+                let chapTitle: String = {
+                    if let heading = try? headingEl?.text(), !heading.isEmpty {
+                        return heading
+                    }
+                    if parser.spine.count == 1 {
+                        return title
+                    }
+                    return "Chapter \(chapterIndex)"
+                }()
+
+                // If the heading had an anchor id, preserve it as an anchor span before removing the heading element
+                if let headingID = try? headingEl?.attr("id"), !headingID.isEmpty {
+                    _ = try? headingEl?.before("<span id=\"\(headingID)\"></span>")
+                }
+
+                // Remove extracted heading from document body so chapter headings are not duplicated
+                _ = try? headingEl?.remove()
+
+                if let elementsWithId = try? doc.select("[id]") {
+                    for el in elementsWithId {
+                        if let id = try? el.attr("id"), !id.isEmpty {
+                            idToTargetMap[id] = targetFilename
+                        }
+                    }
+                }
+
+                spineDocItems.append(SpineDocItem(
+                    originalHref: spineItem.href,
+                    originalFilename: originalFilename,
+                    targetFilename: targetFilename,
+                    isPreface: false,
+                    doc: doc,
+                    chapTitle: chapTitle,
+                    chapterID: chapterID
+                ))
+                chapterIndex += 1
+            }
+        }
+
+        // Rewrite internal cross-references across all extracted documents
+        for item in spineDocItems {
+            if let links = try? item.doc.select("a[href]") {
+                for link in links {
+                    guard let href = try? link.attr("href"), !href.isEmpty else { continue }
+                    if href.contains("://") || href.hasPrefix("mailto:") || href.hasPrefix("javascript:") {
+                        continue
+                    }
+
+                    if href.hasPrefix("#") {
+                        let fragment = String(href.dropFirst())
+                        if let targetFile = idToTargetMap[fragment] {
+                            if targetFile != item.targetFilename {
+                                _ = try? link.attr("href", "\(targetFile)#\(fragment)")
+                            }
+                        }
+                    } else {
+                        let components = href.components(separatedBy: "#")
+                        let filePart = (components[0] as NSString).lastPathComponent
+                        let fragmentPart = components.count > 1 ? "#\(components[1])" : ""
+
+                        if let targetFile = spineToTargetMap[filePart] {
+                            _ = try? link.attr("href", "\(targetFile)\(fragmentPart)")
+                        } else if components.count > 1, let targetFile = idToTargetMap[components[1]] {
+                            _ = try? link.attr("href", "\(targetFile)#\(components[1])")
+                        }
+                    }
+                }
+            }
+
+            if let images = try? item.doc.select("img[src]") {
+                for img in images {
+                    guard let src = try? img.attr("src"), !src.isEmpty else { continue }
+                    if src.contains("://") || src.hasPrefix("data:") { continue }
+                    let filename = (src as NSString).lastPathComponent
+                    _ = try? img.attr("src", "../images/\(filename)")
+                }
+            }
+
+            if item.isPreface {
+                extractedPrefaceHTML = (try? item.doc.body()?.html()) ?? (try? item.doc.html())
+            } else {
+                let bodyHTML = (try? item.doc.body()?.html()) ?? ""
+                chapters.append(AO3EPUB3Builder.ChapterItem(
+                    id: item.chapterID,
+                    title: item.chapTitle,
+                    htmlBody: bodyHTML
+                ))
+            }
         }
 
         if chapters.isEmpty {
@@ -140,29 +264,45 @@ enum AO3EPUB3Normalizer {
             ))
         }
 
+        let hasPreface = extractedPrefaceHTML != nil
+        let hasImprint = !hasPreface
+
         // 3. Prepare EPUB 3 content files
         let containerXMLData = Data(AO3EPUB3Builder.containerXML().utf8)
         let stylesheetData = Data(AO3EPUB3Builder.ao3Stylesheet().utf8)
-        let imprintData = Data(AO3EPUB3Builder.buildImprint(
+        let pageStylesData = Data(AO3EPUB3Builder.pageStylesCSS().utf8)
+        let prefaceData = extractedPrefaceHTML.map {
+            Data(AO3EPUB3Builder.buildPreface(content: $0, language: language).utf8)
+        }
+        let imprintData = hasImprint ? Data(AO3EPUB3Builder.buildImprint(
             title: title,
             authors: authorEntries,
             metadata: metadata,
             language: language
-        ).utf8)
+        ).utf8) : nil
         let tocData = Data(AO3EPUB3Builder.buildTOC(
             title: title,
             chapters: chapters,
-            language: language
+            language: language,
+            hasImprint: hasImprint,
+            hasPreface: hasPreface
+        ).utf8)
+        let ncxData = Data(AO3EPUB3Builder.buildNCX(
+            title: title,
+            chapters: chapters,
+            workID: metadata?.workID,
+            hasImprint: hasImprint,
+            hasPreface: hasPreface
         ).utf8)
 
         var additionalManifestItems: [(id: String, href: String, mediaType: String, properties: String?)] = []
         for (idx, img) in imageEntries.enumerated() {
-            let isCover = img.path.lowercased().contains("cover")
+            // Strictly NO COVERS: Never inject synthetic cover properties
             additionalManifestItems.append((
                 id: "image_\(idx)",
                 href: img.path,
                 mediaType: img.mediaType,
-                properties: isCover ? "cover-image" : nil
+                properties: nil
             ))
         }
 
@@ -173,6 +313,9 @@ enum AO3EPUB3Normalizer {
             metadata: metadata,
             language: language,
             chapters: chapters,
+            hasImprint: hasImprint,
+            hasPreface: hasPreface,
+            primarySeries: targetSeries ?? metadata?.series.first.map { ($0.name, $0.index) },
             additionalManifestItems: additionalManifestItems
         )).utf8)
 
@@ -207,9 +350,9 @@ enum AO3EPUB3Normalizer {
             containerXMLData.subdata(in: Int(position)..<(Int(position) + size))
         }
 
-        // Entry 3: OEBPS/package.opf
+        // Entry 3: EPUB/content.opf
         try destArchive.addEntry(
-            with: "OEBPS/package.opf",
+            with: "EPUB/content.opf",
             type: .file,
             uncompressedSize: Int64(opfData.count),
             compressionMethod: .deflate
@@ -217,9 +360,9 @@ enum AO3EPUB3Normalizer {
             opfData.subdata(in: Int(position)..<(Int(position) + size))
         }
 
-        // Entry 4: OEBPS/toc.xhtml
+        // Entry 4: EPUB/toc.xhtml
         try destArchive.addEntry(
-            with: "OEBPS/toc.xhtml",
+            with: "EPUB/toc.xhtml",
             type: .file,
             uncompressedSize: Int64(tocData.count),
             compressionMethod: .deflate
@@ -227,9 +370,19 @@ enum AO3EPUB3Normalizer {
             tocData.subdata(in: Int(position)..<(Int(position) + size))
         }
 
-        // Entry 5: OEBPS/stylesheet.css
+        // Entry 5: EPUB/toc.ncx
         try destArchive.addEntry(
-            with: "OEBPS/stylesheet.css",
+            with: "EPUB/toc.ncx",
+            type: .file,
+            uncompressedSize: Int64(ncxData.count),
+            compressionMethod: .deflate
+        ) { position, size in
+            ncxData.subdata(in: Int(position)..<(Int(position) + size))
+        }
+
+        // Entry 6: EPUB/css/stylesheet.css
+        try destArchive.addEntry(
+            with: "EPUB/css/stylesheet.css",
             type: .file,
             uncompressedSize: Int64(stylesheetData.count),
             compressionMethod: .deflate
@@ -237,22 +390,43 @@ enum AO3EPUB3Normalizer {
             stylesheetData.subdata(in: Int(position)..<(Int(position) + size))
         }
 
-        // Entry 6: OEBPS/imprint.xhtml
+        // Entry 7: EPUB/css/page_styles.css
         try destArchive.addEntry(
-            with: "OEBPS/imprint.xhtml",
+            with: "EPUB/css/page_styles.css",
             type: .file,
-            uncompressedSize: Int64(imprintData.count),
+            uncompressedSize: Int64(pageStylesData.count),
             compressionMethod: .deflate
         ) { position, size in
-            imprintData.subdata(in: Int(position)..<(Int(position) + size))
+            pageStylesData.subdata(in: Int(position)..<(Int(position) + size))
         }
 
-        // Entry 7+: OEBPS/chapter_*.xhtml
+        // Entry 8: EPUB/text/preface.xhtml or EPUB/text/imprint.xhtml
+        if let prefaceData {
+            try destArchive.addEntry(
+                with: "EPUB/text/preface.xhtml",
+                type: .file,
+                uncompressedSize: Int64(prefaceData.count),
+                compressionMethod: .deflate
+            ) { position, size in
+                prefaceData.subdata(in: Int(position)..<(Int(position) + size))
+            }
+        } else if let imprintData {
+            try destArchive.addEntry(
+                with: "EPUB/text/imprint.xhtml",
+                type: .file,
+                uncompressedSize: Int64(imprintData.count),
+                compressionMethod: .deflate
+            ) { position, size in
+                imprintData.subdata(in: Int(position)..<(Int(position) + size))
+            }
+        }
+
+        // Entry 9+: EPUB/text/chapter_*.xhtml
         for chapter in chapters {
             let chapHTML = AO3EPUB3Builder.buildChapter(chapter: chapter, language: language)
             let chapData = Data(chapHTML.utf8)
             try destArchive.addEntry(
-                with: "OEBPS/\(chapter.id).xhtml",
+                with: "EPUB/text/\(chapter.id).xhtml",
                 type: .file,
                 uncompressedSize: Int64(chapData.count),
                 compressionMethod: .deflate
@@ -264,7 +438,7 @@ enum AO3EPUB3Normalizer {
         // Image entries
         for img in imageEntries {
             try destArchive.addEntry(
-                with: "OEBPS/\(img.path)",
+                with: "EPUB/\(img.path)",
                 type: .file,
                 uncompressedSize: Int64(img.data.count),
                 compressionMethod: .deflate

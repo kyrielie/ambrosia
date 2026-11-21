@@ -1331,17 +1331,16 @@ final class LibrarySession {
                                     // NOT reuse the wide prefix(5) preface scan here — this
                                     // runs on ~70k books, and the covers/TOC pages that
                                     // justify a wide scan before the preface don't exist
-                                    // after it.
-                                    let bylineRangeEnd = min(prefaceIndex + 3, parser.spine.count)
-                                    for candidateIndex in (prefaceIndex + 1)..<bylineRangeEnd {
-                                        let candidate = parser.spine[candidateIndex]
-                                        guard let chapterHTML = try? parser.rawXHTML(for: candidate, archive: archive),
-                                              let chapterDoc = try? SwiftSoup.parse(chapterHTML) else { continue }
-                                        let bylineAuthors = AO3MetadataExtractor.parseAuthors(from: chapterDoc)
-                                        if !bylineAuthors.isEmpty {
-                                            metadata.authors = bylineAuthors
-                                            break
-                                        }
+                                    // after it (window: 2 preserves the 2-candidate scan).
+                                    let bylineAuthors = AO3MetadataExtractor.findBylineAuthors(
+                                        spineCount: parser.spine.count,
+                                        after: prefaceIndex,
+                                        window: 2
+                                    ) { candidateIndex in
+                                        try? parser.rawXHTML(for: parser.spine[candidateIndex], archive: archive)
+                                    }
+                                    if !bylineAuthors.isEmpty {
+                                        metadata.authors = bylineAuthors
                                     }
 
                                     // Tier 2: EPUB's own dc:creator — free, already parsed,

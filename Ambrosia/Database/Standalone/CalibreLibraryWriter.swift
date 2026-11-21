@@ -246,18 +246,16 @@ public enum CalibreLibraryWriter {
         // Try extracting authors from next spine item (byline)
         var ao3Authors: [String] = []
         if let record = ao3Record, prefaceIndex >= 0 {
-            let bylineRangeEnd = min(prefaceIndex + 3, parser.spine.count)
-            for candidateIndex in (prefaceIndex + 1)..<bylineRangeEnd {
-                let candidate = parser.spine[candidateIndex]
-                if let chapterHTML = try? parser.html(for: candidate, userCSS: "") {
-                    let byline = AO3MetadataExtractor.parseAuthors(from: chapterHTML)
-                    if !byline.isEmpty {
-                        ao3Authors = byline.map(\.username)
-                        break
-                    }
-                }
+            let byline = AO3MetadataExtractor.findBylineAuthors(
+                spineCount: parser.spine.count,
+                after: prefaceIndex,
+                window: 2
+            ) { candidateIndex in
+                try? parser.html(for: parser.spine[candidateIndex], userCSS: "")
             }
-            if ao3Authors.isEmpty {
+            if !byline.isEmpty {
+                ao3Authors = byline.map(\.username)
+            } else {
                 ao3Authors = record.authors.map(\.username)
             }
         }
