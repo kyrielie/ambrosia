@@ -703,6 +703,7 @@ struct SortSection: View {
             }
             .labelsHidden()
             Toggle("Ascending", isOn: $ascending)
+                .disabled(sortField == .random)
         }
     }
 }

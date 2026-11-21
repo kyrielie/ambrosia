@@ -50,6 +50,20 @@ Series identities survive extraction rewrites: AO3 IDs resolve to `ao3:<id>`, Ca
 
 ---
 
+## Memory-Mapped I/O (`PRAGMA mmap_size`)
+
+In Pass 3 (Decision D2) of `database-performance-and-query-pipeline-plan.md`, memory-mapped I/O is enabled on `ambrosia_meta.db` connections (`db` writer and `readDB` reader):
+
+```sql
+PRAGMA mmap_size = 268435456; -- 256 MB cap
+```
+
+- **Scope**: Applied strictly to `ambrosia_meta.db` (which Ambrosia owns and writes in WAL mode).
+- **Calibre Exclusion**: Invariant 1 / Decision D2 prohibits `mmap_size` on Calibre's `metadata.db` or external databases. Calibre is an external system with its own concurrency model; memory mapping third-party databases is unsafe.
+- **Verification**: Read back via `PRAGMA mmap_size` scalar query during initialization and logged in `DEBUG` builds.
+
+---
+
 ## Key invariants
 
 10. `AmbrosiaMetaDB` is the sole owner of `ambrosia_meta.db`. All reads and writes go through the actor, accessed via `LibrarySession.metaDB`. `CalibreLibrary` and the former `AO3TagSearchResolver` previously opened independent `Connection` objects to the same file, violating write-lock coordination; both have been fixed (`CalibreLibrary` now reads from caches pushed in via `updateAO3MetaCaches`, and tag resolution moved onto the `AmbrosiaMetaDB` actor). Do not reintroduce a third connection to this file.

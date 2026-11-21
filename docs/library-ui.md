@@ -59,6 +59,11 @@ List-mode rows are self-sizing, so unbounded content makes row height unpredicta
 - Export menu (`libraryExport`)
 - View mode switcher (`libraryViewMode` - List, Email, Ranking)
 
+### Sort Controls and Direction State
+- **Sort Direction & Random Mode**: Sort direction (Ascending / Descending) in the toolbar and filter popup is disabled in `.random` sort mode (randomized order is reshuffled via the Reshuffle affordance instead).
+- **Numeric Sort Defaults (D3)**: Entering `.wordCount` or `.kudos` sort defaults direction to descending (`ascending = false`), restoring the previous non-numeric direction upon switching back to title, author, or other non-numeric sorts.
+- **Last View Priority**: Persisted `LastViewState` restored on launch overrides defaults and preserves the user's saved sort field and direction.
+
 ## Menu Bar Integrations
 
 The macOS menu bar adapts to whether the user is browsing the library or reading:

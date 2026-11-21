@@ -1,4 +1,72 @@
+import CryptoKit
 import Foundation
+
+// MARK: - Query Digest Builder
+
+/// Builds a stable, collision-resistant 12-byte hex digest of all query, filter,
+/// term-scoping, tag-expansion, restrict-IDs, and relevance-ranking inputs.
+/// Precomputed once per `PageQuery` and carried across page requests.
+enum QueryDigestBuilder {
+    static func digest(
+        query: SearchQuery,
+        filter: FilterExpression? = nil,
+        restrictIDs: [Int]? = nil,
+        filterTagExpansions: [String: [String]] = [:],
+        rankedIDs: [Int]? = nil
+    ) -> String {
+        var hasher = SHA256()
+
+        if !query.plainTerms.isEmpty {
+            hasher.update(data: Data("plain:\(query.plainTerms.joined(separator: "\u{1F}"))\n".utf8))
+        }
+
+        for (index, term) in query.tagTerms.enumerated() {
+            let mode = query.scopedTagTerms.indices.contains(index) ? query.scopedTagTerms[index].mode.rawValue : "contains"
+            hasher.update(data: Data("tag:\(mode):\(term)\n".utf8))
+        }
+        for (key, exps) in query.expandedTagTerms.sorted(by: { $0.key < $1.key }) {
+            hasher.update(data: Data("qTagExp:\(key):\(exps.sorted().joined(separator: ","))\n".utf8))
+        }
+        for (key, exps) in filterTagExpansions.sorted(by: { $0.key < $1.key }) {
+            hasher.update(data: Data("fTagExp:\(key):\(exps.sorted().joined(separator: ","))\n".utf8))
+        }
+
+        for (index, term) in query.authorTerms.enumerated() {
+            let mode = query.scopedAuthorTerms.indices.contains(index) ? query.scopedAuthorTerms[index].mode.rawValue : "contains"
+            hasher.update(data: Data("author:\(mode):\(term)\n".utf8))
+        }
+
+        for (index, term) in query.titleTerms.enumerated() {
+            let mode = query.scopedTitleTerms.indices.contains(index) ? query.scopedTitleTerms[index].mode.rawValue : "contains"
+            hasher.update(data: Data("title:\(mode):\(term)\n".utf8))
+        }
+
+        for (index, term) in query.seriesTerms.enumerated() {
+            let mode = query.scopedSeriesTerms.indices.contains(index) ? query.scopedSeriesTerms[index].mode.rawValue : "contains"
+            hasher.update(data: Data("series:\(mode):\(term)\n".utf8))
+        }
+
+        if let ftsIDs = query.ftsMatchedIDs {
+            hasher.update(data: Data("fts:\(ftsIDs.map(String.init).joined(separator: ","))\n".utf8))
+        }
+
+        if let rIDs = restrictIDs {
+            hasher.update(data: Data("restrict:\(rIDs.map(String.init).joined(separator: ","))\n".utf8))
+        }
+
+        if let filter = filter {
+            hasher.update(data: Data("filter:\(LibraryFilterDebug.summary(expression: filter))\n".utf8))
+        }
+
+        let effectiveRanked = rankedIDs ?? query.ftsMatchedIDs
+        if let ranked = effectiveRanked {
+            hasher.update(data: Data("ranked:\(ranked.map(String.init).joined(separator: ","))\n".utf8))
+        }
+
+        let result = hasher.finalize()
+        return result.prefix(12).map { String(format: "%02x", $0) }.joined()
+    }
+}
 
 // MARK: - LRU cache key
 
@@ -55,6 +123,32 @@ struct SortedIDsCacheKey: Hashable {
     let sortField: SortField
     let ascending: Bool
     let randomSeed: UInt64
+    let queryDigest: String
+
+    init(
+        querySignature: String,
+        filterSignature: String,
+        tagExpansionsDigest: String,
+        visibilityVersion: Int,
+        pinnedCollectionVersion: Int = 0,
+        visibilitySignature: String,
+        sortField: SortField,
+        ascending: Bool,
+        randomSeed: UInt64,
+        queryDigest: String = ""
+    ) {
+        self.querySignature = querySignature
+        self.filterSignature = filterSignature
+        self.tagExpansionsDigest = tagExpansionsDigest
+        self.visibilityVersion = visibilityVersion
+        self.pinnedCollectionVersion = pinnedCollectionVersion
+        self.visibilitySignature = visibilitySignature
+        self.sortField = sortField
+        self.ascending = ascending
+        // Non-random sorts ignore reshuffle; seed is zeroed so dead entries are not stranded.
+        self.randomSeed = (sortField == .random) ? randomSeed : 0
+        self.queryDigest = queryDigest
+    }
 }
 
 /// Cache key for a page of hydrated CalibreBook results. Two calls that only
@@ -76,7 +170,7 @@ struct PageCacheKey: Hashable {
     init(querySignature: String, filterSignature: String, tagExpansionsDigest: String,
          visibilityVersion: Int, pinnedCollectionVersion: Int = 0,
          visibilitySignature: String, sortField: SortField,
-         ascending: Bool, randomSeed: UInt64, offset: Int, limit: Int) {
+         ascending: Bool, randomSeed: UInt64, queryDigest: String = "", offset: Int, limit: Int) {
         self.init(
             sortedKey: SortedIDsCacheKey(
                 querySignature: querySignature,
@@ -87,7 +181,8 @@ struct PageCacheKey: Hashable {
                 visibilitySignature: visibilitySignature,
                 sortField: sortField,
                 ascending: ascending,
-                randomSeed: randomSeed
+                randomSeed: randomSeed,
+                queryDigest: queryDigest
             ),
             offset: offset,
             limit: limit

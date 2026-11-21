@@ -89,6 +89,14 @@ actor AmbrosiaMetaDB {
         // Must be set on the write connection before migrations run.
         try db.execute("PRAGMA journal_mode = WAL")
         try db.execute("PRAGMA synchronous = NORMAL")
+        // Pass 3 / D2: Enable memory-mapped I/O on ambrosia_meta.db only (256 MB cap).
+        try? db.execute("PRAGMA mmap_size = 268435456")
+        try? readDB.execute("PRAGMA mmap_size = 268435456")
+        #if DEBUG
+        if let currentMmapSize = try? db.scalar("PRAGMA mmap_size") as? Int64 {
+            print("[AmbrosiaMetaDB] PRAGMA mmap_size = \(currentMmapSize)")
+        }
+        #endif
         try Self.runMigrations(db: db)
         try? db.run("INSERT OR REPLACE INTO library_state (key, value) VALUES (?, ?)", ["library_path", libraryURL.path])
     }

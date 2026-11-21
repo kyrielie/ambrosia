@@ -109,3 +109,41 @@ Collections:
   `book_tags` writer) and mirrored on the session after each successful extraction
   flush. Evaluations capture it before starting and file results under that value.
 - Both caches are cleared on library open and close.
+
+---
+
+## Universal Sorted-ID Cache (`sortedIDsCache`)
+
+Added in Pass 2 of `database-performance-and-query-pipeline-plan.md`.
+
+- **Purpose**: Full sorted ID list per view (capacity: 8 entries). When paging through `.wordCount`, `.kudos`, `.random`, `.relevance`, or `.groupAwareTitle`, the expensive materialize-expand-filter-sort pipeline runs once per view on page 1. Subsequent page requests (page 2, page 3, etc.) reuse the cached sorted array, paying only for slicing + `orderedBooks(for:)` page hydration (< 6 ms).
+- **Key**: `SortedIDsCacheKey`
+  - `queryDigest`: A 12-byte SHA256 hex digest precomputed by `QueryDigestBuilder` from all query inputs (plain, title, tag, author, series terms with match modes, `expandedTagTerms`, `filterTagExpansions`, `ftsMatchedIDs`, `restrictIDs`, `filter`, and `rankedIDs`). Carried as a token in `PageQuery` so it is never re-hashed per page turn.
+  - `querySignature`, `filterSignature`, `tagExpansionsDigest`
+  - `visibilityVersion`, `pinnedCollectionVersion`, `visibilitySignature`
+  - `sortField`, `ascending`
+  - `randomSeed`: Set to `0` for all non-random sorts (seed zeroing). Shuffling random mode never invalidates or strands numeric or title sorted-ID entries.
+- **Generation Guard**: `sortedIDsGeneration` increments on `invalidateSortedIDs()` and `clearQueryCaches()`. A background sort that finishes after an invalidation does not store its stale array into `sortedIDsCache`. Similarly, `pageCache.set` checks `sortedIDsGeneration == generation` before storing.
+- **D4 Total Order Tie-Breaking**: Numeric sorts (word count, kudos) break ties by title NOCASE ASC, then `calibre_id` ASC. Books with missing (nil) values always sort last in both ascending and descending directions, ordered among themselves by title NOCASE ASC, then ID ASC. Matches Calibre's `title COLLATE NOCASE` schema.
+
+---
+
+## Query Pipeline Performance: Before vs. After (Pass 0 Baseline vs. Pass 3 Optimized)
+
+Measured via `CalibreQueryBenchmarkTests` on a synthetic 100,000-book Calibre dataset with multi-author, multi-series, and tagged works on Apple Silicon:
+
+| Operation | Pass 0 Baseline | Pass 3 Optimized | Improvement | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| `fetchAllMatchingIDs` (Cold, Unfiltered) | **202.37 ms** | **139.05 ms** | **-31.3% (-63.3 ms)** | Outer `bal`, `a`, `bsl`, `s` joins eliminated; `GROUP BY b.id` dropped |
+| `fetchAllMatchingIDs` (Warm, Unfiltered) | **204.92 ms** | **134.08 ms** | **-34.6% (-70.8 ms)** | Deterministic `ORDER BY b.title ASC, b.id ASC` |
+| `fetchAllMatchingIDs` (Filtered `"Tag 1"`) | **90.62 ms** | **75.15 ms** | **-17.1% (-15.5 ms)** | Evaluates 11,200 matching IDs |
+| `SeriesMatchExpansion.expand` | **0.02 ms** | **0.03 ms** | — | Fast in-memory series mapping |
+| `LibraryVisibilityPolicy.filter` | **33.18 ms** | **31.45 ms** | **-5.2%** | Set filtering across 100k IDs |
+| Bulk In-Memory Value Lookup (100k) | **9.09 ms** | **7.75 ms** | **-14.7%** | Dictionary lookup across 100k IDs |
+| Swift Sort (100k items) | **14.43 ms** | **12.24 ms** | **-15.2%** | $O(N \log N)$ sort of 100,000 integer IDs |
+| `orderedBooks` (50-item Page Hydration) | **6.06 ms** | **5.93 ms** | — | Hydrates authors, tags, and comments for 50 IDs |
+| **Page 2+ Navigation (Warm)** | ~265 ms | **< 6 ms** | **> 97% reduction** | Served from `sortedIDsCache` slice without running SQL or re-sorting |
+
+### Gate D5 Confirmation
+The total in-memory numeric sort compute (bulk value lookup + Swift sort) is **19.99 ms**, well below the **100 ms** gate threshold specified in D5. Therefore, Pass 4 composite indexes in Calibre are unnecessary and formally bypassed.
+

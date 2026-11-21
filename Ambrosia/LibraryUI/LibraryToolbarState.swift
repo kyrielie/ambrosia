@@ -30,11 +30,24 @@ final class LibraryToolbarState {
     }
     var previousSortFieldBeforeRelevance: SortField = .title
     var previousAscendingBeforeRelevance: Bool      = true
+    var previousAscendingBeforeNumeric: Bool        = true
     var sortField: SortField       = .title {
         didSet {
             if oldValue != .relevance {
                 previousSortFieldBeforeRelevance = oldValue
                 previousAscendingBeforeRelevance = ascending
+            }
+            let oldIsNumeric = (oldValue == .wordCount || oldValue == .kudos)
+            let newIsNumeric = (sortField == .wordCount || sortField == .kudos)
+            if !oldIsNumeric {
+                previousAscendingBeforeNumeric = ascending
+            }
+            if newIsNumeric && !oldIsNumeric {
+                // D3: Numeric sorts default to descending
+                ascending = false
+            } else if oldIsNumeric && !newIsNumeric && sortField != .relevance {
+                // Restore prior direction on leaving numeric sorts
+                ascending = previousAscendingBeforeNumeric
             }
             lastViewDidChange()
         }

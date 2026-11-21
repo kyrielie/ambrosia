@@ -14,13 +14,13 @@ flowchart TD
     P3 --> P4
     P4 --> P5["Phase 5: Search & Aggregation Scalability<br/><b>[COMPLETED]</b>"]
     P4 --> P6["Phase 6: Windowing Lifecycle & Monolith Refactoring<br/><b>[COMPLETED]</b>"]
-    P3 --> P7["Phase 7: AO3 Lifecycle, Duplicates, Series Sync & EPUB 3 Engine<br/><b>[ACTIVE PLAN]</b>"]
+    P3 --> P7["Phase 7: AO3 Lifecycle, Duplicates, Series Sync & EPUB 3 Engine<br/><b>[PRIORITY ACTIVE PLAN: M5 Import & Trashing]</b>"]
     P3 --> P8["Phase 8: Reader Experience & Series Navigation<br/><b>[ACTIVE PLAN]</b>"]
     P4 --> P8
     P4 --> P9["Phase 9: Smart & Hierarchical Collections Engine<br/><b>[PLANNED]</b>"]
     P8 --> P10["Phase 10: Quotes & Clippings Vault<br/><b>[PLANNED]</b>"]
     P9 --> P11["Phase 11: ELO Matchup & Personal Tier Lists<br/><b>[PLANNED]</b>"]
-    P5 --> P12["Phase 12: Local Semantic & Hybrid Search<br/><b>[COMPLETED]</b>"]
+    P5 --> P12["Phase 12: Local Semantic & Hybrid Search<br/><b>[PRIORITY ACTIVE PLAN: Full-Text Extension]</b>"]
     P7 --> P13["Phase 13: OPDS Server & Mobile Reading Bridge<br/><b>[PLANNED]</b>"]
     P9 --> P13
     P9 --> P14["Phase 14: Native AO3 Account Bridge<br/><b>[PLANNED]</b>"]
@@ -31,12 +31,12 @@ flowchart TD
     style P4 fill:#2e7d32,stroke:#1b5e20,stroke-width:2px,color:#ffffff
     style P5 fill:#2e7d32,stroke:#1b5e20,stroke-width:2px,color:#ffffff
     style P6 fill:#2e7d32,stroke:#1b5e20,stroke-width:2px,color:#ffffff
-    style P7 fill:#0288d1,stroke:#01579b,stroke-width:2px,color:#ffffff
+    style P7 fill:#d84315,stroke:#bf360c,stroke-width:3px,color:#ffffff
     style P8 fill:#0288d1,stroke:#01579b,stroke-width:2px,color:#ffffff
     style P9 fill:#455a64,stroke:#263238,stroke-width:2px,color:#ffffff
     style P10 fill:#455a64,stroke:#263238,stroke-width:2px,color:#ffffff
     style P11 fill:#455a64,stroke:#263238,stroke-width:2px,color:#ffffff
-    style P12 fill:#2e7d32,stroke:#1b5e20,stroke-width:2px,color:#ffffff
+    style P12 fill:#d84315,stroke:#bf360c,stroke-width:3px,color:#ffffff
     style P13 fill:#455a64,stroke:#263238,stroke-width:2px,color:#ffffff
     style P14 fill:#455a64,stroke:#263238,stroke-width:2px,color:#ffffff
 ```
@@ -63,13 +63,13 @@ This matrix provides a comprehensive, unified view of all architectural systems 
 | **Incremental Additional Filter Eval** | **Built (Gated)** 🔒 | Phase 5 Addendum &bull; [`incremental-filter-evaluation-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/incremental-filter-evaluation-plan.md) | [docs/search-and-filter.md](~/Documents/Applications/ambrosia/docs/search-and-filter.md) | Gated by `IncrementalFilterFlag` (`incrementalFilterEvaluation`); narrow evaluation over cached IDs. |
 | **App Lifecycle & Monolith Deconstruction** | **Built** ✅ | **Phase 6** &bull; [`phase6-app-lifecycle-monolith-deconstruction-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase6-app-lifecycle-monolith-deconstruction-plan.md) | [docs/overview.md](~/Documents/Applications/ambrosia/docs/overview.md) | Eliminated ghost window; decoupled `LibraryWindowController` and `LibrarySession`. |
 | **XcodeGen & Test Architecture** | **Built** ✅ | Tooling &bull; [`quality-remediation-and-xcodegen-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/quality-remediation-and-xcodegen-plan.md) | [docs/testing.md](~/Documents/Applications/ambrosia/docs/testing.md) | Source-of-truth `project.yml`; `.swiftformat` configuration; 580+ unit tests passing. |
-| **EPUB Import & Safe Trashing** | **Active Plan** 📋 | **Phase 7** &bull; [`epub-import-and-safe-trashing-plan.md`](~/Documents/Applications/ambrosia/docs/plans/epub-import-and-safe-trashing-plan.md) | [docs/calibre-library.md](~/Documents/Applications/ambrosia/docs/calibre-library.md) | Drag-and-drop pre-triage ingestion and reversible trashing remain unbuilt. |
+| **EPUB Import & Safe Trashing** | **Active Priority** 🚀 | **Phase 7 (Milestone 5)** &bull; [`epub-import-and-safe-trashing-plan.md`](~/Documents/Applications/ambrosia/docs/plans/epub-import-and-safe-trashing-plan.md) | [docs/calibre-library.md](~/Documents/Applications/ambrosia/docs/calibre-library.md) | Drag-and-drop pre-triage ingestion and reversible trashing (primary Phase 7 focus). |
 | **Reader Experience & Series Navigation** | **Active Plan** 📋 | **Phase 8** &bull; [`phase8-reader-experience-series-navigation-plan.md`](~/Documents/Applications/ambrosia/docs/plans/phase8-reader-experience-series-navigation-plan.md) | [docs/reader.md](~/Documents/Applications/ambrosia/docs/reader.md) | Direct chapter comment links, next-in-series navigation, preface visual presets. |
 | **Smart & Hierarchical Collections** | **Planned** 🗓️ | **Phase 9** | [docs/metadb-and-migrations.md](~/Documents/Applications/ambrosia/docs/metadb-and-migrations.md) | Dynamic saved filters as live collections, nested folders, curated manual sequencing. |
 | **Quotes & Clippings Annotations Vault** | **Planned** 🗓️ | **Phase 10** | [docs/annotations.md](~/Documents/Applications/ambrosia/docs/annotations.md) | Cross-library annotation browser, quote search, copy with citation, Obsidian export. |
 | **ELO Matchup & Personal Tier Lists** | **Planned** 🗓️ | **Phase 11** | [docs/metadb-and-migrations.md](~/Documents/Applications/ambrosia/docs/metadb-and-migrations.md) | Pairwise head-to-head matchup UI over `AmbrosiaMetaDB` ELO schema, generating tier lists (S/A/B/C). |
-| **Local Semantic, Hybrid & Precision Search** | **Built** ✅ | **Phase 12** &bull; [`phase12-local-semantic-hybrid-and-precision-search-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase12-local-semantic-hybrid-and-precision-search-plan.md) | [docs/search-and-filter.md](~/Documents/Applications/ambrosia/docs/search-and-filter.md) | On-device sentence embeddings, Accelerate BLAS SIMD matrix dot product, RRF hybrid fusion, SQLite REGEXP, Calibre `=`/`~` operators. |
-| **Full-Text Corpus Semantic Search & External Ingestion** | **Active Plan** 📋 | **Phase 12 Extension** &bull; [`fulltext-semantic-search-and-external-ingestion-plan.md`](~/Documents/Applications/ambrosia/docs/plans/fulltext-semantic-search-and-external-ingestion-plan.md) | [docs/search-and-filter.md](~/Documents/Applications/ambrosia/docs/search-and-filter.md), [docs/calibre-fts.md](~/Documents/Applications/ambrosia/docs/calibre-fts.md) | Paragraph-aware chunking (~400 words, 50-word overlap), dual-mode execution (on-device + external headless CLI), on-demand model manager, passage jumping. |
+| **Local Semantic, Hybrid & Precision Search** | **Built** ✅ | **Phase 12 (Core)** &bull; [`phase12-local-semantic-hybrid-and-precision-search-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase12-local-semantic-hybrid-and-precision-search-plan.md) | [docs/search-and-filter.md](~/Documents/Applications/ambrosia/docs/search-and-filter.md) | On-device sentence embeddings, Accelerate BLAS SIMD matrix dot product, RRF hybrid fusion, SQLite REGEXP, Calibre `=`/`~` operators. |
+| **Full-Text Corpus Semantic Search & External Ingestion** | **Active Priority** 🚀 | **Phase 12 Extension** &bull; [`fulltext-semantic-search-and-external-ingestion-plan.md`](~/Documents/Applications/ambrosia/docs/plans/fulltext-semantic-search-and-external-ingestion-plan.md) | [docs/search-and-filter.md](~/Documents/Applications/ambrosia/docs/search-and-filter.md), [docs/calibre-fts.md](~/Documents/Applications/ambrosia/docs/calibre-fts.md) | Paragraph-aware chunking (~400 words, 50-word overlap), dual-mode execution (on-device + external headless CLI), on-demand model manager, passage jumping. |
 | **OPDS Catalog Server & Mobile Bridge** | **Planned** 🗓️ | **Phase 13** | [docs/local-feed-server.md](~/Documents/Applications/ambrosia/docs/local-feed-server.md) | Serve library and modernized EPUB 3/Omnibuses over local Wi-Fi OPDS 1.2/2.0 to mobile reader apps. |
 | **Native AO3 Account Bridge** | **Planned** 🗓️ | **Phase 14** | [docs/ao3-metadata-extraction.md](~/Documents/Applications/ambrosia/docs/ao3-metadata-extraction.md) | In-reader Kudos submission, remote AO3 Bookmarks & Marked-for-Later two-way sync. |
 | **Standalone Mode without Calibre** | **Blueprint Ready** 📦 | Architecture &bull; [`standalone-epub-folder-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/standalone-epub-folder-plan.md) | [docs/calibre-library.md](~/Documents/Applications/ambrosia/docs/calibre-library.md) | Decouple library cataloging from Calibre `metadata.db` to open arbitrary folders of EPUBs. |
@@ -98,12 +98,12 @@ Consolidated from [`docs/not-yet-built.md`](~/Documents/Applications/ambrosia/do
 | **Phase 4** | **State Management & Swift 6** | **Completed** ✅ | Modernize `ReaderPreferences` from Combine to `@Observable`; upgrade from Swift 5 mode to Swift 6 strict concurrency. | **Medium / Low** |
 | **Phase 5** | **Search & Facet Scalability** | **Completed** ✅ | Debounce facet queries; replace unbounded `IN (?, ?, ...)` clauses with temporary tables or virtual ID sets. | **Low** |
 | **Phase 6** | **App Lifecycle & Monolith Deconstruction** | **Completed** ✅ | Eliminate SwiftUI "ghost window" hack; decompose monolithic files (>2,500 lines) into focused, single-responsibility modules. | **Low** |
-| **Phase 7** | **AO3 Lifecycle, Duplicates, Series Sync & EPUB 3 Engine** | **Active Plan** 📋 | Completed: duplicate state migration, series gap manifests, EPUB 3 normalization, omnibus generation. Remaining: configurable omnibus policies and EPUB import with safe reversible trashing. | **Medium** |
+| **Phase 7** | **AO3 Lifecycle, Duplicates, Series Sync & EPUB 3 Engine** | **Active Priority** 🚀 | Completed: duplicate state migration, series gap manifests, EPUB 3 normalization, omnibus generation. **Priority Target**: Milestone 5 EPUB import with safe reversible trashing. | **Medium** |
 | **Phase 8** | **Reader Experience & Series Navigation** | **Partially implemented** 📋 | Work-level comment links and fake-indent trimming exist; chapter-level comments, in-reader next-in-series navigation, preface variants, paragraph spacing, and drop-caps remain. | **Low** |
 | **Phase 9** | **Smart & Hierarchical Collections** | **Planned** 🗓️ | Dynamic saved filters as live collections, nested folders, curated manual sequencing, auto-import AO3 collections, collection progress metrics. | **Low** |
 | **Phase 10** | **Quotes & Clippings Vault** | **Planned** 🗓️ | Cross-library annotation browser, quote search, one-click copy with formatted book citation, and Markdown/Obsidian export. | **Low** |
 | **Phase 11** | **ELO Matchup & Personal Tier Lists** | **Planned** 🗓️ | Pairwise head-to-head matchup UI over existing `AmbrosiaMetaDB` ELO schema, generating dynamic tier lists (S/A/B/C) and sort options. | **Low** |
-| **Phase 12** | **Local Semantic, Hybrid & Precision Search** | **Completed** ✅ | On-device sentence embeddings for summaries/tags, Accelerate BLAS SIMD dot-product cosine similarity, Reciprocal Rank Fusion ($k=60$) with lexical search, Calibre exact (`=`) and regex (`~`) query operators, whole-word token matching, and occurrence highlight fixes. | **Medium** |
+| **Phase 12** | **Local Semantic, Hybrid & Precision Search** | **Active Priority** 🚀 | Core completed ✅ (metadata embeddings, Accelerate BLAS SIMD, RRF hybrid fusion, Calibre exact/regex operators). **Priority Target**: Milestones 4–5 full-text corpus semantic chunking and external ingestion pipeline. | **Medium** |
 | **Phase 13** | **OPDS Server & Mobile Reading Bridge** | **Planned** 🗓️ | Serve library, collections, and Phase 7 modernized EPUBs & Series Omnibuses over local Wi-Fi via OPDS 1.2/2.0 to e-reader apps (Panels, Chunky, Moon+, Kobo) with WIP/completion filtering. | **Low** |
 | **Phase 14** | **Native AO3 Account Bridge** | **Planned** 🗓️ | In-reader Kudos submission, remote AO3 Bookmarks and Marked-for-Later synchronization into Ambrosia smart collections. | **Medium** |
 

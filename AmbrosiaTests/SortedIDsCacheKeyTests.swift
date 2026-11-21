@@ -7,16 +7,16 @@ final class SortedIDsCacheKeyTests: XCTestCase {
 
     private func key(query: String = "q", filter: String = "f", expansions: String = "",
                      version: Int = 1, signature: String = "s", sort: SortField = .title,
-                     ascending: Bool = true, seed: UInt64 = 1) -> SortedIDsCacheKey {
+                     ascending: Bool = true, seed: UInt64 = 1, digest: String = "d") -> SortedIDsCacheKey {
         SortedIDsCacheKey(querySignature: query, filterSignature: filter, tagExpansionsDigest: expansions,
                           visibilityVersion: version, visibilitySignature: signature, sortField: sort,
-                          ascending: ascending, randomSeed: seed)
+                          ascending: ascending, randomSeed: seed, queryDigest: digest)
     }
 
     private func page(offset: Int, limit: Int) -> PageCacheKey {
         PageCacheKey(querySignature: "q", filterSignature: "f", tagExpansionsDigest: "",
                      visibilityVersion: 1, visibilitySignature: "s", sortField: .title,
-                     ascending: true, randomSeed: 1, offset: offset, limit: limit)
+                     ascending: true, randomSeed: 1, queryDigest: "d", offset: offset, limit: limit)
     }
 
     func testPageKeysDifferingOnlyInWindowShareOneSortedKey() {
@@ -33,10 +33,26 @@ final class SortedIDsCacheKeyTests: XCTestCase {
         let base = key()
         let variants = [
             key(query: "other"), key(filter: "other"), key(expansions: "a:[b]"), key(version: 2),
-            key(signature: "other"), key(sort: .wordCount), key(ascending: false), key(seed: 2)
+            key(signature: "other"), key(sort: .wordCount), key(ascending: false), key(digest: "other")
         ]
         for variant in variants { XCTAssertNotEqual(base, variant) }
         XCTAssertEqual(Set(variants + [base]).count, variants.count + 1)
+    }
+
+    func testRandomSortSeedDistinguishesKeys() {
+        let random1 = key(sort: .random, seed: 1)
+        let random2 = key(sort: .random, seed: 2)
+        XCTAssertNotEqual(random1, random2)
+    }
+
+    func testNonRandomSortZeroesSeed() {
+        let title1 = key(sort: .title, seed: 1)
+        let title2 = key(sort: .title, seed: 2)
+        XCTAssertEqual(title1, title2)
+
+        let words1 = key(sort: .wordCount, seed: 1)
+        let words2 = key(sort: .wordCount, seed: 2)
+        XCTAssertEqual(words1, words2)
     }
 
     func testIdenticalInputsAreEqualAndHashEqual() {

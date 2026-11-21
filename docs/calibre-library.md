@@ -21,6 +21,11 @@ Important schema facts:
 
 `CalibreLibrary.books(...)` fetches a page of rows, then bulk-loads authors, tags, and comments with page-level JOIN queries. The `comments` join on the main fetch is omitted unless a filter rule references the comment field (performance optimization: comment blobs are large).
 
+### Book Hydration Contracts
+
+- `CalibreLibrary.orderedBooks(for ids: [Int]) -> [CalibreBook]`: Hydrates books while strictly preserving the sequence of `ids`. Duplicate IDs produce only the first occurrence; missing IDs are dropped silently. Used by all sorted page functions (`wordCountSortedPage`, `kudosSortedPage`, `relevanceSortedPage`, `randomSortedPage`, `groupAwareTitleSortedPage`) so intra-page display order matches the computed sort sequence exactly.
+- `CalibreLibrary.booksForIDs(_ ids: [Int]) -> [CalibreBook]`: Historical hydrator that delegates to `hydratedBooks(for:)` and returns rows in SQL title order (`ORDER BY b.title ASC`). Retained for non-page callers that index results by ID or rely on title ordering.
+
 **Fixed.** `CalibreLibrary` no longer holds its own `Connection` to `ambrosia_meta.db`. `ao3WordCounts(ids:)`, `ao3Dates(ids:)`, and `crossoverBookIDs()` now read from in-memory caches (`ao3WordCountCache`, `ao3DateCache`, `crossoverIDCache`) populated by `CalibreLibrary.updateAO3MetaCaches(...)`, which `LibrarySession.refreshAO3MetaCaches()` calls after bulk-fetching from `AmbrosiaMetaDB` on open and after each AO3 extraction batch. `AmbrosiaMetaDB` remains the sole connection owner; `CalibreLibrary` only ever sees pushed-in results.
 
 
@@ -53,6 +58,22 @@ See `overview.md`'s Invariant 12 for the repo-wide force-unwrap ban. (`ReadingTa
 ### Library fingerprint and chunked series scan
 
 `CalibreLibrary.libraryFingerprint()` runs `SELECT COUNT(*), MAX(id), MAX(last_modified) FROM books` and reads `metadata.db`'s mtime and size. Whether Calibre bumps `last_modified` on every kind of edit is an assumption, not verified. `calibreSeriesEntries(bookIDsAfter:through:)` is the windowed form of `allCalibreSeriesEntries()`, ordered by book id, series name, then series index.
+
+### Query Pipeline & Hydration Contracts (Passes 1–3)
+
+- **Hydration Methods**:
+  - `orderedBooks(for ids: [Int]) -> [CalibreBook]`: Preserves the exact sequence of input `ids` via dictionary mapping and deduplication (`skipSort: true` in SQLite). All 5 sorted-page methods (`wordCountSortedPage`, `kudosSortedPage`, `groupAwareTitleSortedPage`, `randomSortedPage`, `relevanceSortedPage`) hydrate pages through this method.
+  - `booksForIDs(_ ids: [Int]) -> [CalibreBook]`: Retains historical SQL alphabetical title order (`skipSort: false`). Used by non-page callers that build title-ordered indexes.
+- **Cold-Path Optimization (`fetchAllMatchingIDs`)**:
+  - Drops redundant outer joins on `books_authors_link`, `authors`, `books_series_link`, and `series` (`whereClause` uses targeted `EXISTS` subqueries, never outer aliases).
+  - Joins `comments` only when a filter rule explicitly targets the comment field.
+  - Emits `GROUP BY b.id` only when the comments join is present; otherwise executes a pure table scan with zero joins.
+  - Enforces deterministic ordering: `ORDER BY b.title ASC, b.id ASC`.
+- **Page Query Join Elision (`fetchBooksInternal`)**:
+  - Joins `books_authors_link` / `authors` only when sorting by author (`sort == .author`). Series and publisher joins are retained because they are projected columns.
+- **D4 Numeric Sort Contract**:
+  - Numeric sorts (`.wordCount`, `.kudos`) sort by value with nil values placed last in both ascending and descending directions.
+  - Ties (both among equal non-nil values and among nil values) break deterministically by title NOCASE ASC, then `calibre_id` ASC.
 
 ---
 

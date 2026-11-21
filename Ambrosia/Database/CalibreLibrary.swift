@@ -195,7 +195,8 @@ actor CalibreLibrary {
     /// `booksForIDs`, not a fresh materialize-and-sort. Each entry can hold
     /// tens of thousands of ints, so the capacity is deliberately small.
     /// Read through `get` so eviction is true LRU.
-    var sortedIDsCache: LRUCache<SortedIDsCacheKey, [Int]> = LRUCache(limit: 4)
+    var sortedIDsCache: LRUCache<SortedIDsCacheKey, [Int]> = LRUCache(limit: 8)
+    private(set) var sortedIDsComputeCount: Int = 0
     /// Sorts currently being computed. A second same-key caller (for example a
     /// prefetch racing a page change) awaits the running task instead of
     /// starting another full sort. `groupAwareTitleSortedPage` suspends mid
@@ -534,18 +535,7 @@ actor CalibreLibrary {
         }
     }
 
-    /// §2a fix (2): word-count sort, resolved entirely in Swift.
-    ///
-    /// Primary source: a configured Calibre custom column (bulk-fetched, not
-    /// per-book). Fallback: ao3_metadata.word_count, supplied by the caller via
-    /// `ao3WordCounts` (already bulk-fetched from ambrosia_meta.db — a separate
-    /// database file, so it can't be expressed as a SQL JOIN against books.db).
-    ///
-    /// Sorting requires the *entire* matching set, not just one page — a per-page
-    /// sort would be locally correct but globally meaningless across page
-    /// boundaries. The SQL layer therefore only fetches a stable title-ordered
-    /// baseline (see orderByClause(.wordCount)); this function re-sorts that full
-    /// set in memory and the caller slices out the requested page.
+    /// §2a fix (2): word-count sort, resolved entirely in Swift with D4 tie-breaking.
     func sortedByWordCount(books: [CalibreBook], ascending: Bool,
                            ao3WordCounts: [Int: Int]) -> [CalibreBook] {
         let valuesByID: [Int: Int]
@@ -556,15 +546,29 @@ actor CalibreLibrary {
             valuesByID = ao3WordCounts
         }
         return books.sorted { bookA, bookB in
-            compareNilsLast(valuesByID[bookA.id], valuesByID[bookB.id], ascending: ascending)
+            let valA = valuesByID[bookA.id]
+            let valB = valuesByID[bookB.id]
+            switch (valA, valB) {
+            case let (vA?, vB?):
+                if vA != vB {
+                    return ascending ? vA < vB : vA > vB
+                }
+            case (.some, nil):
+                return true
+            case (nil, .some):
+                return false
+            case (nil, nil):
+                break
+            }
+            let cmp = bookA.title.caseInsensitiveCompare(bookB.title)
+            if cmp != .orderedSame {
+                return cmp == .orderedAscending
+            }
+            return bookA.id < bookB.id
         }
     }
 
-    /// §2.2d: kudos sort, mirroring sortedByWordCount exactly.
-    ///
-    /// Primary source: a configured Calibre custom column (bulk-fetched, not
-    /// per-book). Fallback: ao3_metadata.kudos_count, supplied by the caller via
-    /// `ao3Kudos` (already bulk-fetched from ambrosia_meta.db).
+    /// §2.2d: kudos sort, mirroring sortedByWordCount exactly with D4 tie-breaking.
     func sortedByKudos(books: [CalibreBook], ascending: Bool,
                        ao3Kudos: [Int: Int]) -> [CalibreBook] {
         let valuesByID: [Int: Int]
@@ -575,179 +579,54 @@ actor CalibreLibrary {
             valuesByID = ao3Kudos
         }
         return books.sorted { bookA, bookB in
-            compareNilsLast(valuesByID[bookA.id], valuesByID[bookB.id], ascending: ascending)
+            let valA = valuesByID[bookA.id]
+            let valB = valuesByID[bookB.id]
+            switch (valA, valB) {
+            case let (vA?, vB?):
+                if vA != vB {
+                    return ascending ? vA < vB : vA > vB
+                }
+            case (.some, nil):
+                return true
+            case (nil, .some):
+                return false
+            case (nil, nil):
+                break
+            }
+            let cmp = bookA.title.caseInsensitiveCompare(bookB.title)
+            if cmp != .orderedSame {
+                return cmp == .orderedAscending
+            }
+            return bookA.id < bookB.id
         }
     }
 
-    /// The filter/visibility inputs shared by every `*SortedPage` function
-    /// below (word count, kudos, group-aware title, random). Grouped into
-    /// one struct since all four take exactly this same set of 7 params in
-    /// addition to their own offset/limit/ascending, and every call site
-    /// builds them together from the same `LibraryToolbarState`/`session`.
-    /// Defaults mirror each function's own previous per-parameter defaults.
-    struct PageQuery {
-        var query: SearchQuery
-        var filter: FilterExpression?
-        var restrictIDs: [Int]?
-        var visibility: LibraryVisibilityPolicy = .allowAll
-        var filterTagExpansions: [String: [String]] = [:]
-        var visibilityVersion: Int = 0
-        var pinnedCollectionVersion: Int = 0
-        var metaDB: AmbrosiaMetaDB?
-        var rankedIDs: [Int]?
-    }
-
-    /// Fetches the full matching set (capped at exportCap, same cap as export),
-    /// sorts it by word count in memory, and returns just the requested page plus
-    /// whether more pages remain. Used in place of the normal offset/limit SQL
-    /// path whenever sort == .wordCount.
-    func wordCountSortedPage(offset: Int, limit: Int, ascending: Bool,
-                             _ pageQuery: PageQuery) async -> (page: [CalibreBook], hasMore: Bool) {
-        let query = pageQuery.query
-        let filter = pageQuery.filter
-        let restrictIDs = pageQuery.restrictIDs
-        let visibility = pageQuery.visibility
-        let filterTagExpansions = pageQuery.filterTagExpansions
-        let visibilityVersion = pageQuery.visibilityVersion
-        let metaDB = pageQuery.metaDB
-        let cacheKey = PageCacheKey(
-            querySignature: LibraryFilterDebug.summary(query: query),
-            filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
-            tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
-            visibilityVersion: visibilityVersion,
-            pinnedCollectionVersion: pageQuery.pinnedCollectionVersion,
-            visibilitySignature: visibility.cacheSignature,
-            sortField: .wordCount,
-            ascending: ascending,
-            randomSeed: randomSeed,
-            offset: offset,
-            limit: limit
-        )
-        if let cached = pageCache[cacheKey] { LaunchSignposts.event("pageCache.hit"); return cached }
-        // 1. Fetch all matching IDs (no author/tag/comment hydration), then
-        // apply the visibility policy (skip/series-grouping/AO3-publisher-only/
-        // anthology) once, here, instead of callers pre-intersecting restrictIDs
-        // with individual ID sets at each call site.
-        let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
-                                                filterTagExpansions: filterTagExpansions)
-        // §SeriesGrouping Phase 1: a hit on a non-leading series member
-        // (e.g. book 3) must pull in the rest of the series so its leader
-        // survives the seriesOrMergedIDs deny-list below, instead of the
-        // whole group silently disappearing. No-op when grouping is off.
-        let matchedIDs = await SeriesMatchExpansion.expand(
-            matchedIDs: rawMatchedIDs,
-            shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
-            filter: filter,
-            library: self,
-            metaDB: metaDB
-        )
-        let allIDs = visibility.filter(matchedIDs)
-
-        // 2. Bulk-fetch word counts for this ID set only.
-        let wordCounts: [Int: Int]
-        if let label = CustomColumnConfig.shared.wordCountLabel,
-           let tbl = customColumnTableName(label: label) {
-            wordCounts = bulkCustomColumnInts(table: tbl, ids: allIDs)
-        } else {
-            wordCounts = ao3WordCounts(ids: allIDs)
+    /// Total-order comparator for numeric values with nil-last semantics and D4 tie-breaking (title ASC, then calibre_id ASC).
+    private func compareNumericD4(
+        first: (id: Int, val: Int?),
+        second: (id: Int, val: Int?),
+        titles: [Int: String],
+        ascending: Bool
+    ) -> Bool {
+        switch (first.val, second.val) {
+        case let (vA?, vB?):
+            if vA != vB {
+                return ascending ? vA < vB : vA > vB
+            }
+        case (.some, nil):
+            return true
+        case (nil, .some):
+            return false
+        case (nil, nil):
+            break
         }
-
-        // 3. Sort IDs by word count in Swift. Unknown word count sorts last.
-        let sortedIDs = allIDs.sorted { idA, idB in
-            compareNilsLast(wordCounts[idA], wordCounts[idB], ascending: ascending)
+        let titleA = titles[first.id] ?? ""
+        let titleB = titles[second.id] ?? ""
+        let cmp = titleA.caseInsensitiveCompare(titleB)
+        if cmp != .orderedSame {
+            return cmp == .orderedAscending
         }
-
-        // 4. Slice the requested page.
-        let start = min(offset, sortedIDs.count)
-        let end   = min(offset + limit, sortedIDs.count)
-        guard start < end else {
-            pageCache.set(([], false), for: cacheKey)
-            return ([], false)
-        }
-        let pageIDs = Array(sortedIDs[start..<end])
-
-        // 5. Hydrate only the page (authors, tags, comments).
-        let page = booksForIDs(pageIDs)
-        let result = (page, end < sortedIDs.count)
-        pageCache.set(result, for: cacheKey)
-        return result
-    }
-
-    /// §2.2d: Fetches the full matching set (capped at exportCap, same cap as
-    /// export), sorts it by kudos in memory, and returns just the requested
-    /// page plus whether more pages remain. Used in place of the normal
-    /// offset/limit SQL path whenever sort == .kudos. Mirrors
-    /// wordCountSortedPage exactly.
-    func kudosSortedPage(offset: Int, limit: Int, ascending: Bool,
-                         _ pageQuery: PageQuery) async -> (page: [CalibreBook], hasMore: Bool) {
-        let query = pageQuery.query
-        let filter = pageQuery.filter
-        let restrictIDs = pageQuery.restrictIDs
-        let visibility = pageQuery.visibility
-        let filterTagExpansions = pageQuery.filterTagExpansions
-        let visibilityVersion = pageQuery.visibilityVersion
-        let metaDB = pageQuery.metaDB
-        let cacheKey = PageCacheKey(
-            querySignature: LibraryFilterDebug.summary(query: query),
-            filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
-            tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
-            visibilityVersion: visibilityVersion,
-            pinnedCollectionVersion: pageQuery.pinnedCollectionVersion,
-            visibilitySignature: visibility.cacheSignature,
-            sortField: .kudos,
-            ascending: ascending,
-            randomSeed: randomSeed,
-            offset: offset,
-            limit: limit
-        )
-        if let cached = pageCache[cacheKey] { LaunchSignposts.event("pageCache.hit"); return cached }
-        // 1. Fetch all matching IDs (no author/tag/comment hydration), then
-        // apply the visibility policy (skip/series-grouping/AO3-publisher-only/
-        // anthology) once, here, instead of callers pre-intersecting restrictIDs
-        // with individual ID sets at each call site.
-        let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
-                                                filterTagExpansions: filterTagExpansions)
-        // §SeriesGrouping Phase 1: a hit on a non-leading series member
-        // (e.g. book 3) must pull in the rest of the series so its leader
-        // survives the seriesOrMergedIDs deny-list below, instead of the
-        // whole group silently disappearing. No-op when grouping is off.
-        let matchedIDs = await SeriesMatchExpansion.expand(
-            matchedIDs: rawMatchedIDs,
-            shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
-            filter: filter,
-            library: self,
-            metaDB: metaDB
-        )
-        let allIDs = visibility.filter(matchedIDs)
-
-        // 2. Bulk-fetch kudos for this ID set only.
-        let kudos: [Int: Int]
-        if let label = CustomColumnConfig.shared.kudosLabel,
-           let tbl = customColumnTableName(label: label) {
-            kudos = bulkCustomColumnInts(table: tbl, ids: allIDs)
-        } else {
-            kudos = ao3Kudos(ids: allIDs)
-        }
-
-        // 3. Sort IDs by kudos in Swift. Unknown kudos sorts last.
-        let sortedIDs = allIDs.sorted { idA, idB in
-            compareNilsLast(kudos[idA], kudos[idB], ascending: ascending)
-        }
-
-        // 4. Slice the requested page.
-        let start = min(offset, sortedIDs.count)
-        let end   = min(offset + limit, sortedIDs.count)
-        guard start < end else {
-            pageCache.set(([], false), for: cacheKey)
-            return ([], false)
-        }
-        let pageIDs = Array(sortedIDs[start..<end])
-
-        // 5. Hydrate only the page (authors, tags, comments).
-        let page = booksForIDs(pageIDs)
-        let result = (page, end < sortedIDs.count)
-        pageCache.set(result, for: cacheKey)
-        return result
+        return first.id < second.id
     }
 
     /// Bulk-fetch just `title` for a set of IDs — analogous to `ao3WordCounts`/
@@ -801,69 +680,98 @@ actor CalibreLibrary {
         return result
     }
 
-    /// Group-aware title-sorted page. `orderByClause(.title)` alone can't do
-    /// this: it sorts SQL rows by `b.title`, one book at a time, which is
-    /// fine per-book but scatters a grouped series' representative row
-    /// wherever its own title alphabetizes rather than under the series'
-    /// name — and (like the plain SQL-windowed path used for other sorts)
-    /// a query match on a non-leading member never pulls in the leader, so
-    /// the whole series can silently vanish from a filtered/searched page.
-    /// `series_cache` also lives in `AmbrosiaMetaDB`, a separate connection
-    /// from this actor's own `db`, so the sort key can't be produced by a
-    /// single-database SQL `ORDER BY` the way `.series` sort is — hence the
-    /// materialize-then-sort-in-Swift shape shared with `wordCountSortedPage`/
-    /// `randomSortedPage`, rather than a change to `orderByClause`.
-    ///
-    /// Sort key per visible ID: the qualifying series' name if the ID
-    /// belongs to one (so the group sorts as a unit under that name),
-    /// otherwise the book's own title. Grouping-off callers should keep
-    /// using `books()`; this is only correct to call when
-    /// `visibility.shouldGroupSeriesRows` is true.
-    func groupAwareTitleSortedPage(offset: Int, limit: Int, ascending: Bool,
-                                   _ pageQuery: PageQuery) async -> (page: [CalibreBook], hasMore: Bool) {
-        let query = pageQuery.query
-        let filter = pageQuery.filter
-        let cacheKey = PageCacheKey(
-            querySignature: LibraryFilterDebug.summary(query: query),
-            filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
+    /// The filter/visibility inputs shared by every `*SortedPage` function
+    /// below (word count, kudos, group-aware title, random, relevance).
+    struct PageQuery {
+        var query: SearchQuery
+        var filter: FilterExpression?
+        var restrictIDs: [Int]?
+        var visibility: LibraryVisibilityPolicy = .allowAll
+        var filterTagExpansions: [String: [String]] = [:]
+        var visibilityVersion: Int = 0
+        var pinnedCollectionVersion: Int = 0
+        var metaDB: AmbrosiaMetaDB?
+        var rankedIDs: [Int]?
+        var queryDigest: String
+
+        init(
+            query: SearchQuery,
+            filter: FilterExpression? = nil,
+            restrictIDs: [Int]? = nil,
+            visibility: LibraryVisibilityPolicy = .allowAll,
+            filterTagExpansions: [String: [String]] = [:],
+            visibilityVersion: Int = 0,
+            pinnedCollectionVersion: Int = 0,
+            metaDB: AmbrosiaMetaDB? = nil,
+            rankedIDs: [Int]? = nil,
+            queryDigest: String? = nil
+        ) {
+            self.query = query
+            self.filter = filter
+            self.restrictIDs = restrictIDs
+            self.visibility = visibility
+            self.filterTagExpansions = filterTagExpansions
+            self.visibilityVersion = visibilityVersion
+            self.pinnedCollectionVersion = pinnedCollectionVersion
+            self.metaDB = metaDB
+            self.rankedIDs = rankedIDs
+            self.queryDigest = queryDigest ?? QueryDigestBuilder.digest(
+                query: query,
+                filter: filter,
+                restrictIDs: restrictIDs,
+                filterTagExpansions: filterTagExpansions,
+                rankedIDs: rankedIDs
+            )
+        }
+    }
+
+    enum SortKind: Sendable {
+        case random
+        case relevance
+        case wordCount
+        case kudos
+        case groupAwareTitle
+    }
+
+    private func makePageCacheKey(
+        pageQuery: PageQuery,
+        sortField: SortField,
+        ascending: Bool,
+        offset: Int,
+        limit: Int
+    ) -> PageCacheKey {
+        PageCacheKey(
+            querySignature: LibraryFilterDebug.summary(query: pageQuery.query),
+            filterSignature: pageQuery.filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
             tagExpansionsDigest: tagExpansionsDigest(pageQuery.filterTagExpansions),
             visibilityVersion: pageQuery.visibilityVersion,
             pinnedCollectionVersion: pageQuery.pinnedCollectionVersion,
             visibilitySignature: pageQuery.visibility.cacheSignature,
-            sortField: .title,
+            sortField: sortField,
             ascending: ascending,
             randomSeed: randomSeed,
+            queryDigest: pageQuery.queryDigest,
             offset: offset,
             limit: limit
         )
-        if let cached = pageCache[cacheKey] { LaunchSignposts.event("pageCache.hit"); return cached }
-
-        let sortedIDs = await groupAwareTitleSortedIDs(key: cacheKey.sortedKey, ascending: ascending, pageQuery)
-        let start = min(offset, sortedIDs.count)
-        let end   = min(offset + limit, sortedIDs.count)
-        guard start < end else {
-            pageCache.set(([], false), for: cacheKey)
-            return ([], false)
-        }
-        let pageIDs = Array(sortedIDs[start..<end])
-        let page = booksForIDs(pageIDs)
-        let result = (page, end < sortedIDs.count)
-        pageCache.set(result, for: cacheKey)
-        return result
     }
 
-    /// The full group-aware title-sorted id list for `key`: cache hit, join a
-    /// running sort for the same key, or start one. Everything after the first
-    /// page of a view, and every revisit, is served from here.
-    private func groupAwareTitleSortedIDs(key: SortedIDsCacheKey, ascending: Bool,
-                                          _ pageQuery: PageQuery) async -> [Int] {
-        if let cached = sortedIDsCache.get(key) { return cached }
-        if let running = sortedIDsInFlight[key] { return await running.value }
-
+    private func materializedSortedIDs(
+        key: SortedIDsCacheKey,
+        kind: SortKind,
+        pageQuery: PageQuery,
+        ascending: Bool
+    ) async -> [Int] {
+        if let cached = sortedIDsCache.get(key) {
+            LaunchSignposts.event("sortedIDsCache.hit")
+            return cached
+        }
+        if let running = sortedIDsInFlight[key] {
+            LaunchSignposts.event("sortedIDsInFlight.join")
+            return await running.value
+        }
         let generation = sortedIDsGeneration
-        // Unstructured on purpose: cancelling the caller (a superseded page
-        // load) must not cancel a sort that a later caller will reuse.
-        let task = Task { await self.computeGroupAwareTitleSortedIDs(ascending: ascending, pageQuery) }
+        let task = Task { await self.computeSortedIDs(kind: kind, pageQuery: pageQuery, ascending: ascending) }
         sortedIDsInFlight[key] = task
         let ids = await task.value
         if sortedIDsGeneration == generation {
@@ -873,9 +781,210 @@ actor CalibreLibrary {
         return ids
     }
 
+    private func computeSortedIDs(
+        kind: SortKind,
+        pageQuery: PageQuery,
+        ascending: Bool
+    ) async -> [Int] {
+        sortedIDsComputeCount += 1
+        LaunchSignposts.event("sortedIDsCache.compute")
+        switch kind {
+        case .random:
+            return await computeRandomSortedIDs(ascending: ascending, pageQuery)
+        case .relevance:
+            return await computeRelevanceSortedIDs(ascending: ascending, pageQuery)
+        case .wordCount:
+            return await computeWordCountSortedIDs(ascending: ascending, pageQuery)
+        case .kudos:
+            return await computeKudosSortedIDs(ascending: ascending, pageQuery)
+        case .groupAwareTitle:
+            return await computeGroupAwareTitleSortedIDs(ascending: ascending, pageQuery)
+        }
+    }
+
+    /// Fetches the full matching set, sorts it by word count in memory with D4 tie-breaking,
+    /// caching the sorted ID array so subsequent page requests are served without re-querying.
+    func wordCountSortedPage(offset: Int, limit: Int, ascending: Bool,
+                             _ pageQuery: PageQuery) async -> (page: [CalibreBook], hasMore: Bool) {
+        let cacheKey = makePageCacheKey(
+            pageQuery: pageQuery,
+            sortField: .wordCount,
+            ascending: ascending,
+            offset: offset,
+            limit: limit
+        )
+        if let cached = pageCache[cacheKey] { LaunchSignposts.event("pageCache.hit"); return cached }
+        let generation = sortedIDsGeneration
+
+        let sortedIDs = await materializedSortedIDs(
+            key: cacheKey.sortedKey,
+            kind: .wordCount,
+            pageQuery: pageQuery,
+            ascending: ascending
+        )
+        let start = min(offset, sortedIDs.count)
+        let end   = min(offset + limit, sortedIDs.count)
+        guard start < end else {
+            if sortedIDsGeneration == generation {
+                pageCache.set(([], false), for: cacheKey)
+            }
+            return ([], false)
+        }
+        let pageIDs = Array(sortedIDs[start..<end])
+        let page = orderedBooks(for: pageIDs)
+        let result = (page, end < sortedIDs.count)
+        if sortedIDsGeneration == generation {
+            pageCache.set(result, for: cacheKey)
+        }
+        return result
+    }
+
+    private func computeWordCountSortedIDs(ascending: Bool, _ pageQuery: PageQuery) async -> [Int] {
+        let rawMatchedIDs = fetchAllMatchingIDs(
+            query: pageQuery.query,
+            filter: pageQuery.filter,
+            restrictIDs: pageQuery.restrictIDs,
+            filterTagExpansions: pageQuery.filterTagExpansions
+        )
+        let matchedIDs = await SeriesMatchExpansion.expand(
+            matchedIDs: rawMatchedIDs,
+            shouldGroupSeriesRows: pageQuery.visibility.shouldGroupSeriesRows,
+            filter: pageQuery.filter,
+            library: self,
+            metaDB: pageQuery.metaDB
+        )
+        let allIDs = pageQuery.visibility.filter(matchedIDs)
+
+        let wordCounts: [Int: Int]
+        if let label = CustomColumnConfig.shared.wordCountLabel,
+           let tbl = customColumnTableName(label: label) {
+            wordCounts = bulkCustomColumnInts(table: tbl, ids: allIDs)
+        } else {
+            wordCounts = ao3WordCounts(ids: allIDs)
+        }
+
+        let titles = bulkTitles(ids: allIDs)
+        return allIDs.sorted { idA, idB in
+            compareNumericD4(
+                first: (idA, wordCounts[idA]),
+                second: (idB, wordCounts[idB]),
+                titles: titles,
+                ascending: ascending
+            )
+        }
+    }
+
+    /// Fetches the full matching set, sorts it by kudos in memory with D4 tie-breaking,
+    /// caching the sorted ID array so subsequent page requests are served without re-querying.
+    func kudosSortedPage(offset: Int, limit: Int, ascending: Bool,
+                         _ pageQuery: PageQuery) async -> (page: [CalibreBook], hasMore: Bool) {
+        let cacheKey = makePageCacheKey(
+            pageQuery: pageQuery,
+            sortField: .kudos,
+            ascending: ascending,
+            offset: offset,
+            limit: limit
+        )
+        if let cached = pageCache[cacheKey] { LaunchSignposts.event("pageCache.hit"); return cached }
+        let generation = sortedIDsGeneration
+
+        let sortedIDs = await materializedSortedIDs(
+            key: cacheKey.sortedKey,
+            kind: .kudos,
+            pageQuery: pageQuery,
+            ascending: ascending
+        )
+        let start = min(offset, sortedIDs.count)
+        let end   = min(offset + limit, sortedIDs.count)
+        guard start < end else {
+            if sortedIDsGeneration == generation {
+                pageCache.set(([], false), for: cacheKey)
+            }
+            return ([], false)
+        }
+        let pageIDs = Array(sortedIDs[start..<end])
+        let page = orderedBooks(for: pageIDs)
+        let result = (page, end < sortedIDs.count)
+        if sortedIDsGeneration == generation {
+            pageCache.set(result, for: cacheKey)
+        }
+        return result
+    }
+
+    private func computeKudosSortedIDs(ascending: Bool, _ pageQuery: PageQuery) async -> [Int] {
+        let rawMatchedIDs = fetchAllMatchingIDs(
+            query: pageQuery.query,
+            filter: pageQuery.filter,
+            restrictIDs: pageQuery.restrictIDs,
+            filterTagExpansions: pageQuery.filterTagExpansions
+        )
+        let matchedIDs = await SeriesMatchExpansion.expand(
+            matchedIDs: rawMatchedIDs,
+            shouldGroupSeriesRows: pageQuery.visibility.shouldGroupSeriesRows,
+            filter: pageQuery.filter,
+            library: self,
+            metaDB: pageQuery.metaDB
+        )
+        let allIDs = pageQuery.visibility.filter(matchedIDs)
+
+        let kudos: [Int: Int]
+        if let label = CustomColumnConfig.shared.kudosLabel,
+           let tbl = customColumnTableName(label: label) {
+            kudos = bulkCustomColumnInts(table: tbl, ids: allIDs)
+        } else {
+            kudos = ao3Kudos(ids: allIDs)
+        }
+
+        let titles = bulkTitles(ids: allIDs)
+        return allIDs.sorted { idA, idB in
+            compareNumericD4(
+                first: (idA, kudos[idA]),
+                second: (idB, kudos[idB]),
+                titles: titles,
+                ascending: ascending
+            )
+        }
+    }
+
+    /// Group-aware title-sorted page. Caches the full sorted ID array so
+    /// subsequent page requests are served without re-querying.
+    func groupAwareTitleSortedPage(offset: Int, limit: Int, ascending: Bool,
+                                   _ pageQuery: PageQuery) async -> (page: [CalibreBook], hasMore: Bool) {
+        let cacheKey = makePageCacheKey(
+            pageQuery: pageQuery,
+            sortField: .title,
+            ascending: ascending,
+            offset: offset,
+            limit: limit
+        )
+        if let cached = pageCache[cacheKey] { LaunchSignposts.event("pageCache.hit"); return cached }
+        let generation = sortedIDsGeneration
+
+        let sortedIDs = await materializedSortedIDs(
+            key: cacheKey.sortedKey,
+            kind: .groupAwareTitle,
+            pageQuery: pageQuery,
+            ascending: ascending
+        )
+        let start = min(offset, sortedIDs.count)
+        let end   = min(offset + limit, sortedIDs.count)
+        guard start < end else {
+            if sortedIDsGeneration == generation {
+                pageCache.set(([], false), for: cacheKey)
+            }
+            return ([], false)
+        }
+        let pageIDs = Array(sortedIDs[start..<end])
+        let page = orderedBooks(for: pageIDs)
+        let result = (page, end < sortedIDs.count)
+        if sortedIDsGeneration == generation {
+            pageCache.set(result, for: cacheKey)
+        }
+        return result
+    }
+
     /// Materialize every matching id, apply series expansion and visibility,
-    /// and sort. This is the expensive step the sorted-id cache exists to run
-    /// once per view.
+    /// and sort.
     private func computeGroupAwareTitleSortedIDs(ascending: Bool, _ pageQuery: PageQuery) async -> [Int] {
         let query = pageQuery.query
         let filter = pageQuery.filter
@@ -927,13 +1036,6 @@ actor CalibreLibrary {
     /// applied — not the raw SQL row count `fetchAllMatchingIDs` alone would
     /// give (which double-counts collapsed series members and ignores the
     /// publisher/anthology toggles). Used for "Page X of Y" in grouped mode.
-    ///
-    /// This is pure ID-set arithmetic, not a hydration cost: `visibility`'s
-    /// `isVisible(_ id: Int)` form already resolves `hideNonAO3PublisherBooks`/
-    /// `hideAnthologyBooks` against the pre-computed `ao3PublisherIDs`/
-    /// `anthologyIDs` sets the caller passes in (see LibraryVisibilityPolicy),
-    /// so no `CalibreBook` hydration is required — matching IDs in, visible
-    /// IDs out.
     func visibleBookCount(_ pageQuery: PageQuery) async -> Int {
         let query = pageQuery.query
         let filter = pageQuery.filter
@@ -969,135 +1071,139 @@ actor CalibreLibrary {
         return count
     }
 
-    /// Random-sorted page, analogous to wordCountSortedPage.
-    /// Fetches all matching IDs, shuffles with the current seed, slices the page.
+    /// Random-sorted page, caching the shuffled ID list per seed so
+    /// subsequent page requests preserve the shuffle without reshuffling.
     func randomSortedPage(offset: Int, limit: Int,
                           _ pageQuery: PageQuery) async -> (page: [CalibreBook], hasMore: Bool) {
-        let query = pageQuery.query
-        let filter = pageQuery.filter
-        let restrictIDs = pageQuery.restrictIDs
-        let visibility = pageQuery.visibility
-        let filterTagExpansions = pageQuery.filterTagExpansions
-        let visibilityVersion = pageQuery.visibilityVersion
-        let metaDB = pageQuery.metaDB
-        let cacheKey = PageCacheKey(
-            querySignature: LibraryFilterDebug.summary(query: query),
-            filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
-            tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
-            visibilityVersion: visibilityVersion,
-            pinnedCollectionVersion: pageQuery.pinnedCollectionVersion,
-            visibilitySignature: visibility.cacheSignature,
+        let cacheKey = makePageCacheKey(
+            pageQuery: pageQuery,
             sortField: .random,
             ascending: true,
-            randomSeed: randomSeed,
             offset: offset,
             limit: limit
         )
         if let cached = pageCache[cacheKey] { LaunchSignposts.event("pageCache.hit"); return cached }
-        let rawMatchedIDs = fetchAllMatchingIDs(query: query, filter: filter, restrictIDs: restrictIDs,
-                                                filterTagExpansions: filterTagExpansions)
-        let matchedIDs = await SeriesMatchExpansion.expand(
-            matchedIDs: rawMatchedIDs,
-            shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
-            filter: filter,
-            library: self,
-            metaDB: metaDB
+        let generation = sortedIDsGeneration
+
+        let sortedIDs = await materializedSortedIDs(
+            key: cacheKey.sortedKey,
+            kind: .random,
+            pageQuery: pageQuery,
+            ascending: true
         )
-        let allIDs = visibility.filter(matchedIDs)
-        let sortedIDs = sortedRandomly(allIDs)
         let start = min(offset, sortedIDs.count)
         let end   = min(offset + limit, sortedIDs.count)
         guard start < end else {
-            pageCache.set(([], false), for: cacheKey)
+            if sortedIDsGeneration == generation {
+                pageCache.set(([], false), for: cacheKey)
+            }
             return ([], false)
         }
         let pageIDs = Array(sortedIDs[start..<end])
-        let page = booksForIDs(pageIDs)
+        let page = orderedBooks(for: pageIDs)
         let result = (page, end < sortedIDs.count)
-        pageCache.set(result, for: cacheKey)
+        if sortedIDsGeneration == generation {
+            pageCache.set(result, for: cacheKey)
+        }
         return result
     }
 
-    /// Relevance-sorted page for search and filter hits.
-    /// Sorts matching IDs by relevance rank (hybrid RRF / semantic similarity / FTS rank) in memory.
+    private func computeRandomSortedIDs(ascending: Bool, _ pageQuery: PageQuery) async -> [Int] {
+        let rawMatchedIDs = fetchAllMatchingIDs(
+            query: pageQuery.query,
+            filter: pageQuery.filter,
+            restrictIDs: pageQuery.restrictIDs,
+            filterTagExpansions: pageQuery.filterTagExpansions
+        )
+        let matchedIDs = await SeriesMatchExpansion.expand(
+            matchedIDs: rawMatchedIDs,
+            shouldGroupSeriesRows: pageQuery.visibility.shouldGroupSeriesRows,
+            filter: pageQuery.filter,
+            library: self,
+            metaDB: pageQuery.metaDB
+        )
+        let allIDs = pageQuery.visibility.filter(matchedIDs)
+        return sortedRandomly(allIDs)
+    }
+
+    /// Relevance-sorted page for search and filter hits, caching the ranked ID array.
     func relevanceSortedPage(
         offset: Int,
         limit: Int,
         ascending: Bool,
         _ pageQuery: PageQuery
     ) async -> (page: [CalibreBook], hasMore: Bool) {
-        let query = pageQuery.query
-        let filter = pageQuery.filter
-        let restrictIDs = pageQuery.restrictIDs
-        let visibility = pageQuery.visibility
-        let filterTagExpansions = pageQuery.filterTagExpansions
-        let visibilityVersion = pageQuery.visibilityVersion
-        let metaDB = pageQuery.metaDB
-        let rankedIDs = pageQuery.rankedIDs
-
-        let cacheKey = PageCacheKey(
-            querySignature: LibraryFilterDebug.summary(query: query),
-            filterSignature: filter.map { LibraryFilterDebug.summary(expression: $0) } ?? "",
-            tagExpansionsDigest: tagExpansionsDigest(filterTagExpansions),
-            visibilityVersion: visibilityVersion,
-            pinnedCollectionVersion: pageQuery.pinnedCollectionVersion,
-            visibilitySignature: visibility.cacheSignature,
+        let cacheKey = makePageCacheKey(
+            pageQuery: pageQuery,
             sortField: .relevance,
             ascending: ascending,
-            randomSeed: randomSeed,
             offset: offset,
             limit: limit
         )
         if let cached = pageCache[cacheKey] { LaunchSignposts.event("pageCache.hit"); return cached }
+        let generation = sortedIDsGeneration
 
-        let rawMatchedIDs = fetchAllMatchingIDs(
-            query: query,
-            filter: filter,
-            restrictIDs: restrictIDs,
-            filterTagExpansions: filterTagExpansions
+        let sortedIDs = await materializedSortedIDs(
+            key: cacheKey.sortedKey,
+            kind: .relevance,
+            pageQuery: pageQuery,
+            ascending: ascending
         )
-        let matchedIDs = await SeriesMatchExpansion.expand(
-            matchedIDs: rawMatchedIDs,
-            shouldGroupSeriesRows: visibility.shouldGroupSeriesRows,
-            filter: filter,
-            library: self,
-            metaDB: metaDB
-        )
-        let allIDs = visibility.filter(matchedIDs)
-
-        let sortedIDs: [Int]
-        let candidateRanked = rankedIDs ?? query.ftsMatchedIDs
-        if let ranked = candidateRanked, !ranked.isEmpty {
-            let rankMap = Dictionary(uniqueKeysWithValues: ranked.enumerated().map { ($1, $0) })
-            sortedIDs = allIDs.sorted { idA, idB in
-                let rankA = rankMap[idA]
-                let rankB = rankMap[idB]
-                switch (rankA, rankB) {
-                case let (valA?, valB?):
-                    return ascending ? valA > valB : valA < valB
-                case (.some, nil):
-                    return !ascending
-                case (nil, .some):
-                    return ascending
-                case (nil, nil):
-                    return idA < idB
-                }
-            }
-        } else {
-            sortedIDs = allIDs
-        }
-
         let start = min(offset, sortedIDs.count)
         let end   = min(offset + limit, sortedIDs.count)
         guard start < end else {
-            pageCache.set(([], false), for: cacheKey)
+            if sortedIDsGeneration == generation {
+                pageCache.set(([], false), for: cacheKey)
+            }
             return ([], false)
         }
         let pageIDs = Array(sortedIDs[start..<end])
-        let page = booksForIDs(pageIDs)
+        let page = orderedBooks(for: pageIDs)
         let result = (page, end < sortedIDs.count)
-        pageCache.set(result, for: cacheKey)
+        if sortedIDsGeneration == generation {
+            pageCache.set(result, for: cacheKey)
+        }
         return result
+    }
+
+    private func computeRelevanceSortedIDs(ascending: Bool, _ pageQuery: PageQuery) async -> [Int] {
+        let rawMatchedIDs = fetchAllMatchingIDs(
+            query: pageQuery.query,
+            filter: pageQuery.filter,
+            restrictIDs: pageQuery.restrictIDs,
+            filterTagExpansions: pageQuery.filterTagExpansions
+        )
+        let matchedIDs = await SeriesMatchExpansion.expand(
+            matchedIDs: rawMatchedIDs,
+            shouldGroupSeriesRows: pageQuery.visibility.shouldGroupSeriesRows,
+            filter: pageQuery.filter,
+            library: self,
+            metaDB: pageQuery.metaDB
+        )
+        let allIDs = pageQuery.visibility.filter(matchedIDs)
+
+        let candidateRanked = pageQuery.rankedIDs ?? pageQuery.query.ftsMatchedIDs
+        guard let ranked = candidateRanked, !ranked.isEmpty else {
+            return allIDs
+        }
+        let rankMap = Dictionary(uniqueKeysWithValues: ranked.enumerated().map { ($1, $0) })
+        return allIDs.sorted { idA, idB in
+            let rankA = rankMap[idA]
+            let rankB = rankMap[idB]
+            switch (rankA, rankB) {
+            case let (valA?, valB?):
+                if valA != valB {
+                    return ascending ? valA > valB : valA < valB
+                }
+                return idA < idB
+            case (.some, nil):
+                return !ascending
+            case (nil, .some):
+                return ascending
+            case (nil, nil):
+                return idA < idB
+            }
+        }
     }
 
     // MARK: - §1: fetchAllMatchingIDs (lightweight — IDs only, no hydration)
@@ -1134,16 +1240,13 @@ actor CalibreLibrary {
         let needsCommentJoin = filter?.groups.flatMap(\.completeRules)
             .contains { $0.field == .comment } == true
         let commentJoin = needsCommentJoin ? "LEFT JOIN comments c ON c.book = b.id" : ""
+        let groupBy = needsCommentJoin ? "GROUP BY b.id" : ""
         let sql = """
             SELECT b.id FROM books b
-            LEFT JOIN books_authors_link bal ON bal.book = b.id
-            LEFT JOIN authors a ON a.id = bal.author
-            LEFT JOIN books_series_link bsl ON bsl.book = b.id
-            LEFT JOIN series s ON s.id = bsl.series
             \(commentJoin)
             \(whereSQL)
-            GROUP BY b.id
-            ORDER BY b.title ASC
+            \(groupBy)
+            ORDER BY b.title ASC, b.id ASC
             """
         guard let rows = try? db.prepare(sql, args).map({ $0 }) else { return [] }
         return rows.compactMap { ($0[0] as? Int64).map(Int.init) }
@@ -1235,6 +1338,7 @@ actor CalibreLibrary {
             LibraryFilterDebug.log("books.cacheHit", ["rows": cached.page.count])
             return cached.page
         }
+        let generation = sortedIDsGeneration
         let start = LibraryFilterDebug.now()
         do {
             let rows = try fetchBooksInternal(
@@ -1268,7 +1372,9 @@ actor CalibreLibrary {
             // hasMore is not knowable from this overload alone (callers infer it
             // from rows.count vs the limit they passed); store false as a filler,
             // it is never read back — only `.page` is used by this overload's callers.
-            pageCache.set((result, false), for: cacheKey)
+            if sortedIDsGeneration == generation {
+                pageCache.set((result, false), for: cacheKey)
+            }
             return result
         } catch {
             #if DEBUG
@@ -1288,11 +1394,12 @@ actor CalibreLibrary {
         query: SearchQuery,
         filter: FilterExpression? = nil,
         restrictIDs: [Int]? = nil,
-        filterTagExpansions: [String: [String]] = [:]
+        filterTagExpansions: [String: [String]] = [:],
+        skipSort: Bool = false
     ) throws -> [CalibreBook] {
         let direction = ascending ? "ASC" : "DESC"
         // §6 fix: random sort falls back to title in SQL; caller reshuffles post-fetch.
-        let orderBy = orderByClause(sort: sort, direction: direction)
+        let orderBy = skipSort ? "b.id ASC" : orderByClause(sort: sort, direction: direction)
 
         // §6 + §2a: Add kudos LEFT JOIN only when sorting by kudos. (Word-count's
         // wcJoin was removed — word-count sort is now resolved in Swift; see
@@ -1300,6 +1407,15 @@ actor CalibreLibrary {
         let kJoin: String = {
             guard sort == .kudos, let tbl = kudosCustomColumnTable() else { return "" }
             return "LEFT JOIN \(tbl) k ON k.book = b.id"
+        }()
+
+        // Pass 3 item 5: bal / a joins only when sorting by author.
+        let authorJoin: String = {
+            guard sort == .author else { return "" }
+            return """
+            LEFT JOIN books_authors_link bal ON bal.book = b.id
+            LEFT JOIN authors a ON a.id = bal.author
+            """
         }()
 
         // §perf: Only join `comments` when a filter rule references the comment field.
@@ -1337,8 +1453,7 @@ actor CalibreLibrary {
         let sql = """
             SELECT b.id, b.title, b.path, b.pubdate, s.name, b.series_index, p.name
             FROM books b
-            LEFT JOIN books_authors_link bal ON bal.book = b.id
-            LEFT JOIN authors a ON a.id = bal.author
+            \(authorJoin)
             LEFT JOIN books_series_link bsl ON bsl.book = b.id
             LEFT JOIN series s ON s.id = bsl.series
             LEFT JOIN books_publishers_link bpl ON bpl.book = b.id
@@ -1432,7 +1547,7 @@ actor CalibreLibrary {
         }
     }
 
-    func booksForIDs(_ ids: [Int]) -> [CalibreBook] {
+    private func hydratedBooks(for ids: [Int], skipSort: Bool = false) -> [CalibreBook] {
         guard !ids.isEmpty else { return [] }
         do {
             let rows = try fetchBooksQueryIDsInternal(
@@ -1441,7 +1556,8 @@ actor CalibreLibrary {
                 limit: max(ids.count, 1),
                 sort: .title,
                 ascending: true,
-                query: SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+                query: SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: []),
+                skipSort: skipSort
             )
             let fetchedIDs = rows.map(\.id)
             let authorsMap = try authorsInternal(for: fetchedIDs)
@@ -1462,19 +1578,46 @@ actor CalibreLibrary {
         }
     }
 
+    /// Hydrates Calibre books for the given IDs, retaining historical SQL title ordering.
+    /// Used by non-page callers that index results or expect alphabetical title order.
+    func booksForIDs(_ ids: [Int]) -> [CalibreBook] {
+        hydratedBooks(for: ids, skipSort: false)
+    }
+
+    /// Hydrates Calibre books strictly preserving the input `ids` sequence.
+    /// Duplicate IDs yield a single entry (first occurrence). Missing IDs are dropped silently.
+    func orderedBooks(for ids: [Int]) -> [CalibreBook] {
+        guard !ids.isEmpty else { return [] }
+        let books = hydratedBooks(for: ids, skipSort: true)
+        var bookMap: [Int: CalibreBook] = [:]
+        for book in books {
+            bookMap[book.id] = book
+        }
+        var seen = Set<Int>()
+        var result: [CalibreBook] = []
+        for id in ids {
+            if seen.insert(id).inserted, let book = bookMap[id] {
+                result.append(book)
+            }
+        }
+        return result
+    }
+
     private func fetchBooksQueryIDsInternal(
         ids: [Int]? = nil,
         offset: Int,
         limit: Int,
         sort: SortField,
         ascending: Bool,
-        query: SearchQuery
+        query: SearchQuery,
+        skipSort: Bool = false
     ) throws -> [CalibreBook] {
         try fetchBooksInternal(
             offset: offset, limit: limit,
             sort: sort, ascending: ascending,
             query: query, filter: nil,
-            restrictIDs: ids
+            restrictIDs: ids,
+            skipSort: skipSort
         )
     }
 
