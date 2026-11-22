@@ -111,4 +111,44 @@ enum LibraryQueryHelpers {
                         .localizedCaseInsensitiveCompare(normalizedValue) == .orderedSame
             }
     }
+
+    /// Removes the rule with `id` from `expression`. Prunes empty groups only when
+    /// more than one group exists, always leaving at least one group.
+    /// Returns true if the expression was modified.
+    @discardableResult
+    static func removeRule(id: UUID, in expression: inout FilterExpression) -> Bool {
+        var didRemove = false
+        for groupIndex in expression.groups.indices {
+            if let ruleIndex = expression.groups[groupIndex].rules.firstIndex(where: { $0.id == id }) {
+                expression.groups[groupIndex].rules.remove(at: ruleIndex)
+                didRemove = true
+                break
+            }
+        }
+        guard didRemove else { return false }
+        if expression.groups.count > 1 {
+            expression.groups.removeAll { $0.rules.isEmpty }
+            if expression.groups.isEmpty {
+                expression.groups = [FilterGroup()]
+            }
+        }
+        return true
+    }
+
+    /// Inverts the operator of the rule with `id` to its negation counterpart if supported.
+    /// Returns true if the operator was toggled.
+    @discardableResult
+    static func toggleNegation(id: UUID, in expression: inout FilterExpression) -> Bool {
+        for groupIndex in expression.groups.indices {
+            if let ruleIndex = expression.groups[groupIndex].rules.firstIndex(where: { $0.id == id }) {
+                let rule = expression.groups[groupIndex].rules[ruleIndex]
+                guard rule.canToggleNegation, let counterpart = rule.op.negatedCounterpart else {
+                    return false
+                }
+                expression.groups[groupIndex].rules[ruleIndex].op = counterpart
+                return true
+            }
+        }
+        return false
+    }
 }

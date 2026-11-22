@@ -24,6 +24,7 @@ The DEBUG log prints `mode=native|likeFallback reason=...` on every open.
 Phase 1, `searchBooks(_:token:)`: ids only, unranked, `SELECT DISTINCT bt.book FROM
 books_fts JOIN books_text bt ON bt.id = books_fts.rowid WHERE books_fts MATCH ?`. No
 `LIMIT` (D8), no format filter unless `FTSQuery.formats` is set (D9), no `ORDER BY` (D11).
+Returned IDs are unranked, so callers must not treat their order as a ranking (relevance sort treats FTS-only results as a single tie class ordered by tag position, then title).
 
 - The query is `FTSQuery`: trimmed and NFKC-normalized (Calibre NFKC-normalizes queries;
   document text is never normalized by the tokenizer).

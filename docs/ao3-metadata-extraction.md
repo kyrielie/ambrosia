@@ -27,6 +27,8 @@ Chapter byline extraction (`div.byline`) is unified via `AO3MetadataExtractor.fi
 
 Extracted fields include story URL, work ID, author username, kudos, word count, chapter counts, completion, language, dates, fandoms, relationships, characters, additional tags, categories, AO3 collections, and AO3 series.
 
+**Tag Ordering & Semantic Invariant (Invariant 26)**: Array order in `relationships_json`, `characters_json`, `fandoms_json`, and `additional_tags_json` preserves author-specified tag order directly from the preface. Extractors and writers must never sort, `Set`-deduplicate, or reorder these arrays. Note: FicLab frontmatters split `tags` into relationships using a `/` or ` & ` heuristic and leave characters empty, so role rank is less reliable for FicLab-extracted books.
+
 Series metadata is resolved to persistent rows in `series` and book memberships
 are stored in `series_cache`. AO3 IDs and Calibre series IDs have stable keys;
 name-only entries reuse a trimmed, case-folded, whitespace-normalized identity.

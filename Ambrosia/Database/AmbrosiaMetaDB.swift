@@ -2605,6 +2605,105 @@ actor AmbrosiaMetaDB {
         }
     }
 
+    // MARK: - Tag Position Extraction for Relevance Sorting (JSON Pushdown)
+
+    /// Finds the earliest (lowest index) tag position per book for the given target tags
+    /// across relationships (roleRank 0), characters (1), fandoms (2), and freeform tags (3).
+    ///
+    /// Option 2 (JSON pushdown): Uses SQLite's JSON1 `json_each` over `ao3_metadata` columns
+    /// without schema migration. Requires zero extra storage.
+    func firstListedPositions(
+        exactTargets: [String],
+        containsTargets: [String] = [],
+        bookIDs: [Int]
+    ) -> [Int: TagPosition] {
+        guard !bookIDs.isEmpty && (!exactTargets.isEmpty || !containsTargets.isEmpty) else {
+            return [:]
+        }
+
+        var cteParts: [String] = []
+        var allBindings: [Binding?] = []
+
+        cteParts.append("""
+            matched_books AS MATERIALIZED (
+                SELECT calibre_id, relationships_json, characters_json, fandoms_json, additional_tags_json
+                FROM ao3_metadata
+                WHERE ao3_metadata.calibre_id IN (SELECT value FROM json_each(?))
+            )
+        """)
+        allBindings.append(SQLIDList.binding(bookIDs))
+
+        var tagClauses: [String] = []
+        if !exactTargets.isEmpty {
+            cteParts.append("target_exact AS MATERIALIZED (SELECT lower(value) AS tag FROM json_each(?))")
+            let json = (try? String(data: JSONSerialization.data(withJSONObject: exactTargets), encoding: .utf8)) ?? "[]"
+            allBindings.append(json as Binding?)
+            tagClauses.append("lower(je.value) IN (SELECT tag FROM target_exact)")
+        }
+
+        if !containsTargets.isEmpty {
+            cteParts.append("target_contains AS MATERIALIZED (SELECT lower(value) AS pattern FROM json_each(?))")
+            let json = (try? String(data: JSONSerialization.data(withJSONObject: containsTargets), encoding: .utf8)) ?? "[]"
+            allBindings.append(json as Binding?)
+            tagClauses.append("EXISTS (SELECT 1 FROM target_contains WHERE instr(lower(je.value), pattern) > 0)")
+        }
+
+        let tagCondition = tagClauses.joined(separator: " OR ")
+
+        let facets: [(column: String, roleRank: Int)] = [
+            ("relationships_json", 0),
+            ("characters_json", 1),
+            ("fandoms_json", 2),
+            ("additional_tags_json", 3)
+        ]
+
+        var unionParts: [String] = []
+        for facet in facets {
+            let part = """
+                SELECT calibre_id, \(facet.roleRank) AS role_rank, je.key AS pos
+                FROM matched_books, json_each(CASE WHEN json_valid(matched_books.\(facet.column)) THEN matched_books.\(facet.column) ELSE '[]' END) AS je
+                WHERE matched_books.\(facet.column) IS NOT NULL
+                  AND matched_books.\(facet.column) NOT IN ('', '[]')
+                  AND (\(tagCondition))
+                """
+            unionParts.append(part)
+        }
+
+        let fullSQL = """
+            WITH \(cteParts.joined(separator: ",\n"))
+            SELECT calibre_id, MIN(role_rank * 1000000 + pos) AS best_pos
+            FROM (
+                \(unionParts.joined(separator: "\nUNION ALL\n"))
+            )
+            GROUP BY calibre_id
+            """
+
+        do {
+            var result: [Int: TagPosition] = [:]
+            result.reserveCapacity(bookIDs.count)
+            for row in try readDB.prepare(fullSQL, allBindings) {
+                guard let bookID = (row[0] as? Int64).map(Int.init),
+                      let encoded = (row[1] as? Int64).map(Int.init) else { continue }
+                let roleRank = encoded / 1_000_000
+                let index = encoded % 1_000_000
+                result[bookID] = TagPosition(roleRank: roleRank, index: index)
+            }
+            return result
+        } catch {
+            _ = try? logError(
+                subsystem: "relevance",
+                operation: "firstListedPositions",
+                message: "Failed to query firstListedPositions: \(error.localizedDescription)"
+            )
+            return [:]
+        }
+    }
+
+    /// Convenience overload accepting a single list of target tags (treated as exact tags).
+    func firstListedPositions(targets: [String], bookIDs: [Int]) -> [Int: TagPosition] {
+        firstListedPositions(exactTargets: targets, containsTargets: [], bookIDs: bookIDs)
+    }
+
     /// Returns a mapping of tag_name -> SuggestionTagType for all tags in book_tags.
     /// Used by SuggestionSnapshotBuilder to layer AO3 tag classifications onto Calibre tags.
     func allTagTypes() -> [String: SuggestionTagType] {

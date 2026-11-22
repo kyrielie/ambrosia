@@ -127,6 +127,12 @@ Testing), against 112 source files (updated October 2026 after Phases 1–6).
 | Real-library FTS timings (skipped unless `AMBROSIA_FTS_BENCH_LIBRARY` is set to a library folder) | `CalibreFTSBenchmarkTests` |
 | `CalibreTokenizer` (C port of Calibre's FTS5 tokenizer, `Database/CalibreFTS`) | `CalibreTokenizerTests`; the golden-corpus test skips until `AmbrosiaTests/calibre_tokenizer_golden.json` is generated (see `calibre-fts.md`) |
 | `CalibreTokenizerRegistration` against a Calibre-shaped fixture (`FTSTestFixture`, `calibre_fts_schema.sql`) | `CalibreTokenizerRegistrationTests` |
+| `TagPillDisplay.isFirstListed` and deduplication | `TagPillDisplayTests` |
+| `RelevanceOrdering` pure comparator (text relevance vs tag position) | `RelevanceOrderingTests` |
+| First-listed tag positions via `AmbrosiaMetaDB.firstListedPositions` | `TagOrderRelevanceTests` |
+| `TagRelevanceTargets.make` tag extraction and filtering rules | `TagRelevanceTargetsTests` |
+| `HybridSearchCoordinator.fuse(lexicalIsRanked:)` Reciprocal Rank Fusion | `HybridSearchCoordinatorTests` |
+| Relevance sort integration across `PageQuery`, filters, and `ao3_metadata` | `RelevancePageQueryIntegrationTests` |
 
 Note on `LRUCache`: eviction is insertion-order, not access-order. Reading a
 key via the `subscript` getter does not move it to the back of `order`; only

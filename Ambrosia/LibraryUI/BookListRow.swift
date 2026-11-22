@@ -308,7 +308,7 @@ struct BookListRow: View, Equatable {
                         guard RowClickPolicy.shouldHandleCurrentClick else { return }
                         onTagTap(pill.label, pill.field)
                     } label: {
-                        tagPill(pill.label, color: pill.color, isSelected: false)
+                        tagPill(pill, isSelected: false)
                     }
                     .buttonStyle(.plain)
                     .help("Filter by \(pill.label)")
@@ -377,6 +377,37 @@ struct BookListRow: View, Equatable {
 
     private static func formatKudos(_ count: Int) -> String {
         count >= 1_000 ? String(format: "%.1fk kudos", Double(count) / 1_000) : "\(count) kudos"
+    }
+
+    private func tagPill(_ pill: TagPillDisplay, isSelected: Bool) -> some View {
+        HStack(spacing: 3) {
+            if pill.isFirstListed {
+                if pill.role == .relationship {
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: 7))
+                } else if pill.role == .character {
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 7))
+                }
+            }
+            Text(pill.label)
+        }
+        .font(pill.isFirstListed ? .caption2.weight(.semibold) : .caption2)
+        .fixedSize(horizontal: true, vertical: false)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(
+            isSelected
+                ? (pill.color ?? .secondary).opacity(0.35)
+                : (pill.color.map { $0.opacity(0.18) } ?? Color(NSColor.controlBackgroundColor))
+        )
+        .foregroundStyle(isSelected ? Color.primary : (pill.color ?? .secondary))
+        .clipShape(Capsule())
+        .accessibilityLabel(
+            pill.isFirstListed
+                ? (pill.role == .relationship ? "First-listed relationship: \(pill.label)" : "First-listed character: \(pill.label)")
+                : pill.label
+        )
     }
 
     private func tagPill(_ label: String, color: Color?, isSelected: Bool) -> some View {
@@ -469,7 +500,7 @@ struct LibraryStatsRow: View {
 }
 
 struct TagPillDisplay: Identifiable, Equatable {
-    enum Role {
+    enum Role: Equatable, Sendable {
         case rating
         case fandom
         case relationship
@@ -482,6 +513,7 @@ struct TagPillDisplay: Identifiable, Equatable {
     let label: String
     let field: FilterField
     let role: Role
+    var isFirstListed: Bool = false
 
     var id: String { "\(role)-\(label)" }
 
@@ -504,11 +536,15 @@ struct TagPillDisplay: Identifiable, Equatable {
     ) -> [TagPillDisplay] {
         var seen = Set<String>()
         var pills: [TagPillDisplay] = []
+        let firstRelationship = ao3Metadata?.relationships.first
+        let firstCharacter = ao3Metadata?.characters.first
 
         func append(_ tags: [String], role: Role, field: FilterField = .tag) {
             for tag in tags where shouldShow(tag, hideFanworks: hideFanworks) {
                 guard seen.insert(tag).inserted else { continue }
-                pills.append(TagPillDisplay(label: tag, field: field, role: role))
+                let isFirst = (role == .relationship && tag == firstRelationship)
+                    || (role == .character && tag == firstCharacter)
+                pills.append(TagPillDisplay(label: tag, field: field, role: role, isFirstListed: isFirst))
             }
         }
 

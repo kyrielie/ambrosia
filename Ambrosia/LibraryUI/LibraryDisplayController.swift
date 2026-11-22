@@ -543,6 +543,43 @@ final class LibraryDisplayController {
         if activeFullTextPhrase != nil { _ = startPendingSearchTextFullTextIfNeeded() }
     }
 
+    // MARK: - Filter Ribbon Mutations
+
+    func clearAllFilters() {
+        toolbarState.filterExpression = FilterExpression()
+        toolbarState.activeFilterResult = nil
+        toolbarState.cancelLibraryFilterApplication()
+        scheduleLoadPage()
+    }
+
+    func removeRule(id: UUID) {
+        let changed = LibraryQueryHelpers.removeRule(id: id, in: &toolbarState.filterExpression)
+        if changed {
+            applyFilterRules()
+        }
+    }
+
+    func toggleRuleNegation(id: UUID) {
+        let changed = LibraryQueryHelpers.toggleNegation(id: id, in: &toolbarState.filterExpression)
+        if changed {
+            applyFilterRules()
+        }
+    }
+
+    func removeFullTextPhrase() {
+        let updated = SearchQueryParser.removingFulltext(from: toolbarState.searchText)
+        fullTextTask?.cancel()
+        fullTextTask = nil
+        toolbarState.clearPendingFullTextSearch()
+        toolbarState.searchText = updated
+    }
+
+    func cancelPendingFullText() {
+        fullTextTask?.cancel()
+        fullTextTask = nil
+        toolbarState.clearPendingFullTextSearch()
+    }
+
     // MARK: - Filter Application (Unified 3-Branch Execution)
 
     func applyFilterRules(resetPage: Bool = true) {
@@ -821,7 +858,13 @@ final class LibraryDisplayController {
             if rawQuery.isEmpty && toolbarState.activeFilterResult == nil {
                 toolbarState.clearRelevanceSortIfNeeded()
             }
-            let rankedIDs = await resolveRelevanceRankedIDs(query: query)
+            let ranking = await resolveRelevanceRankedIDs(query: query)
+            let mergedExpansions = cachedFilterTagExpansions.merging(resolvedTagExpansions) { current, _ in current }
+            let relevanceTargets = TagRelevanceTargets.make(
+                expression: toolbarState.filterExpression,
+                query: query,
+                expansions: mergedExpansions
+            )
             let (page, hasMore) = await library.relevanceSortedPage(
                 offset: offsetState.currentPage * pageSize, limit: pageSize, ascending: toolbarState.ascending,
                 CalibreLibrary.PageQuery(
@@ -833,7 +876,9 @@ final class LibraryDisplayController {
                     visibilityVersion: session.visibilityVersion,
                     pinnedCollectionVersion: pinnedCollectionVersion,
                     metaDB: session.metaDB,
-                    rankedIDs: rankedIDs
+                    rankedIDs: ranking?.ids,
+                    relevanceTargets: relevanceTargets,
+                    rankedIDsAreOrdered: ranking?.isOrdered ?? true
                 )
             )
             loadedPageBooks = page
@@ -1272,7 +1317,12 @@ final class LibraryDisplayController {
         return true
     }
 
-    private func resolveRelevanceRankedIDs(query: SearchQuery) async -> [Int]? {
+    struct RelevanceRanking: Equatable, Sendable {
+        var ids: [Int]
+        var isOrdered: Bool
+    }
+
+    private func resolveRelevanceRankedIDs(query: SearchQuery) async -> RelevanceRanking? {
         guard let library = session.library else { return nil }
 
         var semanticHits: [(id: Int, score: Double)] = []
@@ -1286,9 +1336,9 @@ final class LibraryDisplayController {
         let ftsIDs = query.ftsMatchedIDs ?? []
 
         if !ftsIDs.isEmpty && !semanticHits.isEmpty {
-            let fused = HybridSearchCoordinator.fuse(lexicalIDs: ftsIDs, semanticHits: semanticHits)
+            let fused = HybridSearchCoordinator.fuse(lexicalIDs: ftsIDs, semanticHits: semanticHits, lexicalIsRanked: false)
             updateSearchMatchBadges(query: query, fused: fused, semanticHits: semanticHits, ftsIDs: Set(ftsIDs))
-            return fused.map(\.bookID)
+            return RelevanceRanking(ids: fused.map(\.bookID), isOrdered: true)
         } else if !semanticHits.isEmpty {
             if !query.plainTerms.isEmpty {
                 let lexicalIDs = await library.fetchAllMatchingIDs(
@@ -1298,16 +1348,16 @@ final class LibraryDisplayController {
                     filterTagExpansions: cachedFilterTagExpansions
                 )
                 if !lexicalIDs.isEmpty {
-                    let fused = HybridSearchCoordinator.fuse(lexicalIDs: lexicalIDs, semanticHits: semanticHits)
+                    let fused = HybridSearchCoordinator.fuse(lexicalIDs: lexicalIDs, semanticHits: semanticHits, lexicalIsRanked: false)
                     updateSearchMatchBadges(query: query, fused: fused, semanticHits: semanticHits, ftsIDs: [])
-                    return fused.map(\.bookID)
+                    return RelevanceRanking(ids: fused.map(\.bookID), isOrdered: true)
                 }
             }
             updateSearchMatchBadges(query: query, fused: nil, semanticHits: semanticHits, ftsIDs: [])
-            return semanticHits.map(\.id)
+            return RelevanceRanking(ids: semanticHits.map(\.id), isOrdered: true)
         } else if !ftsIDs.isEmpty {
             updateSearchMatchBadges(query: query, fused: nil, semanticHits: [], ftsIDs: Set(ftsIDs))
-            return ftsIDs
+            return RelevanceRanking(ids: ftsIDs, isOrdered: false)
         }
 
         updateSearchMatchBadges(query: query, fused: nil, semanticHits: [], ftsIDs: [])

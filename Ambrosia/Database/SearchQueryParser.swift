@@ -695,6 +695,13 @@ struct SearchQueryParser {
         }
         return tokens
     }
+
+    /// Removes any `fulltext:...` token from the search text, preserving other tokens and quotes.
+    static func removingFulltext(from input: String) -> String {
+        let tokens = tokenize(input)
+        let filtered = tokens.filter { !$0.lowercased().hasPrefix("fulltext:") }
+        return filtered.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+    }
 }
 
 // MARK: - activePrefixValue helper (used by autocomplete suggestion computation)

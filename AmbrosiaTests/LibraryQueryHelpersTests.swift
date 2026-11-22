@@ -200,4 +200,107 @@ final class LibraryQueryHelpersTests: XCTestCase {
         XCTAssertEqual(rule.op, .equals)
         XCTAssertEqual(rule.value, "Fluff")
     }
+
+    // MARK: - removeRule & toggleNegation
+
+    func testRemoveRuleSingleGroup() {
+        var expression = FilterExpression()
+        let rule1 = FilterRule(field: .tag, op: .contains, value: "Fluff")
+        let rule2 = FilterRule(field: .tag, op: .contains, value: "Angst")
+        expression.groups[0].rules = [rule1, rule2]
+
+        let removed = LibraryQueryHelpers.removeRule(id: rule1.id, in: &expression)
+        XCTAssertTrue(removed)
+        XCTAssertEqual(expression.groups.count, 1)
+        XCTAssertEqual(expression.groups[0].rules.count, 1)
+        XCTAssertEqual(expression.groups[0].rules[0].id, rule2.id)
+    }
+
+    func testRemoveRuleLeavesOneGroupWhenAllRulesRemoved() {
+        var expression = FilterExpression()
+        let rule = FilterRule(field: .tag, op: .contains, value: "Fluff")
+        expression.groups[0].rules = [rule]
+
+        let removed = LibraryQueryHelpers.removeRule(id: rule.id, in: &expression)
+        XCTAssertTrue(removed)
+        XCTAssertEqual(expression.groups.count, 1)
+        XCTAssertTrue(expression.groups[0].rules.isEmpty)
+    }
+
+    func testRemoveRulePrunesEmptyGroupsWhenMultipleExist() {
+        var expression = FilterExpression()
+        let rule1 = FilterRule(field: .tag, op: .contains, value: "Fluff")
+        let rule2 = FilterRule(field: .tag, op: .contains, value: "Angst")
+        let group1 = FilterGroup(rules: [rule1])
+        let group2 = FilterGroup(rules: [rule2])
+        expression.groups = [group1, group2]
+
+        let removed = LibraryQueryHelpers.removeRule(id: rule1.id, in: &expression)
+        XCTAssertTrue(removed)
+        XCTAssertEqual(expression.groups.count, 1)
+        XCTAssertEqual(expression.groups[0].rules.count, 1)
+        XCTAssertEqual(expression.groups[0].rules[0].id, rule2.id)
+    }
+
+    func testRemoveRuleUnknownIDIsNoOp() {
+        var expression = FilterExpression()
+        let rule = FilterRule(field: .tag, op: .contains, value: "Fluff")
+        expression.groups[0].rules = [rule]
+
+        let removed = LibraryQueryHelpers.removeRule(id: UUID(), in: &expression)
+        XCTAssertFalse(removed)
+        XCTAssertEqual(expression.groups[0].rules.count, 1)
+    }
+
+    func testNegatedCounterpartIsInvolutionForAllCases() {
+        for op in FilterOperator.allCases {
+            if let counterpart = op.negatedCounterpart {
+                XCTAssertEqual(
+                    counterpart.negatedCounterpart,
+                    op,
+                    "Counterpart involution failed for \(op)"
+                )
+            } else {
+                XCTAssertTrue(
+                    op == .startsWith || op == .matchesWord || op == .matchesRegex || op == .ratingAtMost || op == .ratingAtLeast,
+                    "Unexpected nil counterpart for \(op)"
+                )
+            }
+        }
+    }
+
+    func testCanToggleNegationPerField() {
+        let tagContains = FilterRule(field: .tag, op: .contains, value: "A")
+        XCTAssertTrue(tagContains.canToggleNegation)
+
+        let tagStartsWith = FilterRule(field: .tag, op: .startsWith, value: "A")
+        XCTAssertFalse(tagStartsWith.canToggleNegation)
+
+        let tagEquals = FilterRule(field: .tag, op: .equals, value: "A")
+        XCTAssertTrue(tagEquals.canToggleNegation)
+
+        let warningEquals = FilterRule(field: .warning, op: .equals, value: "A")
+        XCTAssertTrue(warningEquals.canToggleNegation)
+
+        let titleEquals = FilterRule(field: .title, op: .equals, value: "A")
+        XCTAssertFalse(titleEquals.canToggleNegation)
+
+        let ratingCeiling = FilterRule(field: .rating, op: .ratingAtMost, value: "General")
+        XCTAssertFalse(ratingCeiling.canToggleNegation)
+
+        let fulltextContains = FilterRule(field: .fulltext, op: .contains, value: "A")
+        XCTAssertTrue(fulltextContains.canToggleNegation)
+    }
+
+    func testToggleNegationLeavesOtherRulesUntouched() {
+        var expression = FilterExpression()
+        let rule1 = FilterRule(field: .tag, op: .contains, value: "Fluff")
+        let rule2 = FilterRule(field: .tag, op: .contains, value: "Angst")
+        expression.groups[0].rules = [rule1, rule2]
+
+        let toggled = LibraryQueryHelpers.toggleNegation(id: rule1.id, in: &expression)
+        XCTAssertTrue(toggled)
+        XCTAssertEqual(expression.groups[0].rules[0].op, .notContains)
+        XCTAssertEqual(expression.groups[0].rules[1].op, .contains)
+    }
 }

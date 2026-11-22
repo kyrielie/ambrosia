@@ -12,7 +12,9 @@ enum QueryDigestBuilder {
         filter: FilterExpression? = nil,
         restrictIDs: [Int]? = nil,
         filterTagExpansions: [String: [String]] = [:],
-        rankedIDs: [Int]? = nil
+        rankedIDs: [Int]? = nil,
+        relevanceTargets: TagRelevanceTargets = .init(),
+        rankedIDsAreOrdered: Bool = true
     ) -> String {
         var hasher = SHA256()
 
@@ -62,6 +64,13 @@ enum QueryDigestBuilder {
         if let ranked = effectiveRanked {
             hasher.update(data: Data("ranked:\(ranked.map(String.init).joined(separator: ","))\n".utf8))
         }
+
+        if !relevanceTargets.isEmpty {
+            let exactPart = relevanceTargets.exact.joined(separator: ",")
+            let containsPart = relevanceTargets.contains.joined(separator: ",")
+            hasher.update(data: Data("relTargets:exact:\(exactPart)|contains:\(containsPart)\n".utf8))
+        }
+        hasher.update(data: Data("rankedOrdered:\(rankedIDsAreOrdered)\n".utf8))
 
         let result = hasher.finalize()
         return result.prefix(12).map { String(format: "%02x", $0) }.joined()

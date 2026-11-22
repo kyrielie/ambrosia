@@ -68,6 +68,8 @@ PRAGMA mmap_size = 268435456; -- 256 MB cap
 
 10. `AmbrosiaMetaDB` is the sole owner of `ambrosia_meta.db`. All reads and writes go through the actor, accessed via `LibrarySession.metaDB`. `CalibreLibrary` and the former `AO3TagSearchResolver` previously opened independent `Connection` objects to the same file, violating write-lock coordination; both have been fixed (`CalibreLibrary` now reads from caches pushed in via `updateAO3MetaCaches`, and tag resolution moved onto the `AmbrosiaMetaDB` actor). Do not reintroduce a third connection to this file.
 
+26. Array order in `ao3_metadata.*_json` (`relationships_json`, `characters_json`, `fandoms_json`, `additional_tags_json`) is semantic: author tag ordering reflects relevance. The `book_tags` table contains no position column; tag positions are preserved directly in `*_json`. Do not sort, `Set`-dedupe, or reorder these arrays in extractors or writers.
+
 11. All destructive schema migrations (DROP, ALTER with data movement) must be wrapped in `db.transaction` and gated on `PRAGMA user_version`, not on table existence. `IF NOT EXISTS` guards cannot prevent a migration from re-running on subsequent launches.
 
 ## `bookTagsRevision`

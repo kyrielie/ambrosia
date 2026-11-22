@@ -108,4 +108,19 @@ final class CacheKeyTests: XCTestCase {
             for: expression(), visibilitySignature: signature(), pinnedCollectionVersion: 5
         ))
     }
+
+    func testDigestChangesWithTargetsAndOrderedFlag() {
+        let emptyQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])
+        let targetsA = TagRelevanceTargets(exact: ["Fluff"], contains: [])
+        let targetsB = TagRelevanceTargets(exact: ["Angst"], contains: [])
+
+        let digestDefault = QueryDigestBuilder.digest(query: emptyQuery)
+        let digestTargetsA = QueryDigestBuilder.digest(query: emptyQuery, relevanceTargets: targetsA)
+        let digestTargetsB = QueryDigestBuilder.digest(query: emptyQuery, relevanceTargets: targetsB)
+        let digestUnordered = QueryDigestBuilder.digest(query: emptyQuery, rankedIDsAreOrdered: false)
+
+        XCTAssertNotEqual(digestDefault, digestTargetsA)
+        XCTAssertNotEqual(digestTargetsA, digestTargetsB)
+        XCTAssertNotEqual(digestDefault, digestUnordered)
+    }
 }

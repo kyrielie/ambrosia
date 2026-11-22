@@ -15,7 +15,7 @@ Four LRU caches (`LRUCache<Key, Value>`, a bounded dictionary + insertion-order 
 | `filterResultCache` | `LibrarySession` | `FilterResultCacheKey` (expression digest + `visibilityVersion` + pinned collection version + visibility signature + `bookTagsRevision`) | 8 | library open/close; old results stop matching when visibility or the query’s collection pin changes |
 | `pageCache` | `CalibreLibrary` | `PageCacheKey` (a `SortedIDsCacheKey` plus offset and limit; includes `visibilityVersion` and pinned collection version) | 48 | `updateAO3MetaCaches` (after every AO3 extraction batch); implicitly stale once visibility, the query pin, or `randomSeed` changes |
 | `countCache` / `groupAwareCountCache` | `CalibreLibrary` | analogous to `PageCacheKey`, minus offset/limit/sort; grouped counts also carry both versions | 48 each | same as `pageCache` |
-| `sortedIDsCache` | `CalibreLibrary` | `SortedIDsCacheKey` (query+filter+tagExpansion digests, `visibilityVersion`, pinned collection version, `visibilitySignature`, sort, ascending, `randomSeed`; i.e. `PageCacheKey` minus offset and limit) | 4 | `updateAO3MetaCaches` via `invalidateSortedIDs()`; implicitly stale once visibility, the query pin, `visibilitySignature`, or `randomSeed` changes |
+| `sortedIDsCache` | `CalibreLibrary` | `SortedIDsCacheKey` (queryDigest including relevance targets and ranked ordering flag, query+filter+tagExpansion digests, `visibilityVersion`, pinned collection version, `visibilitySignature`, sort, ascending, `randomSeed`; i.e. `PageCacheKey` minus offset and limit) | 8 | `updateAO3MetaCaches` via `invalidateSortedIDs()`; implicitly stale once visibility, the query pin, `visibilitySignature`, or `randomSeed` changes |
 
 `LibrarySession.visibilityVersion` tracks Skip, series-or-merged, publisher,
 anthology, and duplicate-loser visibility sets. `collectionVersion` tracks
@@ -34,7 +34,7 @@ rare. Filter popup facets: the whole-library baseline queries are unscoped and
 keyed on `visibilityVersion`; scoped facets are uncached and read collection
 membership live when the popup loads, so they are not reloaded on a Like.
 
-`sortedIDsCache` holds the full sorted id list for one grouped title-sorted view (`groupAwareTitleSortedPage`), so paging within a view costs a slice plus `booksForIDs` instead of a fresh materialize-and-sort. It is read through `LRUCache.get`, which refreshes recency (the subscript does not). A same-key sort already running is joined through `sortedIDsInFlight` rather than started twice, and `sortedIDsGeneration` stops a sort that began before `invalidateSortedIDs()` from storing a stale result. `wordCountSortedPage`, `kudosSortedPage` and `randomSortedPage` are not split yet.
+`sortedIDsCache` holds the full sorted id list across all sort modes (`wordCount`, `kudos`, `random`, `relevance`, and `groupAwareTitle`), so paging within a view costs a slice plus `booksForIDs` instead of a fresh materialize-and-sort. It is read through `LRUCache.get`, which refreshes recency (the subscript does not). A same-key sort already running is joined through `sortedIDsInFlight` rather than started twice, and `sortedIDsGeneration` stops a sort that began before `invalidateSortedIDs()` from storing a stale result.
 
 `CalibreLibrary.clearQueryCaches()` empties `pageCache`, `countCache`, `groupAwareCountCache` and `sortedIDsCache` together; `updateAO3MetaCaches` and the app-activation change check (`session-model.md`) both call it. The same check clears `filterResultCache` and `ruleMatchCache` on the session.
 
@@ -118,13 +118,14 @@ Added in Pass 2 of `database-performance-and-query-pipeline-plan.md`.
 
 - **Purpose**: Full sorted ID list per view (capacity: 8 entries). When paging through `.wordCount`, `.kudos`, `.random`, `.relevance`, or `.groupAwareTitle`, the expensive materialize-expand-filter-sort pipeline runs once per view on page 1. Subsequent page requests (page 2, page 3, etc.) reuse the cached sorted array, paying only for slicing + `orderedBooks(for:)` page hydration (< 6 ms).
 - **Key**: `SortedIDsCacheKey`
-  - `queryDigest`: A 12-byte SHA256 hex digest precomputed by `QueryDigestBuilder` from all query inputs (plain, title, tag, author, series terms with match modes, `expandedTagTerms`, `filterTagExpansions`, `ftsMatchedIDs`, `restrictIDs`, `filter`, and `rankedIDs`). Carried as a token in `PageQuery` so it is never re-hashed per page turn.
+  - `queryDigest`: A 12-byte SHA256 hex digest precomputed by `QueryDigestBuilder` from all query inputs (plain, title, tag, author, series terms with match modes, `expandedTagTerms`, `filterTagExpansions`, `ftsMatchedIDs`, `restrictIDs`, `filter`, `rankedIDs`, `relevanceTargets`, and `rankedIDsAreOrdered`). Carried as a token in `PageQuery` so it is never re-hashed per page turn.
   - `querySignature`, `filterSignature`, `tagExpansionsDigest`
   - `visibilityVersion`, `pinnedCollectionVersion`, `visibilitySignature`
   - `sortField`, `ascending`
   - `randomSeed`: Set to `0` for all non-random sorts (seed zeroing). Shuffling random mode never invalidates or strands numeric or title sorted-ID entries.
 - **Generation Guard**: `sortedIDsGeneration` increments on `invalidateSortedIDs()` and `clearQueryCaches()`. A background sort that finishes after an invalidation does not store its stale array into `sortedIDsCache`. Similarly, `pageCache.set` checks `sortedIDsGeneration == generation` before storing.
 - **D4 Total Order Tie-Breaking**: Numeric sorts (word count, kudos) break ties by title NOCASE ASC, then `calibre_id` ASC. Books with missing (nil) values always sort last in both ascending and descending directions, ordered among themselves by title NOCASE ASC, then ID ASC. Matches Calibre's `title COLLATE NOCASE` schema.
+- **Relevance Sort Tie-Breaking**: With semantic search active, semantic similarity rank is strictly primary; tag position (`TagPosition`) acts as a tie-breaker. With `fulltext:` only, FTS hits are unranked, ordered primarily by tag position. Ties after tag position (or when no rank/tag targets are present) break deterministically by the existing list order (title NOCASE ASC, then ID ASC via `tieBreak`). Books without matched tag positions sort last.
 
 ---
 

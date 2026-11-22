@@ -186,10 +186,7 @@ struct LibraryRootView: View {
                 Button("Edit") { toolbarState.showFilterDrawer = true }
                     .buttonStyle(.borderless).font(.caption)
                 Button {
-                    toolbarState.filterExpression = FilterExpression()
-                    toolbarState.activeFilterResult = nil
-                    toolbarState.cancelLibraryFilterApplication()
-                    displayController.scheduleLoadPage()
+                    displayController.clearAllFilters()
                 } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
@@ -197,61 +194,25 @@ struct LibraryRootView: View {
             }
             FlowLayout(spacing: 4) {
                 ForEach(completeRules) { rule in
-                    let negated = rule.op == .notContains || rule.op == .notEquals
-                    HStack(spacing: 3) {
-                        if negated {
-                            Text("NOT")
-                                .font(.caption2.bold())
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 4).padding(.vertical, 1)
-                                .background(Color.red.opacity(0.85))
-                                .clipShape(Capsule())
-                        }
-                        Text(rule.field.label)
-                            .font(.caption2).foregroundStyle(.secondary)
-                        if !rule.value.isEmpty {
-                            Text(rule.value).font(.caption2.bold())
-                        }
-                    }
-                    .padding(.horizontal, 7).padding(.vertical, 3)
-                    .background(negated ? Color.red.opacity(0.08) : Color.accentColor.opacity(0.12))
-                    .clipShape(Capsule())
-                    .overlay(Capsule().stroke(
-                                negated ? Color.red.opacity(0.3) : Color.accentColor.opacity(0.3),
-                                lineWidth: 0.5))
+                    FilterRulePillView(
+                        rule: rule,
+                        onRemove: { displayController.removeRule(id: rule.id) },
+                        onToggleNegation: { displayController.toggleRuleNegation(id: rule.id) },
+                        onEditInDrawer: { toolbarState.showFilterDrawer = true },
+                        onClearAll: { displayController.clearAllFilters() }
+                    )
                 }
                 if let phrase = displayController.activeFullTextPhrase {
-                    HStack(spacing: 3) {
-                        Text("Full Text")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Text(phrase)
-                            .font(.caption2.bold())
-                            .lineLimit(1)
-                    }
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Color.accentColor.opacity(0.12))
-                    .clipShape(Capsule())
-                    .overlay(Capsule().stroke(Color.accentColor.opacity(0.3), lineWidth: 0.5))
+                    FullTextPillView(
+                        phrase: phrase,
+                        onRemove: { displayController.removeFullTextPhrase() }
+                    )
                 }
                 if let pending = toolbarState.pendingFullTextSearch {
-                    HStack(spacing: 3) {
-                        ProgressView()
-                            .controlSize(.mini)
-                            .scaleEffect(0.6)
-                        Text("Searching")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Text(pending.phrase)
-                            .font(.caption2.bold())
-                            .lineLimit(1)
-                    }
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Color.accentColor.opacity(0.08))
-                    .clipShape(Capsule())
-                    .overlay(Capsule().stroke(Color.accentColor.opacity(0.25), lineWidth: 0.5))
+                    PendingFullTextPillView(
+                        phrase: pending.phrase,
+                        onCancel: { displayController.cancelPendingFullText() }
+                    )
                 }
             }
         }

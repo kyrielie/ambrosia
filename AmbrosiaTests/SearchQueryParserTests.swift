@@ -156,4 +156,33 @@ final class SearchQueryParserTests: XCTestCase {
         let query = SearchQueryParser.parse("dragon egg hunt")
         XCTAssertNil(query.asSingleFilterRule())
     }
+
+    // MARK: - removingFulltext
+
+    func testRemovingFulltextToken() {
+        XCTAssertEqual(
+            SearchQueryParser.removingFulltext(from: "tag:x fulltext:\"a b\" y"),
+            "tag:x y"
+        )
+        XCTAssertEqual(
+            SearchQueryParser.removingFulltext(from: "fulltext:single"),
+            ""
+        )
+        XCTAssertEqual(
+            SearchQueryParser.removingFulltext(from: "fulltext:\"slow burn\" tag:AU"),
+            "tag:AU"
+        )
+        XCTAssertEqual(
+            SearchQueryParser.removingFulltext(from: "author:Jane fulltext:castle"),
+            "author:Jane"
+        )
+        XCTAssertEqual(
+            SearchQueryParser.removingFulltext(from: "tag:Angst tag:Fluff"),
+            "tag:Angst tag:Fluff"
+        )
+        XCTAssertEqual(
+            SearchQueryParser.removingFulltext(from: ""),
+            ""
+        )
+    }
 }

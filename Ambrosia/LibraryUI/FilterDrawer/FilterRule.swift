@@ -126,6 +126,18 @@ enum FilterOperator: String, CaseIterable, Identifiable, Codable {
     static var textOperators: [FilterOperator] { [.contains, .notContains, .equals, .startsWith, .matchesWord, .matchesRegex] }
     static var exactOperators: [FilterOperator] { [.equals, .notEquals] }
     static var ratingOperators: [FilterOperator] { [.equals, .notEquals, .ratingAtMost, .ratingAtLeast] }
+
+    /// The negation counterpart, or nil when the operator has none.
+    var negatedCounterpart: FilterOperator? {
+        switch self {
+        case .contains:    return .notContains
+        case .notContains: return .contains
+        case .equals:      return .notEquals
+        case .notEquals:   return .equals
+        case .startsWith, .matchesWord, .matchesRegex, .ratingAtMost, .ratingAtLeast:
+            return nil
+        }
+    }
 }
 
 // MARK: - Filter conjunction
@@ -200,6 +212,12 @@ struct FilterRule: Identifiable, Codable, Equatable {
         default:
             return FilterOperator.textOperators
         }
+    }
+
+    /// True only when the counterpart exists AND this rule's field offers it.
+    var canToggleNegation: Bool {
+        guard let other = op.negatedCounterpart else { return false }
+        return availableOperators.contains(other)
     }
 }
 

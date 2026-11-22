@@ -696,6 +696,8 @@ actor CalibreLibrary {
         var pinnedCollectionVersion: Int = 0
         var metaDB: AmbrosiaMetaDB?
         var rankedIDs: [Int]?
+        var relevanceTargets: TagRelevanceTargets = .init()
+        var rankedIDsAreOrdered: Bool = true
         var queryDigest: String
 
         init(
@@ -708,6 +710,8 @@ actor CalibreLibrary {
             pinnedCollectionVersion: Int = 0,
             metaDB: AmbrosiaMetaDB? = nil,
             rankedIDs: [Int]? = nil,
+            relevanceTargets: TagRelevanceTargets = .init(),
+            rankedIDsAreOrdered: Bool = true,
             queryDigest: String? = nil
         ) {
             self.query = query
@@ -719,12 +723,16 @@ actor CalibreLibrary {
             self.pinnedCollectionVersion = pinnedCollectionVersion
             self.metaDB = metaDB
             self.rankedIDs = rankedIDs
+            self.relevanceTargets = relevanceTargets
+            self.rankedIDsAreOrdered = rankedIDsAreOrdered
             self.queryDigest = queryDigest ?? QueryDigestBuilder.digest(
                 query: query,
                 filter: filter,
                 restrictIDs: restrictIDs,
                 filterTagExpansions: filterTagExpansions,
-                rankedIDs: rankedIDs
+                rankedIDs: rankedIDs,
+                relevanceTargets: relevanceTargets,
+                rankedIDsAreOrdered: rankedIDsAreOrdered
             )
         }
     }
@@ -1186,27 +1194,57 @@ actor CalibreLibrary {
         )
         let allIDs = pageQuery.visibility.filter(matchedIDs)
 
+        let targets = !pageQuery.relevanceTargets.isEmpty
+            ? pageQuery.relevanceTargets
+            : TagRelevanceTargets.make(
+                expression: pageQuery.filter,
+                query: pageQuery.query,
+                expansions: pageQuery.filterTagExpansions
+            )
+        let exactTargets = targets.exact
+        let containsTargets = targets.contains
+
+        var posMap: [Int: TagPosition]?
+        if !exactTargets.isEmpty || !containsTargets.isEmpty, let metaDB = pageQuery.metaDB {
+            posMap = await metaDB.firstListedPositions(
+                exactTargets: exactTargets,
+                containsTargets: containsTargets,
+                bookIDs: allIDs
+            )
+            guard !Task.isCancelled else { return [] }
+        }
+
         let candidateRanked = pageQuery.rankedIDs ?? pageQuery.query.ftsMatchedIDs
-        guard let ranked = candidateRanked, !ranked.isEmpty else {
+        let rankMap: [Int: Int]?
+        if pageQuery.rankedIDsAreOrdered, let ranked = candidateRanked, !ranked.isEmpty {
+            rankMap = Dictionary(ranked.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        } else {
+            rankMap = nil
+        }
+
+        if rankMap == nil && (posMap?.isEmpty ?? true) {
             return allIDs
         }
-        let rankMap = Dictionary(uniqueKeysWithValues: ranked.enumerated().map { ($1, $0) })
-        return allIDs.sorted { idA, idB in
-            let rankA = rankMap[idA]
-            let rankB = rankMap[idB]
-            switch (rankA, rankB) {
-            case let (valA?, valB?):
-                if valA != valB {
-                    return ascending ? valA > valB : valA < valB
-                }
-                return idA < idB
-            case (.some, nil):
-                return !ascending
-            case (nil, .some):
-                return ascending
-            case (nil, nil):
-                return idA < idB
+
+        let idIndexMap = Dictionary(allIDs.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        let tieBreak: (Int, Int) -> Bool = { idA, idB in
+            let idxA = idIndexMap[idA] ?? Int.max
+            let idxB = idIndexMap[idB] ?? Int.max
+            if idxA != idxB {
+                return idxA < idxB
             }
+            return idA < idB
+        }
+
+        return allIDs.sorted { idA, idB in
+            RelevanceOrdering.areInIncreasingOrder(
+                idA: idA,
+                idB: idB,
+                rankMap: rankMap,
+                posMap: posMap,
+                ascending: ascending,
+                tieBreak: tieBreak
+            )
         }
     }
 

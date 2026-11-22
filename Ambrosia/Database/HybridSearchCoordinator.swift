@@ -25,7 +25,8 @@ public enum HybridSearchCoordinator {
     public static func fuse(
         lexicalIDs: [Int],
         semanticHits: [(id: Int, score: Double)],
-        kConstant: Double = defaultK
+        kConstant: Double = defaultK,
+        lexicalIsRanked: Bool = true
     ) -> [HybridSearchResult] {
         var scores: [Int: Double] = [:]
         var lexicalRanks: [Int: Int] = [:]
@@ -35,7 +36,11 @@ public enum HybridSearchCoordinator {
         for (rankIndex, bookID) in lexicalIDs.enumerated() {
             let rank = rankIndex + 1
             lexicalRanks[bookID] = rank
-            scores[bookID, default: 0.0] += 1.0 / (kConstant + Double(rank))
+            if lexicalIsRanked {
+                scores[bookID, default: 0.0] += 1.0 / (kConstant + Double(rank))
+            } else {
+                scores[bookID, default: 0.0] += 1.0 / (kConstant + 1.0)
+            }
         }
 
         for (rankIndex, hit) in semanticHits.enumerated() {
