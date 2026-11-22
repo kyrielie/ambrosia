@@ -133,6 +133,8 @@ Testing), against 112 source files (updated October 2026 after Phases 1–6).
 | `TagRelevanceTargets.make` tag extraction and filtering rules | `TagRelevanceTargetsTests` |
 | `HybridSearchCoordinator.fuse(lexicalIsRanked:)` Reciprocal Rank Fusion | `HybridSearchCoordinatorTests` |
 | Relevance sort integration across `PageQuery`, filters, and `ao3_metadata` | `RelevancePageQueryIntegrationTests` |
+| Facet aggregation, scoping, rating facets, and canonicalize defects | `FacetCharacterizationTests` |
+| Canonical-deduped facets, `tag_canonical_map` sync, zero-inflation deduplication | `CanonicalFacetTests` |
 
 Note on `LRUCache`: eviction is insertion-order, not access-order. Reading a
 key via the `subscript` getter does not move it to the back of `order`; only

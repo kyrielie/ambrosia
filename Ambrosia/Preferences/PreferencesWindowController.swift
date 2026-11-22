@@ -2033,6 +2033,7 @@ private struct DataTab: View {
         Task {
             do {
                 try await metaDB.clearAO3TagSynonymCacheAndReloadSeeds()
+                _ = try? await metaDB.syncTagCanonicalMapIfNeeded()
                 tagSynonymCacheMessage = "Imported synonym cache cleared."
             } catch {
                 tagSynonymCacheMessage = error.localizedDescription

@@ -1563,6 +1563,7 @@ final class LibrarySession {
     /// batch was not superseded.
     private func extractionFinished(generation: Int, followsSeedSync: Bool,
                                     wroteSeriesAffectingData: Bool) async {
+        _ = try? await metaDB?.syncTagCanonicalMapIfNeeded()
         if followsSeedSync {
             guard wroteSeriesAffectingData, seriesSyncCoordinator.isCurrent(generation) else { return }
             await syncSeriesOrMergedCollection()
@@ -1578,6 +1579,7 @@ final class LibrarySession {
             defer { LaunchSignposts.end("importAO3TagSeeds", seedSignpost) }
             do {
                 try await metaDB.importConfiguredAO3TagSeedsIfNeeded()
+                _ = try? await metaDB.syncTagCanonicalMapIfNeeded()
                 guard AO3TagSeedDatabaseConfig.shared.isEnabled else { return }
                 let counts = try await metaDB.ao3TagSeedCounts()
                 #if DEBUG

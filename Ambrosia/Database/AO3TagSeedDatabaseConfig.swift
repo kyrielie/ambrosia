@@ -149,6 +149,16 @@ final class AO3TagSeedDatabaseConfig {
         }
     }
 
+    /// Returns the fingerprint identity of the currently active seed database,
+    /// or `"off"` if seeds are disabled or invalid.
+    func currentSeedIdentity() -> String {
+        guard isEnabled, let url = validDatabaseURLIfEnabled(),
+              let seedID = try? Self.identity(for: url) else {
+            return "off"
+        }
+        return seedID
+    }
+
     static func validate(url: URL) throws {
         let db = try Connection(url.path, readonly: true)
         let rows = try db.prepare("SELECT name FROM sqlite_master WHERE type='table'").map { $0[0] as? String ?? "" }

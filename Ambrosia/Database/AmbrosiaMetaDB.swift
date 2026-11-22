@@ -60,6 +60,7 @@ actor AmbrosiaMetaDB {
     /// cache keys, so cached tag results do not survive an extraction pass that
     /// changed the tags they were computed from.
     private(set) var bookTagsRevision: Int = 0
+    private var lastSyncedTagCanonicalRevision: Int = -1
     private var ao3DiagnosticsCache: [Int: AO3ExtractionDiagnostic] = [:]
     private var seriesEntriesCache: [Int: [SeriesCacheEntry]] = [:]
     private var seriesEntriesByKeyCache: [String: [SeriesCacheEntry]] = [:]
@@ -618,6 +619,12 @@ actor AmbrosiaMetaDB {
         CREATE INDEX IF NOT EXISTS idx_book_tags_name ON book_tags(tag_name);
         CREATE INDEX IF NOT EXISTS idx_book_tags_calibre ON book_tags(calibre_id);
         CREATE INDEX IF NOT EXISTS idx_book_tags_type ON book_tags(tag_type, tag_name);
+
+        CREATE TABLE IF NOT EXISTS tag_canonical_map (
+            tag_name        TEXT NOT NULL PRIMARY KEY,
+            canonical_name  TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tag_canonical_map_name ON tag_canonical_map(canonical_name);
         """)
     }
 
@@ -817,6 +824,75 @@ actor AmbrosiaMetaDB {
             return try AO3TagSeedDatabaseConfig.counts(url: url)
         }
         return AO3TagSeedDatabaseConfig.Counts(canonicalTags: 0, synonyms: 0, hierarchyEdges: 0, subtagSections: 0)
+    }
+
+    /// Synchronizes `tag_canonical_map` with the configured seed database if needed.
+    ///
+    /// If seeds are disabled or unconfigured, clears the map and sets marker to `"off"`.
+    /// If seeds are enabled and valid, synchronizes synonyms and canonicals for all distinct
+    /// tag names present in `book_tags`.
+    /// Returns true if a re-synchronization was executed, false if already up-to-date.
+    @discardableResult
+    func syncTagCanonicalMapIfNeeded(seedURL: URL? = nil, explicitIdentity: String? = nil) throws -> Bool {
+        let isConfigEnabled = AO3TagSeedDatabaseConfig.shared.isEnabled
+        let resolvedURL = seedURL ?? (isConfigEnabled ? AO3TagSeedDatabaseConfig.shared.validDatabaseURLIfEnabled() : nil)
+        let targetIdentity: String
+        if let explicit = explicitIdentity {
+            targetIdentity = explicit
+        } else if let validURL = resolvedURL {
+            targetIdentity = (try? AO3TagSeedDatabaseConfig.identity(for: validURL)) ?? "off"
+        } else {
+            targetIdentity = "off"
+        }
+
+        let currentMarker = libraryState(LibraryStateKey.tagCanonicalSeedIdentity)
+        if currentMarker == targetIdentity && lastSyncedTagCanonicalRevision == bookTagsRevision {
+            return false
+        }
+
+        guard targetIdentity != "off", let validURL = resolvedURL else {
+            try run("DELETE FROM tag_canonical_map")
+            try setLibraryState(LibraryStateKey.tagCanonicalSeedIdentity, "off")
+            lastSyncedTagCanonicalRevision = bookTagsRevision
+            return true
+        }
+
+        let escapedPath = validURL.path.replacingOccurrences(of: "'", with: "''")
+        try db.execute("ATTACH '\(escapedPath)' AS seed_sync;")
+        defer {
+            _ = try? db.execute("DETACH seed_sync;")
+        }
+
+        try db.transaction {
+            try db.execute("DELETE FROM tag_canonical_map;")
+            try db.execute("CREATE TEMP TABLE IF NOT EXISTS distinct_lib_tags (tag_name TEXT PRIMARY KEY);")
+            try db.execute("DELETE FROM distinct_lib_tags;")
+            try db.execute("INSERT OR IGNORE INTO distinct_lib_tags SELECT DISTINCT tag_name FROM book_tags;")
+            try db.execute("CREATE INDEX IF NOT EXISTS temp.dlt_lower ON distinct_lib_tags(LOWER(tag_name));")
+
+            // 1. Synonyms: map library tag to its canonical name
+            try db.execute("""
+                INSERT OR REPLACE INTO tag_canonical_map (tag_name, canonical_name)
+                SELECT dlt.tag_name, c.name
+                FROM distinct_lib_tags dlt
+                JOIN seed_sync.tag_synonyms s ON LOWER(s.synonym) = LOWER(dlt.tag_name)
+                JOIN seed_sync.canonical_tags c ON c.id = s.canonical_id;
+            """)
+
+            // 2. Canonicals: normalize casing to the canonical tag name
+            try db.execute("""
+                INSERT OR REPLACE INTO tag_canonical_map (tag_name, canonical_name)
+                SELECT dlt.tag_name, c.name
+                FROM distinct_lib_tags dlt
+                JOIN seed_sync.canonical_tags c ON LOWER(c.name) = LOWER(dlt.tag_name);
+            """)
+
+            try db.execute("DROP TABLE distinct_lib_tags;")
+            try setLibraryState(LibraryStateKey.tagCanonicalSeedIdentity, targetIdentity)
+        }
+
+        lastSyncedTagCanonicalRevision = bookTagsRevision
+        return true
     }
 
     func vacuumAndCheckpoint() throws {
@@ -2598,6 +2674,74 @@ actor AmbrosiaMetaDB {
             ORDER BY cnt DESC
             """
         guard let rows = try? readDB.prepare(sql).map({ $0 }) else { return [] }
+        return rows.compactMap { row in
+            guard let name = row[0] as? String else { return nil }
+            let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) ?? 0
+            return (name, count)
+        }
+    }
+
+    // MARK: - Canonical Facets (Zero-Inflation Tag Deduplication)
+
+    /// Top-N canonical tag values by distinct book count, scoped to `ids`.
+    ///
+    /// For tag fields, groups by `COALESCE(tag_canonical_map.canonical_name, book_tags.tag_name)`
+    /// and aggregates `COUNT(DISTINCT book_tags.calibre_id)`, ensuring books carrying multiple
+    /// synonyms of the same canonical tag are counted strictly once, and top-N ranking is
+    /// evaluated after canonical merging.
+    /// Falls back to `topFacets(for:scopedTo:limit:)` for author facets or if `tagType` is nil.
+    func canonicalFacets(for field: AO3FacetField, scopedTo ids: [Int], limit: Int = 10) -> [(name: String, count: Int)] {
+        guard !ids.isEmpty else { return [] }
+        guard let tagType = field.tagType else {
+            return topFacets(for: field, scopedTo: ids, limit: limit)
+        }
+
+        _ = try? syncTagCanonicalMapIfNeeded()
+
+        let sql = """
+            SELECT COALESCE(m.canonical_name, bt.tag_name) AS name, COUNT(DISTINCT bt.calibre_id) AS cnt
+            FROM json_each(?) j
+            JOIN book_tags bt ON bt.calibre_id = j.value AND bt.tag_type = ?
+            LEFT JOIN tag_canonical_map m ON m.tag_name = bt.tag_name
+            GROUP BY name
+            ORDER BY cnt DESC
+            LIMIT ?
+            """
+        let bindings: [Binding?] = [SQLIDList.binding(ids), tagType as Binding?, limit as Binding?]
+        guard let rows = try? readDB.prepare(sql, bindings).map({ $0 }) else {
+            return topFacets(for: field, scopedTo: ids, limit: limit)
+        }
+        return rows.compactMap { row in
+            guard let name = row[0] as? String else { return nil }
+            let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) ?? 0
+            return (name, count)
+        }
+    }
+
+    /// Unconstrained counterpart to `canonicalFacets(for:scopedTo:limit:)`.
+    ///
+    /// Scans the entire library for `field`, grouping by canonical tag name and counting distinct
+    /// books. Used when no filter or search is active.
+    func canonicalFacetsUnconstrained(for field: AO3FacetField, limit: Int = 10) -> [(name: String, count: Int)] {
+        guard let tagType = field.tagType else {
+            return topFacetsUnconstrained(for: field, limit: limit)
+        }
+
+        _ = try? syncTagCanonicalMapIfNeeded()
+
+        let sql = """
+            SELECT COALESCE(m.canonical_name, bt.tag_name) AS name, COUNT(DISTINCT bt.calibre_id) AS cnt
+            FROM book_tags bt
+            LEFT JOIN tag_canonical_map m ON m.tag_name = bt.tag_name
+            WHERE bt.tag_type = ?
+            GROUP BY name
+            ORDER BY cnt DESC
+            LIMIT ?
+            """
+        let bindings: [Binding?] = [tagType as Binding?, limit as Binding?]
+        guard let rows = try? readDB.prepare(sql, bindings).map({ $0 }) else {
+            return topFacetsUnconstrained(for: field, limit: limit)
+        }
         return rows.compactMap { row in
             guard let name = row[0] as? String else { return nil }
             let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) ?? 0

@@ -37,13 +37,13 @@ final class AO3FilterFacetController {
     private let statusMap: [AO3CompletionStatus: Set<Int>]
 
     /// Process-lifetime cache of the "nothing active at all" facet baseline,
-    /// keyed on `LibrarySession.visibilityVersion`. Only ever populated/read
+    /// keyed on `LibrarySession.visibilityVersion` and `seedIdentity`. Only ever populated/read
     /// when `isWhollyUnconstrained` is true, i.e. when it's actually safe to
     /// treat one session's whole-library counts as reusable across popup
     /// opens -- `visibilityVersion` is bumped whenever anything that could
-    /// change these counts changes (import, liked/skipped/status edits), so
-    /// this doesn't go stale mid-session the way a launch-only cache would.
-    private static var wholeLibraryFacetCache: [AO3FacetField: (version: Int, entries: [(name: String, count: Int)])] = [:]
+    /// change these counts changes (import, liked/skipped/status edits), and `seedIdentity`
+    /// changes whenever the seed database is toggled or swapped.
+    private static var wholeLibraryFacetCache: [AO3FacetField: (version: Int, seedIdentity: String, entries: [(name: String, count: Int)])] = [:]
     private static var wholeLibraryRatingCache: (version: Int, entries: [(name: String, count: Int)])?
 
     private init(metaDB: AmbrosiaMetaDB, library: CalibreLibrary, filterBuilder: FilterBuilder,
@@ -190,19 +190,20 @@ final class AO3FilterFacetController {
     /// scoped-and-uncached path as soon as any filter/selection applies.
     func topFacets(for field: AO3FacetField, state: AO3FilterPopupState,
                    limit: Int, visibilityVersion: Int) async -> [(name: String, count: Int)] {
+        let seedIdentity = AO3TagSeedDatabaseConfig.shared.currentSeedIdentity()
         if isWhollyUnconstrained(ignoring: field, state: state) {
             if let cached = Self.wholeLibraryFacetCache[field],
-               cached.version == visibilityVersion, cached.entries.count >= limit {
+               cached.version == visibilityVersion,
+               cached.seedIdentity == seedIdentity,
+               cached.entries.count >= limit {
                 return Array(cached.entries.prefix(limit))
             }
-            let raw = await metaDB.topFacetsUnconstrained(for: field, limit: limit)
-            let canonicalized = await metaDB.canonicalize(raw)
-            Self.wholeLibraryFacetCache[field] = (visibilityVersion, canonicalized)
-            return canonicalized
+            let entries = await metaDB.canonicalFacetsUnconstrained(for: field, limit: limit)
+            Self.wholeLibraryFacetCache[field] = (visibilityVersion, seedIdentity, entries)
+            return entries
         }
         let ids = await scopedIDs(ignoring: field, state: state)
-        let raw = await metaDB.topFacets(for: field, scopedTo: ids, limit: limit)
-        return await metaDB.canonicalize(raw)
+        return await metaDB.canonicalFacets(for: field, scopedTo: ids, limit: limit)
     }
 
     /// Rating counterpart to `topFacets(for:state:limit:visibilityVersion:)`.

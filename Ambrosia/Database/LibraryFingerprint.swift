@@ -85,4 +85,7 @@ enum LibraryStateKey {
     /// Fingerprint an AO3 extraction scan last finished completely for (nothing
     /// left to extract). Not stored for an interrupted run.
     static let extractionScanFingerprint = "extraction_scan_fingerprint"
+    /// Seed database identity used to populate `tag_canonical_map`. Stored as
+    /// the seed's `identity(for:)` string when enabled, or `"off"` when disabled.
+    static let tagCanonicalSeedIdentity = "tag_canonical_seed_identity"
 }

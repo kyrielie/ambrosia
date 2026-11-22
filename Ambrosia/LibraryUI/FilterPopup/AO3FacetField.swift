@@ -26,6 +26,19 @@ enum AO3FacetField: String, CaseIterable {
         }
     }
 
+    /// The `book_tags.tag_type` corresponding to this facet field, or nil if not stored in `book_tags`.
+    var tagType: String? {
+        switch self {
+        case .fandom:       return "fandom"
+        case .relationship: return "relationship"
+        case .character:    return "character"
+        case .freeform:     return "freeform"
+        case .warning:      return "warning"
+        case .category:     return "category"
+        case .author:       return nil
+        }
+    }
+
     /// The `FilterRule.field` this facet's checkboxes translate to on Apply.
     var filterField: FilterField {
         switch self {

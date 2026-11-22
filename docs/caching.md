@@ -31,7 +31,7 @@ collection edit from a path that does not call `bumpCollectionVersion()` is
 still detected. Skip and other visibility refreshes re-apply the filter and
 therefore also re-pin the collection version; this is accepted because Skip is
 rare. Filter popup facets: the whole-library baseline queries are unscoped and
-keyed on `visibilityVersion`; scoped facets are uncached and read collection
+keyed on `(visibilityVersion, seedIdentity)`; scoped facets are uncached and read collection
 membership live when the popup loads, so they are not reloaded on a Like.
 
 `sortedIDsCache` holds the full sorted id list across all sort modes (`wordCount`, `kudos`, `random`, `relevance`, and `groupAwareTitle`), so paging within a view costs a slice plus `booksForIDs` instead of a fresh materialize-and-sort. It is read through `LRUCache.get`, which refreshes recency (the subscript does not). A same-key sort already running is joined through `sortedIDsInFlight` rather than started twice, and `sortedIDsGeneration` stops a sort that began before `invalidateSortedIDs()` from storing a stale result.
@@ -53,7 +53,7 @@ Notes and known rough edges:
 
 - Cache keys are built from `LibraryFilterDebug.summary(expression:)`/`summary(query:)`, a function whose primary purpose is debug logging, repurposed as the cache-key digest. Any change to that formatting silently changes cache-key identity; treat it as cache-critical, not just cosmetic, when editing.
 - `FilterResultCacheKey`'s digest encodes each group by positional index (`g0`, `g1`, ...) without sorting groups themselves, so two expressions with reordered-but-equivalent groups (e.g. under an `OR` top-level conjunction, where order is semantically irrelevant) produce different keys and miss the cache. Harmless (over-invalidation, not incorrectness) but worth knowing if cache-hit-rate work happens here.
-- Facet counts in the AO3 filter sidebar/popup (`AmbrosiaMetaDB.topFacets(for:scopedTo:limit:)`, one `json_each` aggregation query per of the 6 `AO3FacetField` cases, run concurrently via `withTaskGroup`, plus one rating query) are scoped to current candidate IDs. In Phase 5, rapid checkbox toggling is debounced via `DebounceTimer(delay: 0.15)` in `AO3FilterPopupView` / `AO3FilterSidebarView`, and queries bind candidate IDs efficiently via `SQLIDList.clause(column:)` using single-bound `json_each(?)`, eliminating parameter explosion (`SQLITE_LIMIT_VARIABLE_NUMBER`). `canonicalize(_:)` resolves synonyms for facet entries.
+- Facet counts in the AO3 filter sidebar/popup (`AmbrosiaMetaDB.canonicalFacets(for:scopedTo:limit:)` and `canonicalFacetsUnconstrained`, backed by `book_tags` joined with `tag_canonical_map`) are scoped to current candidate IDs with zero inflation (each book counts strictly once per canonical tag). In Phase 5, rapid checkbox toggling is debounced via `DebounceTimer(delay: 0.15)` in `AO3FilterPopupView` / `AO3FilterSidebarView`, and queries bind candidate IDs efficiently via `SQLIDList.clause(column:)` using single-bound `json_each(?)`, eliminating parameter explosion (`SQLITE_LIMIT_VARIABLE_NUMBER`). Whole-library unconstrained counts are cached by `(visibilityVersion, seedIdentity)` in `AO3FilterFacetController.wholeLibraryFacetCache`.
 
 
 ---

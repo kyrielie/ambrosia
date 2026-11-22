@@ -94,30 +94,26 @@ Filters — two front ends, one engine:
   ```
   Because the check operates at the book level (`b.id`), every book containing **at least one** synonym in that cluster is matched and returned **exactly once**. If 2,000 distinct books match, the filtered view displays 2,000 works.
 
-### 2. Why Facet Counts Can Exceed Filtered Work Counts (e.g. 6,000+ vs 2,000)
-In the AO3-style filter sidebar/popup, each tag facet displays a count badge. This number can be significantly higher than the number of works returned when applying the filter:
-- **Raw Facet Query**: `AmbrosiaMetaDB.topFacets(for:scopedTo:limit:)` (and `topFacetsUnconstrained`) queries SQLite for tag frequencies across metadata JSON:
+### 2. Canonical-Deduped Facet Counts (Zero Inflation)
+In the AO3-style filter sidebar/popup, each tag facet displays a count badge. In earlier builds, this number could be significantly higher than the number of works returned when applying the filter due to raw occurrence summing across synonyms (`canonicalize`).
+
+To eliminate this discrepancy:
+- **Canonical Facet Query**: `AmbrosiaMetaDB.canonicalFacets(for:scopedTo:limit:)` (and `canonicalFacetsUnconstrained`) queries `book_tags` joined with `tag_canonical_map`:
   ```sql
-  SELECT je.value AS name, COUNT(*) AS cnt
-  FROM ao3_metadata, json_each(ao3_metadata.fandoms_json) AS je
-  GROUP BY je.value
+  SELECT COALESCE(m.canonical_name, bt.tag_name) AS name, COUNT(DISTINCT bt.calibre_id) AS cnt
+  FROM json_each(?) j
+  JOIN book_tags bt ON bt.calibre_id = j.value AND bt.tag_type = ?
+  LEFT JOIN tag_canonical_map m ON m.tag_name = bt.tag_name
+  GROUP BY name
+  ORDER BY cnt DESC
+  LIMIT ?
   ```
-  This counts how many times each individual raw tag name appears.
-- **Canonical Merging (`AmbrosiaMetaDB.canonicalize`)**: The controller groups these raw tag counts by their canonical name:
-  ```swift
-  for (name, count) in rawFacets {
-      let canonical = canonicalTerm(for: name)
-      merged[canonical, default: 0] += count
-  }
-  ```
-- **The Discrepancy**: On AO3, works frequently carry multiple related and synonymous tags on the *same work* (e.g. a single fic tagged with *"Marvel"*, *"Marvel Cinematic Universe"*, and *"The Avengers (Marvel Movies)"*).
-  - Each of those 3 raw tags appears ~2,000 times across the library.
-  - All 3 map to the single canonical root *"Marvel - All Media Types"*.
-  - `canonicalize` sums their raw counts: `2,000 + 2,000 + 2,000 = 6,000+`.
-  - The facet badge therefore reflects the **sum of tag occurrences across all synonyms**, whereas applying the filter tests book-level set membership, counting each distinct matching work once (2,000 works).
+- **Zero Inflation**: Because SQLite aggregates `COUNT(DISTINCT bt.calibre_id)` grouped by canonical tag name, a work carrying multiple synonyms for the same canonical tag (e.g. *"Stucky"* and *"Steve Rogers/Bucky Barnes"*) is counted **strictly once**. The facet badge matches the work count returned after checking the filter box.
+- **Post-Merge Top-N Ranking**: The `LIMIT ?` cutoff is applied in SQL *after* grouping by canonical name, ensuring popular canonical tags split across multiple low-frequency synonyms are ranked accurately.
+- **Legacy Fallback**: `AmbrosiaMetaDB.topFacets(for:scopedTo:limit:)` and `topFacetsUnconstrained` remain for non-tag facets (such as author facets from `ao3_metadata.author_names_json`) or when tag-type mapping is not applicable.
 
 ### 3. Effect of Series Grouping
-When `toolbarState.groupBySeries` is enabled (active only when sorted by Title), `SeriesGroupBuilder` and `LibraryVisibilityPolicy.filter` collapse books belonging to the same series into a single representative series row (`visibleTotalCount`). While this can further reduce the visible item count on a page if multi-work series are present, the multi-thousand discrepancy between facet badge count and filtered work count is primarily the result of tag-occurrence summation in `canonicalize`.
+When `toolbarState.groupBySeries` is enabled (active only when sorted by Title), `SeriesGroupBuilder` and `LibraryVisibilityPolicy.filter` collapse books belonging to the same series into a single representative series row (`visibleTotalCount`). This can reduce the visible item count on a page if multi-work series are present.
 
 ---
 
@@ -125,10 +121,10 @@ When `toolbarState.groupBySeries` is enabled (active only when sorted by Title),
 
 - **Two independent SQL-generation paths** exist for the same tag/author/series matching logic: `FilterBuilder.sqlFragment(for:)` (drawer/popup path) and `CalibreLibrarySearch.whereClause(for:)` (search-bar path). A correctness or performance fix to one (e.g. the NOT EXISTS rewrite, Invariant 24) does not automatically apply to the other, so treat them as needing separate verification when either changes. As of this writing `CalibreLibrarySearch._bookCount(query:)` does not carry an outer `LEFT JOIN` — it already routes every tag/author/series condition through the same self-contained `EXISTS`/`NOT EXISTS` shape `FilterBuilder` uses (see Invariant 24); this is now pinned by `CalibreLibrarySearchTests.swift`.
 - `SearchQueryParser.parseMultiToken` provides compositional quick-search syntax (multiple scoped tokens, quote-preserving values, negation, and word count ranges).
-- AO3 popup facet counts (`topFacets`) are debounced with `DebounceTimer(delay: 0.15)` and single-bound via `SQLIDList`.
+- AO3 popup facet counts (`canonicalFacets`) are debounced with `DebounceTimer(delay: 0.15)` and single-bound via `SQLIDList`.
 - Crossover membership is cached: `AmbrosiaMetaDB.allCrossoverBookIDs()` (a `json_array_length(fandoms_json) > 1` scan over `ao3_metadata`) runs in `LibrarySession`'s AO3 cache refresh (library open and after extraction batches) and is stored in `CalibreLibrary.crossoverIDCache` via `updateAO3MetaCaches`. `crossoverBookIDs()` returns that cache, so `AO3FilterFacetController.make` does not rescan on popup open. Remaining limitation: the test counts raw `fandoms_json` entries without canonicalization, so a work tagged with two synonymous fandoms (e.g. "Marvel" and "Marvel Cinematic Universe") is treated as a crossover. AO3 itself replaces tags with their canonical merger and ignores meta-tag-related fandoms (`FandomCrossover.check_for_crossover` in otwarchive).
 - `AO3FilterFacetController.make` builds `statusMap` for every `AO3CompletionStatus` case unconditionally (the popup's own completion control can narrow facets even when the base expression has no status rule), one indexed query per case. The enum has two cases (`complete`, `workInProgress`), so this is two queries per popup open, not an unbounded N+1. `FilterEvaluator` only queries the statuses referenced by the expression's rules.
-- Facet badges (`topFacets`/`topFacetsUnconstrained`) tally raw `json_each` entries from `ao3_metadata`, not `book_tags`, then merge by canonical name in Swift; see "Why Facet Counts Can Exceed Filtered Work Counts" above. `book_tags` (`calibre_id, tag_name, tag_type`, raw names) backs rule matching, not facet counting.
+- Tag facet badges route through `AmbrosiaMetaDB.canonicalFacets`/`canonicalFacetsUnconstrained` using `book_tags` and `tag_canonical_map`. Author facets continue to tally `ao3_metadata.author_names_json`.
 - Tag hierarchy is not used by filtering: `tag_parent_links` in the seed database is counted for validation (`AO3TagSeedDatabaseConfig.counts`) but no filter or facet path consults it, so filtering a parent fandom does not match works tagged only with a sub-fandom.
 - No index is created (or verified) on `books_tags_link`/`books_authors_link`/`books_series_link` by Ambrosia itself — these tables belong to Calibre's own `metadata.db` schema, and Calibre normally indexes them, but nothing here defensively creates a fallback index (`CREATE INDEX IF NOT EXISTS` is idempotent even against a foreign schema) for libraries where that index is missing or was stripped.
 
