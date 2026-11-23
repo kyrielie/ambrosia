@@ -15,6 +15,7 @@ doc(s) relevant to your task**, not this whole index cover-to-cover.
 - **`LibrarySession` (library open/close, registry, `ReaderPreferences`)** → `docs/session-model.md`
 - **Full-text search (`fulltext:`), `CalibreFTSLibrary`, the Calibre-compatible FTS5 tokenizer in `Database/CalibreFTS`** → `docs/calibre-fts.md`
 - **Search-bar parsing (`SearchQueryParser`), the filter drawer, or the AO3-style filter popup** → `docs/search-and-filter.md`
+- **Filter system summary, architecture, and query pipelines** → `docs/filter-system-summary.md`
 - **LRU caches (`filterResultCache`/`pageCache`/`countCache`), or list-vs-email reload coordination** → `docs/caching.md`
 - **The library window shell, list/email/ranking modes, or collections** → `docs/library-ui.md`
 - **Row-selection behavior (multiselect, arrow-key navigation) specifically** → `docs/library-ui.md` (and see `docs/collections-management-selection-verification-checklist.md`, a still-open manual-verification checklist — see "Dangling references" below)
@@ -58,14 +59,14 @@ codebase moves faster than docs do. See "Keeping this current" below.
 
 ## Historical Plan Citations (Resolved)
 
-Historical planning documents cited in codebase comments have been recovered and permanently indexed under [`docs/plans/finished/`](~/Documents/Applications/ambrosia/docs/plans/finished/):
-- `ambrosia_caching_plan.md` -> [`docs/plans/finished/ambrosia_caching_plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/ambrosia_caching_plan.md) (and modernized in `library-load-performance-and-caching-plan.md`)
-- `ambrosia_cleanup_plan.md` / `ambrosia_cleanup_plan2.md` -> [`docs/plans/finished/ambrosia_cleanup_plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/ambrosia_cleanup_plan.md)
-- `ambrosia_series_fix_plan.md` (cited 9 times) -> [`docs/plans/finished/ambrosia_series_fix_plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/ambrosia_series_fix_plan.md)
-- `ambrosia-implementation-plan.md` -> [`docs/plans/finished/ambrosia-implementation-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/ambrosia-implementation-plan.md) (and original origin plan in `project-ambrosia-origin-plan.md`)
-- `ambrosia_reader_fix_plan.md` -> [`docs/plans/finished/ambrosia_reader_fix_plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/ambrosia_reader_fix_plan.md)
-- `collections-management-plan.md` -> [`docs/plans/finished/collections-management-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/collections-management-plan.md)
-- All active roadmap proposals and architectural plans are indexed in [`docs/plans/README.md`](~/Documents/Applications/ambrosia/docs/plans/README.md) and tracked in [`docs/roadmap.md`](~/Documents/Applications/ambrosia/docs/roadmap.md).
+Historical planning documents cited in codebase comments have been recovered and permanently indexed under [`docs/plans/finished/`](docs/plans/finished/):
+- `ambrosia_caching_plan.md` -> [`docs/plans/finished/ambrosia_caching_plan.md`](docs/plans/finished/ambrosia_caching_plan.md) (and modernized in `library-load-performance-and-caching-plan.md`)
+- `ambrosia_cleanup_plan.md` / `ambrosia_cleanup_plan2.md` -> [`docs/plans/finished/ambrosia_cleanup_plan.md`](docs/plans/finished/ambrosia_cleanup_plan.md)
+- `ambrosia_series_fix_plan.md` (cited 9 times) -> [`docs/plans/finished/ambrosia_series_fix_plan.md`](docs/plans/finished/ambrosia_series_fix_plan.md)
+- `ambrosia-implementation-plan.md` -> [`docs/plans/finished/ambrosia-implementation-plan.md`](docs/plans/finished/ambrosia-implementation-plan.md) (and original origin plan in `project-ambrosia-origin-plan.md`)
+- `ambrosia_reader_fix_plan.md` -> [`docs/plans/finished/ambrosia_reader_fix_plan.md`](docs/plans/finished/ambrosia_reader_fix_plan.md)
+- `collections-management-plan.md` -> [`docs/plans/finished/collections-management-plan.md`](docs/plans/finished/collections-management-plan.md)
+- All active roadmap proposals and architectural plans are indexed in [`docs/plans/README.md`](docs/plans/README.md) and tracked in [`docs/roadmap.md`](docs/roadmap.md).
 
 ## Keeping this current
 
@@ -119,9 +120,8 @@ that's "primarily about" that system.
 cite a planning/spec doc in a comment (`// see ambrosia_whatever_plan.md`),
 either (a) confirm the file exists in the tree first, or (b) fold the
 relevant decision directly into the nearest doc above instead of citing a
-scratch file that may not survive to the next snapshot. Eight-plus missing
-citations in this codebase already is a sign this practice isn't working
-as a durable record.
+scratch file that may not survive to the next snapshot. All historical
+citations have been audited and indexed under `docs/plans/finished/`.
 
 ## Local-only files
 

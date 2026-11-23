@@ -495,31 +495,6 @@ final class ReaderPreferences: ObservableObject {
         }
     }
 
-    // MARK: - Derived: resolved library colour for current appearance
-
-    /// Returns the effective library background hex string given whether the
-    /// current effective appearance is dark.
-    func resolvedLibraryBackgroundColor(isDark: Bool) -> String {
-        switch libraryColorMode {
-        case .systemDefault:
-            // Return a sentinel that BookGridItem maps to NSColor.windowBackgroundColor
-            return "__system__"
-        case .accentColor:
-            return "__accent__"
-        case .custom:
-            return isDark ? libraryDarkBackgroundColor : libraryLightBackgroundColor
-        }
-    }
-
-    func resolvedLibraryTextColor(isDark: Bool) -> String {
-        switch libraryColorMode {
-        case .systemDefault, .accentColor:
-            return "__system_label__"
-        case .custom:
-            return isDark ? libraryDarkTextColor : libraryLightTextColor
-        }
-    }
-
     var resolvedLibraryNSAppearance: NSAppearance? {
         switch libraryAppearanceMode {
         case .system:
@@ -781,15 +756,8 @@ final class ReaderPreferences: ObservableObject {
 
         paragraphIndent = ud.object(forKey: Keys.paragraphIndent) as? Double
 
-        // Migrate old "rp.backgroundColor" key if present
-        let legacyBG = ud.string(forKey: "rp.backgroundColor")
-        readerBackgroundColor = ud.string(forKey: Keys.readerBackgroundColor)
-            ?? legacyBG
-            ?? Defaults.readerBackgroundColor
-        readerTextColor = ud.string(forKey: Keys.readerTextColor)
-            ?? (legacyBG != nil ? Defaults.readerTextColor : nil)
-            ?? ud.string(forKey: "rp.textColor")
-            ?? Defaults.readerTextColor
+        readerBackgroundColor = ud.string(forKey: Keys.readerBackgroundColor) ?? Defaults.readerBackgroundColor
+        readerTextColor = ud.string(forKey: Keys.readerTextColor) ?? Defaults.readerTextColor
 
         // Library colour mode
         let rawColorMode = ud.string(forKey: Keys.libraryColorMode) ?? Defaults.libraryColorMode.rawValue
@@ -798,17 +766,10 @@ final class ReaderPreferences: ObservableObject {
         let rawAppearance = ud.string(forKey: Keys.libraryAppearanceMode) ?? Defaults.libraryAppearanceMode.rawValue
         libraryAppearanceMode = LibraryAppearanceMode(rawValue: rawAppearance) ?? Defaults.libraryAppearanceMode
 
-        // Migrate old flat libraryBackgroundColor / libraryTextColor to new light keys
-        let legacyLibBG   = ud.string(forKey: "rp.libraryBackgroundColor")
-        let legacyLibText = ud.string(forKey: "rp.libraryTextColor")
-        libraryLightBackgroundColor = ud.string(forKey: Keys.libraryLightBG)
-            ?? legacyLibBG ?? Defaults.libraryLightBackgroundColor
-        libraryLightTextColor       = ud.string(forKey: Keys.libraryLightText)
-            ?? legacyLibText ?? Defaults.libraryLightTextColor
-        libraryDarkBackgroundColor  = ud.string(forKey: Keys.libraryDarkBG)
-            ?? Defaults.libraryDarkBackgroundColor
-        libraryDarkTextColor        = ud.string(forKey: Keys.libraryDarkText)
-            ?? Defaults.libraryDarkTextColor
+        libraryLightBackgroundColor = ud.string(forKey: Keys.libraryLightBG) ?? Defaults.libraryLightBackgroundColor
+        libraryLightTextColor       = ud.string(forKey: Keys.libraryLightText) ?? Defaults.libraryLightTextColor
+        libraryDarkBackgroundColor  = ud.string(forKey: Keys.libraryDarkBG) ?? Defaults.libraryDarkBackgroundColor
+        libraryDarkTextColor        = ud.string(forKey: Keys.libraryDarkText) ?? Defaults.libraryDarkTextColor
         showSkippedCollection = ud.object(forKey: Keys.showSkippedCollection) != nil
             ? ud.bool(forKey: Keys.showSkippedCollection)
             : Defaults.showSkippedCollection

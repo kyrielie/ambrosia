@@ -116,66 +116,6 @@ final class BookStateMetaDBTests: XCTestCase {
         }
     }
 
-    func testLegacySwiftDataMigration() throws {
-        let sourceDB = try Connection(.inMemory)
-
-        // Simulate legacy SwiftData / CoreData table schema with Apple Reference Date offsets
-        try sourceDB.execute("""
-            CREATE TABLE ZBOOKSTATE (
-                Z_PK INTEGER PRIMARY KEY,
-                ZCALIBREID INTEGER,
-                ZLASTSPINEINDEX INTEGER,
-                ZLASTSCROLLOFFSET FLOAT,
-                ZTOTALREADPERCENT FLOAT,
-                ZLASTOPENEDDATE FLOAT,
-                ZDATEADDED FLOAT,
-                ZISREAD INTEGER,
-                ZTOTALREADINGTIMESECONDS FLOAT,
-                ZLASTCHARACTEROFFSET INTEGER,
-                ZELOSCORE FLOAT,
-                ZELOMATCHCOUNT INTEGER
-            );
-        """)
-
-        // Apple Reference Date offset: 1000.0 seconds after Jan 1, 2001
-        // Expected Unix timestamp: 1000.0 + 978307200.0 = 978308200.0
-        try sourceDB.execute("""
-            INSERT INTO ZBOOKSTATE (
-                Z_PK, ZCALIBREID, ZLASTSPINEINDEX, ZLASTSCROLLOFFSET,
-                ZTOTALREADPERCENT, ZLASTOPENEDDATE, ZDATEADDED, ZISREAD,
-                ZTOTALREADINGTIMESECONDS, ZLASTCHARACTEROFFSET, ZELOSCORE, ZELOMATCHCOUNT
-            ) VALUES (
-                1, 999, 4, 0.42, 0.85, 1000.0, 500.0, 1, 3600.0, 250, 1200.0, 5
-            );
-        """)
-
-        let targetDB = try Connection(.inMemory)
-        try AmbrosiaMetaDB.runMigrations(db: targetDB)
-        try AmbrosiaMetaDB.migrateLegacySwiftDataRows(from: sourceDB, to: targetDB)
-
-        var found = false
-        let selectQuery = """
-            SELECT calibre_id, last_spine_index, last_scroll_offset, total_read_percent,
-                   last_opened_date, total_reading_time_seconds, last_character_offset,
-                   elo_score, elo_match_count
-            FROM book_state WHERE calibre_id = 999
-        """
-        for row in try targetDB.prepare(selectQuery) {
-            found = true
-            XCTAssertEqual(row[0] as? Int64, 999)
-            XCTAssertEqual(row[1] as? Int64, 4)
-            XCTAssertEqual(row[2] as? Double, 0.42)
-            XCTAssertEqual(row[3] as? Double, 0.85)
-            let openedSec = row[4] as? Double
-            XCTAssertEqual(openedSec, 978308200.0)
-            XCTAssertEqual(row[5] as? Double, 3600.0)
-            XCTAssertEqual(row[6] as? Int64, 250)
-            XCTAssertEqual(row[7] as? Double, 1200.0)
-            XCTAssertEqual(row[8] as? Int64, 5)
-        }
-        XCTAssertTrue(found, "Migrated row must exist in book_state table")
-    }
-
     func testMultiLibraryIsolation() async throws {
         let libraryURLA = FileManager.default.temporaryDirectory
             .appendingPathComponent("MultiLibA-\(UUID().uuidString)")

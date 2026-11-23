@@ -459,10 +459,6 @@ final class EmailSidebarViewController: NSViewController,
         onSelect?(singleSelectedBook())
     }
 
-    private func reloadBooksPreservingSingleSelection(from oldBooks: [CalibreBook]) {
-        reloadItemsPreservingSingleSelection(from: oldBooks.map { .book($0) })
-    }
-
     private func singleSelectedBook() -> CalibreBook? {
         let indexes = tableView.selectedRowIndexes
         guard indexes.count == 1, let row = indexes.first, row >= 0, row < items.count else {

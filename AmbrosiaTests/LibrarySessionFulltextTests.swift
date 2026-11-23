@@ -157,22 +157,17 @@ final class LibrarySessionFulltextTests: XCTestCase {
         XCTAssertEqual(stub.searchCount, 2)
     }
 
-    func testResolvedQueryCarriesIDsAndDropsPlainTerms() async {
+    func testResolveFulltextIDsReturnsMatchingIDs() async {
         let stub = StubSearcher([.ids([5, 6], StubSearcher.stamp(1))])
         let session = makeSession(stub)
-        let query = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], seriesTerms: [],
-                                statusTerms: [], fulltextPhrase: "dragon", plainTerms: ["x"], ftsMatchedIDs: nil)
-        let resolved = await session.resolvedQuery(query)
-        XCTAssertEqual(resolved.ftsMatchedIDs, [5, 6])
-        XCTAssertEqual(resolved.plainTerms, [])
+        let ids = await session.resolveFulltextIDs(for: "dragon")
+        XCTAssertEqual(ids, [5, 6])
+        XCTAssertEqual(session.cachedFulltextIDs(for: "dragon"), [5, 6])
     }
 
-    func testResolvedQueryWithoutPhraseIsReturnedUnchanged() async {
+    func testCachedFulltextIDsWithoutPriorResolutionIsNil() async {
         let session = makeSession(StubSearcher([]))
-        let query = SearchQuery(tagTerms: ["a"], authorTerms: [], titleTerms: [], plainTerms: [])
-        let resolved = await session.resolvedQuery(query)
-        XCTAssertEqual(resolved.tagTerms, ["a"])
-        XCTAssertNil(resolved.ftsMatchedIDs)
+        XCTAssertNil(session.cachedFulltextIDs(for: "dragon"))
     }
 
     // MARK: - Failure state (no UI retry loop)

@@ -27,9 +27,9 @@ see `swiftdata-store.md`.
 
 `AmbrosiaMetaDB` configures `db.busyTimeout = 5.0` and `readDB.busyTimeout = 5.0` (as well as WAL journal mode). This gives writers and concurrent readers up to 5 seconds to wait for transient SQLite locks to clear, preventing immediate `SQLITE_BUSY` (code 5) runtime exceptions under concurrent reader progress updates and background extraction passes. Calibre library connections also configure `connection.busyTimeout = 5.0` and execute `PRAGMA busy_timeout = 5000`.
 
-### Legacy SwiftData Migration
+### Legacy SwiftData Migration (Retired)
 
-`migrate_legacy_swiftdata_to_sqlite` is recorded in `schema_migrations`. It checks for legacy `default.store` / `Ambrosia.store` SQLite files from early SwiftData versions and migrates `ZBOOKSTATE` and `ZREADINGGOAL` records into `book_state` and `reading_goals`. CoreData timestamps (measured in seconds since Jan 1, 2001) are converted to Unix epoch timestamps by adding `+ 978307200.0`.
+The one-time `migrate_legacy_swiftdata_to_sqlite` migration previously consolidated `ZBOOKSTATE` and `ZREADINGGOAL` records from legacy SwiftData stores (`default.store` / `Ambrosia.store`) into `book_state` and `reading_goals`. All existing libraries have been migrated and this migration shim has been retired to eliminate cross-library collision hazards.
 
 `CollectionStore` wraps collection operations. Bootstrapped system collections:
 
@@ -45,7 +45,7 @@ Annotation inserts/deletes maintain `Has Annotations` membership. Series/antholo
 
 **Series schema reset:** Series identity is stored in `series.series_key`; `series_cache` contains only `(calibre_id, series_id, series_index, is_anthology)`. The effective membership view combines explicit collection rows with series-derived rows and exclusions. The view is dropped and recreated on every open so its definition stays current. There is no automatic migration for the old `series_cache` format: after installing the schema-changing build, quit Ambrosia, run `DROP TABLE IF EXISTS series_cache;` against that library's `ambrosia_meta.db`, relaunch, then run Re-extract in Preferences. This drops only derived series membership; do not delete the database or `series_placeholders`. Do not open the new build against the old `series_cache` shape before doing this reset.
 
-Series identities survive extraction rewrites: AO3 IDs resolve to `ao3:<id>`, Calibre IDs to `calibre:<id>`, and name-only rows to a creation-time `calibre-name:<name>` key. Name-only resolution trims, case-folds, and collapses whitespace. If a Calibre series later becomes AO3-sourced, its old flag remains dormant on the Calibre series row; there is no Calibre-to-AO3 flag transfer. `series_placeholders` remains keyed by `series_key` and has no active writer.
+Series identities survive extraction rewrites: AO3 IDs resolve to `ao3:<id>`, Calibre IDs to `calibre:<id>`, and name-only rows to a creation-time `calibre-name:<name>` key. Name-only resolution trims, case-folds, and collapses whitespace. If a Calibre series later becomes AO3-sourced, its old flag remains dormant on the Calibre series row; there is no Calibre-to-AO3 flag transfer. `series_placeholders` is a retired feature; the table definition is retained for backwards compatibility, but active read/write APIs and in-memory models have been removed.
 
 
 ---

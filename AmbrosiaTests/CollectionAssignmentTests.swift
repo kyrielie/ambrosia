@@ -284,26 +284,26 @@ final class CollectionAssignmentTests: XCTestCase {
         XCTAssertEqual(slowBurn?.works, 2)
     }
 
-    func testSortFieldUnifiedCasesAndLegacyMapping() {
+    func testSortFieldUnifiedCasesAndRelevanceMapping() {
         let userCases = SortField.userFacingCases
-        XCTAssertFalse(userCases.contains(.series))
-        XCTAssertFalse(userCases.contains(.ao3Published))
-        XCTAssertFalse(userCases.contains(.ao3Updated))
         XCTAssertTrue(userCases.contains(.published))
         XCTAssertTrue(userCases.contains(.updated))
         XCTAssertTrue(userCases.contains(.title))
         XCTAssertTrue(userCases.contains(.kudos))
         XCTAssertTrue(userCases.contains(.relevance))
 
-        // LastViewState backward compatibility
-        let stateSeries = LastViewState(sortField: .series, ascending: true, filterExpression: nil)
-        XCTAssertEqual(stateSeries.sortField, .title)
+        // LastViewState backward compatibility for relevance and raw legacy strings
+        var stateLegacySeries = LastViewState(sortField: .title, ascending: true, filterExpression: nil)
+        stateLegacySeries.sortFieldRaw = "series"
+        XCTAssertEqual(stateLegacySeries.sortField, .title)
 
-        let stateAO3Pub = LastViewState(sortField: .ao3Published, ascending: true, filterExpression: nil)
-        XCTAssertEqual(stateAO3Pub.sortField, .published)
+        var stateLegacyAO3Pub = LastViewState(sortField: .title, ascending: true, filterExpression: nil)
+        stateLegacyAO3Pub.sortFieldRaw = "ao3Published"
+        XCTAssertEqual(stateLegacyAO3Pub.sortField, .title)
 
-        let stateAO3Upd = LastViewState(sortField: .ao3Updated, ascending: true, filterExpression: nil)
-        XCTAssertEqual(stateAO3Upd.sortField, .updated)
+        var stateLegacyAO3Upd = LastViewState(sortField: .title, ascending: true, filterExpression: nil)
+        stateLegacyAO3Upd.sortFieldRaw = "ao3Updated"
+        XCTAssertEqual(stateLegacyAO3Upd.sortField, .title)
 
         let stateRelevance = LastViewState(sortField: .relevance, ascending: true, filterExpression: nil)
         XCTAssertEqual(stateRelevance.sortField, .title)

@@ -14,7 +14,7 @@ struct FTSQuery: Hashable, Sendable {
     /// Restrict to these formats (upper-case, as Calibre stores them). `nil` means every
     /// indexed format (D9).
     var formats: Set<String>?
-    /// Query `books_fts_stemmed` instead of `books_fts` (M6; unused until then).
+    /// Query `books_fts_stemmed` instead of `books_fts` (stemming seam; see docs/calibre-fts.md).
     var stemmed: Bool
 
     private init(normalized: String, formats: Set<String>?, stemmed: Bool) {

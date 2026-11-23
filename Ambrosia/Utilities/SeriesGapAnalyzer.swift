@@ -65,9 +65,6 @@ enum SeriesGapAnalyzer {
         for idx in 1...maxIndex where !presentIndices.contains(idx) {
             missing.insert(idx)
         }
-        for placeholder in series.placeholders where !presentIndices.contains(placeholder.partIndex) {
-            missing.insert(placeholder.partIndex)
-        }
         let missingIndices = Array(missing).sorted()
         let totalParts = max(maxIndex, (missingIndices.last ?? 0))
 
@@ -87,7 +84,6 @@ enum SeriesGapAnalyzer {
 
         // Build item rows for every part from 1 to totalParts
         var items: [SeriesGapItem] = []
-        let placeholdersByPart = Dictionary(series.placeholders.map { ($0.partIndex, $0) }, uniquingKeysWith: { first, _ in first })
 
         // Map books by their series index
         var booksByPart: [Int: CalibreBook] = [:]
@@ -116,8 +112,7 @@ enum SeriesGapAnalyzer {
                     url: url
                 ))
             } else {
-                let placeholder = placeholdersByPart[part]
-                let title = placeholder?.note ?? "Part \(part) (Missing)"
+                let title = "Part \(part) (Missing)"
                 let url: URL? = {
                     if let ao3SeriesID {
                         return URL(string: "https://archiveofourown.org/series/\(ao3SeriesID)")

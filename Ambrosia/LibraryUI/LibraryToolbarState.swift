@@ -120,7 +120,7 @@ final class LibraryToolbarState {
     //
     // When the user commits a scoped search token (e.g. tag:horror, author:rowling)
     // via Return or suggestion tap, LibraryWindowController calls
-    // commitSearchTokenAsFilter(_:). The active content view (BookGridItem or
+    // commitSearchTokenAsFilter(_:). The active content view (BookListRow or
     // EmailLibraryViewController) registers the handler via registerFilterCommitHandler.
     //
     // This avoids any direct reference between the AppKit toolbar layer and the

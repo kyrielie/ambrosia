@@ -32,7 +32,6 @@ final class SeriesGapManifestTests: XCTestCase {
             latestUpdated: nil,
             workIndices: [2, 4],
             missingIndices: [1, 3],
-            placeholders: [],
             isComplete: false
         )
 

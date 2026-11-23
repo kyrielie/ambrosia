@@ -63,8 +63,8 @@ type defined in a differently named file can be undercounted, and a reference
 in a test does not mean the type is well covered. Real line coverage is
 collected in CI (`-enableCodeCoverage YES`) but is not reported anywhere yet.
 
-Current size: 72 test files, 593+ test functions, all `XCTestCase` (no Swift
-Testing), against 112 source files (updated October 2026 after Phases 1–6).
+Current size: 108 test files, 896+ test functions, all `XCTestCase` (no Swift
+Testing), against 112 source files (updated November 2026).
 
 ### Covered by a dedicated test file
 
@@ -125,16 +125,46 @@ Testing), against 112 source files (updated October 2026 after Phases 1–6).
 | `FTSOccurrenceExtractor` and `CalibreFTSLibrary.multiSnippets` | `FTSMultiSnippetTests` |
 | `LibrarySession` fulltext cache rules, via the `FulltextSearching` seam | `LibrarySessionFulltextTests` |
 | Real-library FTS timings (skipped unless `AMBROSIA_FTS_BENCH_LIBRARY` is set to a library folder) | `CalibreFTSBenchmarkTests` |
-| `CalibreTokenizer` (C port of Calibre's FTS5 tokenizer, `Database/CalibreFTS`) | `CalibreTokenizerTests`; the golden-corpus test skips until `AmbrosiaTests/calibre_tokenizer_golden.json` is generated (see `calibre-fts.md`) |
+| `CalibreTokenizer` (C port of Calibre's FTS5 tokenizer, `Database/CalibreFTS`) | `CalibreTokenizerTests`; the golden-corpus test skips until `calibre_tokenizer_golden.json` is generated via `scripts/gen_calibre_tokenizer_golden.py` and added to the test bundle (see `calibre-fts.md`) |
 | `CalibreTokenizerRegistration` against a Calibre-shaped fixture (`FTSTestFixture`, `calibre_fts_schema.sql`) | `CalibreTokenizerRegistrationTests` |
 | `TagPillDisplay.isFirstListed` and deduplication | `TagPillDisplayTests` |
 | `RelevanceOrdering` pure comparator (text relevance vs tag position) | `RelevanceOrderingTests` |
+| Relevance ranking planning, branch selection, and expansion merge | `RelevanceRankingPlannerTests` |
 | First-listed tag positions via `AmbrosiaMetaDB.firstListedPositions` | `TagOrderRelevanceTests` |
 | `TagRelevanceTargets.make` tag extraction and filtering rules | `TagRelevanceTargetsTests` |
 | `HybridSearchCoordinator.fuse(lexicalIsRanked:)` Reciprocal Rank Fusion | `HybridSearchCoordinatorTests` |
 | Relevance sort integration across `PageQuery`, filters, and `ao3_metadata` | `RelevancePageQueryIntegrationTests` |
 | Facet aggregation, scoping, rating facets, and canonicalize defects | `FacetCharacterizationTests` |
 | Canonical-deduped facets, `tag_canonical_map` sync, zero-inflation deduplication | `CanonicalFacetTests` |
+| `AO3EPUB3ExportManager` EPUB 3 modernization | `AO3EPUB3ExportTests` |
+| `AO3OmnibusBuilder` multi-work omnibus compilation | `AO3OmnibusTests` |
+| `BookState` persistence in `AmbrosiaMetaDB` | `BookStateMetaDBTests` |
+| Calibre database query benchmark harness | `CalibreQueryBenchmarkTests` |
+| `CollectionAssignment` optimistic state and persistence | `CollectionAssignmentTests` |
+| `DatabaseMaintenanceCoordinator` vacuum, integrity, wal checkpoint | `DatabaseMaintenanceCoordinatorTests` |
+| `DuplicateManager` duplicate detection and consolidation | `DuplicateManagerTests` |
+| `EPUBParser` HTML sanitization and entity escaping | `EPUBParserSanitizationTests` |
+| `FTSTypographicCardView` formatting and passage presentation | `FTSTypographicCardTests` |
+| `FeedBuilder` RSS/JSON-feed serialization | `FeedBuilderTests` |
+| `LibraryDisplayController` selection, sort, and page state | `LibraryDisplayControllerTests` |
+| `LibraryStorageCalculator` disk usage and cache accounting | `LibraryStorageCalculatorTests` |
+| `OrderedHydration` book row batching and hydration order | `OrderedHydrationTests` |
+| `PassageDatabase` FP16 vector storage and passage retrieval | `PassageDatabaseTests` |
+| Precision search exact and prefix matching rules | `PrecisionSearchTests` |
+| `ReaderPreferences` defaults and persistence | `ReaderPreferencesTests` |
+| `RelationshipQuery` constituent parsing and entity normalization | `RelationshipQueryTests` |
+| `SearchQueryParser` multi-token prefix and quoted parsing | `SearchQueryParserMultiTokenTests` |
+| `SemanticVectorEngine` embeddings dot product and cosine scoring | `SemanticVectorEngineTests` |
+| `SeriesGapManifest` missing sequence detection | `SeriesGapManifestTests` |
+| `SeriesIdentity` normalized identity and flags | `SeriesIdentityTests` |
+| `SeriesPressPlanner` series publication and batch planning | `SeriesPressPlannerTests` |
+| `SortedIDsCache` ordering and cache invalidation | `SortedIDsCacheTests` |
+| Standalone Calibre-free library creation and scanning | `StandaloneCalibreTests` |
+| `SuggestionNormalizer` Unicode folding and tokenization | `SuggestionNormalizerTests` |
+| `SuggestionScorer` scoring tiers and tie-breaking | `SuggestionScorerTests` |
+| `AmbrosiaMetaDB.searchTags` autocomplete and prefix matching | `TagAutocompleteTests` |
+| `TypoDistance` OSA/Damerau-Levenshtein edit distance | `TypoDistanceTests` |
+| `VolumeMonitor` disk mount/unmount and volume tracking | `VolumeMonitorTests` |
 
 Note on `LRUCache`: eviction is insertion-order, not access-order. Reading a
 key via the `subscript` getter does not move it to the back of `order`; only

@@ -37,7 +37,6 @@ final class AO3OmnibusTests: XCTestCase {
             latestUpdated: nil,
             workIndices: [1, 3],
             missingIndices: [2],
-            placeholders: [],
             isComplete: false
         )
 

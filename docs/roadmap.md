@@ -45,41 +45,41 @@ flowchart TD
 
 ## 1. Built, Active & Unbuilt Systems Matrix
 
-This matrix provides a comprehensive, unified view of all architectural systems in Ambrosia, cross-referencing shipped code, active engineering plans ([`docs/plans/`](~/Documents/Applications/ambrosia/docs/plans)), completed historical blueprints ([`docs/plans/finished/`](~/Documents/Applications/ambrosia/docs/plans/finished)), and living topic documentation ([`docs/*.md`](~/Documents/Applications/ambrosia/docs)).
+This matrix provides a comprehensive, unified view of all architectural systems in Ambrosia, cross-referencing shipped code, active engineering plans ([`docs/plans/`](plans)), completed historical blueprints ([`docs/plans/finished/`](plans/finished)), and living topic documentation ([`docs/*.md`](../docs)).
 
 | System / Capability | State | Phase & Plan Citation | Living Topic Doc | Code Evidence & Verification |
 | :--- | :--- | :--- | :--- | :--- |
-| **Data Integrity & Storage Consolidation** | **Built** ✅ | **Phase 1** &bull; [`phase1-database-consolidation-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase1-database-consolidation-plan.md) | [docs/metadb-and-migrations.md](~/Documents/Applications/ambrosia/docs/metadb-and-migrations.md) | SwiftData removed; `book_state` & `reading_goals` in `AmbrosiaMetaDB`; `busyTimeout = 5.0` on SQLite connections. |
-| **Dual-Database Isolation** | **Built** ✅ | Foundation &bull; [`calibre-dependency-reduction-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/calibre-dependency-reduction-plan.md) | [docs/calibre-library.md](~/Documents/Applications/ambrosia/docs/calibre-library.md) | Read-only `metadata.db` vs read/write `ambrosia_meta.db`; custom kudos & word count parity. |
-| **Presentation Layer Unification** | **Built** ✅ | **Phase 2** &bull; [`phase2-presentation-unification-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase2-presentation-unification-plan.md) | [docs/library-ui.md](~/Documents/Applications/ambrosia/docs/library-ui.md) | Unified `LibraryDisplayController` driving both List and Email view surfaces without reload races. |
-| **Row Layout Bounding & Scroll Perf** | **Built** ✅ | Phase 2 Opt &bull; [`library-row-performance-fix-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/library-row-performance-fix-plan.md) | [docs/library-ui.md](~/Documents/Applications/ambrosia/docs/library-ui.md) | Clamped book descriptions, static tag chip layouts, bounded thumbnail decode dimensions. |
-| **UI Theme & Status Color Centralization** | **Active Plan** 📋 | Phase 2/8 Styling &bull; [`theme-centralization-plan.md`](~/Documents/Applications/ambrosia/docs/plans/theme-centralization-plan.md) | [docs/library-ui.md](~/Documents/Applications/ambrosia/docs/library-ui.md) | Centralize corner-radius and status-meaning color literals into new `Theme.swift`. |
-| **Library GUI Correctness & Stability** | **Built** ✅ | Phase 2 Fixes &bull; [`library-gui-stability-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/library-gui-stability-plan.md) | [docs/library-ui.md](~/Documents/Applications/ambrosia/docs/library-ui.md) | Historical fixes now reflected in the unified display controller and current concurrency invariants. |
-| **EPUB Single-Pass Sanitizer & Reader** | **Built** ✅ | **Phase 3** &bull; [`phase3-epub-reader-performance-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase3-epub-reader-performance-plan.md) | [docs/epub-parsing.md](~/Documents/Applications/ambrosia/docs/epub-parsing.md), [docs/reader.md](~/Documents/Applications/ambrosia/docs/reader.md) | SwiftSoup single-pass DOM walk stripping publisher CSS; concurrent multi-core chapter extraction. |
-| **State Management & Swift 6 Concurrency** | **Built** ✅ | **Phase 4** &bull; [`phase4-state-concurrency-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase4-state-concurrency-plan.md) | [docs/concurrency-invariants.md](~/Documents/Applications/ambrosia/docs/concurrency-invariants.md) | `@Observable` migration across settings & session; `SWIFT_STRICT_CONCURRENCY: targeted`. |
-| **Search & Facet Scalability** | **Built** ✅ | **Phase 5** &bull; [`phase5-search-facet-scalability-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase5-search-facet-scalability-plan.md) | [docs/search-and-filter.md](~/Documents/Applications/ambrosia/docs/search-and-filter.md) | Facet debounce timer; `SQLIDList` JSON parameters; `SearchQueryParser` multi-token syntax. |
-| **Native Calibre FTS5 Index Querying** | **Built** ✅ | Phase 5 Engine &bull; [`calibre-native-fts-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/calibre-native-fts-plan.md) | [docs/calibre-fts.md](~/Documents/Applications/ambrosia/docs/calibre-fts.md) | `CalibreFTSLibrary` direct SQLite FTS5 queries; custom Calibre tokenizer registration. |
-| **Multi-Tier Caching System** | **Built** ✅ | Phase 5 Caching &bull; [`library-load-performance-and-caching-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/library-load-performance-and-caching-plan.md) | [docs/caching.md](~/Documents/Applications/ambrosia/docs/caching.md) | `filterResultCache` (8 entries), `pageCache` (16 entries), `countCache` (64 entries). |
-| **Incremental Additional Filter Eval** | **Built (Gated)** 🔒 | Phase 5 Addendum &bull; [`incremental-filter-evaluation-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/incremental-filter-evaluation-plan.md) | [docs/search-and-filter.md](~/Documents/Applications/ambrosia/docs/search-and-filter.md) | Gated by `IncrementalFilterFlag` (`incrementalFilterEvaluation`); narrow evaluation over cached IDs. |
-| **App Lifecycle & Monolith Deconstruction** | **Built** ✅ | **Phase 6** &bull; [`phase6-app-lifecycle-monolith-deconstruction-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase6-app-lifecycle-monolith-deconstruction-plan.md) | [docs/overview.md](~/Documents/Applications/ambrosia/docs/overview.md) | Eliminated ghost window; decoupled `LibraryWindowController` and `LibrarySession`. |
-| **XcodeGen & Test Architecture** | **Built** ✅ | Tooling &bull; [`quality-remediation-and-xcodegen-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/quality-remediation-and-xcodegen-plan.md) | [docs/testing.md](~/Documents/Applications/ambrosia/docs/testing.md) | Source-of-truth `project.yml`; `.swiftformat` configuration; 580+ unit tests passing. |
-| **EPUB Import & Safe Trashing** | **Active Priority** 🚀 | **Phase 7 (Milestone 5)** &bull; [`epub-import-and-safe-trashing-plan.md`](~/Documents/Applications/ambrosia/docs/plans/epub-import-and-safe-trashing-plan.md) | [docs/calibre-library.md](~/Documents/Applications/ambrosia/docs/calibre-library.md) | Drag-and-drop pre-triage ingestion and reversible trashing (primary Phase 7 focus). |
-| **Reader Experience & Series Navigation** | **Active Plan** 📋 | **Phase 8** &bull; [`phase8-reader-experience-series-navigation-plan.md`](~/Documents/Applications/ambrosia/docs/plans/phase8-reader-experience-series-navigation-plan.md) | [docs/reader.md](~/Documents/Applications/ambrosia/docs/reader.md) | Direct chapter comment links, next-in-series navigation, preface visual presets. |
-| **Smart & Hierarchical Collections** | **Planned** 🗓️ | **Phase 9** | [docs/metadb-and-migrations.md](~/Documents/Applications/ambrosia/docs/metadb-and-migrations.md) | Dynamic saved filters as live collections, nested folders, curated manual sequencing. |
-| **Quotes & Clippings Annotations Vault** | **Planned** 🗓️ | **Phase 10** | [docs/annotations.md](~/Documents/Applications/ambrosia/docs/annotations.md) | Cross-library annotation browser, quote search, copy with citation, Obsidian export. |
-| **ELO Matchup & Personal Tier Lists** | **Planned** 🗓️ | **Phase 11** | [docs/metadb-and-migrations.md](~/Documents/Applications/ambrosia/docs/metadb-and-migrations.md) | Pairwise head-to-head matchup UI over `AmbrosiaMetaDB` ELO schema, generating tier lists (S/A/B/C). |
-| **Local Semantic, Hybrid & Precision Search** | **Built** ✅ | **Phase 12 (Core)** &bull; [`phase12-local-semantic-hybrid-and-precision-search-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase12-local-semantic-hybrid-and-precision-search-plan.md) | [docs/search-and-filter.md](~/Documents/Applications/ambrosia/docs/search-and-filter.md) | On-device sentence embeddings, Accelerate BLAS SIMD matrix dot product, RRF hybrid fusion, SQLite REGEXP, Calibre `=`/`~` operators. |
-| **Full-Text Corpus Semantic Search & External Ingestion** | **Active Priority** 🚀 | **Phase 12 Extension** &bull; [`fulltext-semantic-search-and-external-ingestion-plan.md`](~/Documents/Applications/ambrosia/docs/plans/fulltext-semantic-search-and-external-ingestion-plan.md) | [docs/search-and-filter.md](~/Documents/Applications/ambrosia/docs/search-and-filter.md), [docs/calibre-fts.md](~/Documents/Applications/ambrosia/docs/calibre-fts.md) | Paragraph-aware chunking (~400 words, 50-word overlap), dual-mode execution (on-device + external headless CLI), on-demand model manager, passage jumping. |
-| **OPDS Catalog Server & Mobile Bridge** | **Planned** 🗓️ | **Phase 13** | [docs/local-feed-server.md](~/Documents/Applications/ambrosia/docs/local-feed-server.md) | Serve library and modernized EPUB 3/Omnibuses over local Wi-Fi OPDS 1.2/2.0 to mobile reader apps. |
-| **Native AO3 Account Bridge** | **Planned** 🗓️ | **Phase 14** | [docs/ao3-metadata-extraction.md](~/Documents/Applications/ambrosia/docs/ao3-metadata-extraction.md) | In-reader Kudos submission, remote AO3 Bookmarks & Marked-for-Later two-way sync. |
-| **Standalone Mode without Calibre** | **Blueprint Ready** 📦 | Architecture &bull; [`standalone-epub-folder-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/standalone-epub-folder-plan.md) | [docs/calibre-library.md](~/Documents/Applications/ambrosia/docs/calibre-library.md) | Decouple library cataloging from Calibre `metadata.db` to open arbitrary folders of EPUBs. |
-| **External Fanfiction Metadata Extraction**| **Blueprint Ready** 📦 | Architecture &bull; [`external-fanfiction-metadata-extraction-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/external-fanfiction-metadata-extraction-plan.md) | [docs/ao3-metadata-extraction.md](~/Documents/Applications/ambrosia/docs/ao3-metadata-extraction.md) | Metadata extractors for FanFicFare, FicLab, and FicHub EPUB structures. |
+| **Data Integrity & Storage Consolidation** | **Built** ✅ | **Phase 1** &bull; [`phase1-database-consolidation-plan.md`](plans/finished/phase1-database-consolidation-plan.md) | [docs/metadb-and-migrations.md](metadb-and-migrations.md) | SwiftData removed; `book_state` & `reading_goals` in `AmbrosiaMetaDB`; `busyTimeout = 5.0` on SQLite connections. |
+| **Dual-Database Isolation** | **Built** ✅ | Foundation &bull; [`calibre-dependency-reduction-plan.md`](plans/finished/calibre-dependency-reduction-plan.md) | [docs/calibre-library.md](calibre-library.md) | Read-only `metadata.db` vs read/write `ambrosia_meta.db`; custom kudos & word count parity. |
+| **Presentation Layer Unification** | **Built** ✅ | **Phase 2** &bull; [`phase2-presentation-unification-plan.md`](plans/finished/phase2-presentation-unification-plan.md) | [docs/library-ui.md](library-ui.md) | Unified `LibraryDisplayController` driving both List and Email view surfaces without reload races. |
+| **Row Layout Bounding & Scroll Perf** | **Built** ✅ | Phase 2 Opt &bull; [`library-row-performance-fix-plan.md`](plans/finished/library-row-performance-fix-plan.md) | [docs/library-ui.md](library-ui.md) | Clamped book descriptions, static tag chip layouts, bounded thumbnail decode dimensions. |
+| **UI Theme & Status Color Centralization** | **Active Plan** 📋 | Phase 2/8 Styling &bull; [`theme-centralization-plan.md`](plans/theme-centralization-plan.md) | [docs/library-ui.md](library-ui.md) | Centralize corner-radius and status-meaning color literals into new `Theme.swift`. |
+| **Library GUI Correctness & Stability** | **Built** ✅ | Phase 2 Fixes &bull; [`library-gui-stability-plan.md`](plans/finished/library-gui-stability-plan.md) | [docs/library-ui.md](library-ui.md) | Historical fixes now reflected in the unified display controller and current concurrency invariants. |
+| **EPUB Single-Pass Sanitizer & Reader** | **Built** ✅ | **Phase 3** &bull; [`phase3-epub-reader-performance-plan.md`](plans/finished/phase3-epub-reader-performance-plan.md) | [docs/epub-parsing.md](epub-parsing.md), [docs/reader.md](reader.md) | SwiftSoup single-pass DOM walk stripping publisher CSS; concurrent multi-core chapter extraction. |
+| **State Management & Swift 6 Concurrency** | **Built** ✅ | **Phase 4** &bull; [`phase4-state-concurrency-plan.md`](plans/finished/phase4-state-concurrency-plan.md) | [docs/concurrency-invariants.md](concurrency-invariants.md) | `@Observable` migration across settings & session; `SWIFT_STRICT_CONCURRENCY: targeted`. |
+| **Search & Facet Scalability** | **Built** ✅ | **Phase 5** &bull; [`phase5-search-facet-scalability-plan.md`](plans/finished/phase5-search-facet-scalability-plan.md) | [docs/search-and-filter.md](search-and-filter.md) | Facet debounce timer; `SQLIDList` JSON parameters; `SearchQueryParser` multi-token syntax. |
+| **Native Calibre FTS5 Index Querying** | **Built** ✅ | Phase 5 Engine &bull; [`calibre-native-fts-plan.md`](plans/finished/calibre-native-fts-plan.md) | [docs/calibre-fts.md](calibre-fts.md) | `CalibreFTSLibrary` direct SQLite FTS5 queries; custom Calibre tokenizer registration. |
+| **Multi-Tier Caching System** | **Built** ✅ | Phase 5 Caching &bull; [`library-load-performance-and-caching-plan.md`](plans/finished/library-load-performance-and-caching-plan.md) | [docs/caching.md](caching.md) | `filterResultCache` (8 entries), `pageCache` (16 entries), `countCache` (64 entries). |
+| **Incremental Additional Filter Eval** | **Built (Gated)** 🔒 | Phase 5 Addendum &bull; [`incremental-filter-evaluation-plan.md`](plans/finished/incremental-filter-evaluation-plan.md) | [docs/search-and-filter.md](search-and-filter.md) | Gated by `IncrementalFilterFlag` (`incrementalFilterEvaluation`); narrow evaluation over cached IDs. |
+| **App Lifecycle & Monolith Deconstruction** | **Built** ✅ | **Phase 6** &bull; [`phase6-app-lifecycle-monolith-deconstruction-plan.md`](plans/finished/phase6-app-lifecycle-monolith-deconstruction-plan.md) | [docs/overview.md](overview.md) | Eliminated ghost window; decoupled `LibraryWindowController` and `LibrarySession`. |
+| **XcodeGen & Test Architecture** | **Built** ✅ | Tooling &bull; [`quality-remediation-and-xcodegen-plan.md`](plans/finished/quality-remediation-and-xcodegen-plan.md) | [docs/testing.md](testing.md) | Source-of-truth `project.yml`; `.swiftformat` configuration; 580+ unit tests passing. |
+| **EPUB Import & Safe Trashing** | **Active Priority** 🚀 | **Phase 7 (Milestone 5)** &bull; [`epub-import-and-safe-trashing-plan.md`](plans/epub-import-and-safe-trashing-plan.md) | [docs/calibre-library.md](calibre-library.md) | Drag-and-drop pre-triage ingestion and reversible trashing (primary Phase 7 focus). |
+| **Reader Experience & Series Navigation** | **Active Plan** 📋 | **Phase 8** &bull; [`phase8-reader-experience-series-navigation-plan.md`](plans/phase8-reader-experience-series-navigation-plan.md) | [docs/reader.md](reader.md) | Direct chapter comment links, next-in-series navigation, preface visual presets. |
+| **Smart & Hierarchical Collections** | **Planned** 🗓️ | **Phase 9** | [docs/metadb-and-migrations.md](metadb-and-migrations.md) | Dynamic saved filters as live collections, nested folders, curated manual sequencing. |
+| **Quotes & Clippings Annotations Vault** | **Planned** 🗓️ | **Phase 10** | [docs/annotations.md](annotations.md) | Cross-library annotation browser, quote search, copy with citation, Obsidian export. |
+| **ELO Matchup & Personal Tier Lists** | **Planned** 🗓️ | **Phase 11** | [docs/metadb-and-migrations.md](metadb-and-migrations.md) | Pairwise head-to-head matchup UI over `AmbrosiaMetaDB` ELO schema, generating tier lists (S/A/B/C). |
+| **Local Semantic, Hybrid & Precision Search** | **Built** ✅ | **Phase 12 (Core)** &bull; [`phase12-local-semantic-hybrid-and-precision-search-plan.md`](plans/finished/phase12-local-semantic-hybrid-and-precision-search-plan.md) | [docs/search-and-filter.md](search-and-filter.md) | On-device sentence embeddings, Accelerate BLAS SIMD matrix dot product, RRF hybrid fusion, SQLite REGEXP, Calibre `=`/`~` operators. |
+| **Full-Text Corpus Semantic Search & External Ingestion** | **Active Priority** 🚀 | **Phase 12 Extension** &bull; [`fulltext-semantic-search-and-external-ingestion-plan.md`](plans/fulltext-semantic-search-and-external-ingestion-plan.md) | [docs/search-and-filter.md](search-and-filter.md), [docs/calibre-fts.md](calibre-fts.md) | Paragraph-aware chunking (~400 words, 50-word overlap), dual-mode execution (on-device + external headless CLI), on-demand model manager, passage jumping. |
+| **OPDS Catalog Server & Mobile Bridge** | **Planned** 🗓️ | **Phase 13** | [docs/local-feed-server.md](local-feed-server.md) | Serve library and modernized EPUB 3/Omnibuses over local Wi-Fi OPDS 1.2/2.0 to mobile reader apps. |
+| **Native AO3 Account Bridge** | **Planned** 🗓️ | **Phase 14** | [docs/ao3-metadata-extraction.md](ao3-metadata-extraction.md) | In-reader Kudos submission, remote AO3 Bookmarks & Marked-for-Later two-way sync. |
+| **Standalone Mode without Calibre** | **Partially Implemented** 📋 | Architecture &bull; [`standalone-epub-folder-plan.md`](plans/finished/standalone-epub-folder-plan.md) | [docs/calibre-library.md](calibre-library.md) | Calibre library generation and folder scanning implemented in `Ambrosia/Database/Standalone/`; verified by `StandaloneCalibreTests`. UI workflows pending. |
+| **External Fanfiction Metadata Extraction**| **Partially Implemented** 📋 | Architecture &bull; [`external-fanfiction-metadata-extraction-plan.md`](plans/finished/external-fanfiction-metadata-extraction-plan.md) | [docs/ao3-metadata-extraction.md](ao3-metadata-extraction.md) | Metadata extractors for FanFicFare, FicLab, and FicHub implemented in `FanfictionFrontmatterParsers.swift`; verified by `ExternalAO3MetadataExtractorTests`. |
 
 ---
 
 ## 1.1 Known Gaps & Technical Debt Register
 
-Consolidated from [`docs/not-yet-built.md`](~/Documents/Applications/ambrosia/docs/not-yet-built.md):
+Consolidated from [`docs/not-yet-built.md`](not-yet-built.md):
 
 1. **FTS Results Snippet Panel & Reader Jump**: The snippet extraction API exists in `CalibreFTSLibrary.snippets` (see `calibre-fts.md`). Building the UI panel requires a pure hit locator that maps text match offsets across `EPUBParser` pagination boundaries (scheduled for **Phase 12**).
 2. **Progressive FTS Grid Updates**: Deferred unless benchmarking in `CalibreFTSBenchmarkTests` shows warm p95 search latency exceeding 400 ms on a 25,000+ item library.
@@ -112,7 +112,7 @@ Consolidated from [`docs/not-yet-built.md`](~/Documents/Applications/ambrosia/do
 ## Detailed Phase Breakdown
 
 ### Phase 1: Database Architecture Consolidation & Data Integrity
-*See [`docs/plans/finished/phase1-database-consolidation-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase1-database-consolidation-plan.md) for the complete implementation blueprint.*
+*See [`docs/plans/finished/phase1-database-consolidation-plan.md`](plans/finished/phase1-database-consolidation-plan.md) for the complete implementation blueprint.*
 - **Status**: **Completed** (October 2026) ✅
 - **Problems Solved**:
   1. `BookState` was stored in a global SwiftData container keyed only by integer `calibreID`, causing reading progress and ELO scores to cross-contaminate between different Calibre libraries.
@@ -130,7 +130,7 @@ Consolidated from [`docs/not-yet-built.md`](~/Documents/Applications/ambrosia/do
   - [x] Verified full build and test suite (`./test.sh`): **0 SwiftLint violations**, **all 566 unit tests passed**.
 
 ### Phase 2: UI Presentation Model & View Controller Unification
-*See [`docs/plans/finished/phase2-presentation-unification-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase2-presentation-unification-plan.md) for the complete implementation blueprint.*
+*See [`docs/plans/finished/phase2-presentation-unification-plan.md`](plans/finished/phase2-presentation-unification-plan.md) for the complete implementation blueprint.*
 - **Status**: **Completed** (October 2026) ✅
 - **Problems Solved**:
   - `LibraryRootView.swift` and `EmailLibraryViewController.swift` duplicated ~3,200 lines of query planning, 3-branch filter execution, group-aware SQL drain loops, and metadata hydration.
@@ -145,20 +145,20 @@ Consolidated from [`docs/not-yet-built.md`](~/Documents/Applications/ambrosia/do
   - [x] Verified full build and test suite (`./test.sh`): **0 SwiftLint violations**, **all 572 unit tests passed** (net -4,029 LOC reduction).
 
 ### Phase 3: EPUB Engine & Reader Performance Modernization
-*See [`docs/plans/finished/phase3-epub-reader-performance-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase3-epub-reader-performance-plan.md) for the complete implementation blueprint.*
+*See [`docs/plans/finished/phase3-epub-reader-performance-plan.md`](plans/finished/phase3-epub-reader-performance-plan.md) for the complete implementation blueprint.*
 - **Status**: Completed (2026-10-23)
 - **Problem**:
-  - [`EPUBParser+Rendering.swift`](~/Documents/Applications/ambrosia/Ambrosia/Reader/EPUBParser+Rendering.swift) ran 5–6 chained `replacingOccurrences(..., options: .regularExpression)` per chapter, recompiling regexes and allocating megabytes of string buffers sequentially across large fics.
+  - [`EPUBParser+Rendering.swift`](../Ambrosia/Reader/EPUBParser+Rendering.swift) ran 5–6 chained `replacingOccurrences(..., options: .regularExpression)` per chapter, recompiling regexes and allocating megabytes of string buffers sequentially across large fics.
   - Reader appearance changes (font, line spacing, margins, background color) risked triggering full EPUB re-parsing and `WKWebView` DOM reloads.
 - **Milestones**:
   - [x] Replaced the sequential regex cascade in `sanitise` and `extractBodyContent` with a unified, single-pass DOM walk using `SwiftSoup` (stripping publisher CSS, style blocks, inline style attributes, and active scripts/event handlers in one pass).
   - [x] Parallelized multi-chapter extraction in `mergedHTML` using `DispatchQueue.concurrentPerform` across available processor cores (cutting load times by 4x–8x on multi-chapter works).
   - [x] Adopted Honeycrisp and Kudos Reader patterns for AO3 preface heading stripping and spacer paragraph handling.
   - [x] Verified zero-flicker CSS `:root` variable injection (`applyCosmeticCSSUpdate`) for cosmetic adjustments.
-  - [x] Added full test coverage in [`EPUBParserSanitizationTests.swift`](~/Documents/Applications/ambrosia/AmbrosiaTests/EPUBParserSanitizationTests.swift) (576 tests passing, 0 SwiftLint violations).
+  - [x] Added full test coverage in [`EPUBParserSanitizationTests.swift`](../AmbrosiaTests/EPUBParserSanitizationTests.swift) (576 tests passing, 0 SwiftLint violations).
 
 ### Phase 4: State Management & Swift Concurrency Modernization
-*See [`docs/plans/finished/phase4-state-concurrency-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase4-state-concurrency-plan.md) for the complete implementation blueprint.*
+*See [`docs/plans/finished/phase4-state-concurrency-plan.md`](plans/finished/phase4-state-concurrency-plan.md) for the complete implementation blueprint.*
 - **Status**: Completed (2026-10-23)
 - **Problem**:
   - The project mixed Combine (`ReaderPreferences`, `AO3TagSeedDatabaseConfig` using `ObservableObject`, `@Published`, and `PassthroughSubject`), `@Observable` (`LibrarySession`, `LibraryDisplayController`, `LibraryToolbarState`), and untyped notifications.
@@ -171,7 +171,7 @@ Consolidated from [`docs/not-yet-built.md`](~/Documents/Applications/ambrosia/do
   - [x] Verified full build and test suite (`./test.sh`): **0 SwiftLint violations**, **all 576 unit tests passed**.
 
 ### Phase 5: Search & Facet Query Scalability
-*See [`docs/plans/finished/phase5-search-facet-scalability-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase5-search-facet-scalability-plan.md) for the complete implementation blueprint.*
+*See [`docs/plans/finished/phase5-search-facet-scalability-plan.md`](plans/finished/phase5-search-facet-scalability-plan.md) for the complete implementation blueprint.*
 - **Status**: Completed (2026-10-23)
 - **Problem**:
   - `AO3FilterFacetController` dispatched 7 simultaneous SQL aggregations on every checkbox toggle without debouncing.
@@ -181,10 +181,10 @@ Consolidated from [`docs/not-yet-built.md`](~/Documents/Applications/ambrosia/do
   - [x] Wrapped `refreshFacets()` in `DebounceTimer(delay: 0.15)` in `AO3FilterPopupView` to collapse rapid checkbox toggles into a single aggregation pass.
   - [x] Migrated `AmbrosiaMetaDB.topFacets(for:scopedTo:)` and `topRatingFacets(scopedTo:)` to `SQLIDList.clause(column:)` using JSON-bound single parameters (`json_each(?)`), eliminating parameter explosion and query size inflation.
   - [x] Upgraded `SearchQueryParser` with `parseMultiToken(_:)` and `asFilterRules()`, supporting quoted values (e.g. `author:"Jane Doe" tag:"Slow Burn"`), preserving plain words, and converting them into filter rules committed to `LibraryToolbarState`.
-  - [x] Added unit tests in [`SearchQueryParserMultiTokenTests.swift`](~/Documents/Applications/ambrosia/AmbrosiaTests/SearchQueryParserMultiTokenTests.swift) (581 tests passing, 0 SwiftLint violations).
+  - [x] Added unit tests in [`SearchQueryParserMultiTokenTests.swift`](../AmbrosiaTests/SearchQueryParserMultiTokenTests.swift) (581 tests passing, 0 SwiftLint violations).
 
 ### Phase 6: App Lifecycle & Monolith Deconstruction
-*See [`docs/plans/finished/phase6-app-lifecycle-monolith-deconstruction-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase6-app-lifecycle-monolith-deconstruction-plan.md) for the complete implementation blueprint.*
+*See [`docs/plans/finished/phase6-app-lifecycle-monolith-deconstruction-plan.md`](plans/finished/phase6-app-lifecycle-monolith-deconstruction-plan.md) for the complete implementation blueprint.*
 - **Status**: **Completed** (October 2026) ✅
 - **Problems Solved**:
   - `AmbrosiaApp` initialized an invisible `WindowGroup` with `Color.clear` that had to be hidden via `ghostWindow.orderOut(nil)` on launch and guarded on dock reopen.
@@ -196,10 +196,10 @@ Consolidated from [`docs/not-yet-built.md`](~/Documents/Applications/ambrosia/do
   - [x] Extracted `JSONFeedBuilder.swift` handling JSON Feed v1.1 serialization, metadata enrichment, and JSON encoding.
   - [x] Extracted `OPMLFeedBuilder.swift` for subscription export.
   - [x] Created `FeedBuilderTypes.swift` defining shared domain types (`FeedBookPair`, `FeedDisplayUnit`, `FeedDateFormatter`, `xmlEscape`).
-  - [x] Added unit tests in [`FeedBuilderTests.swift`](~/Documents/Applications/ambrosia/AmbrosiaTests/FeedBuilderTests.swift) (593 tests passing, 0 SwiftLint violations).
+  - [x] Added unit tests in [`FeedBuilderTests.swift`](../AmbrosiaTests/FeedBuilderTests.swift) (593 tests passing, 0 SwiftLint violations).
 
 ### Phase 7: AO3 Work Lifecycle, Deduplication, Series Gap Manifests & EPUB 3 Omnibus Engine
-*Milestones 1–3 and the omnibus builder are recorded in [`phase7-ao3-lifecycle-deduplication-epub3-omnibus-plan.md`](~/Documents/Applications/ambrosia/docs/plans/phase7-ao3-lifecycle-deduplication-epub3-omnibus-plan.md); remaining policy controls and import work are described there and in [`epub-import-and-safe-trashing-plan.md`](~/Documents/Applications/ambrosia/docs/plans/epub-import-and-safe-trashing-plan.md).*
+*Milestones 1–3 and the omnibus builder are recorded in [`phase7-ao3-lifecycle-deduplication-epub3-omnibus-plan.md`](plans/phase7-ao3-lifecycle-deduplication-epub3-omnibus-plan.md); remaining policy controls and import work are described there and in [`epub-import-and-safe-trashing-plan.md`](plans/epub-import-and-safe-trashing-plan.md).*
 - **Status**: **Active: import and reversible trashing remain** 📋
 - **Problem**:
   - The original lifecycle, duplicate-management, series-gap, and EPUB 3 export gaps have been addressed by completed milestones 1–4.
@@ -226,7 +226,7 @@ Consolidated from [`docs/not-yet-built.md`](~/Documents/Applications/ambrosia/do
       - *Unfinished WIP series*: File export annotates the omnibus as WIP. OPDS feed filtering remains deferred to Phase 13.
       - *Incomplete WIP works*: Annotate unfinished chapter status in TOC and frontmatter.
   - [ ] **Milestone 5: EPUB Drag-and-Drop Ingestion, Pre-Triage Engine & Safe Reversible Trashing**:
-    - *See [`docs/plans/epub-import-and-safe-trashing-plan.md`](~/Documents/Applications/ambrosia/docs/plans/epub-import-and-safe-trashing-plan.md) for the complete engineering plan.*
+    - *See [`docs/plans/epub-import-and-safe-trashing-plan.md`](plans/epub-import-and-safe-trashing-plan.md) for the complete engineering plan.*
     - Implement drag-and-drop ingestion (`.onDrop(of: [.fileURL])`) with interactive visual drop overlay on the library window and Dock drop handling (leveraging patterns from `Honeycrisp`).
     - Build in-memory pre-triage engine (`EPUBImportTriageEngine.swift`) to parse incoming EPUB frontmatter without full archive expansion (leveraging `swift-toolkit` container streaming) and compare against the active Calibre library before disk or database mutation.
     - Classify work progression: exact duplicates (auto-skip), chapter updates (in-place upgrade preserving reading progress/bookmarks), older revisions (skip with warning), divergent cuts (diff prompt), and new works.
@@ -235,7 +235,7 @@ Consolidated from [`docs/not-yet-built.md`](~/Documents/Applications/ambrosia/do
     - Add "Trash Identical Duplicates (Reversible)" and per-cluster superseded edition trashing with safety confirmation modals to `DuplicateWorksManagerView`.
 
 ### Phase 8: Reader Experience, Series Navigation & Preface Styling Modernization
-*See [`docs/plans/phase8-reader-experience-series-navigation-plan.md`](~/Documents/Applications/ambrosia/docs/plans/phase8-reader-experience-series-navigation-plan.md) for the complete implementation blueprint.*
+*See [`docs/plans/phase8-reader-experience-series-navigation-plan.md`](plans/phase8-reader-experience-series-navigation-plan.md) for the complete implementation blueprint.*
 - **Status**: **Active Plan** 📋 (November 2026)
 - **Problem**:
   - Readers can reach work-level AO3 comments from endmatter, but cannot jump directly to comments for the chapter they finished.
@@ -286,8 +286,8 @@ Consolidated from [`docs/not-yet-built.md`](~/Documents/Applications/ambrosia/do
   - [ ] Add library sorting and filter drawer rules for `elo_score` and tier rank.
 
 ### Phase 12: Local Semantic, Hybrid & Precision Search Engine
-*See blueprints: [`docs/plans/finished/phase12-local-semantic-hybrid-and-precision-search-plan.md`](~/Documents/Applications/ambrosia/docs/plans/finished/phase12-local-semantic-hybrid-and-precision-search-plan.md) (Core, Shipped) and [`docs/plans/fulltext-semantic-search-and-external-ingestion-plan.md`](~/Documents/Applications/ambrosia/docs/plans/fulltext-semantic-search-and-external-ingestion-plan.md) (Full-Text Extension).*
-- **Status**: **Core Completed ✅ / Full-Text Extension Active Plan 📋** (November 2026)
+*See blueprints: [`docs/plans/finished/phase12-local-semantic-hybrid-and-precision-search-plan.md`](plans/finished/phase12-local-semantic-hybrid-and-precision-search-plan.md) (Core, Shipped) and [`docs/plans/fulltext-semantic-search-and-external-ingestion-plan.md`](plans/fulltext-semantic-search-and-external-ingestion-plan.md) (Full-Text Extension).*
+- **Status**: **Core Completed ✅ / Full-Text Extension Partially Implemented & Active 📋** (November 2026)
 - **Problem**:
   - Keyword and literal FTS5 searches fail when readers search by narrative themes, vibes, or conceptual tropes without knowing the exact author tags (e.g. *"time loop where they try to prevent a murder"* or *"forced proximity in a snowstorm"*).
   - Cloud-based vector APIs compromise reader privacy, require ongoing API costs, and fail when offline.
@@ -309,13 +309,14 @@ Consolidated from [`docs/not-yet-built.md`](~/Documents/Applications/ambrosia/do
     - Implement `HybridSearchCoordinator.swift` executing concurrent FTS5 keyword queries and vector similarity searches.
     - Implement Reciprocal Rank Fusion ($k=60$) score blending.
     - Expose `semantic:"..."` syntax and blended hybrid scoring in the main library search bar and Relevance sort order.
-  - [ ] **Milestone 4: Full-Text Corpus Semantic Search & Narrative Chunker**:
-    - Implement `NarrativeChunker` splitting chapter text into ~400-word paragraph-bounded blocks with 50-word overlaps.
-    - Maintain UTF-16 offset anchors to enable exact passage jumping in `ReaderViewController`.
-  - [ ] **Milestone 5: External Headless Ingestion & Model Management**:
-    - Distribute `scripts/ambrosia_embed_cli.py` for headless GPU batch indexing on Linux/Windows CUDA servers.
-    - Implement portable SQLite database export/import (`ambrosia_semantic_passages.db`).
-    - Build on-demand `ModelManager` for SHA-256 verified download of CoreML/MLX query embedders (`Qwen3-Embedding-0.6B` and `bge-small-en-v1.5`).
+  - [ ] **Milestone 4: Full-Text Corpus Storage & Query Embedder**:
+    - Built: Passage database layer (`PassageDatabase.swift`) with schema for chunks, embeddings, and FTS virtual tables.
+    - Built: Passage query embedder (`PassageQueryEmbedder.swift`) and model structures (`PassageModels.swift`).
+    - Built: `passageDB` wiring in `LibrarySession.swift` and management UI in `PreferencesWindowController.swift`.
+    - Remaining: `NarrativeChunker` splitting chapter text into ~400-word paragraph-bounded blocks with 50-word overlaps and UTF-16 offset anchors for exact passage jumping in `ReaderViewController`.
+  - [ ] **Milestone 5: External Headless Ingestion CLI & Model Management**:
+    - Built: `scripts/ambrosia_embed_cli.py` for headless GPU batch indexing on Linux/Windows CUDA servers and portable SQLite export/import (`ambrosia_semantic_passages.db`).
+    - Remaining: on-demand `ModelManager` for automated download of CoreML/MLX query embedders (`Qwen3-Embedding-0.6B` and `bge-small-en-v1.5`).
 
 ### Phase 13: OPDS Catalog Server & Mobile Reading Bridge
 *Depends on Phase 7 (AO3 EPUB 3 Modernization & Omnibus Engine) and Phase 9 (Smart Collections).*

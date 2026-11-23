@@ -157,6 +157,61 @@ final class SearchQueryParserTests: XCTestCase {
         XCTAssertNil(query.asSingleFilterRule())
     }
 
+    // MARK: - Word count parsing (words:)
+    // Pass T4 characterization tests for SearchQueryParser word count syntax.
+
+    func testWordCount_greaterThanModifier() {
+        let query = SearchQueryParser.parseMultiToken("words:>50k")
+        XCTAssertEqual(query.wordCountGT, 50_000)
+        XCTAssertNil(query.wordCountLT)
+    }
+
+    func testWordCount_lessThanModifier() {
+        let query = SearchQueryParser.parseMultiToken("words:<20k")
+        XCTAssertEqual(query.wordCountLT, 20_000)
+        XCTAssertNil(query.wordCountGT)
+    }
+
+    func testWordCount_rangeModifier() {
+        let query = SearchQueryParser.parseMultiToken("words:10k-50k")
+        XCTAssertEqual(query.wordCountGT, 10_000)
+        XCTAssertEqual(query.wordCountLT, 50_000)
+    }
+
+    func testWordCount_decimalKModifier() {
+        let query = SearchQueryParser.parseMultiToken("words:>1.5k")
+        XCTAssertEqual(query.wordCountGT, 1_500)
+    }
+
+    func testWordCount_plainInteger() {
+        let query = SearchQueryParser.parseMultiToken("words:>50000")
+        XCTAssertEqual(query.wordCountGT, 50_000)
+    }
+
+    func testWordCount_caseInsensitiveK() {
+        let query = SearchQueryParser.parseMultiToken("words:>50K")
+        XCTAssertEqual(query.wordCountGT, 50_000)
+    }
+
+    func testWordCount_malformedTokensIgnored() {
+        let query1 = SearchQueryParser.parseMultiToken("words:abc")
+        XCTAssertNil(query1.wordCountGT)
+        XCTAssertNil(query1.wordCountLT)
+
+        let query2 = SearchQueryParser.parseMultiToken("words:k")
+        XCTAssertNil(query2.wordCountGT)
+        XCTAssertNil(query2.wordCountLT)
+    }
+
+    func testCurrentExactWordCountIsLowerBound() {
+        // Current behavior, pinned deliberately (Pass T4):
+        // An exact token without > or < (e.g. `words:50k`) is parsed by `else if let exact = parseWordCount`
+        // and assigned to `wordGT`, functioning as a lower-bound rather than an exact match.
+        let query = SearchQueryParser.parseMultiToken("words:50k")
+        XCTAssertEqual(query.wordCountGT, 50_000)
+        XCTAssertNil(query.wordCountLT)
+    }
+
     // MARK: - removingFulltext
 
     func testRemovingFulltextToken() {

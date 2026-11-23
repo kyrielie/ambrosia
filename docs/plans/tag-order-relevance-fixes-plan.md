@@ -151,7 +151,7 @@ Docs: `search-and-filter.md` (replace "text relevance rank is strictly primary" 
 
 ### Pass 4: `firstListedPositions` hardening and performance gate (fixes P6, B4)
 
-Files: `AmbrosiaMetaDB.firstListedPositions`; new benchmark in `AmbrosiaTests/CalibreQueryBenchmarkTests.swift` (follow its existing pattern) or a new `TagPositionBenchmarkTests.swift`.
+Files: `AmbrosiaMetaDB.firstListedPositions`; benchmark in `AmbrosiaTests/TagOrderRelevanceTests.swift` (`testBenchmark20kMatchedBooksPositions`).
 Tests:
 - `testMalformedAndEmptyJSONRowsDoNotAbortPositions` (insert rows via raw SQL with `''`, `'not json'`, NULL alongside a valid row; valid row still gets a position)
 - `testSQLErrorIsLoggedToErrorLog`

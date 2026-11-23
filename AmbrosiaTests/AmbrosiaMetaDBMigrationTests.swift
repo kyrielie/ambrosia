@@ -53,14 +53,13 @@ final class AmbrosiaMetaDBMigrationTests: XCTestCase {
     }
 
     func testSchemaMigrationsBridgeIsIdempotent() throws {
-        // The remaining named migrations are the AO3 author cleanup and the
-        // legacy SwiftData import. Series data is now rebuilt by Re-extract.
+        // Fresh databases have schema_migrations initialized with zero legacy migrations applied.
         let db = try Connection(.inMemory)
         try AmbrosiaMetaDB.runMigrations(db: db)
         try AmbrosiaMetaDB.runMigrations(db: db)
 
         let count = (try? db.scalar("SELECT COUNT(*) FROM schema_migrations")) as? Int64 ?? -1
-        XCTAssertEqual(count, 2, "Expected only the two remaining named migrations")
+        XCTAssertEqual(count, 0, "Expected empty schema_migrations on fresh database")
     }
 
     func testSeriesSchemaIsCreatedAndForeignKeysAreValid() throws {
@@ -74,24 +73,6 @@ final class AmbrosiaMetaDBMigrationTests: XCTestCase {
         let view = (try db.scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='view' AND name='effective_collection_members'") as? Int64) ?? 0
         XCTAssertEqual(view, 1)
         XCTAssertEqual(try db.prepare("PRAGMA foreign_key_check").map { $0 }.count, 0)
-    }
-
-    func testLegacyTagSeedTablesArePurgedOnMigration() throws {
-        let db = try Connection(.inMemory)
-        try db.execute("""
-            CREATE TABLE canonical_tags (id INTEGER PRIMARY KEY, name TEXT);
-            CREATE TABLE tag_synonyms (synonym TEXT, canonical_id INTEGER);
-            CREATE TABLE tag_parent_links (child_id INTEGER, parent_id INTEGER);
-            CREATE TABLE tag_subtag_sections (child_id INTEGER, parent_id INTEGER, section TEXT);
-            """)
-
-        try AmbrosiaMetaDB.runMigrations(db: db)
-
-        let tables = try tableNames(db)
-        XCTAssertFalse(tables.contains("canonical_tags"), "canonical_tags must be purged")
-        XCTAssertFalse(tables.contains("tag_synonyms"), "tag_synonyms must be purged")
-        XCTAssertFalse(tables.contains("tag_parent_links"), "tag_parent_links must be purged")
-        XCTAssertFalse(tables.contains("tag_subtag_sections"), "tag_subtag_sections must be purged")
     }
 
     func testVacuumAndCheckpointOnMetaDB() async throws {

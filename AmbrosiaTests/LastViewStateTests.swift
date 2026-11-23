@@ -78,6 +78,23 @@ final class LastViewStateTests: XCTestCase {
         let result = LastViewValidator.validate(odd, collectionNames: nil)
         XCTAssertEqual(result.state.sortField, .title)
         XCTAssertEqual(result.dropped, ["sort:somethingNew"])
+
+        var legacySeries = state()
+        legacySeries.sortFieldRaw = "series"
+        XCTAssertEqual(legacySeries.sortField, .title)
+        let resSeries = LastViewValidator.validate(legacySeries, collectionNames: nil)
+        XCTAssertEqual(resSeries.state.sortField, .title)
+        XCTAssertEqual(resSeries.dropped, ["sort:series"])
+
+        var legacyAO3 = state()
+        legacyAO3.sortFieldRaw = "ao3Published"
+        XCTAssertEqual(legacyAO3.sortField, .title)
+        let resAO3 = LastViewValidator.validate(legacyAO3, collectionNames: nil)
+        XCTAssertEqual(resAO3.state.sortField, .title)
+        XCTAssertEqual(resAO3.dropped, ["sort:ao3Published"])
+
+        let relState = state(sort: .relevance)
+        XCTAssertEqual(relState.sortField, .title)
     }
 
     // MARK: Validation

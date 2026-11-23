@@ -6,6 +6,14 @@ struct TagRelevanceTargets: Equatable, Sendable {
     var contains: [String] = []
     var isEmpty: Bool { exact.isEmpty && contains.isEmpty }
 
+    /// Merges filter expansions with search-bar expansions, preferring filter expansions on collision.
+    static func mergedExpansions(
+        filter: [String: [String]],
+        search: [String: [String]]
+    ) -> [String: [String]] {
+        filter.merging(search) { current, _ in current }
+    }
+
     static func make(
         expression: FilterExpression?,
         query: SearchQuery,

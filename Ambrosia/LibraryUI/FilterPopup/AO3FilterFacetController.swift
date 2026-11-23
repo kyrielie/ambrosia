@@ -292,13 +292,6 @@ final class AO3FilterFacetController {
         await metaDB.searchTags(query: query, field: field, fandomContext: fandomContext, limit: limit)
     }
 
-    /// Rating facet scoping: ignores only the rating fields themselves (no
-    /// `AO3FacetField` case for rating — it's handled separately from the
-    /// six JSON-column facets).
-    func scopedIDsForRating(state: AO3FilterPopupState) async -> [Int] {
-        await scopedIDs(ignoring: nil, state: ratingExcludedState(state))
-    }
-
     /// Returns a lightweight copy of `state` with rating selections cleared,
     /// so rating's own scoping doesn't narrow against itself. Only rating
     /// fields are cleared; every other field's selections still apply.

@@ -696,6 +696,9 @@ final class LibrarySession {
         startAO3Extraction(seriesSyncGeneration: seriesSyncGen, followsSeedSync: true)
         seedCalibreSeriesCache(seriesSyncGeneration: seriesSyncGen)
         warmSuggestionSnapshots()
+        Task(priority: .utility) { [weak metaDB] in
+            try? await metaDB?.pruneErrorLog(keeping: AmbrosiaMetaDB.errorLogRetention)
+        }
     }
 
     /// Builds fast in-memory suggestion snapshots for tags, authors, and series off-actor.
@@ -791,17 +794,6 @@ final class LibrarySession {
         extractionTask?.cancel()
     }
 
-    // MARK: - Count refresh
-
-    func refreshCount(query: SearchQuery = SearchQuery(tagTerms: [], authorTerms: [], titleTerms: [], plainTerms: [])) async {
-        guard let library else { return }
-        if query.isEmpty {
-            totalCount = await library.bookCount()
-        } else {
-            totalCount = await library.bookCount(query: query)
-        }
-    }
-
     // MARK: - FTS resolution
 
     func cachedFulltextIDs(for phrase: String) -> [Int]? {
@@ -876,25 +868,6 @@ final class LibrarySession {
             #endif
             return []
         }
-    }
-
-    /// Attempts FTS resolution for explicit fulltext only.
-    /// Shared between list view and email view — single source of truth.
-    func resolvedQuery(_ query: SearchQuery) async -> SearchQuery {
-        guard let rawPhrase = query.fulltextPhrase, FTSQuery.make(rawPhrase) != nil else {
-            return query
-        }
-        let ids = await resolveFulltextIDs(for: rawPhrase)
-        return SearchQuery(
-            tagTerms: query.tagTerms,
-            authorTerms: query.authorTerms,
-            titleTerms: query.titleTerms,
-            seriesTerms: query.seriesTerms,
-            statusTerms: query.statusTerms,
-            fulltextPhrase: query.fulltextPhrase,
-            plainTerms: [],
-            ftsMatchedIDs: ids
-        )
     }
 
     /// Searches the local semantic index for works matching the given natural language query.
@@ -1578,7 +1551,6 @@ final class LibrarySession {
             let seedSignpost = LaunchSignposts.begin("importAO3TagSeeds")
             defer { LaunchSignposts.end("importAO3TagSeeds", seedSignpost) }
             do {
-                try await metaDB.importConfiguredAO3TagSeedsIfNeeded()
                 _ = try? await metaDB.syncTagCanonicalMapIfNeeded()
                 guard AO3TagSeedDatabaseConfig.shared.isEnabled else { return }
                 let counts = try await metaDB.ao3TagSeedCounts()

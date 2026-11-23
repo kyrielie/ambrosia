@@ -127,10 +127,9 @@ final class CalibreLibrarySearchTests: XCTestCase {
         XCTAssertEqual(count, 50)
     }
 
-    // MARK: - tagSuggestions
-
+    // MARK: - tagMatches
     func testTagSuggestionsPrefixMatchAndFreqOrdering() async throws {
-        let suggestions = await library.tagSuggestions(prefix: "ang", limit: 8)
+        let suggestions = (await library.tagMatches(prefix: "ang", limit: 8)).map(\.value)
         XCTAssertEqual(suggestions, [
             "Angst",
             "Fluff and Angst",
@@ -144,54 +143,54 @@ final class CalibreLibrarySearchTests: XCTestCase {
     }
 
     func testTagSuggestionsEmptyPrefixReturnsEmpty() async throws {
-        let suggestions = await library.tagSuggestions(prefix: "", limit: 8)
+        let suggestions = (await library.tagMatches(prefix: "", limit: 8)).map(\.value)
         XCTAssertEqual(suggestions, [])
     }
 
     func testRelationshipTagInvertedOrderMatches() async throws {
-        let suggestions = await library.tagSuggestions(prefix: "tony/loki", limit: 8)
+        let suggestions = (await library.tagMatches(prefix: "tony/loki", limit: 8)).map(\.value)
         XCTAssertTrue(suggestions.contains("Loki/Tony Stark"))
     }
 
     func testRelationshipTagInvertedOrderSecondMatches() async throws {
-        let suggestions = await library.tagSuggestions(prefix: "harry/draco", limit: 8)
+        let suggestions = (await library.tagMatches(prefix: "harry/draco", limit: 8)).map(\.value)
         XCTAssertTrue(suggestions.contains("Draco Malfoy/Harry Potter"))
     }
 
     func testRelationshipAmpersandMatches() async throws {
-        let suggestions = await library.tagSuggestions(prefix: "zuko & toph", limit: 8)
+        let suggestions = (await library.tagMatches(prefix: "zuko & toph", limit: 8)).map(\.value)
         XCTAssertTrue(suggestions.contains("Toph Beifong & Zuko"))
     }
 
     func testRelationshipDiacriticMatches() async throws {
-        let suggestions = await library.tagSuggestions(prefix: "padme/anakin", limit: 8)
+        let suggestions = (await library.tagMatches(prefix: "padme/anakin", limit: 8)).map(\.value)
         XCTAssertTrue(suggestions.contains("Padmé Amidala/Anakin Skywalker"))
     }
 
     func testTagTypoMatches() async throws {
-        let suggestions = await library.tagSuggestions(prefix: "angts", limit: 8)
+        let suggestions = (await library.tagMatches(prefix: "angts", limit: 8)).map(\.value)
         XCTAssertTrue(suggestions.contains("Angst"))
     }
 
     func testRelationshipTypoMatches() async throws {
-        let suggestions = await library.tagSuggestions(prefix: "hurt/comfrt", limit: 8)
+        let suggestions = (await library.tagMatches(prefix: "hurt/comfrt", limit: 8)).map(\.value)
         XCTAssertTrue(suggestions.contains("Hurt/Comfort"))
     }
 
-    // MARK: - authorSuggestions
+    // MARK: - authorMatches
 
     func testAuthorSuggestionsPrefixMatch() async throws {
-        let suggestions = await library.authorSuggestions(prefix: "ast", limit: 8)
+        let suggestions = (await library.authorMatches(prefix: "ast", limit: 8)).map(\.value)
         XCTAssertEqual(suggestions, ["astolat", "EwNasty (BogDing)"])
     }
 
     func testAuthorTypoMatches() async throws {
-        let suggestions = await library.authorSuggestions(prefix: "astlat", limit: 8)
+        let suggestions = (await library.authorMatches(prefix: "astlat", limit: 8)).map(\.value)
         XCTAssertTrue(suggestions.contains("astolat"))
     }
 
     func testAuthorSuggestionsEmptyPrefixReturnsEmpty() async throws {
-        let suggestions = await library.authorSuggestions(prefix: "", limit: 8)
+        let suggestions = (await library.authorMatches(prefix: "", limit: 8)).map(\.value)
         XCTAssertEqual(suggestions, [])
     }
 
@@ -212,11 +211,11 @@ final class CalibreLibrarySearchTests: XCTestCase {
     }
 
     func testLikeMetacharactersDoNotMatchEverything() async throws {
-        let tagSuggestions = await library.tagSuggestions(prefix: "_", limit: 8)
+        let tagSuggestions = (await library.tagMatches(prefix: "_", limit: 8)).map(\.value)
         XCTAssertFalse(tagSuggestions.contains("Angst"))
         XCTAssertTrue(tagSuggestions.contains("Community: hc_bingo"))
 
-        let authorSuggestions = await library.authorSuggestions(prefix: "_", limit: 8)
+        let authorSuggestions = (await library.authorMatches(prefix: "_", limit: 8)).map(\.value)
         XCTAssertFalse(authorSuggestions.contains("astolat"))
         XCTAssertTrue(authorSuggestions.contains("aenor_llelo"))
 
@@ -224,10 +223,10 @@ final class CalibreLibrarySearchTests: XCTestCase {
         XCTAssertEqual(titleSuggestions, [])
     }
 
-    // MARK: - seriesSuggestions
+    // MARK: - seriesMatches
 
     func testSeriesSuggestionsPrefixMatch() async throws {
-        let suggestions = await library.seriesSuggestions(prefix: "the", limit: 8)
+        let suggestions = (await library.seriesMatches(prefix: "the", limit: 8)).map(\.value)
         XCTAssertEqual(suggestions, [
             "The White Clouds, Flying",
             "The Breeding Grounds",
@@ -240,12 +239,12 @@ final class CalibreLibrarySearchTests: XCTestCase {
     }
 
     func testSeriesTypoMatches() async throws {
-        let suggestions = await library.seriesSuggestions(prefix: "lonly", limit: 8)
+        let suggestions = (await library.seriesMatches(prefix: "lonly", limit: 8)).map(\.value)
         XCTAssertTrue(suggestions.contains("In the Lonely Hour"))
     }
 
     func testSeriesSuggestionsEmptyPrefixReturnsEmpty() async throws {
-        let suggestions = await library.seriesSuggestions(prefix: "", limit: 8)
+        let suggestions = (await library.seriesMatches(prefix: "", limit: 8)).map(\.value)
         XCTAssertEqual(suggestions, [])
     }
 }

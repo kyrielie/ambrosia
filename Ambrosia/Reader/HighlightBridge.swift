@@ -206,7 +206,7 @@ enum HighlightBridge {
             var baseID = '\(hexID)';
             // Collect all spans for this annotation (single span or multi-segment)
             var spans = Array.from(document.querySelectorAll('[data-hl-base="' + baseID + '"]'));
-            // Also catch the legacy single-span id format
+            // Also catch single-segment highlights using the hl-<id> id format (see restoreHighlights)
             var single = document.getElementById('hl-' + baseID);
             if (single && !spans.includes(single)) spans.push(single);
 

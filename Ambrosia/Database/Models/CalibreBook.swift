@@ -214,13 +214,6 @@ struct SeriesCollectionFlag: Equatable, Sendable {
     let exclusions: Set<Int>
 }
 
-struct SeriesPlaceholder: Hashable, Sendable {
-    let seriesKey: String
-    let seriesName: String
-    let partIndex: Int
-    let note: String?
-}
-
 struct SingletonSeriesWarning: Hashable, Sendable {
     let seriesKey: String
     let seriesName: String
@@ -257,7 +250,6 @@ struct SeriesGroup: Identifiable, Hashable {
     let latestUpdated: Date?
     let workIndices: [Int]
     let missingIndices: [Int]
-    let placeholders: [SeriesPlaceholder]
     let isComplete: Bool
 
     init(
@@ -285,7 +277,6 @@ struct SeriesGroup: Identifiable, Hashable {
         latestUpdated: Date?,
         workIndices: [Int],
         missingIndices: [Int],
-        placeholders: [SeriesPlaceholder],
         isComplete: Bool
     ) {
         precondition(!works.isEmpty, "SeriesGroup must be constructed with at least one work")
@@ -313,7 +304,6 @@ struct SeriesGroup: Identifiable, Hashable {
         self.latestUpdated = latestUpdated
         self.workIndices = workIndices
         self.missingIndices = missingIndices
-        self.placeholders = placeholders
         self.isComplete = isComplete
     }
 

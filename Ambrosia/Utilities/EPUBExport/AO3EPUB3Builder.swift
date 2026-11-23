@@ -489,33 +489,6 @@ enum AO3EPUB3Builder {
         """
     }
 
-    static func buildAfterword(
-        notes: String,
-        language: String
-    ) -> String {
-        let bcp47 = AO3LanguageMap.bcp47Tag(for: language)
-        return """
-        <?xml version="1.0" encoding="utf-8"?>
-        <!DOCTYPE html>
-        <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="\(bcp47)">
-        <head>
-            <meta charset="utf-8"/>
-            <title>Afterword</title>
-            <link rel="stylesheet" type="text/css" href="../css/stylesheet.css"/>
-            <link rel="stylesheet" type="text/css" href="../css/page_styles.css"/>
-        </head>
-        <body epub:type="backmatter">
-            <section class="afterword" id="afterword" epub:type="afterword">
-                <h2>Afterword</h2>
-                <div id="workskin" class="userstuff notes">
-                    \(notes)
-                </div>
-            </section>
-        </body>
-        </html>
-        """
-    }
-
     // MARK: - Stylesheets
 
     static func pageStylesCSS() -> String {

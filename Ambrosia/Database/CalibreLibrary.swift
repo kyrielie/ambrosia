@@ -2,9 +2,6 @@ import SQLite
 import Foundation
 
 // MARK: - Sort field
-//
-// §6: Added .ao3Published, .ao3Updated (sort by ao3_metadata dates),
-//     .random (seeded shuffle), and renamed nothing — existing cases unchanged.
 
 enum SortField: String, CaseIterable, Identifiable {
     case title
@@ -13,9 +10,6 @@ enum SortField: String, CaseIterable, Identifiable {
     case kudos
     case published      // Unified published date (archive metadata -> Calibre pubdate)
     case updated        // Unified updated date (archive updated -> archive published -> Calibre pubdate)
-    case series         // Legacy case kept for enum stability; retired from user-facing UI
-    case ao3Published   // Legacy case kept for enum stability
-    case ao3Updated     // Legacy case kept for enum stability
     case random         // Seeded random order
     case relevance      // Contextual relevance rank for search and filter results
 
@@ -23,20 +17,18 @@ enum SortField: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .title:                    return "Title"
-        case .author:                   return "Author"
-        case .wordCount:                return "Word Count"
-        case .kudos:                    return "Kudos"
-        case .published, .ao3Published: return "Date Published"
-        case .updated, .ao3Updated:     return "Date Updated"
-        case .series:                   return "Series"
-        case .random:                   return "Random"
-        case .relevance:                return "Relevance"
+        case .title:     return "Title"
+        case .author:    return "Author"
+        case .wordCount: return "Word Count"
+        case .kudos:     return "Kudos"
+        case .published: return "Date Published"
+        case .updated:   return "Date Updated"
+        case .random:    return "Random"
+        case .relevance: return "Relevance"
         }
     }
 
     /// User-facing active cases presented in UI sort pickers and menus.
-    /// Retires `.series` (redundant with Title series grouping) and legacy duplicate date cases.
     static var userFacingCases: [SortField] {
         [.relevance, .title, .author, .wordCount, .kudos, .published, .updated, .random]
     }
@@ -415,10 +407,8 @@ actor CalibreLibrary {
             return "b.title \(direction), b.id ASC"
         case .kudos:
             return "COALESCE(k.value, 0) \(direction), b.id ASC"
-        case .published, .updated, .ao3Published, .ao3Updated:
+        case .published, .updated:
             return "b.pubdate \(direction), b.id ASC"
-        case .series:
-            return "s.name \(direction), b.series_index ASC, b.id ASC"
         case .random:
             // Seeded random is handled post-fetch in the caller (sortedRandomly).
             return "b.title ASC, b.id ASC"
@@ -490,7 +480,7 @@ actor CalibreLibrary {
         return books.sorted { bookA, bookB in
             let dateA: String?
             let dateB: String?
-            if field == .updated || field == .ao3Updated {
+            if field == .updated {
                 dateA = dates[bookA.id]?.updated ?? dates[bookA.id]?.published ?? bookA.publishedDate.map { iso.string(from: $0) }
                 dateB = dates[bookB.id]?.updated ?? dates[bookB.id]?.published ?? bookB.publishedDate.map { iso.string(from: $0) }
             } else {
@@ -526,19 +516,6 @@ actor CalibreLibrary {
         }
     }
 
-    /// Nil-safe comparator shared by every in-memory sort that may have missing
-    /// values for some books (word count, kudos, etc). Books with no value always
-    /// sort last, regardless of ascending/descending — there is no natural "low" or
-    /// "high" placement for "we don't know".
-    func compareNilsLast(_ x: Int?, _ y: Int?, ascending: Bool) -> Bool {
-        switch (x, y) {
-        case (nil, nil): return false
-        case (nil, _):    return false
-        case (_, nil):    return true
-        case let (xv?, yv?): return ascending ? xv < yv : xv > yv
-        }
-    }
-
     /// §2a fix (2): word-count sort, resolved entirely in Swift with D4 tie-breaking.
     func sortedByWordCount(books: [CalibreBook], ascending: Bool,
                            ao3WordCounts: [Int: Int]) -> [CalibreBook] {
@@ -548,39 +525,6 @@ actor CalibreLibrary {
             valuesByID = bulkCustomColumnInts(table: tbl, ids: books.map(\.id))
         } else {
             valuesByID = ao3WordCounts
-        }
-        return books.sorted { bookA, bookB in
-            let valA = valuesByID[bookA.id]
-            let valB = valuesByID[bookB.id]
-            switch (valA, valB) {
-            case let (vA?, vB?):
-                if vA != vB {
-                    return ascending ? vA < vB : vA > vB
-                }
-            case (.some, nil):
-                return true
-            case (nil, .some):
-                return false
-            case (nil, nil):
-                break
-            }
-            let cmp = bookA.title.caseInsensitiveCompare(bookB.title)
-            if cmp != .orderedSame {
-                return cmp == .orderedAscending
-            }
-            return bookA.id < bookB.id
-        }
-    }
-
-    /// §2.2d: kudos sort, mirroring sortedByWordCount exactly with D4 tie-breaking.
-    func sortedByKudos(books: [CalibreBook], ascending: Bool,
-                       ao3Kudos: [Int: Int]) -> [CalibreBook] {
-        let valuesByID: [Int: Int]
-        if let label = CustomColumnConfig.shared.kudosLabel,
-           let tbl = customColumnTableName(label: label) {
-            valuesByID = bulkCustomColumnInts(table: tbl, ids: books.map(\.id))
-        } else {
-            valuesByID = ao3Kudos
         }
         return books.sorted { bookA, bookB in
             let valA = valuesByID[bookA.id]
@@ -1414,7 +1358,7 @@ actor CalibreLibrary {
                 return enrichedBook
             }
             switch sort {
-            case .published, .updated, .ao3Published, .ao3Updated:
+            case .published, .updated:
                 result = sortedByDate(books: result, field: sort, ascending: ascending)
             default:
                 break
@@ -1581,7 +1525,7 @@ actor CalibreLibrary {
                 return enrichedBook
             }
             switch sort {
-            case .published, .updated, .ao3Published, .ao3Updated:
+            case .published, .updated:
                 books = sortedByDate(books: books, field: sort, ascending: ascending)
             default:
                 break
@@ -1935,16 +1879,6 @@ extension CalibreLibrary {
         customColumns().first {
             $0.label == label.lowercased()
         }?.tableName
-    }
-
-    /// Reads the integer value for a custom column for a single book.
-    func customColumnInt(calibreID: Int, columnLabel: String) -> Int? {
-        guard let tbl = customColumnTableName(label: columnLabel) else { return nil }
-        let sql = "SELECT value FROM \(tbl) WHERE book = ?"
-        guard let rows = try? db.prepare(sql, [calibreID as Binding?]).map({ $0 }),
-              let first = rows.first,
-              let int64Value = first[0] as? Int64 else { return nil }
-        return Int(int64Value)
     }
 
     /// §2a: Bulk-fetch integer custom column values for a set of book IDs.

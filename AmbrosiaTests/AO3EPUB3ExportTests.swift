@@ -775,7 +775,6 @@ final class AO3EPUB3ExportTests: XCTestCase {
             latestUpdated: nil,
             workIndices: [1],
             missingIndices: [],
-            placeholders: [],
             isComplete: true
         )
 

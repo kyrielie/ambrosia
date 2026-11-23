@@ -51,7 +51,7 @@ actor AmbrosiaMetaDB {
     // all-series-ID-set requests overlap heavily but are rarely identical,
     // so a set-keyed cache (like CalibreLibrary.PageCacheKey) would rarely
     // hit. Every write site that touches ao3_metadata,
-    // ao3_extraction_diagnostics, series_cache, or series_placeholders must
+    // ao3_extraction_diagnostics, or series_cache must
     // evict the corresponding entries below.
     private var ao3MetadataCache: [Int: AO3MetadataRecord] = [:]
 
@@ -65,7 +65,6 @@ actor AmbrosiaMetaDB {
     private var seriesEntriesCache: [Int: [SeriesCacheEntry]] = [:]
     private var seriesEntriesByKeyCache: [String: [SeriesCacheEntry]] = [:]
     private var singletonWarningsCache: [Int: [SingletonSeriesWarning]] = [:]
-    private var placeholdersCache: [String: [SeriesPlaceholder]] = [:]
     private var hasSeriesFlagsCache: Bool?
     /// §7.3 (Phase 6): no reader caches book_index rows yet (§7.4 — the table
     /// isn't wired into any filter/sort/UI surface in this phase), but this
@@ -204,18 +203,14 @@ actor AmbrosiaMetaDB {
         try createReadingGoals(db: db)
         try createSchemaMigrations(db: db)
         try createLibraryState(db: db)
-        try dropAO3AuthorUsernameIfNeeded(db: db)
-        try migrateLegacySwiftDataIfNeeded(db: db)
-        purgeLegacyTagSeedTablesIfPresent(db: db)
         try bootstrapSystemCollections(db: db)
         pruneStaleDiagnostics(db: db)
     }
 
-    // MARK: - Migration tracking (Finding 13)
+    // MARK: - Migration tracking
     //
-    // Named records are retained for the AO3 author cleanup and legacy
-    // SwiftData import. Series schema replacement has no automatic migration;
-    // the derived cache is reset manually and rebuilt by Re-extract.
+    // `schema_migrations` tracks applied schema migrations.
+    // Legacy SwiftData, AO3 author column, and tag seed purge migrations have been retired.
 
     private static func createSchemaMigrations(db: Connection) throws {
         try db.execute("""
@@ -537,22 +532,6 @@ actor AmbrosiaMetaDB {
     /// extracted record). `AO3MetadataRecord.authors` replaces it with a
     /// structured, potentially multi-author array stored as `authors_json`
     /// (added additively in `createAO3Metadata` above, mirroring
-    /// `fandoms_json`/`relationships_json`). This drops the old column,
-    /// since nothing depends on it holding real data today. Gated on
-    /// `schema_migrations` per Invariant 11 so the DROP COLUMN runs exactly
-    /// once and a crash mid-migration can't strand the table.
-    private static let migrationNameDropAO3AuthorUsername = "2025_drop_ao3_author_username"
-
-    private static func dropAO3AuthorUsernameIfNeeded(db: Connection) throws {
-        guard !hasAppliedMigration(migrationNameDropAO3AuthorUsername, db: db) else { return }
-        try db.transaction {
-            if try columnExists("ao3_metadata", "ao3_author_username", db: db) {
-                try db.run("ALTER TABLE ao3_metadata DROP COLUMN ao3_author_username")
-            }
-            try markMigrationApplied(migrationNameDropAO3AuthorUsername, db: db)
-        }
-    }
-
     /// §7.1 (Phase 6): universal per-book index. Every book for which
     /// `EPUBParser.parse()` succeeds gets a row here, AO3 or not — see
     /// LibrarySession.extractOneBook's `.indexed` outcome. `title`/`description`
@@ -691,106 +670,8 @@ actor AmbrosiaMetaDB {
         """)
     }
 
-    private static let migrationNameLegacySwiftData = "migrate_legacy_swiftdata_to_sqlite"
-
-    private static func migrateLegacySwiftDataIfNeeded(db: Connection) throws {
-        guard !hasAppliedMigration(migrationNameLegacySwiftData, db: db) else { return }
-
-        defer {
-            try? markMigrationApplied(migrationNameLegacySwiftData, db: db)
-        }
-
-        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
-        let candidateURLs = [
-            appSupport.appendingPathComponent("default.store"),
-            appSupport.appendingPathComponent("Ambrosia").appendingPathComponent("default.store"),
-            appSupport.appendingPathComponent("Ambrosia.store")
-        ]
-
-        guard let storeURL = candidateURLs.first(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
-            return
-        }
-
-        guard let sourceConn = try? Connection(storeURL.path, readonly: true) else { return }
-        try migrateLegacySwiftDataRows(from: sourceConn, to: db)
-    }
-
-    static func migrateLegacySwiftDataRows(from sourceConn: Connection, to db: Connection) throws {
-        try db.transaction {
-            let hasBookState = (try? sourceConn.scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ZBOOKSTATE'")) as? Int64 ?? 0
-            if hasBookState > 0 {
-                let stmt = try sourceConn.prepare("""
-                    SELECT
-                        ZCALIBREID,
-                        COALESCE(ZLASTOPENEDDATE, 0.0),
-                        COALESCE(ZTOTALREADPERCENT, 0.0),
-                        COALESCE(ZTOTALREADINGTIMESECONDS, 0.0),
-                        COALESCE(ZLASTSPINEINDEX, 0),
-                        COALESCE(ZLASTCHARACTEROFFSET, 0),
-                        COALESCE(ZLASTSCROLLOFFSET, 0.0),
-                        COALESCE(ZELOSCORE, 1000.0),
-                        COALESCE(ZELOMATCHCOUNT, 0)
-                    FROM ZBOOKSTATE
-                """)
-                for row in stmt {
-                    guard let cid = row[0] as? Int64 else { continue }
-                    let coreDataDate = row[1] as? Double ?? 0.0
-                    let epochDate = coreDataDate > 0 ? (coreDataDate + 978307200.0) : 0.0
-                    let readPercent = row[2] as? Double ?? 0.0
-                    let readingTime = row[3] as? Double ?? 0.0
-                    let spineIndex = row[4] as? Int64 ?? 0
-                    let charOffset = row[5] as? Int64 ?? 0
-                    let scrollOffset = row[6] as? Double ?? 0.0
-                    let eloScore = row[7] as? Double ?? 1000.0
-                    let eloMatchCount = row[8] as? Int64 ?? 0
-
-                    try db.run("""
-                        INSERT OR IGNORE INTO book_state (
-                            calibre_id, last_opened_date, total_read_percent, total_reading_time_seconds,
-                            last_spine_index, last_character_offset, last_scroll_offset, elo_score, elo_match_count
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, cid, epochDate, readPercent, readingTime, spineIndex, charOffset, scrollOffset, eloScore, eloMatchCount)
-                }
-            }
-
-            let hasReadingGoal = (try? sourceConn.scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ZREADINGGOAL'")) as? Int64 ?? 0
-            if hasReadingGoal > 0 {
-                let stmt = try sourceConn.prepare("""
-                    SELECT
-                        ZTARGETBOOKSCOUNT,
-                        COALESCE(ZPERIODSTART, 0.0),
-                        COALESCE(ZPERIODEND, 0.0)
-                    FROM ZREADINGGOAL
-                """)
-                for row in stmt {
-                    guard let target = row[0] as? Int64 else { continue }
-                    let startCD = row[1] as? Double ?? 0.0
-                    let endCD = row[2] as? Double ?? 0.0
-                    let startEpoch = startCD > 0 ? (startCD + 978307200.0) : 0.0
-                    let endEpoch = endCD > 0 ? (endCD + 978307200.0) : 0.0
-
-                    try db.run("""
-                        INSERT INTO reading_goals (
-                            target_books_count, period_start, period_end
-                        ) VALUES (?, ?, ?)
-                    """, target, startEpoch, endEpoch)
-                }
-            }
-        }
-    }
-
-    private static func purgeLegacyTagSeedTablesIfPresent(db: Connection) {
-        let legacyTables = ["tag_subtag_sections", "tag_parent_links", "tag_synonyms", "canonical_tags"]
-        var purgedAny = false
-        for table in legacyTables
-        where (try? db.scalar("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", table)) != nil {
-            try? db.execute("DROP TABLE IF EXISTS \(table);")
-            purgedAny = true
-        }
-        if purgedAny {
-            try? db.execute("VACUUM;")
-        }
-    }
+    /// Maximum number of error log records retained during open-time pruning.
+    static let errorLogRetention = 1000
 
     private static func pruneStaleDiagnostics(db: Connection) {
         _ = try? db.run("""
@@ -799,23 +680,7 @@ actor AmbrosiaMetaDB {
             """)
     }
 
-    private var tagSeedLoadedKey: String {
-        "tagSeedLoaded_\(libraryHash)"
-    }
-
-    func importConfiguredAO3TagSeedsIfNeeded() throws {
-        // Tag seeds are now queried directly from the configured external
-        // ao3_tag_seeds.db without duplicating 1.74M rows into ambrosia_meta.db.
-        Self.purgeLegacyTagSeedTablesIfPresent(db: db)
-    }
-
-    func clearAO3TagSynonymCache() throws {
-        Self.purgeLegacyTagSeedTablesIfPresent(db: db)
-        UserDefaults.standard.removeObject(forKey: tagSeedLoadedKey)
-    }
-
     func clearAO3TagSynonymCacheAndReloadSeeds() throws {
-        try clearAO3TagSynonymCache()
         AO3TagSeedDatabaseConfig.shared.refreshValidation()
     }
 
@@ -2340,52 +2205,6 @@ actor AmbrosiaMetaDB {
             )
         }
         return result
-    }
-
-    func placeholders(for seriesKeys: [String]) throws -> [String: [SeriesPlaceholder]] {
-        guard !seriesKeys.isEmpty else { return [:] }
-        let missing = seriesKeys.filter { placeholdersCache[$0] == nil }
-        if !missing.isEmpty {
-            let fetched = try fetchPlaceholders(for: missing)
-            for key in missing { placeholdersCache[key] = fetched[key] ?? [] }
-        }
-        var result: [String: [SeriesPlaceholder]] = [:]
-        for key in seriesKeys {
-            if let cached = placeholdersCache[key], !cached.isEmpty { result[key] = cached }
-        }
-        return result
-    }
-
-    private func fetchPlaceholders(for seriesKeys: [String]) throws -> [String: [SeriesPlaceholder]] {
-        guard !seriesKeys.isEmpty else { return [:] }
-        let placeholders = seriesKeys.map { _ in "?" }.joined(separator: ",")
-        let sql = """
-        SELECT series_key, series_name, part_index, note
-        FROM series_placeholders
-        WHERE series_key IN (\(placeholders))
-        ORDER BY series_key, part_index
-        """
-        var result: [String: [SeriesPlaceholder]] = [:]
-        for row in try prepare(sql, seriesKeys.map { $0 as Binding? }) {
-            guard let seriesKey = row[safe: 0] as? String,
-                  let seriesName = row[safe: 1] as? String,
-                  let partIndex = row.int(at: 2) else { continue }
-            result[seriesKey, default: []].append(
-                SeriesPlaceholder(seriesKey: seriesKey, seriesName: seriesName, partIndex: partIndex, note: row[safe: 3] as? String)
-            )
-        }
-        return result
-    }
-
-    func upsertPlaceholder(seriesKey: String, seriesName: String, partIndex: Int, note: String?) throws {
-        try run(
-            """
-            INSERT OR REPLACE INTO series_placeholders (series_name, series_key, part_index, note)
-            VALUES (?, ?, ?, ?)
-            """,
-            [seriesName, seriesKey, partIndex, note]
-        )
-        placeholdersCache[seriesKey] = nil
     }
 
     /// Inserts Calibre-derived fallback memberships for books that have no

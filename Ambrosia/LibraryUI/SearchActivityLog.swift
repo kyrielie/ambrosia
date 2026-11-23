@@ -64,13 +64,6 @@ final class SearchActivityLog {
         entries.append(entry)
     }
 
-    // MARK: - Read
-
-    /// Returns entries newest-first, ready for display in the activity feed.
-    func recentEntries(limit: Int = 200) -> [SearchActivityEntry] {
-        Array(entries.suffix(limit).reversed())
-    }
-
     // MARK: - Persistence
 
     /// Load persisted entries for the given library hash from Application Support.

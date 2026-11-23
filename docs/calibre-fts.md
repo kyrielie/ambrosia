@@ -265,6 +265,6 @@ To help users manage disk consumption and database health, Ambrosia provides thr
 ## Full-Text Semantic Search Extension
 
 For full-text semantic/passage vector search over body text, see:
-- Architectural Plan: [`docs/plans/fulltext-semantic-search-and-external-ingestion-plan.md`](~/Documents/Applications/ambrosia/docs/plans/fulltext-semantic-search-and-external-ingestion-plan.md)
-- External Headless Ingestion Walkthrough: [`docs/guides/external-semantic-indexing-walkthrough.md`](~/Documents/Applications/ambrosia/docs/guides/external-semantic-indexing-walkthrough.md)
-- Ingestion CLI Script: [`scripts/ambrosia_embed_cli.py`](~/Documents/Applications/ambrosia/scripts/ambrosia_embed_cli.py)
+- Architectural Plan: [`docs/plans/fulltext-semantic-search-and-external-ingestion-plan.md`](plans/fulltext-semantic-search-and-external-ingestion-plan.md)
+- External Headless Ingestion Walkthrough: [`docs/guides/external-semantic-indexing-walkthrough.md`](guides/external-semantic-indexing-walkthrough.md)
+- Ingestion CLI Script: [`scripts/ambrosia_embed_cli.py`](../scripts/ambrosia_embed_cli.py)

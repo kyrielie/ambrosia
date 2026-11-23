@@ -16,7 +16,7 @@ import SQLite
 ///
 /// Synonym/canonical rows are seeded directly into `AmbrosiaMetaDB`'s own
 /// `canonical_tags`/`tag_synonyms` tables via its `run(_:_:)` method, not via
-/// the AO3-seed-database `ATTACH`/import path (`importConfiguredAO3TagSeedsIfNeeded`)
+/// the AO3-seed-database `ATTACH`/import path
 /// -- reading `AmbrosiaMetaDB.swift` directly (not chasing the import path
 /// down) shows those are exactly the tables `expandedTermsBatch` queries, so
 /// this is a legitimate, more direct seeding route for the resolver's own

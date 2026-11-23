@@ -90,6 +90,19 @@ final class ErrorLogTests: XCTestCase {
         XCTAssertEqual(entries.map(\.message), ["error 9", "error 8", "error 7", "error 6"])
     }
 
+    func testPruneErrorLogRetentionConstant() async throws {
+        // Insert more than retention constant
+        for index in 0..<1010 {
+            try await metaDB.logError(subsystem: "Test", operation: "op", message: "err \(index)")
+        }
+
+        try await metaDB.pruneErrorLog(keeping: AmbrosiaMetaDB.errorLogRetention)
+
+        let entries = try await metaDB.recentErrors(limit: 2000)
+        XCTAssertEqual(entries.count, AmbrosiaMetaDB.errorLogRetention)
+        XCTAssertEqual(entries.first?.message, "err 1009")
+    }
+
     func testClearErrorLogRemovesAllRows() async throws {
         try await metaDB.logError(subsystem: "A", operation: "op", message: "one")
         try await metaDB.logError(subsystem: "B", operation: "op", message: "two")

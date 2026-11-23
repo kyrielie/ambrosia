@@ -1490,9 +1490,6 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
     }
 
-    private func updateProgressForCurrentPage() {
-        savePaginatedProgress()
-    }
     /// In scroll mode it fires an evaluateJavaScript call.
     private func saveCurrentPositionSync(completion: @escaping () -> Void) {
         if currentMode == .paginated {
@@ -1860,10 +1857,6 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             webView.evaluateJavaScript("window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'});", completionHandler: nil)
         }
     }
-    @objc func increaseFontSizeAction(_ sender: Any?) { ReaderPreferences.shared.increaseFontSize() }
-    @objc func decreaseFontSizeAction(_ sender: Any?) { ReaderPreferences.shared.decreaseFontSize() }
-    @objc func resetFontSizeAction(_ sender: Any?) { ReaderPreferences.shared.resetFontSize() }
-
     /// Toggles Like on whichever work is currently on screen — `activeCalibreID`,
     /// not the reading target's primary book, so paging into a later work of a
     /// multi-work series toggles *that* work, matching what the reader is
@@ -2135,10 +2128,6 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
     }
 
-    func currentAnnotationsForSidebar() -> [Annotation] {
-        annotations
-    }
-
     // MARK: - Jump to Semantic Passage
 
     func jumpToPassage(_ passage: SemanticPassageMatch) {
@@ -2346,22 +2335,6 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         publishLocalFindState()
     }
 
-    func localFindNext() {
-        if let bar = searchBarVC, !bar.view.isHidden {
-            searchBarDidRequestNext(bar)
-        } else {
-            findNext()
-        }
-    }
-
-    func localFindPrevious() {
-        if let bar = searchBarVC, !bar.view.isHidden {
-            searchBarDidRequestPrevious(bar)
-        } else {
-            findPrevious()
-        }
-    }
-
     func currentLocalFindState() -> LocalReaderFindState {
         let isVis = (searchBarVC?.view.isHidden == false) || (findBarHostingView != nil)
         return LocalReaderFindState(
@@ -2370,13 +2343,6 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             matchTotal: findMatchTotal,
             isVisible: isVis
         )
-    }
-
-    private func showFindBar(openSidebar: Bool = false) {
-        if openSidebar {
-            onOpenSearchSidebar?()
-        }
-        showSearchBar()
     }
 
     private func hideFindBar() {
@@ -2667,10 +2633,6 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         toggleTOCSidebar()
     }
 
-    func showTOCPopup(sender: Any? = nil) {
-        openTOCSidebar()
-    }
-
     func closeTOCPopup() {
         if let panel = tocPanel, panel.isVisible {
             panel.orderOut(nil)
@@ -2958,14 +2920,6 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
     }
 
-    // MARK: - DEBUG harness
-
-    #if DEBUG
-    func runPaginationHarness() {
-        // Pagination harness removed with the old geometry-based engine.
-    }
-
-    #endif
 }
 
 // MARK: - NotePopoverView

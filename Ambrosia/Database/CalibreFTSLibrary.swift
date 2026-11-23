@@ -158,7 +158,7 @@ actor CalibreFTSLibrary {
     /// with the sanitized expression (D10). Throws `.cancelled` when `token` went stale.
     func searchBooks(_ query: FTSQuery, token: SearchToken) throws -> FTSBookSet {
         guard control.isCurrent(token) else { throw FTSSearchError.cancelled }
-        guard !query.stemmed else { throw FTSSearchError.tokenizerUnavailable }   // M6
+        guard !query.stemmed else { throw FTSSearchError.tokenizerUnavailable }   // Stemming seam; see docs/calibre-fts.md
         try refreshIfFileChanged()
         let stamp = try currentStamp(token: token)
 
@@ -219,7 +219,7 @@ actor CalibreFTSLibrary {
     func snippets(bookID: Int, query: FTSQuery, token: SearchToken,
                   snippetTokens: Int = 64) throws -> [FTSSnippet] {
         guard control.isCurrent(token) else { throw FTSSearchError.cancelled }
-        guard !query.stemmed else { throw FTSSearchError.tokenizerUnavailable }   // M6
+        guard !query.stemmed else { throw FTSSearchError.tokenizerUnavailable }   // Stemming seam; see docs/calibre-fts.md
         try refreshIfFileChanged()
         guard mode == .native else { return [] }
 

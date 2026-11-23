@@ -148,12 +148,6 @@ extension CalibreLibrary {
         return await _tagSuggestionsFallback(prefix: trimmed, limit: limit)
     }
 
-    /// Backwards-compatible tag suggestions returning string values.
-    nonisolated func tagSuggestions(prefix: String, limit: Int = 8) async -> [String] {
-        let matches = await tagMatches(prefix: prefix, limit: limit)
-        return matches.map(\.value)
-    }
-
     /// Returns structured author matches with match class and link frequency.
     nonisolated func authorMatches(prefix: String, limit: Int = 8) async -> [SuggestionMatch] {
         let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -165,12 +159,6 @@ extension CalibreLibrary {
         return await _authorSuggestionsFallback(prefix: trimmed, limit: limit)
     }
 
-    /// Backwards-compatible author suggestions returning string values.
-    nonisolated func authorSuggestions(prefix: String, limit: Int = 8) async -> [String] {
-        let matches = await authorMatches(prefix: prefix, limit: limit)
-        return matches.map(\.value)
-    }
-
     /// Returns structured series matches with match class and link frequency.
     nonisolated func seriesMatches(prefix: String, limit: Int = 8) async -> [SuggestionMatch] {
         let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -180,12 +168,6 @@ extension CalibreLibrary {
             return snapshot.search(query: trimmed, limit: limit)
         }
         return await _seriesSuggestionsFallback(prefix: trimmed, limit: limit)
-    }
-
-    /// Backwards-compatible series suggestions returning string values.
-    nonisolated func seriesSuggestions(prefix: String, limit: Int = 8) async -> [String] {
-        let matches = await seriesMatches(prefix: prefix, limit: limit)
-        return matches.map(\.value)
     }
 
     /// Title suggestions querying SQLite directly with LIKE metacharacter escaping.

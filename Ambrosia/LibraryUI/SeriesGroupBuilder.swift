@@ -21,10 +21,9 @@ import Foundation
 /// `allEntries` to its `CalibreBook` (typically `library.booksForIDs(allIDs)`
 /// where `allIDs = Array(Set(allEntries.map(\.calibreID)))`).
 ///
-/// `seriesDiagnostics` and `placeholders` are UI-display-only inputs (`#if DEBUG`
-/// logging and `SeriesGroup.placeholders` respectively) — callers that don't need
-/// them (e.g. `LocalFeedServer`, which serializes neither into a feed item) may
-/// omit them and rely on the empty defaults below.
+/// `seriesDiagnostics` is a UI-display-only input (`#if DEBUG` logging) — callers
+/// that don't need it (e.g. `LocalFeedServer`, which serializes nothing diagnostic
+/// into a feed item) may omit it and rely on the empty default below.
 ///
 /// `duplicateLoserIDs` (see `DuplicateBookDetector`) is excluded from the
 /// grouping pool the same way `anthologyIDs` is: a stale Calibre duplicate of
@@ -36,8 +35,7 @@ func buildSeriesGroups(
     seriesMetadata: [Int: AO3MetadataRecord],
     seriesDiagnostics: [Int: AO3ExtractionDiagnostic] = [:],
     anthologyIDs: Set<Int> = [],
-    duplicateLoserIDs: Set<Int> = [],
-    placeholders: [String: [SeriesPlaceholder]] = [:]
+    duplicateLoserIDs: Set<Int> = []
 ) -> [String: SeriesGroup] {
     let entriesBySeries = Dictionary(
         grouping: allEntries.filter { !anthologyIDs.contains($0.calibreID) && !duplicateLoserIDs.contains($0.calibreID) },
@@ -112,7 +110,6 @@ func buildSeriesGroups(
             latestUpdated: metadata.compactMap { parseISODate($0.updatedDate) }.max(),
             workIndices: indices,
             missingIndices: missing,
-            placeholders: placeholders[seriesKey] ?? [],
             isComplete: !metadata.isEmpty && metadata.allSatisfy(\.isComplete)
         )
     }

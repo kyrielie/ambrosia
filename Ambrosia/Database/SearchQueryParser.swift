@@ -324,10 +324,10 @@ struct SearchQuery {
 
 // MARK: - SearchQueryParser
 
-// TODO: Multi-token parsing (e.g. "tag:x author:y" -> two rules) is out of
-// scope for the trailing-prefix warning added in the gap closure plan
-// (Phase 5, ambrosia_gap_closure_plan.md). The warning only flags the
-// situation; it does not change parsing behavior.
+// Multi-token parsing is supported via `parseMultiToken` (used by the search bar in
+// `LibraryWindowController` to parse multi-rule expressions like "tag:x author:y").
+// The simpler `parse` method remains active across direct callers and parses a single
+// prefix or plain terms. Both parser entry points are live.
 struct SearchQueryParser {
 
     /// Parse a raw search string into a `SearchQuery`.
