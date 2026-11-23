@@ -1,10 +1,8 @@
 name: Tests
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  # Automated runs on push/PR disabled due to macOS runner capacity limits.
+  # Manual dispatch remains available when needed.
   workflow_dispatch:
 
 permissions:
