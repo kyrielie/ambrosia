@@ -15,6 +15,13 @@ Unified `Annotation` represents point annotations and ranged highlights:
 
 Annotations are persisted in `AmbrosiaMetaDB.annotations`, not SwiftData. JS selection capture computes UTF-16 offsets with a TreeWalker. Highlights are restored through `HighlightBridge`; sidebar UI is SwiftUI in an `NSPanel`.
 
+### Optimistic Persistence and Error Recovery
+
+`AnnotationPersistence` (`Reader/AnnotationPersistence.swift`) coordinates asynchronous annotation saves and deletes initiated by the reader:
+- Point annotations and text highlights are applied to in-memory state and the DOM immediately for responsive interaction.
+- Asynchronous persistence is dispatched to `AmbrosiaMetaDB`.
+- If database persistence fails, `AnnotationPersistence` rolls back local state (restoring deleted highlights to the DOM or removing unsaved additions), logs the error to `error_log` via `AmbrosiaMetaDB.logError`, and presents a non-fatal user alert via `NSAlert`.
+
 `BookmarkManager` is a dead stub. All current bookmark behavior is handled by the annotation system. `BookmarkSidebarView` is also dead; it has no instantiation site and is superseded by `AnnotationSidebarView`.
 
 ## Export

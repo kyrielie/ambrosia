@@ -698,6 +698,7 @@ final class LibrarySession {
         warmSuggestionSnapshots()
         Task(priority: .utility) { [weak metaDB] in
             try? await metaDB?.pruneErrorLog(keeping: AmbrosiaMetaDB.errorLogRetention)
+            try? await metaDB?.pruneResolvedDiagnostics()
         }
     }
 
@@ -1513,6 +1514,7 @@ final class LibrarySession {
             }
             // Flush any remaining records.
             await flushBatch()
+            try? await metaDB.pruneResolvedDiagnostics()
             // A run that was not cancelled and flushed everything leaves nothing
             // to extract for this fingerprint, so the next launch can skip the
             // scan. A cancelled or partially flushed run is not recorded.

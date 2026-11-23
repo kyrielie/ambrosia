@@ -21,6 +21,9 @@ final class CalibreQueryBenchmarkTests: XCTestCase {
     // swiftlint:disable:next static_over_final_class
     override class func setUp() {
         super.setUp()
+        guard ProcessInfo.processInfo.environment["AMBROSIA_RUN_BENCHMARKS"] != nil else {
+            return
+        }
         if let envCount = ProcessInfo.processInfo.environment["AMBROSIA_BENCH_BOOK_COUNT"],
            let parsed = Int(envCount), parsed > 0 {
             totalBooks = parsed
@@ -50,6 +53,10 @@ final class CalibreQueryBenchmarkTests: XCTestCase {
     }
 
     func testPass0BenchmarkSuite() async throws {
+        try XCTSkipIf(
+            ProcessInfo.processInfo.environment["AMBROSIA_RUN_BENCHMARKS"] == nil,
+            "set AMBROSIA_RUN_BENCHMARKS=1 to run query benchmarks"
+        )
         guard let library = Self.library else {
             XCTFail("Benchmark library not initialized")
             return

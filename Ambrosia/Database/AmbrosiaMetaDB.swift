@@ -1597,12 +1597,16 @@ actor AmbrosiaMetaDB {
         return result
     }
 
-    /// Fetches all stored extraction diagnostics, optionally filtering to failures only.
-    func allAO3Diagnostics(failedOnly: Bool = false) throws -> [AO3ExtractionDiagnostic] {
-        try? run("""
+    /// Prunes extraction diagnostics for books that have now succeeded extraction (present in `ao3_metadata`).
+    func pruneResolvedDiagnostics() throws {
+        try run("""
             DELETE FROM ao3_extraction_diagnostics
             WHERE calibre_id IN (SELECT calibre_id FROM ao3_metadata);
             """)
+    }
+
+    /// Fetches all stored extraction diagnostics, optionally filtering to failures only.
+    func allAO3Diagnostics(failedOnly: Bool = false) throws -> [AO3ExtractionDiagnostic] {
         let condition = failedOnly ? "WHERE status = 'failed' OR reason LIKE '%error%'" : ""
         let sql = """
         SELECT calibre_id, status, reason, epub_path, epub_filename, spine_items_checked, attempted_at

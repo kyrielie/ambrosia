@@ -101,6 +101,12 @@ Testing), against 112 source files (updated November 2026).
 | `WordCountFormatting` | `WordCountFormattingTests` |
 | `SQLiteFileMaintenance` (file size, checkpoint and vacuum) | `SQLiteFileMaintenanceTests` |
 | Extraction raw-read path (`rawXHTML`, `parse(skipTOC:)`, `Document` overloads) | `ExtractionRawReadTests` |
+| UTF-16 offset contract in `epub-parsing.md` (surrogates, combining marks, clamping) | `OffsetContractTests` |
+| `AnnotationPersistence` (optimistic rollback, error logging, alerts) | `AnnotationPersistenceTests` |
+| `AmbrosiaMetaDB` annotation CRUD and isolation | `AnnotationMetaDBCRUDTests` |
+| `TransferDatabaseBuilder` transfer DB generation | `TransferDatabaseBuilderTests` |
+| `ReadingGoal` math and progress calculation | `ReadingGoalMathTests` |
+| `TypographyValueFormat` formatters and steppers | `TypographyValueFormatTests` |
 | `LibraryQueryHelpers`, `LibraryVisibilityPolicy`, `DuplicateBookDetector` | `LibraryQueryHelpersTests`, `LibraryVisibilityPolicyTests`, `DuplicateBookDetectorTests` |
 | `KeyBinding.validate` | `KeyBindingValidationTests` |
 | `CollectionStore`, `ErrorLogEntry` storage | `CollectionStoreTests`, `ErrorLogTests` |
@@ -179,16 +185,14 @@ Lines are source LOC. "Tests" is what exists today.
 
 | Source | LOC | Tests today |
 | --- | --- | --- |
-| `AmbrosiaMetaDB.swift` | 2482 | migrations and `CollectionStore`; tag queries indirectly through `TagCoverageTests` and `TagCandidateRestrictionTests` |
+| `AmbrosiaMetaDB.swift` | 2482 | migrations, `BookStateMetaDBTests`, `AnnotationMetaDBCRUDTests`, and `CollectionStore`; tag queries indirectly through `TagCoverageTests` and `TagCandidateRestrictionTests` |
 | `LocalFeedServer.swift` | 2543 | walk cache only (4 tests); feed XML, JSON feed and OPML output untested |
 | `LibrarySession.swift` | 1058 | full-text cache and failure rules (`LibrarySessionFulltextTests`), filter cache keys and `narrowingBase` (`CacheKeyTests`, `NarrowingBaseTests`, `RuleMatchCacheTests`); open/close lifecycle and collection snapshots untested |
-| `EPUBParser` and extensions (spine, OPF, merged HTML, offsets, `parseTOC`) | about 900 | image reference rewrite only |
+| `EPUBParser` and extensions (spine, OPF, merged HTML, offsets, `parseTOC`) | about 900 | image reference rewrite and UTF-16 offset contracts (`OffsetContractTests`) |
 | `ExportManager.swift` | 543 | `exportScope(for:)` only (`ExportScopeTests`); CSV row building and the export panels untested (`AnnotationExportManagerTests` covers a different type) |
 | `CalibreFTSLibrary.swift` | about 380 | `CalibreFTSLibraryTests` (modes, phase 1 and 2, cancellation, busy, file replacement, error mapping) |
-| `TransferDatabaseBuilder.swift` | 196 | none |
 
-The UTF-16 offset contract in `epub-parsing.md` (Invariant 5) is the
-highest-risk untested behavior, because annotations depend on it.
+The UTF-16 offset contract in `epub-parsing.md` (Invariant 5) is tested by `OffsetContractTests`.
 
 ### Out of scope for unit tests (UI and web view)
 
@@ -219,7 +223,7 @@ the reference that the exclusion was meant to keep out.
 
 ## CI test-completeness gap
 
-CI's `macos-tests` job (`.github/workflows/swift.yml`) runs `xcodebuild test`
+CI's `macos-tests` job (`.github/workflows/tests.yml`) runs `xcodebuild test`
 and uploads the `.xcresult` bundle on failure, but nothing currently parses
 that bundle to confirm every `.swift` file under `AmbrosiaTests/` that
 defines an `XCTestCase` subclass actually produced a result. The "sanity

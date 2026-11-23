@@ -15,7 +15,7 @@ see `swiftdata-store.md`.
 - `reading_goals` — reading targets (`target_books_count`, `period_start`, `period_end`).
 - `collections`, `collection_members`.
 - `annotations`.
-- `ao3_metadata`, `ao3_extraction_diagnostics`.
+- `ao3_metadata`, `ao3_extraction_diagnostics` (`allAO3Diagnostics(failedOnly:)` performs pure reads; resolved records are pruned via `pruneResolvedDiagnostics()` on library session open and extraction completion, preventing read-that-writes).
 - `series` (stable series identity), `series_cache` (book membership),
   `series_collection_members`, `series_collection_exclusions`,
   `effective_collection_members`, and `series_placeholders`.

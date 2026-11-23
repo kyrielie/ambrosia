@@ -70,7 +70,9 @@ func anthologySeriesEntry(for book: CalibreBook, seriesEntries: [SeriesCacheEntr
     guard book.isDescriptionAnthology else { return nil }
     let sorted = seriesEntries.sorted { $0.seriesIndex < $1.seriesIndex }
     if sorted.count > 1 {
+        #if DEBUG
         print("[LocalFeedServer] anthology book \(book.id) has \(sorted.count) series_cache rows; using \(sorted[0].seriesName)")
+        #endif
     }
     return sorted.first
 }

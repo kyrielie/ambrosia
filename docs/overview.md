@@ -28,13 +28,13 @@ Ambrosia is a native macOS EPUB reader for AO3-heavy Calibre libraries.
 
 - App lifecycle/windowing: SwiftUI `App` plus AppKit `NSApplicationDelegate`, `NSWindowController`, and `NSViewController`.
 - UI: AppKit shell with SwiftUI content hosted through `NSHostingView`/`NSHostingController`.
-- Calibre DB: SQLite.swift 0.15.3, read-only.
+- Calibre DB: SQLite.swift 0.16.0, read-only.
 - Per-library app DB: `AmbrosiaMetaDB` actor, writable SQLite (WAL mode), under `~/Library/Application Support/Ambrosia/libraries/<hash>/ambrosia_meta.db`. Stores collections, annotations, AO3 metadata, reading history, and unified `BookState`/`ReadingGoal` (legacy SwiftData store was completely eliminated in Phase 1).
-- EPUB parsing: ZIPFoundation 0.9.19, `NSXMLParser`, and single-pass `SwiftSoup` DOM transformation (Phase 3).
-- AO3 HTML parsing: SwiftSoup 2.13.5.
+- EPUB parsing: ZIPFoundation 0.9.20, `NSXMLParser`, and single-pass `SwiftSoup` DOM transformation (Phase 3).
+- AO3 HTML parsing: SwiftSoup 2.13.6.
 - Rendering: `WKWebView`.
-- Networking: FlyingFox 0.26.2 for `LocalFeedServer`.
-- Packages: SQLite.swift, ZIPFoundation, SwiftSoup, FlyingFox 0.26.2.
+- Networking: FlyingFox 0.27.0 for `LocalFeedServer`.
+- Packages: SQLite.swift 0.16.0, ZIPFoundation 0.9.20, SwiftSoup 2.13.6, FlyingFox 0.27.0.
 
 ---
 
@@ -44,7 +44,7 @@ Ambrosia is a native macOS EPUB reader for AO3-heavy Calibre libraries.
 
 13. All diagnostic `print` calls must be wrapped in `#if DEBUG` or removed before shipping. `Thread.callStackSymbols` must never be called outside `#if DEBUG` blocks.
 
-14. Do not hand-edit `Package.resolved`; add packages through the Xcode/SPM workflow.
+14. Do not hand-edit `Package.resolved`; manage package requirements in `project.yml`, then run `xcodegen generate`.
 
 ---
 

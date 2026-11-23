@@ -1,0 +1,50 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-tests:
+    name: macOS Tests & Lint
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+
+      - name: Install Tooling
+        run: brew install xcodegen swiftlint xcbeautify
+
+      - name: Generate Xcode Project
+        run: xcodegen generate
+
+      - name: Lint (SwiftLint)
+        run: swiftlint lint --strict
+
+      - name: Run Test Suite
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project Ambrosia.xcodeproj \
+            -scheme Ambrosia \
+            -destination "platform=macOS,arch=arm64" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            -enableCodeCoverage YES \
+            -resultBundlePath /tmp/AmbrosiaTests.xcresult | xcbeautify
+
+      - name: Upload Test Result Bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AmbrosiaTests-xcresult
+          path: /tmp/AmbrosiaTests.xcresult

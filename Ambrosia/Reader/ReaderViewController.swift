@@ -156,6 +156,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     // Resize debounce
     private let resizeDebounce = DebounceTimer(delay: 0.3)
+    private lazy var annotationPersistence = AnnotationPersistence(metaDB: AppDelegate.shared?.session.metaDB)
 
     /// Local NSEvent monitor that intercepts trackpad/mouse scrollWheel events
     /// before AppKit dispatches them into the WKWebView's own responder chain.
@@ -1958,12 +1959,20 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 $0.startChar == offset && $0.spineIndex == spineIndex && $0.isPointAnnotation
                     && self.annotationCalibreID[$0.id] == calibreID
             }) {
+                let previousAnnotations = self.annotations
+                let previousCalibreIDs = self.annotationCalibreID
                 existing.append(annotation)
                 self.annotations = existing
                 self.annotationCalibreID[annotation.id] = calibreID
                 self.onAnnotationsChanged?(existing)
-                Task { try? await AppDelegate.shared?.session.metaDB?.insertAnnotation(
-                    annotation, calibreID: calibreID) }
+                self.annotationPersistence.saveAnnotation(annotation, calibreID: calibreID) { [weak self] in
+                    guard let self else { return }
+                    self.annotations = previousAnnotations
+                    self.annotationCalibreID = previousCalibreIDs
+                    self.onAnnotationsChanged?(previousAnnotations)
+                    HighlightBridge.removeHighlight(id: annotation.id, from: self.webView)
+                    self.refreshSidebarIfVisible()
+                }
             }
 
             self.webView.evaluateJavaScript(
@@ -2013,13 +2022,21 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 final.note     = note
                 final.colorHex = colorHex
 
+                let previousAnnotations = self.annotations
+                let previousCalibreIDs = self.annotationCalibreID
                 var existing = self.annotations
                 existing.append(final)
                 self.annotations = existing
                 self.annotationCalibreID[final.id] = calibreID
                 self.onAnnotationsChanged?(existing)
-                Task { try? await AppDelegate.shared?.session.metaDB?.insertAnnotation(
-                    final, calibreID: calibreID) }
+                self.annotationPersistence.saveAnnotation(final, calibreID: calibreID) { [weak self] in
+                    guard let self else { return }
+                    self.annotations = previousAnnotations
+                    self.annotationCalibreID = previousCalibreIDs
+                    self.onAnnotationsChanged?(previousAnnotations)
+                    HighlightBridge.removeHighlight(id: final.id, from: self.webView)
+                    self.refreshSidebarIfVisible()
+                }
                 self.flushPosition()
                 self.refreshSidebarIfVisible()
 
@@ -2598,15 +2615,30 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     }
 
     private func deleteAnnotation(id: UUID) {
+        guard let deleted = annotations.first(where: { $0.id == id }) else { return }
         let calibreID = annotationCalibreID[id] ?? book.id
+        let previousAnnotations = annotations
+        let previousCalibreIDs = annotationCalibreID
+
         annotations = annotations.filter { $0.id != id }
         annotationCalibreID.removeValue(forKey: id)
         onAnnotationsChanged?(annotations)
-        Task { try? await AppDelegate.shared?.session.metaDB?.deleteAnnotation(
-            id: id, calibreID: calibreID) }
         flushPosition()
         refreshSidebarIfVisible()
         HighlightBridge.removeHighlight(id: id, from: webView)
+
+        annotationPersistence.removeAnnotation(id: id, calibreID: calibreID) { [weak self] in
+            guard let self else { return }
+            self.annotations = previousAnnotations
+            self.annotationCalibreID = previousCalibreIDs
+            self.onAnnotationsChanged?(previousAnnotations)
+            self.refreshSidebarIfVisible()
+            if !deleted.isPointAnnotation {
+                HighlightBridge.restoreHighlights([deleted], into: self.webView)
+            } else {
+                self.webView.evaluateJavaScript("window.ambrosiaHighlight(\(deleted.startChar));", completionHandler: nil)
+            }
+        }
     }
 
     func deleteAnnotationFromSidebar(id: UUID) {

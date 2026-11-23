@@ -169,4 +169,81 @@ final class BookStateMetaDBTests: XCTestCase {
         XCTAssertEqual(failures.count, 1)
         XCTAssertEqual(failures.first?.calibreID, 10)
     }
+
+    func testAllAO3DiagnosticsDoesNotDeleteRows() async throws {
+        guard let metaDB = self.metaDB else { return }
+        let diag = AO3ExtractionDiagnostic(
+            calibreID: 15,
+            status: "failed",
+            reason: "error unzipping EPUB",
+            epubPath: "/path/to/15.epub",
+            epubFilename: "15.epub",
+            spineItemsChecked: 0,
+            attemptedAt: "2026-01-01T00:00:00Z"
+        )
+        try await metaDB.insert(diag)
+
+        // Multiple reads do not alter diagnostic count
+        let firstRead = try await metaDB.allAO3Diagnostics()
+        XCTAssertEqual(firstRead.count, 1)
+
+        let secondRead = try await metaDB.allAO3Diagnostics()
+        XCTAssertEqual(secondRead.count, 1)
+    }
+
+    func testPruneResolvedDiagnosticsRemovesOnlyResolvedRows() async throws {
+        guard let metaDB = self.metaDB else { return }
+        let diag1 = AO3ExtractionDiagnostic(
+            calibreID: 101,
+            status: "failed",
+            reason: "error parsing preface",
+            epubPath: "/path/to/101.epub",
+            epubFilename: "101.epub",
+            spineItemsChecked: 1,
+            attemptedAt: "2026-01-01T00:00:00Z"
+        )
+        let diag2 = AO3ExtractionDiagnostic(
+            calibreID: 102,
+            status: "failed",
+            reason: "error reading spine",
+            epubPath: "/path/to/102.epub",
+            epubFilename: "102.epub",
+            spineItemsChecked: 1,
+            attemptedAt: "2026-01-01T00:00:00Z"
+        )
+        try await metaDB.insert(diag1)
+        try await metaDB.insert(diag2)
+
+        // Simulate resolution of calibreID 101 by saving AO3 metadata
+        let record = AO3MetadataRecord(
+            storyURL: nil,
+            workID: nil,
+            authors: [],
+            kudosCount: 100,
+            wordCount: 1000,
+            chapterCurrent: 1,
+            chapterTotal: 1,
+            isComplete: true,
+            language: "English",
+            publishedDate: nil,
+            updatedDate: nil,
+            fandoms: ["Fandom"],
+            relationships: [],
+            characters: [],
+            additionalTags: [],
+            categories: [],
+            ao3Collections: [],
+            series: [],
+            rating: nil,
+            warnings: [],
+            extractedAt: "2026-01-01T00:00:00Z"
+        )
+        try await metaDB.insert(record, calibreID: 101)
+
+        try await metaDB.pruneResolvedDiagnostics()
+
+        let remaining = try await metaDB.allAO3Diagnostics()
+        XCTAssertEqual(remaining.count, 1)
+        XCTAssertEqual(remaining.first?.calibreID, 102)
+    }
 }

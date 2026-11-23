@@ -90,7 +90,7 @@ final class ErrorLogTests: XCTestCase {
         XCTAssertEqual(entries.map(\.message), ["error 9", "error 8", "error 7", "error 6"])
     }
 
-    func testPruneErrorLogRetentionConstant() async throws {
+    func testPruneKeepsOnlyNewestUpToRetentionLimit() async throws {
         // Insert more than retention constant
         for index in 0..<1010 {
             try await metaDB.logError(subsystem: "Test", operation: "op", message: "err \(index)")

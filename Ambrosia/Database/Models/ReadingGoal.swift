@@ -17,6 +17,17 @@ public struct ReadingGoal: Identifiable, Sendable, Equatable, Hashable {
         self.periodStart = periodStart
         self.periodEnd = periodEnd
     }
+
+    /// Computes fractional progress clamped to [0.0, 1.0]. Returns 0.0 if target <= 0.
+    public static func progress(booksRead: Int, target: Int) -> Double {
+        guard target > 0 else { return 0.0 }
+        return min(1.0, max(0.0, Double(booksRead) / Double(target)))
+    }
+
+    /// Computes integer percentage [0, 100].
+    public static func percentage(booksRead: Int, target: Int) -> Int {
+        Int((progress(booksRead: booksRead, target: target) * 100).rounded())
+    }
 }
 
 public struct FandomInsight: Identifiable, Sendable, Equatable {

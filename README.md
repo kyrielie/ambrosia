@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/kyrielie/ambrosia/actions/workflows/swift.yml"><img src="https://github.com/kyrielie/ambrosia/actions/workflows/swift.yml/badge.svg" alt="Tests"></a>
+  <a href="https://github.com/kyrielie/ambrosia/actions/workflows/tests.yml"><img src="https://github.com/kyrielie/ambrosia/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
   <a href="https://github.com/kyrielie/ambrosia/releases/latest"><img src="https://img.shields.io/github/v/release/kyrielie/ambrosia" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-blue" alt="macOS 14 or later">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="GPL-3.0 License"></a>

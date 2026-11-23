@@ -133,8 +133,8 @@ struct ReadingGoalView: View {
     private var heroGoalCard: some View {
         let booksRead = historyReadCount ?? 0
         let target = activeGoal?.targetBooksCount ?? targetInput
-        let progress = target > 0 ? min(1.0, Double(booksRead) / Double(target)) : 0.0
-        let pct = Int((progress * 100).rounded())
+        let progress = ReadingGoal.progress(booksRead: booksRead, target: target)
+        let pct = ReadingGoal.percentage(booksRead: booksRead, target: target)
 
         return VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top) {
@@ -1015,15 +1015,26 @@ struct ReadingGoalView: View {
     private func saveGoal() {
         Task {
             guard let metaDB = session.metaDB else { return }
-            try? await metaDB.saveReadingGoal(
-                targetBooksCount: targetInput,
-                periodStart: periodStart,
-                periodEnd: periodEnd
-            )
-            await loadData()
-            await MainActor.run {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    self.isEditingGoal = false
+            do {
+                try await metaDB.saveReadingGoal(
+                    targetBooksCount: targetInput,
+                    periodStart: periodStart,
+                    periodEnd: periodEnd
+                )
+                await loadData()
+                await MainActor.run {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        self.isEditingGoal = false
+                    }
+                }
+            } catch {
+                _ = try? await metaDB.logError(subsystem: "ReadingGoal", operation: "saveReadingGoal", message: error.localizedDescription)
+                await MainActor.run {
+                    let alert = NSAlert()
+                    alert.messageText = "Failed to Save Goal"
+                    alert.informativeText = error.localizedDescription
+                    alert.alertStyle = .warning
+                    alert.runModal()
                 }
             }
         }
@@ -1032,12 +1043,23 @@ struct ReadingGoalView: View {
     private func deleteGoal(_ goal: ReadingGoal) {
         Task {
             guard let metaDB = session.metaDB else { return }
-            try? await metaDB.deleteReadingGoal(id: goal.id)
-            await MainActor.run {
-                self.activeGoal = nil
-                self.historyReadCount = nil
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    self.isEditingGoal = false
+            do {
+                try await metaDB.deleteReadingGoal(id: goal.id)
+                await MainActor.run {
+                    self.activeGoal = nil
+                    self.historyReadCount = nil
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        self.isEditingGoal = false
+                    }
+                }
+            } catch {
+                _ = try? await metaDB.logError(subsystem: "ReadingGoal", operation: "deleteReadingGoal", message: error.localizedDescription)
+                await MainActor.run {
+                    let alert = NSAlert()
+                    alert.messageText = "Failed to Delete Goal"
+                    alert.informativeText = error.localizedDescription
+                    alert.alertStyle = .warning
+                    alert.runModal()
                 }
             }
         }

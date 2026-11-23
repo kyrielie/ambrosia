@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run Ambrosia's test suite locally, the same way .github/workflows/swift.yml
+# Run Ambrosia's test suite locally, the same way .github/workflows/tests.yml
 # does in CI: SwiftLint first, then `xcodebuild test` against the AmbrosiaTests
 # target. See docs/overview.md's "Repo-wide engineering rules" for the
 # invariants this enforces (Invariant 12 force-unwrap ban, Invariant 21 build

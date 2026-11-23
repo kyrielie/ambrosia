@@ -87,11 +87,26 @@ struct CollectionsView: View {
         ) { collection in
             Button("Delete", role: .destructive) {
                 Task {
-                    try? await session.collectionStore?.deleteCollection(id: collection.id)
-                    session.bumpCollectionVersion()
-                    if renamingID == collection.id { renamingID = nil }
-                    if selectedCollectionID == collection.id { selectedCollectionID = nil }
-                    await reload()
+                    do {
+                        try await session.collectionStore?.deleteCollection(id: collection.id)
+                        session.bumpCollectionVersion()
+                        if renamingID == collection.id { renamingID = nil }
+                        if selectedCollectionID == collection.id { selectedCollectionID = nil }
+                        await reload()
+                    } catch {
+                        _ = try? await session.metaDB?.logError(
+                            subsystem: "Collections",
+                            operation: "deleteCollection",
+                            message: error.localizedDescription
+                        )
+                        await MainActor.run {
+                            let alert = NSAlert()
+                            alert.messageText = "Failed to Delete Collection"
+                            alert.informativeText = error.localizedDescription
+                            alert.alertStyle = .warning
+                            alert.runModal()
+                        }
+                    }
                 }
             }
         } message: { collection in

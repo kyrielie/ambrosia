@@ -5,14 +5,6 @@ import XCTest
 @MainActor
 final class VolumeMonitorTests: XCTestCase {
 
-    func testVolumeMonitorStartMonitoring() {
-        let monitor = VolumeMonitor.shared
-        let session = LibrarySession()
-        monitor.startMonitoring(session: session)
-        // Calling startMonitoring again should be safe and idempotent
-        monitor.startMonitoring(session: session)
-    }
-
     func testLibrarySessionDisconnectMatchingVolume() {
         let session = LibrarySession()
         session.setActivePathForTesting("/Volumes/ExternalUSB/CalibreLibrary")

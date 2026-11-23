@@ -176,7 +176,7 @@ extension CalibreLibrary {
         guard !trimmed.isEmpty else { return [] }
         let escaped = Self.escapeLikePattern(trimmed.lowercased())
         let sql = "SELECT title FROM books WHERE LOWER(title) LIKE ? ESCAPE '\\' ORDER BY title LIMIT ?"
-        let rows = (try? db.prepare(sql, ["%\(escaped)%" as Binding?, limit as Binding?]).map { $0 }) ?? []
+        let rows = queryRowsBestEffort(sql, bindings: ["%\(escaped)%", limit])
         return rows.compactMap { $0[0] as? String }
     }
 
@@ -193,7 +193,7 @@ extension CalibreLibrary {
             ORDER BY freq DESC
             LIMIT ?
             """
-        let rows = (try? db.prepare(sql, ["%\(escaped)%" as Binding?, limit as Binding?]).map { $0 }) ?? []
+        let rows = queryRowsBestEffort(sql, bindings: ["%\(escaped)%", limit])
         return rows.compactMap { row in
             guard let name = row[0] as? String else { return nil }
             let freq = (row[1] as? Int64).map(Int.init) ?? 1
@@ -212,7 +212,7 @@ extension CalibreLibrary {
             ORDER BY freq DESC
             LIMIT ?
             """
-        let rows = (try? db.prepare(sql, ["%\(escaped)%" as Binding?, limit as Binding?]).map { $0 }) ?? []
+        let rows = queryRowsBestEffort(sql, bindings: ["%\(escaped)%", limit])
         return rows.compactMap { row in
             guard let name = row[0] as? String else { return nil }
             let freq = (row[1] as? Int64).map(Int.init) ?? 1
@@ -231,11 +231,22 @@ extension CalibreLibrary {
             ORDER BY freq DESC
             LIMIT ?
             """
-        let rows = (try? db.prepare(sql, ["%\(escaped)%" as Binding?, limit as Binding?]).map { $0 }) ?? []
+        let rows = queryRowsBestEffort(sql, bindings: ["%\(escaped)%", limit])
         return rows.compactMap { row in
             guard let name = row[0] as? String else { return nil }
             let freq = (row[1] as? Int64).map(Int.init) ?? 1
             return SuggestionMatch(value: name, matchClass: .substring, frequency: freq)
+        }
+    }
+
+    private func queryRowsBestEffort(_ sql: String, bindings: [Binding?]) -> [[Binding?]] {
+        do {
+            return try db.prepare(sql, bindings).map { $0 }
+        } catch {
+            #if DEBUG
+            print("[CalibreLibrarySearch] suggestion fallback query failed: \(error)")
+            #endif
+            return []
         }
     }
 

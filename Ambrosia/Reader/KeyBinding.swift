@@ -25,6 +25,24 @@ struct KeyBinding: Codable, Equatable {
     var keyEquivalentModifierMask: NSEvent.ModifierFlags {
         modifiers.reduce(into: []) { $0.insert($1.nsFlag) }
     }
+
+    init(character: String, modifiers: Set<ModifierKey>) {
+        self.character = character
+        self.modifiers = modifiers
+    }
+
+    init?(event: NSEvent) {
+        guard let character = event.charactersIgnoringModifiers?.lowercased(), !character.isEmpty else {
+            return nil
+        }
+        var modifiers: Set<ModifierKey> = []
+        if event.modifierFlags.contains(.command) { modifiers.insert(.command) }
+        if event.modifierFlags.contains(.shift) { modifiers.insert(.shift) }
+        if event.modifierFlags.contains(.option) { modifiers.insert(.option) }
+        if event.modifierFlags.contains(.control) { modifiers.insert(.control) }
+        self.character = character
+        self.modifiers = modifiers
+    }
 }
 
 enum ModifierKey: String, Codable, CaseIterable, Hashable {

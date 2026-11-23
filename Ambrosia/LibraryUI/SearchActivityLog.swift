@@ -78,7 +78,13 @@ final class SearchActivityLog {
     func save(libraryHash: String) {
         guard let url = activityFileURL(libraryHash: libraryHash) else { return }
         guard let data = try? JSONEncoder().encode(entries) else { return }
-        try? data.write(to: url, options: .atomic)
+        do {
+            try data.write(to: url, options: .atomic)
+        } catch {
+            #if DEBUG
+            print("[SearchActivityLog] Failed to persist activity log: \(error)")
+            #endif
+        }
     }
 
     // MARK: - Lifecycle

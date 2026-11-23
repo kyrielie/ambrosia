@@ -245,7 +245,15 @@ struct SeriesListRow: View, Equatable {
             } else {
                 content = SeriesGapManifestBuilder.generateTextManifest(report: report)
             }
-            try? content.write(to: url, atomically: true, encoding: .utf8)
+            do {
+                try content.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = "Failed to Save Manifest"
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .warning
+                alert.runModal()
+            }
         }
     }
 
