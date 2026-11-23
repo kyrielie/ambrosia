@@ -100,6 +100,19 @@ The filter drawer supports cancellation and dismissal:
 - Dedicated **Cancel** button in the footer alongside Apply and Clear All.
 - Close, Cancel, Apply, Clear All, and Escape all dismiss through one owner callback that sets `showFilterDrawer = false`; the sheet does not mix environment dismissal with presentation-state changes.
 
+### Filter Drawer Sizing & Controls
+- **Modal Dimensions**: Fixed `width: 720 pt` and `maxHeight: 460 pt`. This expanded width provides ample horizontal space for multi-control rows (position preset picker and variants toggle) alongside the value autocomplete text field without horizontal clipping or squishing.
+- **Position Fields Controls**: For `firstRelationship` and `firstCharacter`, rows display a preset picker (First, First 2, First 3, First 5; defaulting to 1 for relationships, 3 for characters) and a "Variants" checkbox toggle (`matchVariants`).
+- **Relationship Count Controls**: Displays a numeric text field (`relationshipCount >= 1`) and the "Variants" checkbox toggle.
+- **Field Switch Reset**: Changing a row's field to any standard field resets `limit` and `matchVariants` to nil.
+
+### Filter Ribbon Pills & Context Menus
+- **Pill Display**: Rendered with `rule.displayLabel` ("First-listed relationship", "Relationship in first N", "Character in first N", "Relationship count", with " (variants)" appended when enabled).
+- **Context Menu Conversions**:
+  - On `.tag` pills (`is` / `is not`): offers "Match as First-Listed Relationship" or "Match as First-Listed Character" if the tag matches that role in `book_tags`.
+  - On position pills: offers "Match Anywhere" (converting back to `.tag` and dropping limit/variants) and an "Include Tag Variants" toggle.
+  - On relationship count pills: offers the "Include Tag Variants" toggle.
+
 - System collections live in `ambrosia_meta.db`.
 - `Series or Merged` is system-maintained from `series_cache` and anthology detection.
 - Series grouping uses representative grouped rows for collapsed series.

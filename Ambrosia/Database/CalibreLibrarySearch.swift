@@ -251,9 +251,6 @@ extension CalibreLibrary {
     }
 
     private static func escapeLikePattern(_ pattern: String) -> String {
-        pattern
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "%", with: "\\%")
-            .replacingOccurrences(of: "_", with: "\\_")
+        LibraryQueryHelpers.escapeLikePattern(pattern)
     }
 }

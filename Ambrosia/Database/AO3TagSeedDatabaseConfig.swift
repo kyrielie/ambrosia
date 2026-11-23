@@ -343,4 +343,56 @@ final class AO3TagSeedDatabaseConfig {
         }
         return result
     }
+
+    /// Batched canonical tag lookup. Returns a dictionary mapping each input tag
+    /// to its canonical tag name (or the tag unchanged if unmapped).
+    /// Chunks queries in batches of 400 to strictly respect SQLite parameter limits.
+    func canonicalTagsBatch(for tags: [String]) -> [String: String] {
+        guard !tags.isEmpty else { return [:] }
+        readLock.lock()
+        defer { readLock.unlock() }
+        guard let db = readConnection() else {
+            var identity: [String: String] = [:]
+            for tag in tags { identity[tag] = tag }
+            return identity
+        }
+
+        let chunkSize = 400
+        var result: [String: String] = [:]
+        result.reserveCapacity(tags.count)
+
+        for startIndex in stride(from: 0, to: tags.count, by: chunkSize) {
+            let chunk = Array(tags[startIndex..<min(startIndex + chunkSize, tags.count)])
+            let placeholders = chunk.map { _ in "?" }.joined(separator: ", ")
+            let lowerBindings: [Binding?] = chunk.map { $0.lowercased() as Binding? }
+
+            let sql = """
+                SELECT LOWER(name) AS matched_term, name
+                FROM canonical_tags
+                WHERE LOWER(name) IN (\(placeholders))
+                UNION ALL
+                SELECT LOWER(s.synonym) AS matched_term, c.name
+                FROM tag_synonyms s
+                JOIN canonical_tags c ON c.id = s.canonical_id
+                WHERE LOWER(s.synonym) IN (\(placeholders))
+                """
+            var canonicalByLower: [String: String] = [:]
+            if let rows = try? db.prepare(sql, lowerBindings + lowerBindings).map({ $0 }) {
+                for row in rows {
+                    guard let matched = row[0] as? String,
+                          let canonical = row[1] as? String else { continue }
+                    if canonicalByLower[matched] == nil {
+                        canonicalByLower[matched] = canonical
+                    }
+                }
+            }
+
+            for tag in chunk {
+                let lower = tag.lowercased()
+                result[tag] = canonicalByLower[lower] ?? tag
+            }
+        }
+
+        return result
+    }
 }

@@ -64,7 +64,7 @@ struct FilterValueTextField: View {
 
     private var supportsAutocomplete: Bool {
         switch field {
-        case .tag, .authorName, .title: return true
+        case .tag, .authorName, .title, .firstRelationship, .firstCharacter: return true
         default:                         return false
         }
     }
@@ -95,6 +95,12 @@ struct FilterValueTextField: View {
             switch capturedField {
             case .tag:
                 results = await library.tagMatches(prefix: trimmed, limit: capturedLimit)
+            case .firstRelationship:
+                let matches = await library.tagMatches(prefix: trimmed, limit: 50)
+                results = Array(matches.filter { $0.tagType == .relationship }.prefix(capturedLimit))
+            case .firstCharacter:
+                let matches = await library.tagMatches(prefix: trimmed, limit: 50)
+                results = Array(matches.filter { $0.tagType == .character }.prefix(capturedLimit))
             case .authorName:
                 results = await library.authorMatches(prefix: trimmed, limit: capturedLimit)
             case .title:

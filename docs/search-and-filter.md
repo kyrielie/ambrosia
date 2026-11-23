@@ -184,3 +184,24 @@ never stored in `ruleMatchCache`, which holds global sets only.
 ### Persisted filter expression
 
 `FilterExpression` is `Codable` and the last-used one is persisted per library as part of `LastViewState` (see `library-ui.md`). On restore, `LastViewValidator.validate` drops rules that name a collection no longer in `collections()`, drops `fulltext` rules (so restore never starts FTS work at launch), and drops incomplete rows. Series and tag rules are not validated, so a stale one shows the existing no-results state; the existing clear-filter control resets the view and, through `LibraryToolbarState`'s recording, the persisted state.
+
+### LIKE Wildcard Escaping & Operator Display
+
+- SQL `LIKE` queries across tag-family matchers (`tag`, `rating`, `warning`, `category`) and `authorName` escape literal `%`, `_`, and `\` characters via `LibraryQueryHelpers.escapeLikePattern` and query with explicit `ESCAPE '\\'`. A tag containing `_` or `%` no longer acts as a wildcard match.
+- In `FilterDrawerView`, the operator picker for `.tag` rules displays `"name starts with"` for `.startsWith` via `FilterRule.operatorLabel(_:)` (while `FilterOperator.label` remains globally `"starts with"`).
+
+### First-Listed Position Filters & Exclusion Semantics
+
+- Three new fields:
+  - `firstRelationship`: Matches works whose relationship array contains the target within the first $N$ entries (default $N=1$).
+  - `firstCharacter`: Matches works whose character array contains the target within the first $N$ entries (default $N=3$).
+  - `relationshipCount`: Matches works by total relationship count.
+- **Decision 4 Exclusion Semantics**: A work without an `ao3_metadata` row or with an empty array for the role is treated as having "no data" and is strictly excluded from **both** `is` (`.equals`) and `is not` (`.notEquals`). The negated rule evaluates as: `idSet ∩ coverage − members`.
+- **JSON1 Pushdown**: Evaluated using SQLite `json_each` over `ao3_metadata.relationships_json` and `characters_json` with candidate pre-filtering against `book_tags`.
+- **Level 1 Tag Variant Matching**: Pure Swift normalizer (`TagVariantKey`) handles case, diacritic, width folding, quotation removal, trailing ` - relationship` or `| alias` stripping, reader token canonicalization, spaced ` x ` delimiter handling, and per-side whitespace/parenthetical stripping. When `matchVariants` is enabled on position or count rules, entries map through their normalizer equivalence keys.
+- **Relationship Count**: Without variants, evaluates raw JSON array length. With variants, canonicalizes and normalizes entries for works with up to 8 relationships (`relationshipCountDedupeCap`), counting distinct normalized keys; works with > 8 relationships evaluate against raw length. Coverage is `listedRoleCoverage(.relationship)`.
+
+
+### Known Limitations
+
+- **Non-ASCII Folding in SQLite**: SQLite's built-in `lower()` folds ASCII characters only unless an ICU extension is registered. In `firstListedPositions`, a non-ASCII target like `éowyn/faramir` will not match a stored title-cased `Éowyn/Faramir` because SQLite leaves `É` unchanged in uppercase. Ambrosia's Swift-side tag indexing and the new first-listed position engine resolve case folding in Swift via `lowercased()` / `TagVariantKey` to guarantee Unicode-safe matching across all languages and scripts.

@@ -5,10 +5,17 @@ import AppKit
 
 struct FilterRulePillView: View {
     let rule: FilterRule
+    var metaDB: AmbrosiaMetaDB?
     let onRemove: () -> Void
     let onToggleNegation: () -> Void
+    var onConvertToFirstRelationship: (() -> Void)?
+    var onConvertToFirstCharacter: (() -> Void)?
+    var onConvertToTag: (() -> Void)?
+    var onToggleVariants: ((Bool) -> Void)?
     let onEditInDrawer: () -> Void
     let onClearAll: () -> Void
+
+    @State private var tagRoles: Set<SuggestionTagType> = []
 
     private var isNegated: Bool {
         rule.op == .notContains || rule.op == .notEquals
@@ -17,9 +24,9 @@ struct FilterRulePillView: View {
     private var accessibilityLabelText: String {
         let state = isNegated ? ", excluded" : ""
         if rule.value.isEmpty {
-            return "\(rule.field.label)\(state)"
+            return "\(rule.displayLabel)\(state)"
         }
-        return "\(rule.field.label) \(rule.value)\(state)"
+        return "\(rule.displayLabel) \(rule.value)\(state)"
     }
 
     var body: some View {
@@ -33,7 +40,7 @@ struct FilterRulePillView: View {
                     .background(Color.red.opacity(0.85))
                     .clipShape(Capsule())
             }
-            Text(rule.field.label)
+            Text(rule.displayLabel)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             if !rule.value.isEmpty {
@@ -65,6 +72,13 @@ struct FilterRulePillView: View {
             )
         )
         .contentShape(Capsule())
+        .task(id: rule.value) {
+            if rule.field == .tag, let metaDB {
+                tagRoles = await metaDB.tagRoles(for: rule.value)
+            } else {
+                tagRoles = []
+            }
+        }
         .contextMenu {
             Button(role: .destructive) {
                 onRemove()
@@ -82,6 +96,38 @@ struct FilterRulePillView: View {
                         Label("Exclude This Filter", systemImage: "minus.circle")
                     }
                 }
+            }
+
+            if rule.field == .tag && (rule.op == .equals || rule.op == .notEquals) {
+                if tagRoles.contains(.relationship) {
+                    Button {
+                        onConvertToFirstRelationship?()
+                    } label: {
+                        Label("Match as First-Listed Relationship", systemImage: "heart")
+                    }
+                }
+                if tagRoles.contains(.character) {
+                    Button {
+                        onConvertToFirstCharacter?()
+                    } label: {
+                        Label("Match as First-Listed Character", systemImage: "person")
+                    }
+                }
+            } else if rule.field == .firstRelationship || rule.field == .firstCharacter {
+                Button {
+                    onConvertToTag?()
+                } label: {
+                    Label("Match Anywhere", systemImage: "tag")
+                }
+                Toggle("Include Tag Variants", isOn: Binding(
+                    get: { rule.usesVariants },
+                    set: { onToggleVariants?($0) }
+                ))
+            } else if rule.field == .relationshipCount {
+                Toggle("Include Tag Variants", isOn: Binding(
+                    get: { rule.usesVariants },
+                    set: { onToggleVariants?($0) }
+                ))
             }
 
             if !rule.value.isEmpty {

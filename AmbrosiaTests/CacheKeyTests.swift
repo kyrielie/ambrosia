@@ -123,4 +123,61 @@ final class CacheKeyTests: XCTestCase {
         XCTAssertNotEqual(digestTargetsA, digestTargetsB)
         XCTAssertNotEqual(digestDefault, digestUnordered)
     }
+
+    // MARK: - Invariant 30 & Position Filter Cache Keys
+
+    func testRuleMatchKeyDiffersByLimitAndVariants() {
+        let rule1 = FilterRule(field: .firstRelationship, op: .equals, value: "A/B", limit: 1, matchVariants: false)
+        let rule2 = FilterRule(field: .firstRelationship, op: .equals, value: "A/B", limit: 3, matchVariants: false)
+        let rule3 = FilterRule(field: .firstRelationship, op: .equals, value: "A/B", limit: 1, matchVariants: true)
+
+        let key1 = RuleMatchKey(rule: rule1, tagExpansions: [:])
+        let key2 = RuleMatchKey(rule: rule2, tagExpansions: [:])
+        let key3 = RuleMatchKey(rule: rule3, tagExpansions: [:])
+
+        XCTAssertNotEqual(key1, key2, "Keys must differ when limit differs")
+        XCTAssertNotEqual(key1, key3, "Keys must differ when matchVariants differs")
+    }
+
+    func testFilterResultCacheKeyDiffersByLimitAndVariants() {
+        var expr1 = FilterExpression()
+        expr1.groups = [FilterGroup(rules: [
+            FilterRule(field: .firstRelationship, op: .equals, value: "A/B", limit: 1, matchVariants: false)
+        ])]
+
+        var expr2 = FilterExpression()
+        expr2.groups = [FilterGroup(rules: [
+            FilterRule(field: .firstRelationship, op: .equals, value: "A/B", limit: 3, matchVariants: false)
+        ])]
+
+        var expr3 = FilterExpression()
+        expr3.groups = [FilterGroup(rules: [
+            FilterRule(field: .firstRelationship, op: .equals, value: "A/B", limit: 1, matchVariants: true)
+        ])]
+
+        let key1 = FilterResultCacheKey(expression: expr1, visibilityVersion: 1, pinnedCollectionVersion: 1)
+        let key2 = FilterResultCacheKey(expression: expr2, visibilityVersion: 1, pinnedCollectionVersion: 1)
+        let key3 = FilterResultCacheKey(expression: expr3, visibilityVersion: 1, pinnedCollectionVersion: 1)
+
+        XCTAssertNotEqual(key1, key2)
+        XCTAssertNotEqual(key1, key3)
+    }
+
+    func testFilterSignatureDiffersByLimitAndVariants() {
+        var expr1 = FilterExpression()
+        expr1.groups = [FilterGroup(rules: [
+            FilterRule(field: .firstRelationship, op: .equals, value: "A/B", limit: 1, matchVariants: false)
+        ])]
+
+        var expr2 = FilterExpression()
+        expr2.groups = [FilterGroup(rules: [
+            FilterRule(field: .firstRelationship, op: .equals, value: "A/B", limit: 2, matchVariants: false)
+        ])]
+
+        let sig1 = LibraryFilterDebug.summary(expression: expr1)
+        let sig2 = LibraryFilterDebug.summary(expression: expr2)
+        XCTAssertNotEqual(sig1, sig2)
+        XCTAssertTrue(sig1.contains("n=1"))
+        XCTAssertTrue(sig2.contains("n=2"))
+    }
 }

@@ -148,3 +148,13 @@ Measured via `CalibreQueryBenchmarkTests` on a synthetic 100,000-book Calibre da
 ### Gate D5 Confirmation
 The total in-memory numeric sort compute (bulk value lookup + Swift sort) is **19.99 ms**, well below the **100 ms** gate threshold specified in D5. Therefore, Pass 4 composite indexes in Calibre are unnecessary and formally bypassed.
 
+---
+
+## Invariant 30: Cache Token Completeness
+
+Every `FilterRule` property that can alter match sets (`field`, `op`, `value`, `limit`, `matchVariants`) MUST participate in `FilterRule.cacheToken`. 
+All production cache digests (`RuleMatchKey`, `FilterResultCacheKey`, and `LibraryFilterDebug.summary(expression:)` which forms `PageCacheKey.filterSignature` and `CountCacheKey.filterSignature`) evaluate `rule.cacheToken` rather than raw field/op/value strings. This guarantees that rules differing only in position window (`limit`) or variant matching (`matchVariants`) never collide or serve stale match sets.
+
+In `AmbrosiaMetaDB`, name indices (Level 0 and Level 1 tag mappings) and role coverage sets are cached in-memory and invalidated whenever `bookTagsRevision` changes.
+
+

@@ -1420,14 +1420,16 @@ actor AmbrosiaMetaDB {
         let arg: Binding?
         switch op {
         case .contains, .notContains:
-            matcher = "LOWER(name) LIKE ?"
-            arg = "%\(value.lowercased())%"
+            matcher = "LOWER(name) LIKE ? ESCAPE '\\'"
+            let escaped = LibraryQueryHelpers.escapeLikePattern(value.lowercased())
+            arg = "%\(escaped)%"
         case .equals, .notEquals:
             matcher = "LOWER(name) = ?"
             arg = value.lowercased()
         case .startsWith:
-            matcher = "LOWER(name) LIKE ?"
-            arg = "\(value.lowercased())%"
+            matcher = "LOWER(name) LIKE ? ESCAPE '\\'"
+            let escaped = LibraryQueryHelpers.escapeLikePattern(value.lowercased())
+            arg = "\(escaped)%"
         case .matchesWord:
             let escaped = NSRegularExpression.escapedPattern(for: value)
             matcher = "name REGEXP ?"
@@ -1503,11 +1505,11 @@ actor AmbrosiaMetaDB {
         let args: [Binding?]
         switch op {
         case .contains, .notContains:
-            matcher = terms.map { _ in "tag_name LIKE ?" }.joined(separator: " OR ")
-            args = terms.map { "%\($0)%" as Binding? }
+            matcher = terms.map { _ in "tag_name LIKE ? ESCAPE '\\'" }.joined(separator: " OR ")
+            args = terms.map { "%\(LibraryQueryHelpers.escapeLikePattern($0))%" as Binding? }
         case .startsWith:
-            matcher = terms.map { _ in "tag_name LIKE ?" }.joined(separator: " OR ")
-            args = terms.map { "\($0)%" as Binding? }
+            matcher = terms.map { _ in "tag_name LIKE ? ESCAPE '\\'" }.joined(separator: " OR ")
+            args = terms.map { "\(LibraryQueryHelpers.escapeLikePattern($0))%" as Binding? }
         case .equals, .notEquals:
             matcher = terms.map { _ in "tag_name = ?" }.joined(separator: " OR ")
             args = terms.map { $0 as Binding? }
@@ -2671,6 +2673,241 @@ actor AmbrosiaMetaDB {
         firstListedPositions(exactTargets: targets, containsTargets: [], bookIDs: bookIDs)
     }
 
+    // MARK: - Listed Role Position Evaluation & Coverage
+
+    private struct ListedNameIndexCache {
+        var revision: Int
+        var level0: [String: Set<String>]
+        var level1: [String: Set<String>]
+    }
+
+    private var listedNameIndices: [ListedRole: ListedNameIndexCache] = [:]
+    private var listedRoleCoverageCache: [ListedRole: (revision: Int, ids: Set<Int>)] = [:]
+    private var rawRelationshipCountsCache: (revision: Int, counts: [Int: Int])?
+    private var variantRelationshipCountsCache: (revision: Int, counts: [Int: Int])?
+    static let relationshipCountDedupeCap = 8
+
+    private func nameIndex(for role: ListedRole) -> (level0: [String: Set<String>], level1: [String: Set<String>]) {
+        if let cached = listedNameIndices[role], cached.revision == bookTagsRevision {
+            return (cached.level0, cached.level1)
+        }
+        let sql = "SELECT tag_name FROM book_tags WHERE tag_type = ? GROUP BY tag_name"
+        var l0: [String: Set<String>] = [:]
+        var l1: [String: Set<String>] = [:]
+        if let rows = try? readDB.prepare(sql, [role.dbTagType as Binding?]) {
+            for row in rows {
+                guard let name = row[0] as? String, !name.isEmpty else { continue }
+                let k0 = name.lowercased()
+                l0[k0, default: []].insert(name)
+                let k1 = TagVariantKey.key(for: name)
+                if !k1.isEmpty {
+                    l1[k1, default: []].insert(name)
+                }
+            }
+        }
+        listedNameIndices[role] = ListedNameIndexCache(revision: bookTagsRevision, level0: l0, level1: l1)
+        return (l0, l1)
+    }
+
+    func listedPositionMembers(
+        role: ListedRole,
+        terms: [String],
+        limit: Int,
+        variants: Bool = false
+    ) -> Set<Int> {
+        guard !terms.isEmpty && limit >= 1 else { return [] }
+        let index = nameIndex(for: role)
+        var resolvedNames = Set<String>()
+        for term in terms {
+            let k0 = term.lowercased()
+            if let matches = index.level0[k0] {
+                resolvedNames.formUnion(matches)
+            }
+            if variants {
+                let k1 = TagVariantKey.key(for: term)
+                if let vMatches = index.level1[k1] {
+                    resolvedNames.formUnion(vMatches)
+                }
+            }
+            resolvedNames.insert(term)
+        }
+        guard !resolvedNames.isEmpty else { return [] }
+
+        let namesJSON = (try? String(data: JSONSerialization.data(withJSONObject: Array(resolvedNames)), encoding: .utf8)) ?? "[]"
+        let candidateSQL = """
+            SELECT DISTINCT calibre_id FROM book_tags
+            WHERE tag_type = ? AND tag_name IN (SELECT value FROM json_each(?))
+            """
+        guard let candidateRows = try? readDB.prepare(candidateSQL, [role.dbTagType as Binding?, namesJSON as Binding?]) else {
+            return []
+        }
+        var candidateIDs: [Int] = []
+        for row in candidateRows {
+            if let id = (row[0] as? Int64).map(Int.init) {
+                candidateIDs.append(id)
+            }
+        }
+        guard !candidateIDs.isEmpty else { return [] }
+
+        let positionSQL = """
+            SELECT m.calibre_id, je.value
+            FROM ao3_metadata m,
+                 json_each(CASE WHEN json_valid(m.\(role.jsonColumn)) THEN m.\(role.jsonColumn) ELSE '[]' END) je
+            WHERE m.calibre_id IN (SELECT value FROM json_each(?))
+              AND je.key < ?
+            """
+        let bindings: [Binding?] = [SQLIDList.binding(candidateIDs), limit as Binding?]
+        guard let posRows = try? readDB.prepare(positionSQL, bindings) else {
+            return []
+        }
+
+        let lowerResolved = Set(resolvedNames.map { $0.lowercased() })
+        let variantResolved: Set<String> = variants ? Set(resolvedNames.map { TagVariantKey.key(for: $0) }) : []
+        var matchedIDs = Set<Int>()
+        for row in posRows {
+            guard let bookID = (row[0] as? Int64).map(Int.init),
+                  let val = row[1] as? String else { continue }
+            if resolvedNames.contains(val) || lowerResolved.contains(val.lowercased()) {
+                matchedIDs.insert(bookID)
+            } else if variants && variantResolved.contains(TagVariantKey.key(for: val)) {
+                matchedIDs.insert(bookID)
+            }
+        }
+        return matchedIDs
+    }
+
+    func listedRoleCoverage(role: ListedRole) -> Set<Int> {
+        if let cached = listedRoleCoverageCache[role], cached.revision == bookTagsRevision {
+            return cached.ids
+        }
+        let sql = """
+            SELECT calibre_id FROM ao3_metadata
+            WHERE (CASE WHEN json_valid(\(role.jsonColumn)) THEN json_array_length(\(role.jsonColumn)) ELSE 0 END) > 0
+            """
+        guard let rows = try? readDB.prepare(sql) else { return [] }
+        var ids = Set<Int>()
+        for row in rows {
+            if let id = (row[0] as? Int64).map(Int.init) {
+                ids.insert(id)
+            }
+        }
+        listedRoleCoverageCache[role] = (bookTagsRevision, ids)
+        return ids
+    }
+
+    /// Evaluates `relationshipCount` filter rules, returning all calibre IDs whose
+    /// relationship count equals `value`.
+    /// When `variants` is false, uses raw array length.
+    /// When `variants` is true, canonicalizes and normalizes relationship tags for works
+    /// with at most `relationshipCountDedupeCap` (8) relationships, counting distinct tags.
+    func relationshipCountMembers(value: Int, variants: Bool) -> Set<Int> {
+        guard value >= 1 else { return [] }
+        let counts = variants ? variantRelationshipCounts() : rawRelationshipCounts()
+        var result = Set<Int>()
+        for (id, count) in counts where count == value {
+            result.insert(id)
+        }
+        return result
+    }
+
+    private func rawRelationshipCounts() -> [Int: Int] {
+        if let cached = rawRelationshipCountsCache, cached.revision == bookTagsRevision {
+            return cached.counts
+        }
+        let sql = """
+            SELECT calibre_id,
+                   CASE WHEN json_valid(relationships_json) THEN json_array_length(relationships_json) ELSE 0 END
+            FROM ao3_metadata
+            """
+        guard let rows = try? readDB.prepare(sql) else { return [:] }
+        var counts: [Int: Int] = [:]
+        for row in rows {
+            guard let id = (row[0] as? Int64).map(Int.init),
+                  let count = (row[1] as? Int64).map(Int.init) ?? (row[1] as? Int) else { continue }
+            if count > 0 {
+                counts[id] = count
+            }
+        }
+        rawRelationshipCountsCache = (bookTagsRevision, counts)
+        return counts
+    }
+
+    private func variantRelationshipCounts() -> [Int: Int] {
+        if let cached = variantRelationshipCountsCache, cached.revision == bookTagsRevision {
+            return cached.counts
+        }
+        let rawCounts = rawRelationshipCounts()
+        var variantCounts: [Int: Int] = [:]
+        variantCounts.reserveCapacity(rawCounts.count)
+
+        for (id, rawCount) in rawCounts where rawCount > Self.relationshipCountDedupeCap {
+            variantCounts[id] = rawCount
+        }
+
+        let sql = """
+            SELECT calibre_id, relationships_json
+            FROM ao3_metadata
+            WHERE json_valid(relationships_json)
+              AND json_array_length(relationships_json) BETWEEN 1 AND ?
+            """
+        if let rows = try? readDB.prepare(sql, [Self.relationshipCountDedupeCap as Binding?]) {
+            var bookTagsList: [(id: Int, tags: [String])] = []
+            var allUniqueTags = Set<String>()
+            for row in rows {
+                guard let id = (row[0] as? Int64).map(Int.init),
+                      let jsonString = row[1] as? String,
+                      let data = jsonString.data(using: .utf8),
+                      let tags = try? JSONSerialization.jsonObject(with: data) as? [String] else { continue }
+                bookTagsList.append((id: id, tags: tags))
+                for tag in tags {
+                    allUniqueTags.insert(tag)
+                }
+            }
+
+            let canonicalMap = AO3TagSeedDatabaseConfig.shared.canonicalTagsBatch(for: Array(allUniqueTags))
+            for item in bookTagsList {
+                var distinctKeys = Set<String>()
+                for tag in item.tags {
+                    let canonical = canonicalMap[tag] ?? tag
+                    distinctKeys.insert(TagVariantKey.key(for: canonical))
+                }
+                variantCounts[item.id] = distinctKeys.count
+            }
+        }
+
+        variantRelationshipCountsCache = (bookTagsRevision, variantCounts)
+        return variantCounts
+    }
+
+    /// Returns a mapping of tag_name -> Set<SuggestionTagType> for the given tag names.
+    func tagRoles(for names: [String]) -> [String: Set<SuggestionTagType>] {
+        guard !names.isEmpty else { return [:] }
+        let namesJSON = (try? String(data: JSONSerialization.data(withJSONObject: names), encoding: .utf8)) ?? "[]"
+        let sql = """
+            SELECT tag_name, tag_type FROM book_tags
+            WHERE tag_name IN (SELECT value FROM json_each(?))
+            GROUP BY tag_name, tag_type
+            """
+        guard let rows = try? readDB.prepare(sql, [namesJSON as Binding?]) else { return [:] }
+        var result: [String: Set<SuggestionTagType>] = [:]
+        for row in rows {
+            guard let name = row[0] as? String,
+                  let rawType = row[1] as? String else { continue }
+            let role = SuggestionTagType.from(rawType: rawType)
+            if role != .unknown {
+                result[name, default: []].insert(role)
+            }
+        }
+        return result
+    }
+
+    /// Convenience lookup for a single tag name's roles.
+    func tagRoles(for tagName: String) -> Set<SuggestionTagType> {
+        let trimmed = tagName.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return [] }
+        return tagRoles(for: [trimmed])[trimmed] ?? []
+    }
+
     /// Returns a mapping of tag_name -> SuggestionTagType for all tags in book_tags.
     /// Used by SuggestionSnapshotBuilder to layer AO3 tag classifications onto Calibre tags.
     func allTagTypes() -> [String: SuggestionTagType] {
@@ -2875,6 +3112,12 @@ actor AmbrosiaMetaDB {
     /// `AO3TagSeedDatabaseConfig` read-only connection.
     func expandedTermsBatch(for tags: [String]) -> [String: [String]] {
         AO3TagSeedDatabaseConfig.shared.expandedTermsBatch(for: tags)
+    }
+
+    /// Batched form of `canonicalTerm(for:)`. Returns a dictionary mapping each
+    /// input tag to its canonical tag name (or the tag unchanged if unmapped).
+    func canonicalTermsBatch(for tags: [String]) -> [String: String] {
+        AO3TagSeedDatabaseConfig.shared.canonicalTagsBatch(for: tags)
     }
 
     // MARK: - Book State (Reading Progress & Position)

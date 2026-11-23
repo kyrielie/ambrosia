@@ -189,4 +189,33 @@ final class LastViewStateTests: XCTestCase {
         XCTAssertFalse(state(sort: .title, ascending: true,
                              filter: expression([FilterGroup(rules: [tagRule()])])).isDefaultView)
     }
+
+    // MARK: - Pass 2 Codable tests
+
+    func testLegacyRuleJSONDecodesWithoutNewKeys() throws {
+        let legacyJSON = """
+        {
+            "id": "E621E1F8-C36C-495A-93FC-0C247A3E6E5F",
+            "field": "tag",
+            "op": "equals",
+            "value": "fluff"
+        }
+        """
+        let rule = try JSONDecoder().decode(FilterRule.self, from: Data(legacyJSON.utf8))
+        XCTAssertEqual(rule.field, .tag)
+        XCTAssertEqual(rule.value, "fluff")
+        XCTAssertNil(rule.limit)
+        XCTAssertNil(rule.matchVariants)
+    }
+
+    func testNewRuleFieldsRoundTrip() throws {
+        let original = FilterRule(field: .firstRelationship, op: .equals, value: "A/B", limit: 3, matchVariants: true)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(FilterRule.self, from: data)
+        XCTAssertEqual(decoded, original)
+        XCTAssertEqual(decoded.limit, 3)
+        XCTAssertEqual(decoded.matchVariants, true)
+        XCTAssertEqual(decoded.effectiveLimit, 3)
+        XCTAssertTrue(decoded.usesVariants)
+    }
 }

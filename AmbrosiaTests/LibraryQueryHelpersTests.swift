@@ -303,4 +303,108 @@ final class LibraryQueryHelpersTests: XCTestCase {
         XCTAssertEqual(expression.groups[0].rules[0].op, .notContains)
         XCTAssertEqual(expression.groups[0].rules[1].op, .contains)
     }
+
+    // MARK: - FilterRule operatorLabel & LIKE escaping
+
+    func testEscapeLikePattern() {
+        XCTAssertEqual(LibraryQueryHelpers.escapeLikePattern("normal"), "normal")
+        XCTAssertEqual(LibraryQueryHelpers.escapeLikePattern("100%"), "100\\%")
+        XCTAssertEqual(LibraryQueryHelpers.escapeLikePattern("tag_name"), "tag\\_name")
+        XCTAssertEqual(LibraryQueryHelpers.escapeLikePattern("path\\file"), "path\\\\file")
+    }
+
+    func testOperatorLabelTagStartsWith() {
+        let tagRule = FilterRule(field: .tag, op: .startsWith, value: "angst")
+        XCTAssertEqual(tagRule.operatorLabel(.startsWith), "name starts with")
+        XCTAssertEqual(tagRule.operatorLabel(.contains), "contains")
+
+        let titleRule = FilterRule(field: .title, op: .startsWith, value: "the")
+        XCTAssertEqual(titleRule.operatorLabel(.startsWith), "starts with")
+    }
+
+    // MARK: - Pass 5: Rule Conversion, Variants & DisplayLabel Tests
+
+    func testConvertTagRuleToFirstRelationshipKeepsOpAndValue() {
+        var expr = FilterExpression()
+        let tagRule = FilterRule(field: .tag, op: .equals, value: "Thor/Loki")
+        expr.groups[0].rules = [tagRule]
+
+        let converted = LibraryQueryHelpers.convertTagRule(id: tagRule.id, to: .firstRelationship, in: &expr)
+        XCTAssertTrue(converted)
+        XCTAssertEqual(expr.groups[0].rules[0].field, .firstRelationship)
+        XCTAssertEqual(expr.groups[0].rules[0].op, .equals)
+        XCTAssertEqual(expr.groups[0].rules[0].value, "Thor/Loki")
+        XCTAssertNil(expr.groups[0].rules[0].limit)
+        XCTAssertNil(expr.groups[0].rules[0].matchVariants)
+    }
+
+    func testConvertBackDropsLimitAndVariants() {
+        var expr = FilterExpression()
+        var posRule = FilterRule(field: .firstRelationship, op: .equals, value: "Thor/Loki")
+        posRule.limit = 3
+        posRule.matchVariants = true
+        expr.groups[0].rules = [posRule]
+
+        let converted = LibraryQueryHelpers.convertPositionRuleToTag(id: posRule.id, in: &expr)
+        XCTAssertTrue(converted)
+        XCTAssertEqual(expr.groups[0].rules[0].field, .tag)
+        XCTAssertEqual(expr.groups[0].rules[0].op, .equals)
+        XCTAssertEqual(expr.groups[0].rules[0].value, "Thor/Loki")
+        XCTAssertNil(expr.groups[0].rules[0].limit)
+        XCTAssertNil(expr.groups[0].rules[0].matchVariants)
+    }
+
+    func testSetVariantsOnNewFields() {
+        var expr = FilterExpression()
+        let posRule = FilterRule(field: .firstRelationship, op: .equals, value: "Thor/Loki")
+        let countRule = FilterRule(field: .relationshipCount, op: .equals, value: "1")
+        let tagRule = FilterRule(field: .tag, op: .equals, value: "Fluff")
+        expr.groups[0].rules = [posRule, countRule, tagRule]
+
+        XCTAssertTrue(LibraryQueryHelpers.setRuleVariants(id: posRule.id, enabled: true, in: &expr))
+        XCTAssertEqual(expr.groups[0].rules[0].matchVariants, true)
+
+        XCTAssertTrue(LibraryQueryHelpers.setRuleVariants(id: countRule.id, enabled: true, in: &expr))
+        XCTAssertEqual(expr.groups[0].rules[1].matchVariants, true)
+
+        XCTAssertFalse(LibraryQueryHelpers.setRuleVariants(id: tagRule.id, enabled: true, in: &expr))
+        XCTAssertNil(expr.groups[0].rules[2].matchVariants)
+    }
+
+    func testToggleNegationWorksOnNewFields() {
+        var expr = FilterExpression()
+        let posRule = FilterRule(field: .firstRelationship, op: .equals, value: "Thor/Loki")
+        let charRule = FilterRule(field: .firstCharacter, op: .equals, value: "Loki")
+        let countRule = FilterRule(field: .relationshipCount, op: .equals, value: "1")
+        expr.groups[0].rules = [posRule, charRule, countRule]
+
+        XCTAssertTrue(LibraryQueryHelpers.toggleNegation(id: posRule.id, in: &expr))
+        XCTAssertEqual(expr.groups[0].rules[0].op, .notEquals)
+
+        XCTAssertTrue(LibraryQueryHelpers.toggleNegation(id: charRule.id, in: &expr))
+        XCTAssertEqual(expr.groups[0].rules[1].op, .notEquals)
+
+        XCTAssertTrue(LibraryQueryHelpers.toggleNegation(id: countRule.id, in: &expr))
+        XCTAssertEqual(expr.groups[0].rules[2].op, .notEquals)
+    }
+
+    func testPillDisplayLabelForLimit() {
+        var rule1 = FilterRule(field: .firstRelationship, op: .equals, value: "Thor/Loki")
+        XCTAssertEqual(rule1.displayLabel, "First-listed relationship")
+        rule1.limit = 2
+        XCTAssertEqual(rule1.displayLabel, "Relationship in first 2")
+        rule1.matchVariants = true
+        XCTAssertEqual(rule1.displayLabel, "Relationship in first 2 (variants)")
+
+        var charRule = FilterRule(field: .firstCharacter, op: .equals, value: "Thor")
+        charRule.limit = 1
+        XCTAssertEqual(charRule.displayLabel, "First-listed character")
+        charRule.limit = 3
+        XCTAssertEqual(charRule.displayLabel, "Character in first 3")
+
+        var countRule = FilterRule(field: .relationshipCount, op: .equals, value: "1")
+        XCTAssertEqual(countRule.displayLabel, "Relationship count")
+        countRule.matchVariants = true
+        XCTAssertEqual(countRule.displayLabel, "Relationship count (variants)")
+    }
 }

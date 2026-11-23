@@ -16,7 +16,7 @@ enum TagExpansionResolver {
     ) async -> [String: [String]] {
         guard let metaDB else { return [:] }
         let tagValues = Set(expression.groups.flatMap(\.rules)
-                                .filter { $0.field == .tag && $0.isComplete }
+                                .filter { ($0.field == .tag || $0.field == .firstRelationship || $0.field == .firstCharacter) && $0.isComplete }
                                 .map(\.value))
         guard !tagValues.isEmpty else { return [:] }
         return await metaDB.expandedTermsBatch(for: Array(tagValues))

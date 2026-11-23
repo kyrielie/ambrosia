@@ -163,9 +163,9 @@ Integration in `CalibreLibrary.computeRelevanceSortedIDs`:
 - Call `metaDB` only when targets exist (always when there is no ranked list; with a ranked list only if ties are plausible).
 - Sorted-ID cache: `SortedIDsCacheKey` carries no `bookTagsRevision`. Either confirm that every extraction flush reaches `updateAO3MetaCaches` (which clears sorted caches), or add the revision to the key. A test must prove a relevance result is recomputed after a flush.
 
-### B2. DEFERRED: first-listed-relationship filter (requires B0 Option 1)
+### B2. COMPLETED: first-listed position filters and relationship count (shipped via `first-listed-position-filters-plan.md`)
 
-Not part of the current implementation scope. Kept as a design sketch; revisit after B1 has been used on the real library.
+Implemented via JSON1 pushdown (no schema migrations) across `firstRelationship`, `firstCharacter`, and `relationshipCount`, with Level 1 tag variant normalization, Invariant 30 cache tokens, drawer controls, and ribbon context menu actions. See `docs/plans/first-listed-position-filters-plan.md` and `docs/search-and-filter.md`.
 
 Do not add a Bool to `FilterRule`. Add `FilterField.firstRelationship`:
 - Cache identity is automatic: `LibraryFilterDebug.summary` and `RuleMatchKey` both include `field.rawValue`.

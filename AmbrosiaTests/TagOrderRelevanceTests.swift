@@ -353,4 +353,55 @@ final class TagOrderRelevanceTests: XCTestCase {
         print("==> Benchmark 20k books firstListedPositions p95: \(String(format: "%.2f", p95)) ms (timings: \(timings.map { String(format: "%.2f", $0) }))")
         XCTAssertLessThanOrEqual(p95, 100.0, "p95 <= 100ms in Debug Swift (measured ~71-76ms; raw SQLite ~49ms)")
     }
+
+    // MARK: - Pass 1 Tests: Wildcard Escaping & Folding Characterization
+
+    func testTagContainsEscapesUnderscore() async throws {
+        guard let db = metaDB else {
+            XCTFail("metaDB was not initialized")
+            return
+        }
+
+        try await db.run("INSERT INTO book_tags (calibre_id, tag_name, tag_type) VALUES (?, ?, ?)", [201, "foo_bar", "relationship"])
+        try await db.run("INSERT INTO book_tags (calibre_id, tag_name, tag_type) VALUES (?, ?, ?)", [202, "fooxbar", "relationship"])
+
+        let matches = try await db.bookTagMatchIDs(op: .contains, terms: ["foo_bar"], tagType: nil)
+        XCTAssertTrue(matches.contains(201), "Should match literal foo_bar")
+        XCTAssertFalse(matches.contains(202), "Should NOT match fooxbar (underscore must be escaped)")
+    }
+
+    func testTagStartsWithEscapesPercent() async throws {
+        guard let db = metaDB else {
+            XCTFail("metaDB was not initialized")
+            return
+        }
+
+        try await db.run("INSERT INTO book_tags (calibre_id, tag_name, tag_type) VALUES (?, ?, ?)", [301, "%percent", "freeform"])
+        try await db.run("INSERT INTO book_tags (calibre_id, tag_name, tag_type) VALUES (?, ?, ?)", [302, "other_percent", "freeform"])
+
+        let matches = try await db.bookTagMatchIDs(op: .startsWith, terms: ["%per"], tagType: nil)
+        XCTAssertTrue(matches.contains(301), "Should match literal %percent")
+        XCTAssertFalse(matches.contains(302), "Should NOT match other_percent (percent must be escaped)")
+    }
+
+    func testFirstListedPositionsNonASCIICaseCharacterization() async throws {
+        guard let db = metaDB else {
+            XCTFail("metaDB was not initialized")
+            return
+        }
+
+        try await db.run("""
+            INSERT INTO ao3_metadata (calibre_id, relationships_json, characters_json, fandoms_json, additional_tags_json, extracted_at)
+            VALUES (401, '["Éowyn/Faramir"]', '[]', '[]', '[]', '2024-01-01T00:00:00Z')
+        """)
+
+        let positionsLowerTarget = await db.firstListedPositions(exactTargets: ["éowyn/faramir"], bookIDs: [401])
+        let positionsUpperTarget = await db.firstListedPositions(exactTargets: ["ÉOWYN/FARAMIR"], bookIDs: [401])
+        let positionsExactTarget = await db.firstListedPositions(exactTargets: ["Éowyn/Faramir"], bookIDs: [401])
+
+        let upperCount = positionsUpperTarget.count
+        let exactCount = positionsExactTarget.count
+        print("==> Characterization: lower count: \(positionsLowerTarget.count), upper: \(upperCount), exact: \(exactCount)")
+        XCTAssertEqual(positionsExactTarget.count, 1, "Exact case always matches")
+    }
 }

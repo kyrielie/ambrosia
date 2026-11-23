@@ -90,7 +90,7 @@ struct FilterDrawerView: View {
                     }
                 }
             }
-            .frame(maxHeight: 420)
+            .frame(maxHeight: 460)
 
             Divider()
 
@@ -145,7 +145,7 @@ struct FilterDrawerView: View {
             }
             .padding(20)
         }
-        .frame(width: 540)
+        .frame(width: 720)
         .onExitCommand(perform: onDismiss)
         .preventInitialButtonFocus()
     }
@@ -286,10 +286,14 @@ struct FilterRuleRow: View {
                 if !rule.availableOperators.contains(rule.op) {
                     rule.op = rule.availableOperators[0]
                 }
+                if rule.field != .firstRelationship && rule.field != .firstCharacter && rule.field != .relationshipCount {
+                    rule.limit = nil
+                    rule.matchVariants = nil
+                }
             }
 
             Picker("", selection: operatorBinding) {
-                ForEach(rule.availableOperators) { op in Text(op.label).tag(op) }
+                ForEach(rule.availableOperators) { op in Text(rule.operatorLabel(op)).tag(op) }
             }
             .labelsHidden().frame(width: 150)
 
@@ -368,6 +372,52 @@ struct FilterRuleRow: View {
         case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT:
             TextField("Number", text: $rule.value)
                 .textFieldStyle(.roundedBorder).frame(maxWidth: .infinity)
+        case .firstRelationship, .firstCharacter:
+            let limitBinding = Binding<Int>(
+                get: { rule.limit ?? (rule.field == .firstCharacter ? 3 : 1) },
+                set: { rule.limit = $0 }
+            )
+            let variantsBinding = Binding<Bool>(
+                get: { rule.matchVariants ?? false },
+                set: { rule.matchVariants = $0 }
+            )
+            HStack(spacing: 6) {
+                FilterValueTextField(
+                    placeholder: placeholder,
+                    text: $rule.value,
+                    field: rule.field,
+                    library: session.library,
+                    metaDB: session.metaDB
+                ) { selected in
+                    rule.value = selected
+                }
+                Picker("", selection: limitBinding) {
+                    Text("First").tag(1)
+                    Text("First 2").tag(2)
+                    Text("First 3").tag(3)
+                    Text("First 5").tag(5)
+                }
+                .labelsHidden()
+                .frame(width: 85)
+                Toggle("Variants", isOn: variantsBinding)
+                    .toggleStyle(.checkbox)
+                    .font(.caption)
+                    .help("Match spelling and alias variants of the tag")
+            }
+        case .relationshipCount:
+            let variantsBinding = Binding<Bool>(
+                get: { rule.matchVariants ?? false },
+                set: { rule.matchVariants = $0 }
+            )
+            HStack(spacing: 6) {
+                TextField("Number", text: $rule.value)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
+                Toggle("Variants", isOn: variantsBinding)
+                    .toggleStyle(.checkbox)
+                    .font(.caption)
+                    .help("Deduplicate relationship spelling and alias variants")
+            }
         case .crossover:                                        // §6
             Text("crossover").font(.callout).foregroundStyle(.secondary); Spacer()
         default:

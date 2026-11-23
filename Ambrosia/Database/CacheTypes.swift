@@ -102,7 +102,7 @@ extension FilterResultCacheKey {
         // a cache entry — (A OR B) AND C ≠ A OR (B AND C).
         let digest = expression.groups.enumerated().map { groupIndex, group in
             let rules = group.completeRules
-                .map { "\($0.field.rawValue).\($0.op.rawValue).\($0.value)" }
+                .map(\.cacheToken)
                 .sorted()
                 .joined(separator: ",")
             return "g\(groupIndex)[\(group.conjunction.rawValue):\(rules)]"

@@ -196,8 +196,13 @@ struct LibraryRootView: View {
                 ForEach(completeRules) { rule in
                     FilterRulePillView(
                         rule: rule,
+                        metaDB: session.metaDB,
                         onRemove: { displayController.removeRule(id: rule.id) },
                         onToggleNegation: { displayController.toggleRuleNegation(id: rule.id) },
+                        onConvertToFirstRelationship: { displayController.convertTagRule(id: rule.id, to: .firstRelationship) },
+                        onConvertToFirstCharacter: { displayController.convertTagRule(id: rule.id, to: .firstCharacter) },
+                        onConvertToTag: { displayController.convertPositionRuleToTag(id: rule.id) },
+                        onToggleVariants: { displayController.setRuleVariants(id: rule.id, enabled: $0) },
                         onEditInDrawer: { toolbarState.showFilterDrawer = true },
                         onClearAll: { displayController.clearAllFilters() }
                     )

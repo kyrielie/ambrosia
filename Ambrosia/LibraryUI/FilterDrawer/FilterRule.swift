@@ -19,35 +19,42 @@ enum FilterField: String, CaseIterable, Identifiable, Codable {
     case status
     case fulltext
     case crossover  // §6: new; boolean — fandoms.count > 1
+    case firstRelationship
+    case firstCharacter
+    case relationshipCount
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .title:       return "Title"
-        case .authorName:  return "Author"
-        case .tag:         return "Tag"
-        case .rating:      return "Rating"
-        case .warning:     return "Warning"
-        case .category:    return "Category"
-        case .series:      return "Series"
-        case .comment:     return "Description"
-        case .wordCountGT: return "Word count >"
-        case .wordCountLT: return "Word count <"
-        case .kudosGT:     return "Kudos >"
-        case .kudosLT:     return "Kudos <"
-        case .collection:  return "Collection"
-        case .status:      return "Status"
-        case .fulltext:    return "Full text"
-        case .crossover:   return "Crossover"
+        case .title:             return "Title"
+        case .authorName:        return "Author"
+        case .tag:               return "Tag"
+        case .rating:            return "Rating"
+        case .warning:           return "Warning"
+        case .category:          return "Category"
+        case .series:            return "Series"
+        case .comment:           return "Description"
+        case .wordCountGT:       return "Word count >"
+        case .wordCountLT:       return "Word count <"
+        case .kudosGT:           return "Kudos >"
+        case .kudosLT:           return "Kudos <"
+        case .collection:        return "Collection"
+        case .status:            return "Status"
+        case .fulltext:          return "Full text"
+        case .crossover:         return "Crossover"
+        case .firstRelationship: return "First-listed relationship"
+        case .firstCharacter:    return "First-listed character"
+        case .relationshipCount: return "Relationship count"
         }
     }
 
     var expectsText: Bool {
         switch self {
-        case .title, .authorName, .tag, .rating, .warning, .category, .series, .comment, .collection, .status, .fulltext:
+        case .title, .authorName, .tag, .rating, .warning, .category, .series, .comment,
+             .collection, .status, .fulltext, .firstRelationship, .firstCharacter:
             return true
-        case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT, .crossover:
+        case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT, .crossover, .relationshipCount:
             return false
         }
     }
@@ -149,6 +156,34 @@ enum FilterConjunction: String, CaseIterable, Identifiable, Codable {
     var label: String { rawValue }
 }
 
+// MARK: - ListedRole
+
+enum ListedRole: String, Sendable {
+    case relationship
+    case character
+
+    var jsonColumn: String {
+        switch self {
+        case .relationship: return "relationships_json"
+        case .character:    return "characters_json"
+        }
+    }
+
+    var tagType: SuggestionTagType {
+        switch self {
+        case .relationship: return .relationship
+        case .character:    return .character
+        }
+    }
+
+    var dbTagType: String {
+        switch self {
+        case .relationship: return "relationship"
+        case .character:    return "character"
+        }
+    }
+}
+
 // MARK: - FilterRule
 
 struct FilterRule: Identifiable, Codable, Equatable {
@@ -156,11 +191,77 @@ struct FilterRule: Identifiable, Codable, Equatable {
     var field: FilterField
     var op: FilterOperator
     var value: String
+    var limit: Int?
+    var matchVariants: Bool?
 
-    init(field: FilterField = .title, op: FilterOperator = .contains, value: String = "") {
+    init(
+        field: FilterField = .title,
+        op: FilterOperator = .contains,
+        value: String = "",
+        limit: Int? = nil,
+        matchVariants: Bool? = nil
+    ) {
         self.field = field
         self.op    = op
         self.value = value
+        self.limit = limit
+        self.matchVariants = matchVariants
+    }
+
+    var listedRole: ListedRole? {
+        switch field {
+        case .firstRelationship: return .relationship
+        case .firstCharacter:    return .character
+        default:                 return nil
+        }
+    }
+
+    static let limitPresets = [1, 2, 3, 5]
+
+    static func defaultLimit(for role: ListedRole) -> Int {
+        switch role {
+        case .relationship: return 1
+        case .character:    return 3
+        }
+    }
+
+    var effectiveLimit: Int {
+        guard let role = listedRole else { return 1 }
+        let raw = limit ?? Self.defaultLimit(for: role)
+        return min(max(raw, 1), 10)
+    }
+
+    var usesVariants: Bool {
+        matchVariants ?? false
+    }
+
+    var cacheToken: String {
+        let base = "\(field.rawValue).\(op.rawValue)=\(value)"
+        switch field {
+        case .firstRelationship, .firstCharacter:
+            let variantSuffix = usesVariants ? "|v=1" : ""
+            return "\(base)|n=\(effectiveLimit)\(variantSuffix)"
+        case .relationshipCount:
+            let variantSuffix = usesVariants ? "|v=1" : ""
+            return "\(base)\(variantSuffix)"
+        default:
+            return base
+        }
+    }
+
+    var displayLabel: String {
+        let text: String
+        switch field {
+        case .firstRelationship:
+            text = effectiveLimit == 1 ? "First-listed relationship" : "Relationship in first \(effectiveLimit)"
+        case .firstCharacter:
+            text = effectiveLimit == 1 ? "First-listed character" : "Character in first \(effectiveLimit)"
+        case .relationshipCount:
+            text = "Relationship count"
+        default:
+            text = field.label
+        }
+        return usesVariants ? "\(text) (variants)" : text
     }
 
     var isComplete: Bool {
@@ -171,6 +272,9 @@ struct FilterRule: Identifiable, Codable, Equatable {
             return AO3CompletionStatus(userValue: value) != nil
         case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT:
             return Int(value) != nil
+        case .relationshipCount:
+            guard let num = Int(value.trimmingCharacters(in: .whitespaces)) else { return false }
+            return num >= 1
         default:
             return !value.trimmingCharacters(in: .whitespaces).isEmpty
         }
@@ -201,13 +305,13 @@ struct FilterRule: Identifiable, Codable, Equatable {
         switch field {
         case .rating:
             return FilterOperator.ratingOperators
-        case .warning, .category, .collection, .status, .crossover:
+        case .warning, .category, .collection, .status, .crossover, .firstRelationship, .firstCharacter:
             return FilterOperator.exactOperators
         case .tag, .authorName:
             return FilterOperator.textOperators + [.notEquals]
         case .fulltext:
             return [.contains, .notContains]
-        case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT:
+        case .wordCountGT, .wordCountLT, .kudosGT, .kudosLT, .relationshipCount:
             return FilterOperator.numericOperators
         default:
             return FilterOperator.textOperators
@@ -218,6 +322,14 @@ struct FilterRule: Identifiable, Codable, Equatable {
     var canToggleNegation: Bool {
         guard let other = op.negatedCounterpart else { return false }
         return availableOperators.contains(other)
+    }
+
+    /// Field-aware display label for operators in UI pickers.
+    func operatorLabel(_ op: FilterOperator) -> String {
+        if field == .tag && op == .startsWith {
+            return "name starts with"
+        }
+        return op.label
     }
 }
 

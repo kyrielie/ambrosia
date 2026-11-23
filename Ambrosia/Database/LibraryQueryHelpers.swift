@@ -48,6 +48,14 @@ enum LibraryQueryHelpers {
         Dictionary(pairs, uniquingKeysWith: { first, _ in first })
     }
 
+    /// Escapes SQL LIKE wildcards (% and _) using a backslash.
+    static func escapeLikePattern(_ pattern: String) -> String {
+        pattern
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_")
+    }
+
     /// Intersects `ids` with `optionalIDs`, or returns `ids` unchanged if
     /// `optionalIDs` is nil (i.e. "no additional restriction").
     static func intersect(_ ids: [Int], with optionalIDs: [Int]?) -> [Int] {
@@ -146,6 +154,57 @@ enum LibraryQueryHelpers {
                     return false
                 }
                 expression.groups[groupIndex].rules[ruleIndex].op = counterpart
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Converts a `.tag` rule with `.equals` or `.notEquals` into a listed position field
+    /// (`.firstRelationship` or `.firstCharacter`). Preserves `op` and `value`, resets `limit` and `matchVariants` to nil.
+    @discardableResult
+    static func convertTagRule(id: UUID, to targetField: FilterField, in expression: inout FilterExpression) -> Bool {
+        guard targetField == .firstRelationship || targetField == .firstCharacter else { return false }
+        for groupIndex in expression.groups.indices {
+            if let ruleIndex = expression.groups[groupIndex].rules.firstIndex(where: { $0.id == id }) {
+                let rule = expression.groups[groupIndex].rules[ruleIndex]
+                guard rule.field == .tag, rule.op == .equals || rule.op == .notEquals else { return false }
+                expression.groups[groupIndex].rules[ruleIndex].field = targetField
+                expression.groups[groupIndex].rules[ruleIndex].limit = nil
+                expression.groups[groupIndex].rules[ruleIndex].matchVariants = nil
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Converts a listed position rule back to a `.tag` rule with the same `op` and `value`.
+    /// Resets `limit` and `matchVariants` to nil.
+    @discardableResult
+    static func convertPositionRuleToTag(id: UUID, in expression: inout FilterExpression) -> Bool {
+        for groupIndex in expression.groups.indices {
+            if let ruleIndex = expression.groups[groupIndex].rules.firstIndex(where: { $0.id == id }) {
+                let rule = expression.groups[groupIndex].rules[ruleIndex]
+                guard rule.field == .firstRelationship || rule.field == .firstCharacter else { return false }
+                expression.groups[groupIndex].rules[ruleIndex].field = .tag
+                expression.groups[groupIndex].rules[ruleIndex].limit = nil
+                expression.groups[groupIndex].rules[ruleIndex].matchVariants = nil
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Updates the `matchVariants` toggle for a listed rule.
+    @discardableResult
+    static func setRuleVariants(id: UUID, enabled: Bool, in expression: inout FilterExpression) -> Bool {
+        for groupIndex in expression.groups.indices {
+            if let ruleIndex = expression.groups[groupIndex].rules.firstIndex(where: { $0.id == id }) {
+                let rule = expression.groups[groupIndex].rules[ruleIndex]
+                guard rule.field == .firstRelationship || rule.field == .firstCharacter || rule.field == .relationshipCount else {
+                    return false
+                }
+                expression.groups[groupIndex].rules[ruleIndex].matchVariants = enabled
                 return true
             }
         }

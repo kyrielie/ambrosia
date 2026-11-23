@@ -566,6 +566,27 @@ final class LibraryDisplayController {
         }
     }
 
+    func convertTagRule(id: UUID, to field: FilterField) {
+        let changed = LibraryQueryHelpers.convertTagRule(id: id, to: field, in: &toolbarState.filterExpression)
+        if changed {
+            applyFilterRules()
+        }
+    }
+
+    func convertPositionRuleToTag(id: UUID) {
+        let changed = LibraryQueryHelpers.convertPositionRuleToTag(id: id, in: &toolbarState.filterExpression)
+        if changed {
+            applyFilterRules()
+        }
+    }
+
+    func setRuleVariants(id: UUID, enabled: Bool) {
+        let changed = LibraryQueryHelpers.setRuleVariants(id: id, enabled: enabled, in: &toolbarState.filterExpression)
+        if changed {
+            applyFilterRules()
+        }
+    }
+
     func removeFullTextPhrase() {
         let updated = SearchQueryParser.removingFulltext(from: toolbarState.searchText)
         fullTextTask?.cancel()

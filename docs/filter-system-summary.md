@@ -13,16 +13,16 @@
 - Live queries use a separate SQL path (`CalibreLibrarySearch`) that reads Calibre's own tag, author and series tables.
 
 **Drawer**
-- It is a generic rule builder with 16 field types and a draft/Apply lifecycle.
+- It is a generic rule builder with 19 field types and a draft/Apply lifecycle. Modal width is 720 pt.
 - Evaluation branches:
   - **Branch A, SQL-pageable.** Only when every rule is a plain SQL-able field (title, comment, word count or kudos with a custom column). The database does the filtering and paging.
   - **Branch B.** A result cache keyed on the expression and visibility versions.
-  - **Branch C, full evaluation.** Tag, rating, warning and category rules read `book_tags`, with a Calibre-side fallback for books without AO3 data. Author uses `book_authors`, series uses `series_cache`, and collection, status, liked and crossover use in-memory sets. Fulltext goes through FTS.
+  - **Branch C, full evaluation.** Tag, rating, warning and category rules read `book_tags`, with a Calibre-side fallback for books without AO3 data. Author uses `book_authors`, series uses `series_cache`, and collection, status, liked and crossover use in-memory sets. Position filters (`firstRelationship`, `firstCharacter`) and `relationshipCount` use SQLite JSON1 pushdown (`json_each`) over `ao3_metadata` with candidate pre-filtering against `book_tags` and Decision 4 exclusion semantics. Fulltext goes through FTS.
 - Adding one AND rule can narrow the previous result instead of recomputing. This is behind a flag that defaults off in release.
-- Tag values are expanded through the synonym database at filter time.
+- Tag values are expanded through the synonym database at filter time, with optional Level 1 variant normalizer matching.
 
 **Ribbon**
-- Each rule appears as a pill with remove, include/exclude toggle (only where the opposite operator exists), copy, edit in drawer, and clear all.
+- Each rule appears as a pill with remove, include/exclude toggle (only where the opposite operator exists), copy, edit in drawer, clear all, and role-aware conversions (convert between plain tag and first-listed relationship/character, and toggle tag variants).
 - It changes the expression and triggers the same apply path.
 
 **AO3-style builder**

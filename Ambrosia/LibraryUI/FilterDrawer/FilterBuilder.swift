@@ -132,10 +132,13 @@ enum LibraryFilterDebug {
         String(format: "%.1f", (CFAbsoluteTimeGetCurrent() - start) * 1000)
     }
 
+    /// Canonical summary of a FilterExpression for cache keys and signatures.
+    /// Despite the `LibraryFilterDebug` namespace, this is the production
+    /// `filterSignature` used by PageCacheKey, CountCacheKey, and FilterResult.
     static func summary(expression: FilterExpression) -> String {
         expression.groups
             .flatMap(\.completeRules)
-            .map { "\($0.field.rawValue).\($0.op.rawValue)=\($0.value)" }
+            .map(\.cacheToken)
             .joined(separator: ",")
     }
 
@@ -228,7 +231,8 @@ extension FilterExpression {
         return completeRules.allSatisfy { rule in
             switch rule.field {
             case .collection, .status, .fulltext, .crossover, .series, .authorName,
-                 .tag, .rating, .warning, .category:
+                 .tag, .rating, .warning, .category,
+                 .firstRelationship, .firstCharacter, .relationshipCount:
                 return false
             default:
                 return true
@@ -292,13 +296,17 @@ struct RuleMatchKey: Hashable {
     let positiveOp: String
     let value: String
     let termsDigest: String
+    let limit: Int
+    let matchVariants: Bool
 
     init(rule: FilterRule, tagExpansions: [String: [String]]) {
         field = rule.field.rawValue
         positiveOp = rule.op.positiveForm.rawValue
         value = rule.value
-        // Only `.tag` rules use synonym expansion (see tagFamilyMatchIDs).
-        termsDigest = rule.field == .tag
+        limit = rule.effectiveLimit
+        matchVariants = rule.usesVariants
+        let usesSynonyms = rule.field == .tag || rule.field == .firstRelationship || rule.field == .firstCharacter
+        termsDigest = usesSynonyms
             ? tagExpansionsDigest([rule.value: tagExpansions[rule.value] ?? [rule.value]])
             : ""
     }
@@ -791,6 +799,43 @@ struct FilterBuilder {
             ids = Array(idSet)
         }
 
+        // Phase 4b: apply listed rules (firstRelationship, firstCharacter, relationshipCount)
+        let listedRules = complete.filter(Self.isListedRule)
+        if !listedRules.isEmpty {
+            var idSet = Set(ids)
+            if group.conjunction == .and {
+                for rule in listedRules {
+                    if idSet.isEmpty { break }
+                    let memberIDs = await listedRuleMembers(rule, memo: &memo)
+                    switch rule.op {
+                    case .equals:
+                        idSet = idSet.intersection(memberIDs)
+                    case .notEquals:
+                        let coverage = await listedCoverage(rule)
+                        idSet = idSet.intersection(coverage).subtracting(memberIDs)
+                    default:
+                        break
+                    }
+                }
+            } else {
+                var unionIDs = Set<Int>()
+                for rule in listedRules {
+                    let memberIDs = await listedRuleMembers(rule, memo: &memo)
+                    switch rule.op {
+                    case .equals:
+                        unionIDs.formUnion(idSet.intersection(memberIDs))
+                    case .notEquals:
+                        let coverage = await listedCoverage(rule)
+                        unionIDs.formUnion(idSet.intersection(coverage).subtracting(memberIDs))
+                    default:
+                        break
+                    }
+                }
+                idSet = unionIDs
+            }
+            ids = Array(idSet)
+        }
+
         return ids
     }
 
@@ -806,7 +851,8 @@ struct FilterBuilder {
     private static func isSQLRule(_ rule: FilterRule) -> Bool {
         switch rule.field {
         case .collection, .status, .fulltext, .crossover, .series, .authorName,
-             .tag, .rating, .warning, .category:
+             .tag, .rating, .warning, .category,
+             .firstRelationship, .firstCharacter, .relationshipCount:
             return false
         default:
             return true
@@ -815,6 +861,10 @@ struct FilterBuilder {
 
     private static func isTagFamilyRule(_ rule: FilterRule) -> Bool {
         rule.field == .tag || rule.field == .rating || rule.field == .warning || rule.field == .category
+    }
+
+    private static func isListedRule(_ rule: FilterRule) -> Bool {
+        rule.field == .firstRelationship || rule.field == .firstCharacter || rule.field == .relationshipCount
     }
 
     /// Fetches the `book_tags` coverage partition once for a whole call.
@@ -888,6 +938,63 @@ struct FilterBuilder {
             "elapsedMS": LibraryFilterDebug.elapsedMS(since: start)
         ])
         return members
+    }
+
+    private func listedRuleMembers(
+        _ rule: FilterRule,
+        memo: inout RuleMatchMemo
+    ) async -> Set<Int> {
+        guard let metaDB else { return [] }
+        let key = RuleMatchKey(rule: rule, tagExpansions: tagExpansions)
+        if let hit = memo.sets[key] {
+            LibraryFilterDebug.log("listedRule.eval", [
+                "field": rule.field.rawValue, "op": rule.op.rawValue, "memoHit": true, "result": hit.count
+            ])
+            return hit
+        }
+        if let cache = ruleMatchCache, let hit = cache.members(for: key, revision: bookTagsRevision) {
+            memo.sets[key] = hit
+            LibraryFilterDebug.log("listedRule.eval", [
+                "field": rule.field.rawValue, "op": rule.op.rawValue, "memoHit": false,
+                "ruleCacheHit": true, "result": hit.count
+            ])
+            return hit
+        }
+
+        let start = LibraryFilterDebug.now()
+        let members: Set<Int>
+        if rule.field == .relationshipCount {
+            let value = Int(rule.value.trimmingCharacters(in: .whitespaces)) ?? 1
+            members = await metaDB.relationshipCountMembers(value: value, variants: rule.usesVariants)
+        } else if let role = rule.listedRole {
+            let terms = tagExpansions[rule.value] ?? [rule.value]
+            members = await metaDB.listedPositionMembers(
+                role: role,
+                terms: terms,
+                limit: rule.effectiveLimit,
+                variants: rule.usesVariants
+            )
+        } else {
+            members = []
+        }
+
+        memo.sets[key] = members
+        ruleMatchCache?.store(members, for: key, revision: bookTagsRevision, isGlobal: true)
+        LibraryFilterDebug.log("listedRule.eval", [
+            "field": rule.field.rawValue, "op": rule.op.rawValue, "memoHit": false,
+            "candidates": 0, "result": members.count,
+            "elapsedMS": LibraryFilterDebug.elapsedMS(since: start)
+        ])
+        return members
+    }
+
+    private func listedCoverage(_ rule: FilterRule) async -> Set<Int> {
+        guard let metaDB else { return [] }
+        if rule.field == .relationshipCount {
+            return await metaDB.listedRoleCoverage(role: .relationship)
+        }
+        guard let role = rule.listedRole else { return [] }
+        return await metaDB.listedRoleCoverage(role: role)
     }
 
     /// Phase 5: mirrors `MatchingSubqueryBuilder.seriesFragment`'s op/matcher
@@ -1419,6 +1526,8 @@ extension CalibreLibrary {
             return nil
         case .category:
             return nil
+        case .firstRelationship, .firstCharacter, .relationshipCount:
+            return nil
 
         case .wordCountGT:
             guard let numericValue = rule.numericValue else { return nil }
@@ -1460,15 +1569,18 @@ extension CalibreLibrary {
         let end  = nullClause != nil ? ")" : ""
         switch op {
         case .contains:
-            return ("\(column) LIKE ?", ["%\(value)%"])
+            let escaped = LibraryQueryHelpers.escapeLikePattern(value)
+            return ("\(column) LIKE ? ESCAPE '\\'", ["%\(escaped)%"])
         case .notContains:
-            return ("\(null)\(column) NOT LIKE ?\(end)", ["%\(value)%"])
+            let escaped = LibraryQueryHelpers.escapeLikePattern(value)
+            return ("\(null)\(column) NOT LIKE ? ESCAPE '\\'\(end)", ["%\(escaped)%"])
         case .equals:
             return ("\(column) = ?", [value])
         case .notEquals:
             return ("\(null)\(column) != ?\(end)", [value])
         case .startsWith:
-            return ("\(column) LIKE ?", ["\(value)%"])
+            let escaped = LibraryQueryHelpers.escapeLikePattern(value)
+            return ("\(column) LIKE ? ESCAPE '\\'", ["\(escaped)%"])
         case .matchesWord:
             let escaped = NSRegularExpression.escapedPattern(for: value)
             return ("\(column) REGEXP ?", ["(?i)\\b\(escaped)\\b"])
@@ -1487,12 +1599,12 @@ extension CalibreLibrary {
 
         switch op {
         case .contains:
-            matcher = terms.map { _ in "t2.name LIKE ?" }.joined(separator: " OR ")
-            args = terms.map { "%\($0)%" as Binding? }
+            matcher = terms.map { _ in "t2.name LIKE ? ESCAPE '\\'" }.joined(separator: " OR ")
+            args = terms.map { "%\(LibraryQueryHelpers.escapeLikePattern($0))%" as Binding? }
             return tagMembershipFragment(matcher: matcher, args: args, negated: false)
         case .notContains:
-            matcher = terms.map { _ in "t2.name LIKE ?" }.joined(separator: " OR ")
-            args = terms.map { "%\($0)%" as Binding? }
+            matcher = terms.map { _ in "t2.name LIKE ? ESCAPE '\\'" }.joined(separator: " OR ")
+            args = terms.map { "%\(LibraryQueryHelpers.escapeLikePattern($0))%" as Binding? }
             return tagMembershipFragment(matcher: matcher, args: args, negated: true)
         case .equals, .ratingAtMost, .ratingAtLeast:
             matcher = terms.map { _ in "t2.name = ?" }.joined(separator: " OR ")
@@ -1503,8 +1615,8 @@ extension CalibreLibrary {
             args = terms.map { $0 as Binding? }
             return tagMembershipFragment(matcher: matcher, args: args, negated: true)
         case .startsWith:
-            matcher = terms.map { _ in "t2.name LIKE ?" }.joined(separator: " OR ")
-            args = terms.map { "\($0)%" as Binding? }
+            matcher = terms.map { _ in "t2.name LIKE ? ESCAPE '\\'" }.joined(separator: " OR ")
+            args = terms.map { "\(LibraryQueryHelpers.escapeLikePattern($0))%" as Binding? }
             return tagMembershipFragment(matcher: matcher, args: args, negated: false)
         case .matchesWord:
             let escaped = terms.map { NSRegularExpression.escapedPattern(for: $0) }
@@ -1547,11 +1659,14 @@ extension CalibreLibrary {
         case .notEquals:
             return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name = ?", args: [value], negated: true)
         case .contains:
-            return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name LIKE ?", args: ["%\(value)%"], negated: false)
+            let escaped = LibraryQueryHelpers.escapeLikePattern(value)
+            return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name LIKE ? ESCAPE '\\'", args: ["%\(escaped)%"], negated: false)
         case .notContains:
-            return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name LIKE ?", args: ["%\(value)%"], negated: true)
+            let escaped = LibraryQueryHelpers.escapeLikePattern(value)
+            return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name LIKE ? ESCAPE '\\'", args: ["%\(escaped)%"], negated: true)
         case .startsWith:
-            return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name LIKE ?", args: ["\(value)%"], negated: false)
+            let escaped = LibraryQueryHelpers.escapeLikePattern(value)
+            return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name LIKE ? ESCAPE '\\'", args: ["\(escaped)%"], negated: false)
         case .matchesWord:
             let escaped = NSRegularExpression.escapedPattern(for: value)
             return MatchingSubqueryBuilder.tagFragment(matcher: "t2.name REGEXP ?", args: ["(?i)\\b\(escaped)\\b"], negated: false)

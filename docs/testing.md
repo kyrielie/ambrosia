@@ -140,6 +140,9 @@ Testing), against 112 source files (updated November 2026).
 | `RelevanceOrdering` pure comparator (text relevance vs tag position) | `RelevanceOrderingTests` |
 | Relevance ranking planning, branch selection, and expansion merge | `RelevanceRankingPlannerTests` |
 | First-listed tag positions via `AmbrosiaMetaDB.firstListedPositions` | `TagOrderRelevanceTests` |
+| First-listed position filters, coverage, and Decision 4 exclusion semantics | `ListedPositionFilterTests` |
+| Level 1 tag variant normalization and equivalence key generation | `TagVariantKeyTests` |
+| Rule conversion, variant toggling, and operator escaping helpers | `LibraryQueryHelpersTests` |
 | `TagRelevanceTargets.make` tag extraction and filtering rules | `TagRelevanceTargetsTests` |
 | `HybridSearchCoordinator.fuse(lexicalIsRanked:)` Reciprocal Rank Fusion | `HybridSearchCoordinatorTests` |
 | Relevance sort integration across `PageQuery`, filters, and `ao3_metadata` | `RelevancePageQueryIntegrationTests` |
