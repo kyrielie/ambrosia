@@ -161,7 +161,7 @@ struct FTSTypographicCardView: View {
             // Word Count
             let wordCount = ao3Metadata?.wordCount ?? book.wordCount
             if let wc = wordCount, wc > 0 {
-                badgePill(label: formatWordCount(wc), color: .secondary)
+                badgePill(label: WordCountFormatting.label(wc), color: .secondary)
             }
 
             // Completion Status
@@ -187,17 +187,6 @@ struct FTSTypographicCardView: View {
                     .fill(color.opacity(0.12))
             )
             .foregroundColor(color)
-    }
-
-    private func formatWordCount(_ wc: Int) -> String {
-        switch wc {
-        case 0..<1_000:
-            return "\(wc) words"
-        case 0..<1_000_000:
-            return String(format: "%.1fk words", Double(wc) / 1_000)
-        default:
-            return String(format: "%.2fM words", Double(wc) / 1_000_000)
-        }
     }
 
     // MARK: - Snippets Section

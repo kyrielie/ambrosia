@@ -255,33 +255,14 @@ public actor PassageDatabase {
         guard FileManager.default.fileExists(atPath: dbURL.path) else {
             return (0, 0)
         }
-        let beforeSize = databaseFilesSize(baseFileURL: dbURL)
+        let beforeSize = SQLiteFileMaintenance.totalFileSize(baseFileURL: dbURL)
         let conn = try Connection(dbURL.path)
         conn.busyTimeout = 5.0
-        _ = try? conn.run("PRAGMA wal_checkpoint(TRUNCATE);")
-        _ = try? conn.run("VACUUM;")
-        _ = try? conn.run("PRAGMA wal_checkpoint(TRUNCATE);")
+        SQLiteFileMaintenance.checkpointAndVacuum(conn)
 
-        let afterSize = databaseFilesSize(baseFileURL: dbURL)
+        let afterSize = SQLiteFileMaintenance.totalFileSize(baseFileURL: dbURL)
         let reclaimed = max(0, beforeSize - afterSize)
         return (bytesReclaimed: reclaimed, passagesAfter: afterSize)
-    }
-
-    private static func databaseFilesSize(baseFileURL: URL) -> Int64 {
-        var total: Int64 = 0
-        let paths = [
-            baseFileURL,
-            baseFileURL.deletingPathExtension().appendingPathExtension("db-wal"),
-            baseFileURL.deletingPathExtension().appendingPathExtension("db-shm")
-        ]
-        let fm = FileManager.default
-        for path in paths {
-            if let attrs = try? fm.attributesOfItem(atPath: path.path),
-               let size = attrs[.size] as? NSNumber {
-                total += size.int64Value
-            }
-        }
-        return total
     }
 }
 

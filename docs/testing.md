@@ -97,6 +97,9 @@ Testing), against 112 source files (updated November 2026).
 | `AO3TagSeedDatabaseConfig` | `AO3TagSeedDatabaseConfigValidationTests`, `AO3TagSeedDatabaseConfigInstanceTests` |
 | `ExtractionProgress` | `ExtractionProgressTests` |
 | `EPUBWordCounter` | `EPUBWordCounterTests` |
+| `xmlEscape`, `xmlEscapeIncludingApostrophe` (`Utilities/MarkupEscaping.swift`) | `MarkupEscapingTests` |
+| `WordCountFormatting` | `WordCountFormattingTests` |
+| `SQLiteFileMaintenance` (file size, checkpoint and vacuum) | `SQLiteFileMaintenanceTests` |
 | Extraction raw-read path (`rawXHTML`, `parse(skipTOC:)`, `Document` overloads) | `ExtractionRawReadTests` |
 | `LibraryQueryHelpers`, `LibraryVisibilityPolicy`, `DuplicateBookDetector` | `LibraryQueryHelpersTests`, `LibraryVisibilityPolicyTests`, `DuplicateBookDetectorTests` |
 | `KeyBinding.validate` | `KeyBindingValidationTests` |

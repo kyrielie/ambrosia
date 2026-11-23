@@ -21,7 +21,7 @@ them.
   - `JSONFeedBuilder.swift`: JSON Feed v1.1 serialization.
   - `OPMLFeedBuilder.swift`: OPML 2.0 subscription export.
   - `TransferDatabaseBuilder.swift`: SQLite transfer container generation (`manifest` and `books` tables) with gzip streaming.
-  - `FeedBuilderTypes.swift`: Domain models (`FeedBookPair`, `FeedDisplayUnit`, `FeedDateFormatter`, `xmlEscape`).
+  - `FeedBuilderTypes.swift`: Domain models (`FeedBookPair`, `FeedDisplayUnit`, `FeedDateFormatter`). XML escaping (`xmlEscape`) lives in `Utilities/MarkupEscaping.swift`, shared with the reader, series gap report and EPUB builders.
 - `RSSPublishView` is the SwiftUI publish sheet (searchable collection list, target selection, Publish / Copy Feed URL / Export OPML actions) presented as a sheet from `LibraryWindowController`. All routes are GET-only and read-only; there is no write-back path from a feed reader into Ambrosia yet (see Invariant 26 below on the server's auth posture).
 
 ---

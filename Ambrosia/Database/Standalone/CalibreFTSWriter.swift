@@ -203,36 +203,17 @@ public enum CalibreFTSWriter {
         guard FileManager.default.fileExists(atPath: ftsURL.path) else {
             return (0, 0)
         }
-        let ftsBefore = databaseFilesSize(baseFileURL: ftsURL)
+        let ftsBefore = SQLiteFileMaintenance.totalFileSize(baseFileURL: ftsURL)
         let ftsConn = try Connection(ftsURL.path)
         ftsConn.busyTimeout = 5.0
         try CalibreTokenizerRegistration.register(on: ftsConn)
 
         _ = try? ftsConn.run("INSERT INTO books_fts(books_fts) VALUES('optimize');")
         _ = try? ftsConn.run("INSERT INTO books_fts_stemmed(books_fts_stemmed) VALUES('optimize');")
-        _ = try? ftsConn.run("PRAGMA wal_checkpoint(TRUNCATE);")
-        _ = try? ftsConn.run("VACUUM;")
-        _ = try? ftsConn.run("PRAGMA wal_checkpoint(TRUNCATE);")
+        SQLiteFileMaintenance.checkpointAndVacuum(ftsConn)
 
-        let ftsAfter = databaseFilesSize(baseFileURL: ftsURL)
+        let ftsAfter = SQLiteFileMaintenance.totalFileSize(baseFileURL: ftsURL)
         let reclaimed = max(0, ftsBefore - ftsAfter)
         return (bytesReclaimed: reclaimed, ftsAfter: ftsAfter)
-    }
-
-    private static func databaseFilesSize(baseFileURL: URL) -> Int64 {
-        var total: Int64 = 0
-        let paths = [
-            baseFileURL,
-            baseFileURL.deletingPathExtension().appendingPathExtension("db-wal"),
-            baseFileURL.deletingPathExtension().appendingPathExtension("db-shm")
-        ]
-        let fm = FileManager.default
-        for path in paths {
-            if let attrs = try? fm.attributesOfItem(atPath: path.path),
-               let size = attrs[.size] as? NSNumber {
-                total += size.int64Value
-            }
-        }
-        return total
     }
 }

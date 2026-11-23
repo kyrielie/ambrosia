@@ -55,7 +55,7 @@ enum SeriesGapManifestBuilder {
             <tr class="\(item.isPresent ? "row-present" : "row-missing")">
                 <td class="part-col">Part \(item.partIndex)</td>
                 <td class="status-col">\(statusBadge)</td>
-                <td class="title-col">\(escapeHTML(item.title))</td>
+                <td class="title-col">\(xmlEscape(item.title))</td>
                 <td class="words-col">\(words)</td>
                 <td class="action-col">\(linkHTML)</td>
             </tr>\n
@@ -68,7 +68,7 @@ enum SeriesGapManifestBuilder {
         <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
-            <title>Series Update: \(escapeHTML(report.seriesName))</title>
+            <title>Series Update: \(xmlEscape(report.seriesName))</title>
             <style>
                 :root {
                     --bg: #1e1e24;
@@ -218,8 +218,8 @@ enum SeriesGapManifestBuilder {
         <body>
             <div class="container">
                 <div class="card">
-                    <h1>\(escapeHTML(report.seriesName))</h1>
-                    <div class="subtitle">by \(escapeHTML(authors))</div>
+                    <h1>\(xmlEscape(report.seriesName))</h1>
+                    <div class="subtitle">by \(xmlEscape(authors))</div>
 
                     <div class="progress-container">
                         <div class="progress-label">
@@ -283,12 +283,5 @@ enum SeriesGapManifestBuilder {
     private static func safeFilename(_ name: String) -> String {
         let invalid = CharacterSet(charactersIn: "\\/:*?\"<>| &")
         return name.components(separatedBy: invalid).joined(separator: "_")
-    }
-
-    private static func escapeHTML(_ text: String) -> String {
-        text.replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
     }
 }

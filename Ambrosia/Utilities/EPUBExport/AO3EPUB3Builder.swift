@@ -93,8 +93,8 @@ enum AO3EPUB3Builder {
                 let pseudID = "pseud_\(idx)"
                 let displayName = author.pseud ?? author.username
                 creatorTags.append("""
-                        <dc:creator id="\(pseudID)">\(escapeXML(displayName))</dc:creator>
-                        <meta refines="#\(pseudID)" property="file-as">\(escapeXML(author.username))</meta>
+                        <dc:creator id="\(pseudID)">\(xmlEscapeIncludingApostrophe(displayName))</dc:creator>
+                        <meta refines="#\(pseudID)" property="file-as">\(xmlEscapeIncludingApostrophe(author.username))</meta>
                         <meta refines="#\(pseudID)" property="role" scheme="marc:relators">aut</meta>
                 """)
             }
@@ -102,30 +102,30 @@ enum AO3EPUB3Builder {
 
         var subjectTags: [String] = []
         if let rating = options.metadata?.rating, !rating.isEmpty {
-            subjectTags.append("<dc:subject>\(escapeXML(rating))</dc:subject>")
+            subjectTags.append("<dc:subject>\(xmlEscapeIncludingApostrophe(rating))</dc:subject>")
         }
         for warning in options.metadata?.warnings ?? [] {
-            subjectTags.append("<dc:subject>\(escapeXML(warning))</dc:subject>")
+            subjectTags.append("<dc:subject>\(xmlEscapeIncludingApostrophe(warning))</dc:subject>")
         }
         for fandom in options.metadata?.fandoms ?? [] {
-            subjectTags.append("<dc:subject>\(escapeXML(fandom))</dc:subject>")
+            subjectTags.append("<dc:subject>\(xmlEscapeIncludingApostrophe(fandom))</dc:subject>")
         }
         for rel in options.metadata?.relationships ?? [] {
-            subjectTags.append("<dc:subject>\(escapeXML(rel))</dc:subject>")
+            subjectTags.append("<dc:subject>\(xmlEscapeIncludingApostrophe(rel))</dc:subject>")
         }
         for char in options.metadata?.characters ?? [] {
-            subjectTags.append("<dc:subject>\(escapeXML(char))</dc:subject>")
+            subjectTags.append("<dc:subject>\(xmlEscapeIncludingApostrophe(char))</dc:subject>")
         }
         for tag in options.metadata?.additionalTags ?? [] {
-            subjectTags.append("<dc:subject>\(escapeXML(tag))</dc:subject>")
+            subjectTags.append("<dc:subject>\(xmlEscapeIncludingApostrophe(tag))</dc:subject>")
         }
 
         var seriesTags: [String] = []
         let activeSeries = options.primarySeries ?? options.metadata?.series.first.map { ($0.name, $0.index) }
         if let activeSeries {
-            seriesTags.append("<meta name=\"calibre:series\" content=\"\(escapeXML(activeSeries.name))\"/>")
+            seriesTags.append("<meta name=\"calibre:series\" content=\"\(xmlEscapeIncludingApostrophe(activeSeries.name))\"/>")
             seriesTags.append("<meta name=\"calibre:series_index\" content=\"\(activeSeries.index)\"/>")
-            seriesTags.append("<meta property=\"belongs-to-collection\" id=\"series_01\">\(escapeXML(activeSeries.name))</meta>")
+            seriesTags.append("<meta property=\"belongs-to-collection\" id=\"series_01\">\(xmlEscapeIncludingApostrophe(activeSeries.name))</meta>")
             seriesTags.append("<meta refines=\"#series_01\" property=\"collection-type\">series</meta>")
             seriesTags.append("<meta refines=\"#series_01\" property=\"group-position\">\(activeSeries.index)</meta>")
         }
@@ -177,7 +177,7 @@ enum AO3EPUB3Builder {
         <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
             <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
                 <dc:identifier id="pub-id">\(identifierURL)</dc:identifier>
-                <dc:title id="title">\(escapeXML(options.title))</dc:title>
+                <dc:title id="title">\(xmlEscapeIncludingApostrophe(options.title))</dc:title>
                 <dc:language>\(bcp47)</dc:language>
                 <dc:publisher id="pub">Archive of Our Own</dc:publisher>
                 <link refines="#pub" rel="record" href="https://archiveofourown.org/"/>
@@ -212,7 +212,7 @@ enum AO3EPUB3Builder {
         var chapterListItems: [String] = []
         for chapter in chapters {
             chapterListItems.append("""
-                            <li><a href="text/\(chapter.id).xhtml">\(escapeXML(chapter.title))</a></li>
+                            <li><a href="text/\(chapter.id).xhtml">\(xmlEscapeIncludingApostrophe(chapter.title))</a></li>
             """)
         }
 
@@ -228,7 +228,7 @@ enum AO3EPUB3Builder {
 
         topLevelListItems.append("""
                     <li>
-                        <span>\(escapeXML(title))</span>
+                        <span>\(xmlEscapeIncludingApostrophe(title))</span>
                         <ol>
         \(chapterListItems.joined(separator: "\n"))
                         </ol>
@@ -304,7 +304,7 @@ enum AO3EPUB3Builder {
         for chap in chapters {
             navPoints.append("""
             <navPoint id="np_\(order)" playOrder="\(order)">
-              <navLabel><text>\(escapeXML(chap.title))</text></navLabel>
+              <navLabel><text>\(xmlEscapeIncludingApostrophe(chap.title))</text></navLabel>
               <content src="text/\(chap.id).xhtml"/>
             </navPoint>
             """)
@@ -322,7 +322,7 @@ enum AO3EPUB3Builder {
             <meta name="dtb:maxPageNumber" content="0"/>
           </head>
           <docTitle>
-            <text>\(escapeXML(title))</text>
+            <text>\(xmlEscapeIncludingApostrophe(title))</text>
           </docTitle>
           <navMap>
         \(navPoints.joined(separator: "\n"))
@@ -345,26 +345,26 @@ enum AO3EPUB3Builder {
         var metaRows: [String] = []
 
         if let rating = metadata?.rating, !rating.isEmpty {
-            metaRows.append("<dt>Rating:</dt><dd>\(escapeXML(rating))</dd>")
+            metaRows.append("<dt>Rating:</dt><dd>\(xmlEscapeIncludingApostrophe(rating))</dd>")
         }
         if let warnings = metadata?.warnings, !warnings.isEmpty {
-            metaRows.append("<dt>Archive Warning:</dt><dd>\(escapeXML(warnings.joined(separator: ", ")))</dd>")
+            metaRows.append("<dt>Archive Warning:</dt><dd>\(xmlEscapeIncludingApostrophe(warnings.joined(separator: ", ")))</dd>")
         }
         if let fandoms = metadata?.fandoms, !fandoms.isEmpty {
-            metaRows.append("<dt>Fandom:</dt><dd>\(escapeXML(fandoms.joined(separator: ", ")))</dd>")
+            metaRows.append("<dt>Fandom:</dt><dd>\(xmlEscapeIncludingApostrophe(fandoms.joined(separator: ", ")))</dd>")
         }
         if let rels = metadata?.relationships, !rels.isEmpty {
-            metaRows.append("<dt>Relationship:</dt><dd>\(escapeXML(rels.joined(separator: ", ")))</dd>")
+            metaRows.append("<dt>Relationship:</dt><dd>\(xmlEscapeIncludingApostrophe(rels.joined(separator: ", ")))</dd>")
         }
         if let chars = metadata?.characters, !chars.isEmpty {
-            metaRows.append("<dt>Characters:</dt><dd>\(escapeXML(chars.joined(separator: ", ")))</dd>")
+            metaRows.append("<dt>Characters:</dt><dd>\(xmlEscapeIncludingApostrophe(chars.joined(separator: ", ")))</dd>")
         }
         if let tags = metadata?.additionalTags, !tags.isEmpty {
-            metaRows.append("<dt>Additional Tags:</dt><dd>\(escapeXML(tags.joined(separator: ", ")))</dd>")
+            metaRows.append("<dt>Additional Tags:</dt><dd>\(xmlEscapeIncludingApostrophe(tags.joined(separator: ", ")))</dd>")
         }
         if let series = metadata?.series, !series.isEmpty {
             let seriesStr = series.map { "Part \($0.index) of \($0.name)" }.joined(separator: "; ")
-            metaRows.append("<dt>Series:</dt><dd>\(escapeXML(seriesStr))</dd>")
+            metaRows.append("<dt>Series:</dt><dd>\(xmlEscapeIncludingApostrophe(seriesStr))</dd>")
         }
 
         var stats: [String] = []
@@ -382,7 +382,7 @@ enum AO3EPUB3Builder {
             stats.append("Chapters: \(curr)/\(total)")
         }
         if !stats.isEmpty {
-            metaRows.append("<dt>Stats:</dt><dd>\(escapeXML(stats.joined(separator: " • ")))</dd>")
+            metaRows.append("<dt>Stats:</dt><dd>\(xmlEscapeIncludingApostrophe(stats.joined(separator: " • ")))</dd>")
         }
 
         return """
@@ -391,15 +391,15 @@ enum AO3EPUB3Builder {
         <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="\(bcp47)">
         <head>
             <meta charset="utf-8"/>
-            <title>\(escapeXML(title))</title>
+            <title>\(xmlEscapeIncludingApostrophe(title))</title>
             <link rel="stylesheet" type="text/css" href="../css/stylesheet.css"/>
             <link rel="stylesheet" type="text/css" href="../css/page_styles.css"/>
         </head>
         <body epub:type="frontmatter">
             <section class="imprint" id="imprint" epub:type="imprint">
                 <header>
-                    <h1 class="title">\(escapeXML(title))</h1>
-                    <div class="byline">by \(escapeXML(authorNames))</div>
+                    <h1 class="title">\(xmlEscapeIncludingApostrophe(title))</h1>
+                    <div class="byline">by \(xmlEscapeIncludingApostrophe(authorNames))</div>
                 </header>
                 <dl class="tags">
                     \(metaRows.joined(separator: "\n            "))
@@ -468,14 +468,14 @@ enum AO3EPUB3Builder {
         <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="\(bcp47)">
         <head>
             <meta charset="utf-8"/>
-            <title>\(escapeXML(chapter.title))</title>
+            <title>\(xmlEscapeIncludingApostrophe(chapter.title))</title>
             <link rel="stylesheet" type="text/css" href="../css/stylesheet.css"/>
             <link rel="stylesheet" type="text/css" href="../css/page_styles.css"/>
         </head>
         <body epub:type="bodymatter">
             <section class="chapter" epub:type="chapter">
                 <header class="chapter-header">
-                    <h2>\(escapeXML(chapter.title))</h2>
+                    <h2>\(xmlEscapeIncludingApostrophe(chapter.title))</h2>
                 </header>
                 \(notesHTML)
                 <main class="chapter-body" epub:type="bodymatter">
@@ -643,13 +643,5 @@ enum AO3EPUB3Builder {
             }
         }
         """
-    }
-
-    private static func escapeXML(_ text: String) -> String {
-        text.replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&apos;")
     }
 }

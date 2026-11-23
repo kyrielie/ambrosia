@@ -240,4 +240,24 @@ final class SearchQueryParserTests: XCTestCase {
             ""
         )
     }
+
+    // MARK: - Quoted values for exact and regex prefixes
+
+    func test_exactAuthorPrefix_stripsSurroundingQuotes() {
+        let query = SearchQueryParser.parse("author:=\"Jane Doe\"")
+        XCTAssertEqual(query.authorTerms, ["Jane Doe"])
+        XCTAssertEqual(query.scopedAuthorTerms.first?.value, "Jane Doe")
+        XCTAssertEqual(query.scopedAuthorTerms.first?.mode, .exact)
+    }
+
+    func test_regexSeriesPrefix_stripsSurroundingQuotes() {
+        let query = SearchQueryParser.parse("series:~\"^The \"")
+        XCTAssertEqual(query.seriesTerms, ["^The "])
+        XCTAssertEqual(query.scopedSeriesTerms.first?.mode, .regex)
+    }
+
+    func test_exactAuthorPrefix_leavesUnbalancedQuoteUntouched() {
+        let query = SearchQueryParser.parse("author:=\"Jane")
+        XCTAssertEqual(query.authorTerms, ["\"Jane"])
+    }
 }

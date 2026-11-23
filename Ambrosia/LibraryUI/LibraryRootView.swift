@@ -338,20 +338,10 @@ struct LibraryRootView: View {
     // MARK: - Row Actions & Mutations
 
     private func removeFromCollection(named collectionName: String, calibreIDs: [Int]) {
-        Task {
-            guard let collections = try? await session.collectionStore?.collections(),
-                  let match = collections.first(where: { $0.name == collectionName }) else { return }
-            if match.id == SystemCollectionID.liked || match.id == SystemCollectionID.readLater {
-                _ = try? await session.collectionStore?.setWorkFlags(
-                    collectionID: match.id,
-                    desired: Dictionary(uniqueKeysWithValues: calibreIDs.map { ($0, false) })
-                )
-            } else {
-                try? await session.collectionStore?.bulkRemove(calibreIDs: calibreIDs, from: match.id)
-            }
-            CollectionAssignment.didAssign(session: session) {
-                Task { await displayController.refreshVisibilitySnapshots(resetPage: false) }
-            }
+        CollectionAssignment.removeFromCollection(
+            named: collectionName, calibreIDs: calibreIDs, session: session
+        ) {
+            await displayController.refreshVisibilitySnapshots(resetPage: false)
         }
     }
 
@@ -404,51 +394,13 @@ struct LibraryRootView: View {
     }
 
     private func markRead(_ books: [CalibreBook]) {
-        let ids = books.map(\.id)
-        Task {
-            if let metaDB = session.metaDB {
-                for calibreID in ids {
-                    try? await metaDB.markBookRead(calibreID: calibreID)
-                }
-            }
-            for calibreID in ids {
-                try? await session.collectionStore?.syncAutomatedCollection(
-                    collectionID: SystemCollectionID.finished,
-                    calibreID: calibreID,
-                    shouldBeMember: true
-                )
-                try? await session.collectionStore?.syncAutomatedCollection(
-                    collectionID: SystemCollectionID.inProgress,
-                    calibreID: calibreID,
-                    shouldBeMember: false
-                )
-            }
-            session.bumpCollectionVersion()
+        CollectionAssignment.markRead(calibreIDs: books.map(\.id), session: session) {
             displayController.refreshBookStates()
         }
     }
 
     private func resetProgress(_ books: [CalibreBook]) {
-        let ids = books.map(\.id)
-        Task {
-            if let metaDB = session.metaDB {
-                for calibreID in ids {
-                    try? await metaDB.resetReadingProgress(calibreID: calibreID)
-                }
-            }
-            for calibreID in ids {
-                try? await session.collectionStore?.syncAutomatedCollection(
-                    collectionID: SystemCollectionID.finished,
-                    calibreID: calibreID,
-                    shouldBeMember: false
-                )
-                try? await session.collectionStore?.syncAutomatedCollection(
-                    collectionID: SystemCollectionID.inProgress,
-                    calibreID: calibreID,
-                    shouldBeMember: false
-                )
-            }
-            session.bumpCollectionVersion()
+        CollectionAssignment.resetProgress(calibreIDs: books.map(\.id), session: session) {
             displayController.refreshBookStates()
         }
     }

@@ -119,7 +119,7 @@ struct PassageTypographicCardView: View {
 
             let wordCount = ao3Metadata?.wordCount ?? book.wordCount
             if let count = wordCount, count > 0 {
-                badgePill(label: formatWordCount(count), color: .secondary)
+                badgePill(label: WordCountFormatting.label(count), color: .secondary)
             }
 
             if let ao3 = ao3Metadata {
@@ -179,17 +179,6 @@ struct PassageTypographicCardView: View {
                     .fill(color.opacity(0.12))
             )
             .foregroundColor(color)
-    }
-
-    private func formatWordCount(_ count: Int) -> String {
-        switch count {
-        case 0..<1_000:
-            return "\(count) words"
-        case 0..<1_000_000:
-            return String(format: "%.1fk words", Double(count) / 1_000)
-        default:
-            return String(format: "%.2fM words", Double(count) / 1_000_000)
-        }
     }
 
     // MARK: - Passage Snippet Section

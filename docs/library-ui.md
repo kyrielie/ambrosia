@@ -85,6 +85,8 @@ Book and series rows support macOS right-click / secondary-click context menus a
 - Collection assignments (Read Later, Liked, Skipped, Finished, In Progress, custom collections).
 - Open in Reader / Open in External Reader.
 
+Mark Read, Reset Progress and Remove from Collection are implemented once in `CollectionAssignment` (`markRead`, `resetProgress`, `removeFromCollection`) and called by both `LibraryRootView` and `EmailLibraryViewController`; each view only supplies its own refresh callback.
+
 ## Modal Sheets Architecture
 
 All modal library dialogs (`CollectionsView`, `ReadingGoalView`, `ErrorLogView`, `RSSPublishWarningView`, `ManageFeedsView`) are managed and presented centrally as AppKit modal sheets on `LibraryWindowController` (`window.beginSheet`), rather than via multiple SwiftUI `.sheet(isPresented:)` modifiers. This guarantees clean, single-animation presentation and deterministic dismissal without bouncing or re-opening.

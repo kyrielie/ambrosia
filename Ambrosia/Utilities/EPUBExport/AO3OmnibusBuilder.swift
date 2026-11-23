@@ -242,13 +242,13 @@ enum AO3OmnibusBuilder {
             var partChapterItems: [String] = []
             for chap in part.chapters {
                 partChapterItems.append("""
-                                <li><a href="text/\(chap.id).xhtml">\(escapeXML(chap.title))</a></li>
+                                <li><a href="text/\(chap.id).xhtml">\(xmlEscapeIncludingApostrophe(chap.title))</a></li>
                 """)
             }
 
             tocListItems.append("""
                         <li>
-                            <span>Part \(part.partIndex): \(escapeXML(part.title))</span>
+                            <span>Part \(part.partIndex): \(xmlEscapeIncludingApostrophe(part.title))</span>
                             <ol>
             \(partChapterItems.joined(separator: "\n"))
                             </ol>
@@ -264,13 +264,13 @@ enum AO3OmnibusBuilder {
         <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="\(bcp47)">
         <head>
             <meta charset="utf-8"/>
-            <title>\(escapeXML(omnibusTitle))</title>
+            <title>\(xmlEscapeIncludingApostrophe(omnibusTitle))</title>
             <link rel="stylesheet" type="text/css" href="css/stylesheet.css"/>
             <link rel="stylesheet" type="text/css" href="css/page_styles.css"/>
         </head>
         <body>
             <nav id="toc" epub:type="toc">
-                <h1>\(escapeXML(omnibusTitle))</h1>
+                <h1>\(xmlEscapeIncludingApostrophe(omnibusTitle))</h1>
                 <ol>
         \(tocListItems.joined(separator: "\n"))
                 </ol>
@@ -281,29 +281,35 @@ enum AO3OmnibusBuilder {
 
         // 5. Build Omnibus Imprint
         let authorNames = series.allAuthors.isEmpty ? "Unknown" : series.allAuthors.joined(separator: ", ")
+        let fandomsTag = series.allFandoms.isEmpty ? "" :
+            "<dt>Fandoms:</dt><dd>\(xmlEscapeIncludingApostrophe(series.allFandoms.joined(separator: ", ")))</dd>"
+        let relationshipsTag = series.allRelationships.isEmpty ? "" :
+            "<dt>Relationships:</dt><dd>\(xmlEscapeIncludingApostrophe(series.allRelationships.joined(separator: ", ")))</dd>"
+        let charactersTag = series.allCharacters.isEmpty ? "" :
+            "<dt>Characters:</dt><dd>\(xmlEscapeIncludingApostrophe(series.allCharacters.joined(separator: ", ")))</dd>"
         let imprintContent = """
         <?xml version="1.0" encoding="utf-8"?>
         <!DOCTYPE html>
         <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="\(bcp47)">
         <head>
             <meta charset="utf-8"/>
-            <title>\(escapeXML(omnibusTitle))</title>
+            <title>\(xmlEscapeIncludingApostrophe(omnibusTitle))</title>
             <link rel="stylesheet" type="text/css" href="../css/stylesheet.css"/>
             <link rel="stylesheet" type="text/css" href="../css/page_styles.css"/>
         </head>
         <body epub:type="frontmatter">
             <section class="imprint" epub:type="imprint">
                 <header>
-                    <h1 class="title">\(escapeXML(omnibusTitle))</h1>
-                    <div class="byline">by \(escapeXML(authorNames))</div>
+                    <h1 class="title">\(xmlEscapeIncludingApostrophe(omnibusTitle))</h1>
+                    <div class="byline">by \(xmlEscapeIncludingApostrophe(authorNames))</div>
                 </header>
                 <dl class="tags">
-                    <dt>Series:</dt><dd>\(escapeXML(series.seriesName))</dd>
+                    <dt>Series:</dt><dd>\(xmlEscapeIncludingApostrophe(series.seriesName))</dd>
                     <dt>Works:</dt><dd>\(parts.count) parts (\(report.presentIndices.count) present, \(report.missingIndices.count) missing)</dd>
                     <dt>Word Count:</dt><dd>\(formatNumber(series.totalWordCount)) words</dd>
-                    \(series.allFandoms.isEmpty ? "" : "<dt>Fandoms:</dt><dd>\(escapeXML(series.allFandoms.joined(separator: ", ")))</dd>")
-                    \(series.allRelationships.isEmpty ? "" : "<dt>Relationships:</dt><dd>\(escapeXML(series.allRelationships.joined(separator: ", ")))</dd>")
-                    \(series.allCharacters.isEmpty ? "" : "<dt>Characters:</dt><dd>\(escapeXML(series.allCharacters.joined(separator: ", ")))</dd>")
+                    \(fandomsTag)
+                    \(relationshipsTag)
+                    \(charactersTag)
                     \(isWIP ? "<dt>Status:</dt><dd><strong>Work in Progress [WIP]</strong></dd>" : "<dt>Status:</dt><dd>Complete</dd>")
                 </dl>
             </section>
@@ -491,13 +497,5 @@ enum AO3OmnibusBuilder {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
         return formatter.string(from: NSNumber(value: num)) ?? "\(num)"
-    }
-
-    private static func escapeXML(_ text: String) -> String {
-        text.replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&apos;")
     }
 }

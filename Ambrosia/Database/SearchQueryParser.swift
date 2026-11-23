@@ -330,6 +330,15 @@ struct SearchQuery {
 // prefix or plain terms. Both parser entry points are live.
 struct SearchQueryParser {
 
+    /// Trims whitespace and strips one pair of surrounding double quotes.
+    private static func unquoted(_ val: String) -> String {
+        var str = val.trimmingCharacters(in: .whitespaces)
+        if str.hasPrefix("\"") && str.hasSuffix("\"") && str.count >= 2 {
+            str = String(str.dropFirst().dropLast())
+        }
+        return str
+    }
+
     /// Parse a raw search string into a `SearchQuery`.
     ///
     /// Tag, author, title, series values consume EVERYTHING after the colon —
@@ -338,14 +347,6 @@ struct SearchQueryParser {
     /// prefix is the value.
     static func parse(_ input: String) -> SearchQuery {
         let trimmed = input.trimmingCharacters(in: .whitespaces)
-
-        func unquoted(_ val: String) -> String {
-            var str = val.trimmingCharacters(in: .whitespaces)
-            if str.hasPrefix("\"") && str.hasSuffix("\"") && str.count >= 2 {
-                str = String(str.dropFirst().dropLast())
-            }
-            return str
-        }
 
         // Check for a leading prefix that consumes the rest of the string.
         // Order matters: check longest prefixes first.
@@ -480,14 +481,6 @@ struct SearchQueryParser {
         var wordGT: Int?
         var wordLT: Int?
         var plain: [String] = []
-
-        func unquoted(_ val: String) -> String {
-            var str = val.trimmingCharacters(in: .whitespaces)
-            if str.hasPrefix("\"") && str.hasSuffix("\"") && str.count >= 2 {
-                str = String(str.dropFirst().dropLast())
-            }
-            return str
-        }
 
         let tokens = tokenize(trimmed)
         let prefixMap: [(String, (String) -> Void)] = [

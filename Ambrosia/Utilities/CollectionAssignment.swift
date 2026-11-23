@@ -35,6 +35,95 @@ enum CollectionAssignment {
         onRefresh()
     }
 
+    // MARK: - Reading state and bulk removal (shared by the list and email views)
+
+    /// Marks the books read: persists full progress, moves them to "Finished"
+    /// and out of "In Progress", bumps the collection version, then calls `onFinished`.
+    static func markRead(
+        calibreIDs: [Int],
+        session: LibrarySession,
+        onFinished: @escaping () -> Void
+    ) {
+        Task { @MainActor in
+            if let metaDB = session.metaDB {
+                for calibreID in calibreIDs {
+                    try? await metaDB.markBookRead(calibreID: calibreID)
+                }
+            }
+            await syncReadingCollections(calibreIDs: calibreIDs, session: session, isFinished: true)
+            session.bumpCollectionVersion()
+            onFinished()
+        }
+    }
+
+    /// Resets reading progress: clears stored position and progress, removes the
+    /// books from both "Finished" and "In Progress", bumps the collection
+    /// version, then calls `onFinished`.
+    static func resetProgress(
+        calibreIDs: [Int],
+        session: LibrarySession,
+        onFinished: @escaping () -> Void
+    ) {
+        Task { @MainActor in
+            if let metaDB = session.metaDB {
+                for calibreID in calibreIDs {
+                    try? await metaDB.resetReadingProgress(calibreID: calibreID)
+                }
+            }
+            await syncReadingCollections(calibreIDs: calibreIDs, session: session, isFinished: false)
+            session.bumpCollectionVersion()
+            onFinished()
+        }
+    }
+
+    /// Removes the books from the collection with the given display name. Liked and
+    /// Read Later are flag-backed, so they are cleared through `setWorkFlags`; every
+    /// other collection uses `bulkRemove`. Does nothing if no collection has that
+    /// name. `onRefresh` runs after the collection version bump.
+    static func removeFromCollection(
+        named collectionName: String,
+        calibreIDs: [Int],
+        session: LibrarySession,
+        onRefresh: @escaping () async -> Void
+    ) {
+        Task { @MainActor in
+            guard let collections = try? await session.collectionStore?.collections(),
+                  let match = collections.first(where: { $0.name == collectionName }) else { return }
+            if match.id == SystemCollectionID.liked || match.id == SystemCollectionID.readLater {
+                _ = try? await session.collectionStore?.setWorkFlags(
+                    collectionID: match.id,
+                    desired: Dictionary(uniqueKeysWithValues: calibreIDs.map { ($0, false) })
+                )
+            } else {
+                try? await session.collectionStore?.bulkRemove(calibreIDs: calibreIDs, from: match.id)
+            }
+            didAssign(session: session) {
+                Task { await onRefresh() }
+            }
+        }
+    }
+
+    /// Syncs the automated "Finished" and "In Progress" collections after a
+    /// reading-state change. "In Progress" membership is always cleared here.
+    private static func syncReadingCollections(
+        calibreIDs: [Int],
+        session: LibrarySession,
+        isFinished: Bool
+    ) async {
+        for calibreID in calibreIDs {
+            try? await session.collectionStore?.syncAutomatedCollection(
+                collectionID: SystemCollectionID.finished,
+                calibreID: calibreID,
+                shouldBeMember: isFinished
+            )
+            try? await session.collectionStore?.syncAutomatedCollection(
+                collectionID: SystemCollectionID.inProgress,
+                calibreID: calibreID,
+                shouldBeMember: false
+            )
+        }
+    }
+
     /// Toggles the "Liked" state for the given calibre IDs optimistically and persists to the database.
     static func toggleLiked(
         calibreIDs: [Int],

@@ -19,15 +19,6 @@ func dedupPreservingOrder(_ values: [String]) -> [String] {
     return values.filter { seen.insert($0).inserted }
 }
 
-/// XML character escaping for OPML, RSS, and XML attributes.
-func xmlEscape(_ string: String) -> String {
-    string
-        .replacingOccurrences(of: "&", with: "&amp;")
-        .replacingOccurrences(of: "<", with: "&lt;")
-        .replacingOccurrences(of: ">", with: "&gt;")
-        .replacingOccurrences(of: "\"", with: "&quot;")
-}
-
 /// Date formatting utilities shared across RSS and JSON feed generation.
 enum FeedDateFormatter {
     /// Tries ISO 8601 with fractional seconds, then without, then a bare

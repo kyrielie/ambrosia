@@ -711,14 +711,6 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
     }
 
-    private static func escapeHTML(_ string: String) -> String {
-        string
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-    }
-
     /// Rebuilds the scroll-mode merged HTML for the current target from the
     /// already-parsed `workParsers` (no disk re-read). Used both by the
     /// initial load and by reloadHTML() (style-only preference changes), so
@@ -757,7 +749,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             let record = workAO3Records.indices.contains(offset) ? workAO3Records[offset] : nil
             let displayIndex = series.displayIndex(for: work) ?? offset + 1
             let breakHTML = """
-            <div class="ambrosia-series-break"><h2>Work \(displayIndex): \(Self.escapeHTML(work.displayTitle))</h2></div>
+            <div class="ambrosia-series-break"><h2>Work \(displayIndex): \(xmlEscape(work.displayTitle))</h2></div>
             """
             // Running count of spine items already emitted by prior works, so
             // each work's data-spine-index range is disjoint in the merged

@@ -347,7 +347,7 @@ struct BookListRow: View, Equatable {
         LibraryStats(
             chapterText: ao3Metadata.flatMap(Self.chapterText),
             isComplete: ao3Metadata?.isComplete == true,
-            wordText: (ao3Metadata?.wordCount ?? book.wordCount).map(Self.formatWordCount),
+            wordText: (ao3Metadata?.wordCount ?? book.wordCount).map(WordCountFormatting.label),
             publishedText: Self.nonEmpty(ao3Metadata?.publishedDate),
             updatedText: Self.nonEmpty(ao3Metadata?.updatedDate)
         )
@@ -365,14 +365,6 @@ struct BookListRow: View, Equatable {
             return "\(current)/\(total) ch"
         }
         return "\(current)/? ch"
-    }
-
-    private static func formatWordCount(_ count: Int) -> String {
-        switch count {
-        case 0..<1_000: return "\(count) words"
-        case 0..<1_000_000: return String(format: "%.1fk words", Double(count) / 1_000)
-        default: return String(format: "%.2fM words", Double(count) / 1_000_000)
-        }
     }
 
     private static func formatKudos(_ count: Int) -> String {

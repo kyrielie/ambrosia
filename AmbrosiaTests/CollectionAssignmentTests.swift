@@ -308,4 +308,110 @@ final class CollectionAssignmentTests: XCTestCase {
         let stateRelevance = LastViewState(sortField: .relevance, ascending: true, filterExpression: nil)
         XCTAssertEqual(stateRelevance.sortField, .title)
     }
+
+    // MARK: - Shared reading-state and removal actions
+
+    /// Polls until `condition` holds or the timeout elapses. The shared actions
+    /// run in unstructured tasks, so tests wait on their observable effects.
+    private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline {
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTAssertTrue(condition(), "Condition not met within \(timeout)s")
+    }
+
+    func testMarkReadMovesBookToFinishedAndOutOfInProgress() async throws {
+        guard let store = session.collectionStore, let metaDB = session.metaDB else {
+            XCTFail("collectionStore or metaDB was nil")
+            return
+        }
+        let bookID = 1
+        try await store.syncAutomatedCollection(
+            collectionID: SystemCollectionID.inProgress, calibreID: bookID, shouldBeMember: true
+        )
+        let versionBefore = session.collectionVersion
+
+        var finishedCalled = false
+        CollectionAssignment.markRead(calibreIDs: [bookID], session: session) { finishedCalled = true }
+        try await waitUntil { finishedCalled }
+
+        let finished = try await store.members(of: SystemCollectionID.finished)
+        let inProgress = try await store.members(of: SystemCollectionID.inProgress)
+        XCTAssertTrue(finished.contains(bookID))
+        XCTAssertFalse(inProgress.contains(bookID))
+        let state = await metaDB.bookState(for: bookID)
+        XCTAssertEqual(state.totalReadPercent, 1.0, accuracy: 0.0001)
+        XCTAssertGreaterThan(session.collectionVersion, versionBefore)
+    }
+
+    func testResetProgressClearsFinishedAndInProgressAndStoredProgress() async throws {
+        guard let store = session.collectionStore, let metaDB = session.metaDB else {
+            XCTFail("collectionStore or metaDB was nil")
+            return
+        }
+        let bookID = 1
+        try await metaDB.markBookRead(calibreID: bookID)
+        try await store.syncAutomatedCollection(
+            collectionID: SystemCollectionID.finished, calibreID: bookID, shouldBeMember: true
+        )
+
+        var finishedCalled = false
+        CollectionAssignment.resetProgress(calibreIDs: [bookID], session: session) { finishedCalled = true }
+        try await waitUntil { finishedCalled }
+
+        let finished = try await store.members(of: SystemCollectionID.finished)
+        let inProgress = try await store.members(of: SystemCollectionID.inProgress)
+        XCTAssertFalse(finished.contains(bookID))
+        XCTAssertFalse(inProgress.contains(bookID))
+        let state = await metaDB.bookState(for: bookID)
+        XCTAssertEqual(state.totalReadPercent, 0.0, accuracy: 0.0001)
+    }
+
+    func testRemoveFromCollectionRemovesOnlyTheRequestedBooksFromAManualCollection() async throws {
+        guard let store = session.collectionStore else {
+            XCTFail("CollectionStore was nil")
+            return
+        }
+        let shelf = try await store.createCollection(name: "Test Shelf", calibreIDs: [1, 2])
+
+        var refreshed = false
+        CollectionAssignment.removeFromCollection(
+            named: "Test Shelf", calibreIDs: [1], session: session
+        ) { refreshed = true }
+        try await waitUntil { refreshed }
+
+        let members = try await store.members(of: shelf.id)
+        XCTAssertEqual(Set(members), [2])
+    }
+
+    func testRemoveFromCollectionClearsFlagBackedLikedCollection() async throws {
+        guard let store = session.collectionStore else {
+            XCTFail("CollectionStore was nil")
+            return
+        }
+        let bookID = 1
+        _ = try await store.setWorkFlags(collectionID: SystemCollectionID.liked, desired: [bookID: true])
+        let before = try await store.members(of: SystemCollectionID.liked)
+        XCTAssertTrue(before.contains(bookID))
+
+        var refreshed = false
+        CollectionAssignment.removeFromCollection(
+            named: "Liked", calibreIDs: [bookID], session: session
+        ) { refreshed = true }
+        try await waitUntil { refreshed }
+
+        let after = try await store.members(of: SystemCollectionID.liked)
+        XCTAssertFalse(after.contains(bookID))
+    }
+
+    func testRemoveFromCollectionWithUnknownNameDoesNothingAndDoesNotRefresh() async throws {
+        var refreshed = false
+        CollectionAssignment.removeFromCollection(
+            named: "No Such Collection", calibreIDs: [1], session: session
+        ) { refreshed = true }
+
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertFalse(refreshed)
+    }
 }
