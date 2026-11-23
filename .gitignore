@@ -1,4 +1,9 @@
 
+# Distribution & Release artifacts
+dist/
+*.dmg
+*.dmg.sha256
+
 # AI tool output / scratch dumps
 *repomix*
 *dump*.xml

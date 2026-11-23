@@ -1624,6 +1624,9 @@
 		21EF449511D67D7D66C4523F /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = (
+					arm64,
+				);
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Ambrosia/Ambrosia.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
@@ -1651,6 +1654,9 @@
 		2738B5DE65E5A43FBC2F3DE9 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = (
+					arm64,
+				);
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -1792,6 +1798,9 @@
 		80C05CBFBFE0B3CF410D83A3 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = (
+					arm64,
+				);
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -1814,6 +1823,9 @@
 		D8EE4460B39643897C6B359E /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = (
+					arm64,
+				);
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Ambrosia/Ambrosia.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
