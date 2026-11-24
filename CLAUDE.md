@@ -33,6 +33,7 @@ doc(s) relevant to your task**, not this whole index cover-to-cover.
 - **Nectar and Honeycrisp feature adoption strategy** → `docs/nectar-feature-adoption.md`
 - **Local Swift reference implementations (swiftreference, companion reader architectures)** → `docs/local-dev-references.md`
 - **Adding a test file, or "why didn't my new test run"** → `docs/testing.md`
+- **Releases, packaging, DMG creation, and Homebrew tap dispatch** → `docs/testing.md`, `~/.gemini/config/skills/macos-app-release/SKILL.md`, and `scripts/release-local.sh`
 
 If nothing above fits, grep the codebase before assuming it's
 undocumented — this split was complete when it was written, but the
@@ -102,6 +103,7 @@ it's trusted by default. Specifically:
 | Shipping something previously listed as not-yet-built | `docs/not-yet-built.md` (remove the line) and whichever system doc now owns it |
 | `.swiftlint.yml` rules (adding/disabling a rule, changing thresholds), or a new accepted force-unwrap exception | `docs/overview.md`'s "Repo-wide engineering rules" (Invariant 12) |
 | Adding an `AmbrosiaTests/` file, or changing what CI verifies about test-file wiring | `docs/testing.md` |
+| Packaging, local release pipeline, DMG creation, or Homebrew tap dispatch | `docs/testing.md`, `scripts/release-local.sh`, and `~/.gemini/config/skills/macos-app-release/SKILL.md` |
 | Local reference repositories, architectural models from companion apps | `docs/local-dev-references.md` |
 | Strategic roadmap, modernization milestones, or implementation plans | `docs/roadmap.md` and `docs/plans/finished/` |
 

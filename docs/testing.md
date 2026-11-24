@@ -237,6 +237,20 @@ someone to inspect `xcrun xcresulttool get --format json --path
 isn't something to guess at. Until that lands, step 3 above (read the
 `./test.sh` output, don't just check its exit code) is the only guard.
 
+## Release Automation and Packaging
+
+Releases are built, signed, packaged, and published **directly on the local Apple Silicon machine** using [`scripts/release-local.sh`](../scripts/release-local.sh) or the release helper (`~/.gemini/config/skills/macos-app-release/scripts/release.sh local <version>`).
+
+```bash
+# Full local release: test -> version bump -> build -> codesign -> DMG -> GitHub release -> Homebrew dispatch
+./scripts/release-local.sh 0.2.0
+
+# Dry-run validation (builds DMG and checksum without pushing or publishing):
+./scripts/release-local.sh 0.2.0 --dry-run
+```
+
+GitHub Actions automated test runs on push/PR are disabled due to macOS runner queue capacity constraints and runner timeouts. The local release script provides instant execution (~40s), guarantees Apple Silicon arm64 target compilation (avoiding `Float16` unavailability on x86_64), ad-hoc signs for Gatekeeper, generates compressed UDZO DMGs, publishes to GitHub Releases, and dispatches the cask update event to `kyrielie/homebrew-yggdrasil`.
+
 ## Local git hooks
 
 A pre-commit hook (SwiftLint only, not the full suite — see the file's own
