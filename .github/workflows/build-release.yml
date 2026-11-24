@@ -71,7 +71,6 @@ jobs:
             -project Ambrosia.xcodeproj \
             -scheme Ambrosia \
             -configuration Release \
-            -destination "platform=macOS,arch=arm64" \
             -derivedDataPath "$build_dir" \
             MARKETING_VERSION="${{ steps.release.outputs.version }}" \
             CODE_SIGNING_ALLOWED=NO \

@@ -107,7 +107,7 @@ public actor PassageDatabase {
             return []
         }
 
-        let expectedByteCount = dimension * MemoryLayout<Float16>.size
+        let expectedByteCount = dimension * 2
 
         // Build SQL query
         var sql = """
@@ -148,10 +148,21 @@ public actor PassageDatabase {
             let blobBytes = Int(sqlite3_column_bytes(stmt, 6))
             guard blobBytes == expectedByteCount else { continue }
 
-            // Zero-copy pointer read of Float16 elements
-            let f16Ptr = rawBlob.assumingMemoryBound(to: Float16.self)
-            for dimIndex in 0..<dimension {
-                floatBuffer[dimIndex] = Float(f16Ptr[dimIndex])
+            // Universal SIMD conversion from packed 16-bit float (IEEE 754 half) to Float32
+            var srcBuffer = vImage_Buffer(
+                data: UnsafeMutableRawPointer(mutating: rawBlob),
+                height: 1,
+                width: vImagePixelCount(dimension),
+                rowBytes: dimension * 2
+            )
+            floatBuffer.withUnsafeMutableBufferPointer { dstPtr in
+                var dstBuffer = vImage_Buffer(
+                    data: dstPtr.baseAddress,
+                    height: 1,
+                    width: vImagePixelCount(dimension),
+                    rowBytes: dimension * 4
+                )
+                vImageConvert_Planar16FtoPlanarF(&srcBuffer, &dstBuffer, 0)
             }
 
             // SIMD Dot Product (since vectors are L2-normalized, dot product is cosine similarity)

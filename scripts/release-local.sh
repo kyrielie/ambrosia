@@ -148,18 +148,18 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 4. Release Build (Apple Silicon ARM64)
+# 4. Release Build (Universal: ARM64 + x86_64)
 # ------------------------------------------------------------------------------
 BUILD_DIR="${TMPDIR:-/tmp}/ambrosia-release-build"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
-log_info "Building Ambrosia in Release configuration (ARM64)..."
+log_info "Building Ambrosia in Release configuration (Universal: ARM64 + x86_64)..."
 xcodebuild \
   -project Ambrosia.xcodeproj \
   -scheme Ambrosia \
   -configuration Release \
-  -destination "platform=macOS,arch=arm64" \
+  -destination "generic/platform=macOS" \
   -derivedDataPath "$BUILD_DIR" \
   MARKETING_VERSION="${VERSION}" \
   CODE_SIGNING_ALLOWED=NO \
@@ -173,6 +173,10 @@ if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
   exit 1
 fi
 log_ok "Built application: $APP_PATH"
+
+log_info "Verifying Universal binary architectures (lipo)..."
+BINARY_ARCHS=$(lipo -archs "$APP_PATH/Contents/MacOS/Ambrosia")
+log_ok "Architectures: $BINARY_ARCHS"
 
 # ------------------------------------------------------------------------------
 # 5. Ad-Hoc Code Signing

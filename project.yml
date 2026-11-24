@@ -93,7 +93,7 @@ targets:
       - sdk: libicucore.tbd
     settings:
       base:
-        ARCHS: [arm64]
+        ARCHS: [arm64, x86_64]
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_OBJC_BRIDGING_HEADER: Ambrosia/Ambrosia-Bridging-Header.h
         CODE_SIGN_ENTITLEMENTS: Ambrosia/Ambrosia.entitlements
@@ -120,7 +120,7 @@ targets:
         product: SQLite
     settings:
       base:
-        ARCHS: [arm64]
+        ARCHS: [arm64, x86_64]
         BUNDLE_LOADER: "$(TEST_HOST)"
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: YES

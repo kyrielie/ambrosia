@@ -93,8 +93,26 @@ final class PassageDatabaseTests: XCTestCase {
             sqlite3_reset(insertVecStmt)
             sqlite3_bind_int(insertVecStmt, 1, Int32(chunkID))
 
-            let f16Data = vec.map { Float16($0) }
-            f16Data.withUnsafeBytes { raw in
+            var srcFloats = vec
+            var halfFloats = [UInt16](repeating: 0, count: vec.count)
+            srcFloats.withUnsafeMutableBufferPointer { srcPtr in
+                halfFloats.withUnsafeMutableBufferPointer { dstPtr in
+                    var srcBuf = vImage_Buffer(
+                        data: srcPtr.baseAddress,
+                        height: 1,
+                        width: vImagePixelCount(vec.count),
+                        rowBytes: vec.count * 4
+                    )
+                    var dstBuf = vImage_Buffer(
+                        data: dstPtr.baseAddress,
+                        height: 1,
+                        width: vImagePixelCount(vec.count),
+                        rowBytes: vec.count * 2
+                    )
+                    vImageConvert_PlanarFtoPlanar16F(&srcBuf, &dstBuf, 0)
+                }
+            }
+            halfFloats.withUnsafeBytes { raw in
                 sqlite3_bind_blob(insertVecStmt, 2, raw.baseAddress, Int32(raw.count), nil)
             }
             XCTAssertEqual(sqlite3_step(insertVecStmt), SQLITE_DONE)

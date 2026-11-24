@@ -38,7 +38,6 @@ jobs:
             -project Ambrosia.xcodeproj \
             -scheme Ambrosia \
             -configuration Release \
-            -destination "platform=macOS,arch=arm64" \
             -derivedDataPath "$build_dir" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
