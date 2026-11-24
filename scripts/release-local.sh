@@ -135,7 +135,8 @@ log_ok "project.yml, Info.plist, and Ambrosia.xcodeproj updated to ${VERSION}."
 if [ "$DRY_RUN" -eq 0 ]; then
   if [ -n "$(git status --porcelain project.yml Ambrosia/Resources/Info.plist Ambrosia.xcodeproj)" ]; then
     log_info "Committing version bump to ${VERSION}..."
-    git add project.yml Ambrosia/Resources/Info.plist Ambrosia.xcodeproj
+    git add project.yml Ambrosia/Resources/Info.plist
+    git add -f Ambrosia.xcodeproj/project.pbxproj
     git commit -m "chore(release): bump version to ${VERSION}"
     git push origin main
     log_ok "Pushed release commit to origin/main."
