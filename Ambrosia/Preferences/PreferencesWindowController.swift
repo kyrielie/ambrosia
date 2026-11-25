@@ -62,9 +62,8 @@ final class PreferencesWindowController: NSWindowController {
         }
 
         let window = NSWindow(contentViewController: tabVC)
-        window.title   = "Preferences"
-        window.minSize = NSSize(width: 700, height: 500)
-        window.setContentSize(NSSize(width: 720, height: 680))
+        window.title   = "Settings"
+        window.minSize = NSSize(width: 700, height: 480)
         window.center()
         window.isReleasedWhenClosed = false
         window.isRestorable = false
@@ -2639,6 +2638,19 @@ private struct DocsTab: View {
                     syntaxRow(syntax: "status:Complete", description: "Filters by status: Complete or InProgress")
                     syntaxRow(syntax: "words:>50k", description: "Filters word count: >50k, <20k, or 10k-50k")
                     syntaxRow(syntax: "tag:\"Slow Burn\"", description: "Use double quotes for multi-word phrases")
+                }
+
+                docSection(
+                    title: "Tag Autocomplete & Relationships",
+                    icon: "heart.circle",
+                    description: "Smart suggestions for characters, fandoms, and romantic (/) or platonic (&) relationships."
+                ) {
+                    syntaxRow(syntax: "steve/tony", description: "Order-invariant relationship search (matches Tony Stark/Steve Rogers)")
+                    syntaxRow(syntax: "holst/rans", description: "Prefix abbreviation matching (matches Adam \"Holster\" Birkholtz/Justin \"Ransom\" Oluransi)")
+                    syntaxRow(syntax: "sr/ts or jb/sr", description: "Initials across slashes (matches Steve Rogers/Tony Stark, James Barnes/Steve Rogers)")
+                    syntaxRow(syntax: "character/y/n", description: "Reader insert canonicalization (unifies with Character/Reader)")
+                    syntaxRow(syntax: "zuko & toph", description: "Platonic relationship search with ampersand delimiter")
+                    syntaxRow(syntax: "Hurt/Comfort", description: "Exact trope and freeform tags with slashes matched with high priority")
                 }
 
                 docSection(

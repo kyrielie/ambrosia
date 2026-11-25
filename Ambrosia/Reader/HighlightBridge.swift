@@ -79,25 +79,23 @@ enum HighlightBridge {
 
     // FIX 2: Multi-node wrap replaces surroundContents.
     // Collects all text nodes in [startChar, endChar), splits the boundary nodes,
-    // and wraps each segment in its own span with the same id-prefix + "-N" suffix.
-    // This works correctly across <em>, <strong>, <p>, <br> and any other element boundary.
+    // and wraps each segment in its own <mark class="ambrosia-highlight"> with the
+    // same id-prefix + "-N" suffix. CSS custom properties drive theme-aware colors,
+    // translucency, box-decoration-break: clone, and overlap-underline rendering.
     // swiftlint:disable:next function_body_length
     private static func restoreHighlightJS(annotation: Annotation, useUnderline: Bool) -> String {
         let startChar   = annotation.startChar
         let endChar     = annotation.endChar
-        let colorHex    = annotation.colorHex
+        let colorKey    = annotation.colorKey.rawValue
         let highlightID = annotation.id.uuidString.replacingOccurrences(of: "-", with: "")
-        let hasNote     = (annotation.note ?? "").isEmpty == false
-        let hasNoteJS   = hasNote ? "true" : "false"
         let useUnderJS  = useUnderline ? "true" : "false"
 
         return """
         (function() {
             var startChar    = \(startChar);
             var endChar      = \(endChar);
-            var color        = '\(colorHex)';
+            var colorKey     = '\(colorKey)';
             var hid          = '\(highlightID)';
-            var hasNote      = \(hasNoteJS);
             var useUnderline = \(useUnderJS);
             var pageStart    = window._ambrosiaPageStart || 0;
             var pageEnd      = window._ambrosiaPageEnd || Number.MAX_SAFE_INTEGER;
@@ -134,25 +132,7 @@ enum HighlightBridge {
             }
             if (segments.length === 0) return;
 
-            // ── CSS for highlight spans ───────────────────────────────────────
-            function spanCSS() {
-                if (useUnderline) {
-                    return [
-                        'text-decoration: underline',
-                        'text-decoration-color: ' + color,
-                        'text-decoration-thickness: 2px',
-                        'text-underline-offset: 2px',
-                        'cursor: ' + (hasNote ? 'pointer' : 'text')
-                    ].join(';');
-                }
-                return [
-                    'background-color: ' + color + '80',
-                    'border-radius: 2px',
-                    'cursor: ' + (hasNote ? 'pointer' : 'text')
-                ].join(';');
-            }
-
-            // ── Wrap each segment in its own span ─────────────────────────────
+            // ── Wrap each segment in its own <mark> ───────────────────────────
             for (var si = 0; si < segments.length; si++) {
                 var seg    = segments[si];
                 var txtNode = seg.node;
@@ -167,29 +147,31 @@ enum HighlightBridge {
                              : null;
                 // 'before' is exactly the text we want to wrap
 
-                var span = document.createElement('span');
-                // Primary span gets base id; segments get -0, -1 … suffix
-                span.id = 'hl-' + hid + (segments.length === 1 ? '' : '-' + si);
-                span.setAttribute('data-ambrosia-highlight', '1');
-                span.setAttribute('data-hl-base', hid);
-                span.style.cssText = spanCSS();
-
-                if (hasNote) {
-                    span.addEventListener('click', function(baseHid) {
-                        return function(e) {
-                            e.stopPropagation();
-                            window.webkit.messageHandlers.highlightTapped.postMessage(JSON.stringify({
-                                id: baseHid,
-                                x: e.clientX,
-                                y: e.clientY
-                            }));
-                        };
-                    }(hid));
+                var mark = document.createElement('mark');
+                // Primary mark gets base id; segments get -0, -1 … suffix
+                mark.id = 'hl-' + hid + (segments.length === 1 ? '' : '-' + si);
+                mark.className = 'ambrosia-highlight';
+                mark.setAttribute('data-ambrosia-highlight', '1');
+                mark.setAttribute('data-hl-base', hid);
+                mark.setAttribute('data-annotation-color', colorKey);
+                if (useUnderline) {
+                    mark.setAttribute('data-overlap', 'underline');
                 }
 
-                parent.insertBefore(span, before);
-                span.appendChild(before);
-                // 'after' stays in place after the span automatically
+                mark.addEventListener('click', function(baseHid) {
+                    return function(e) {
+                        e.stopPropagation();
+                        window.webkit.messageHandlers.highlightTapped.postMessage(JSON.stringify({
+                            id: baseHid,
+                            x: e.clientX,
+                            y: e.clientY
+                        }));
+                    };
+                }(hid));
+
+                parent.insertBefore(mark, before);
+                mark.appendChild(before);
+                // 'after' stays in place after the mark automatically
             }
         })();
         """

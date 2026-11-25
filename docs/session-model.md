@@ -11,7 +11,7 @@ search/filter, see `caching.md`.
 
 `LibraryRegistry` stores known library paths and the active path in `UserDefaults`; it is available immediately on launch.
 
-`ReaderPreferences` is an `@Observable` singleton backed by `UserDefaults` (migrated from Combine `ObservableObject` in Phase 4). It controls reader typography, themes, layout order, spacing, colors, preferred reader app, library appearance, reader window sizing, context-menu preferences, and custom Calibre column labels.
+`ReaderPreferences` is an `@Observable` singleton backed by `UserDefaults` (migrated from Combine `ObservableObject` in Phase 4). It controls reader typography, themes, layout order, spacing, colors, preferred reader app, library appearance, reader window sizing, context-menu preferences, and custom Calibre column labels. To protect host machine preferences from test pollution or resets, `ReaderPreferences`, `AO3TagSeedDatabaseConfig`, `CustomColumnConfig`, and `LibraryRegistry` accept an injectable `UserDefaults` instance and automatically route to isolated test suites (e.g. `com.ambrosia.test-reader-preferences`) when `AppEnvironment.isRunningTests` is true.
 
 The Preferences window (Reader, Library, Data, RSS, Shortcuts tabs) is the UI for reader defaults, library appearance, custom Calibre column labels, AO3 extraction, RSS options, keyboard shortcuts, and tag seed configuration — i.e. the front end for `ReaderPreferences` plus AO3 tag seed import described in `ao3-metadata-extraction.md`.
 

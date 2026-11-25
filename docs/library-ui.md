@@ -53,11 +53,12 @@ List-mode rows are self-sizing, so unbounded content makes row height unpredicta
 - Search bar item (`librarySearch` - titles, tags, scoped search)
 - Full-Text Search button (`libraryFTSSearch` - `doc.text.magnifyingglass` icon, opens `FTSSearchResultsWindowController`)
 - Filter drawer toggle (`libraryFilter`)
+- AO3-style filter floating panel toggle (`libraryAO3Filter`)
 - Sort menu (`librarySort`)
 - Collections sheet toggle (`libraryCollections`)
 - Reading goal sheet (`libraryReadingGoal`)
 - Export menu (`libraryExport`)
-- View mode switcher (`libraryViewMode` - List, Email, Ranking)
+- View mode switcher (`libraryViewMode` - List, Email, Activity)
 
 ### Sort Controls and Direction State
 - **Sort Direction & Random Mode**: Sort direction (Ascending / Descending) in the toolbar and filter popup is disabled in `.random` sort mode (randomized order is reshuffled via the Reshuffle affordance instead).
@@ -89,7 +90,7 @@ Mark Read, Reset Progress and Remove from Collection are implemented once in `Co
 
 ## Modal Sheets Architecture
 
-All modal library dialogs (`CollectionsView`, `ReadingGoalView`, `ErrorLogView`, `RSSPublishWarningView`, `ManageFeedsView`) are managed and presented centrally as AppKit modal sheets on `LibraryWindowController` (`window.beginSheet`), rather than via multiple SwiftUI `.sheet(isPresented:)` modifiers. This guarantees clean, single-animation presentation and deterministic dismissal without bouncing or re-opening.
+All modal library dialogs (`CollectionsView`, `ReadingGoalView`, `ErrorLogView`, `DuplicateWorksManagerView`, `RSSPublishWarningView`, `ManageFeedsView`) are managed and presented centrally as AppKit modal sheets on `LibraryWindowController` (`window.beginSheet`), rather than via multiple SwiftUI `.sheet(isPresented:)` modifiers. This guarantees clean, single-animation presentation across all library modes without bouncing or re-opening.
 
 ## Filter Drawer Dismissal
 

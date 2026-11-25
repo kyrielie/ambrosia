@@ -59,6 +59,7 @@ struct EPUBParser {
     private(set) var opfDate: String?
     private(set) var opfPublisher: String?
     private(set) var opfSubjects: [String] = []
+    private(set) var isFixedLayout: Bool = false
 
     // MARK: - TOCEntry
 
@@ -141,6 +142,7 @@ struct EPUBParser {
         opfDate = opfParser.dcDate
         opfPublisher = opfParser.dcPublisher
         opfSubjects = opfParser.dcSubjects
+        isFixedLayout = opfParser.isFixedLayout
 
         // Build spine in order
         var items: [SpineItem] = []

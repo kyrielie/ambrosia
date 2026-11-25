@@ -16,6 +16,20 @@ final class SuggestionNormalizerTests: XCTestCase {
 
         let hyphenTokens = SuggestionNormalizer.tokens(of: "Spider-Man: Into the Spider-Verse")
         XCTAssertEqual(hyphenTokens, ["spider", "man", "into", "the", "spider", "verse"])
+
+        let ynTokens = SuggestionNormalizer.tokens(of: "Character/Y/N")
+        XCTAssertEqual(ynTokens, ["character", "reader"])
+    }
+
+    func testNormalizeReaderTokens() {
+        XCTAssertEqual(SuggestionNormalizer.normalizeReaderTokens("character/y/n"), "character/reader")
+        XCTAssertEqual(SuggestionNormalizer.normalizeReaderTokens("Y/N & Character"), "reader & Character")
+    }
+
+    func testStripParentheticals() {
+        XCTAssertEqual(SuggestionNormalizer.stripParentheticals("Loki (Marvel)"), "Loki")
+        XCTAssertEqual(SuggestionNormalizer.stripParentheticals("Clark Kent (Smallville)"), "Clark Kent")
+        XCTAssertEqual(SuggestionNormalizer.stripParentheticals("Aziraphale (Good Omens)"), "Aziraphale")
     }
 
     func testStripTrailingQualifier() {

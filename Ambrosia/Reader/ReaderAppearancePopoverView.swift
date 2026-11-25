@@ -17,7 +17,6 @@ struct ReaderAppearancePopoverView: View {
                     get: { readerVC?.currentMode ?? prefs.defaultReadingMode },
                     set: { newMode in
                         readerVC?.setReadingMode(newMode)
-                        prefs.defaultReadingMode = newMode
                     }
                 )) {
                     Label("Paged", systemImage: "book.pages").tag(ReadingMode.paginated)
@@ -133,7 +132,7 @@ struct ReaderAppearancePopoverView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Slider(value: $prefs.lineHeight, in: 1.2...2.2, step: 0.1)
+                    Slider(value: $prefs.lineHeight, in: 1.0...3.0, step: 0.1)
                         .frame(width: 130)
                     Text(String(format: "%.1f", prefs.lineHeight))
                         .font(.system(size: 11).monospacedDigit())

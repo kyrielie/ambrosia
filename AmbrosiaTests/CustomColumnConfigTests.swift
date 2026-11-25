@@ -47,7 +47,7 @@ final class CustomColumnConfigTests: XCTestCase {
     func testSettingWordCountLabelToNilRemovesKey() {
         CustomColumnConfig.shared.wordCountLabel = "words"
         CustomColumnConfig.shared.wordCountLabel = nil
-        XCTAssertNil(UserDefaults.standard.object(forKey: "customColumn.wordCount"),
+        XCTAssertNil(CustomColumnConfig.shared.userDefaults.object(forKey: "customColumn.wordCount"),
                      "setting nil should remove the key rather than store an empty string")
         XCTAssertNil(CustomColumnConfig.shared.wordCountLabel)
     }
@@ -55,7 +55,7 @@ final class CustomColumnConfigTests: XCTestCase {
     func testSettingKudosLabelToNilRemovesKey() {
         CustomColumnConfig.shared.kudosLabel = "kudos"
         CustomColumnConfig.shared.kudosLabel = nil
-        XCTAssertNil(UserDefaults.standard.object(forKey: "customColumn.kudos"),
+        XCTAssertNil(CustomColumnConfig.shared.userDefaults.object(forKey: "customColumn.kudos"),
                      "setting nil should remove the key rather than store an empty string")
         XCTAssertNil(CustomColumnConfig.shared.kudosLabel)
     }

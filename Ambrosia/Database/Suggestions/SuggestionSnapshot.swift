@@ -28,6 +28,12 @@ public final class SuggestionSnapshot: Sendable {
     /// Inverted index mapping folded tokens to candidate row indices.
     private let tokenPostings: [String: [Int32]]
 
+    /// Sorted unique vocabulary tokens for fast binary-search prefix expansion.
+    private let sortedTokens: [String]
+
+    /// Inverted index mapping entity initials and single letters to candidate row indices.
+    private let initialsPostings: [String: [Int32]]
+
     public init(
         originals: [String],
         frequencies: [Int],
@@ -40,6 +46,7 @@ public final class SuggestionSnapshot: Sendable {
         var typeArr: [UInt8] = []
         var initialsArr: [UInt32] = []
         var postings: [String: [Int32]] = [:]
+        var initPostings: [String: [Int32]] = [:]
 
         blobBytes.reserveCapacity(originals.count * 16)
         offsetArr.reserveCapacity(originals.count)
@@ -74,9 +81,52 @@ public final class SuggestionSnapshot: Sendable {
             }
             initialsArr.append(packed)
 
-            // Inverted index
+            // Inverted index for complete tokens
             for token in tokens where token.count >= 2 {
                 postings[token, default: []].append(Int32(index))
+            }
+
+            // Entity initials for relationship candidates
+            let hasSeparator = folded.contains("/") || folded.contains("&") || folded.contains(" x ")
+            if hasSeparator {
+                let entities = RelationshipQuery.splitEntities(folded)
+                var candidateKeys = Set<String>()
+
+                for entity in entities {
+                    let eTokens = SuggestionNormalizer.tokens(of: entity)
+                    guard !eTokens.isEmpty else { continue }
+
+                    // Individual first letters of each token in the entity
+                    for eToken in eTokens {
+                        if let firstLetter = eToken.first {
+                            candidateKeys.insert(String(firstLetter))
+                        }
+                    }
+
+                    // Combined initials across the entity
+                    let allInit = eTokens.compactMap { $0.first.map(String.init) }.joined()
+                    if allInit.count >= 2 && allInit.count <= 4 {
+                        candidateKeys.insert(allInit)
+                    }
+
+                    // First-last initials
+                    if eTokens.count >= 2,
+                       let first = eTokens.first?.first,
+                       let last = eTokens.last?.first {
+                        candidateKeys.insert("\(first)\(last)")
+                    }
+
+                    // Nickname-last initials
+                    if eTokens.count >= 3,
+                       let nick = eTokens[1].first,
+                       let last = eTokens.last?.first {
+                        candidateKeys.insert("\(nick)\(last)")
+                    }
+                }
+
+                for key in candidateKeys {
+                    initPostings[key, default: []].append(Int32(index))
+                }
             }
         }
 
@@ -88,6 +138,8 @@ public final class SuggestionSnapshot: Sendable {
         self.originalStrings = originals
         self.packedInitials = initialsArr
         self.tokenPostings = postings
+        self.sortedTokens = postings.keys.sorted()
+        self.initialsPostings = initPostings
     }
 
     public var count: Int {
@@ -112,17 +164,25 @@ public final class SuggestionSnapshot: Sendable {
         )
 
         // Tier 2: Acronym matching (e.g. "au" -> "alternate universe")
-        if !collector.isFull && queryTokens.count == 1 && foldedQuery.count >= 2 && foldedQuery.count <= 4 {
+        if collector.hasCapacity(forClass: .acronym) && queryTokens.count == 1 && foldedQuery.count >= 2 && foldedQuery.count <= 4 {
             searchAcronyms(foldedQuery: foldedQuery, collector: &collector)
         }
 
         // Tier 3: Relationship / Token-Set permutation matching
-        if !collector.isFull {
+        let isExplicitRel: Bool
+        switch relQuery {
+        case .explicitEntities:
+            isExplicitRel = true
+        case .tokenSet:
+            isExplicitRel = false
+        }
+
+        if isExplicitRel || collector.hasCapacity(forClass: .relationshipPermuted) {
             searchRelationshipPermutations(relQuery: relQuery, queryTokens: queryTokens, collector: &collector)
         }
 
         // Tier 4: Fuzzy typo matching on token vocabulary
-        if !collector.isFull && !queryTokens.isEmpty {
+        if collector.hasCapacity(forClass: .fuzzyDistance1) && !queryTokens.isEmpty {
             searchFuzzyVocabulary(queryTokens: queryTokens, relQuery: relQuery, collector: &collector)
         }
 
@@ -205,14 +265,41 @@ public final class SuggestionSnapshot: Sendable {
     ) {
         guard !queryTokens.isEmpty else { return }
 
-        // Find intersection of postings for candidate generation
         var candidateSet: Set<Int32>?
-        for token in queryTokens {
-            let postings = tokenPostings[token] ?? []
-            if let existing = candidateSet {
-                candidateSet = existing.intersection(postings)
-            } else {
-                candidateSet = Set(postings)
+
+        // Separate long tokens (>= 2 chars) from 1-char tokens
+        let longTokens = queryTokens.filter { $0.count >= 2 }
+        let singleCharTokens = queryTokens.filter { $0.count == 1 }
+
+        if !longTokens.isEmpty {
+            for token in longTokens {
+                let posts = postings(forPrefix: token)
+                if let existing = candidateSet {
+                    candidateSet = existing.intersection(posts)
+                } else {
+                    candidateSet = Set(posts)
+                }
+            }
+        } else if !singleCharTokens.isEmpty {
+            // All tokens are 1-character initials (e.g. "h/r", "s/t")
+            for token in singleCharTokens {
+                let posts = initialsPostings[token] ?? []
+                if let existing = candidateSet {
+                    candidateSet = existing.intersection(posts)
+                } else {
+                    candidateSet = Set(posts)
+                }
+            }
+        }
+
+        // Check if query tokens also match entity initials (e.g. "sr/ts", "jb/sr")
+        for token in queryTokens where token.count >= 2 && token.count <= 4 {
+            if let initPosts = initialsPostings[token] {
+                if let existing = candidateSet {
+                    candidateSet = existing.union(initPosts)
+                } else {
+                    candidateSet = Set(initPosts)
+                }
             }
         }
 
@@ -220,7 +307,7 @@ public final class SuggestionSnapshot: Sendable {
         for candIdx32 in candidatesToCheck {
             let candIdx = Int(candIdx32)
             let original = originalStrings[candIdx]
-            let (matches, maxDist) = relQuery.matches(candidateName: original, allowTypos: false)
+            let (matches, maxDist, _) = relQuery.matches(candidateName: original, allowTypos: false)
             if matches {
                 let tagType = SuggestionTagType(rawValue: tagTypes[candIdx])
                 let matchClass: SuggestionMatchClass = (maxDist == 0) ? .relationshipPermuted : .fuzzyDistance1
@@ -256,9 +343,14 @@ public final class SuggestionSnapshot: Sendable {
         for candIdx32 in expandedCandidates {
             let candIdx = Int(candIdx32)
             let original = originalStrings[candIdx]
-            let (matches, maxDist) = relQuery.matches(candidateName: original, allowTypos: true)
-            if matches && maxDist > 0 {
-                let matchClass: SuggestionMatchClass = (maxDist == 1) ? .fuzzyDistance1 : .fuzzyDistance2
+            let (matches, maxDist, isPrefix) = relQuery.matches(candidateName: original, allowTypos: true)
+            if matches && (maxDist > 0 || isPrefix) {
+                let matchClass: SuggestionMatchClass
+                if maxDist == 0 && isPrefix {
+                    matchClass = .relationshipPermuted
+                } else {
+                    matchClass = (maxDist == 1) ? .fuzzyDistance1 : .fuzzyDistance2
+                }
                 let tagType = SuggestionTagType(rawValue: tagTypes[candIdx])
                 collector.insert(SuggestionMatch(
                     value: original,
@@ -271,6 +363,46 @@ public final class SuggestionSnapshot: Sendable {
     }
 
     // MARK: - Helpers
+
+    /// Returns postings for all indexed tokens that begin with the given prefix.
+    private func postings(forPrefix prefix: String) -> [Int32] {
+        if let exact = tokenPostings[prefix] {
+            return exact
+        }
+        guard prefix.count >= 2 else { return [] }
+
+        // Binary search in sortedTokens for the first token >= prefix
+        var low = 0
+        var high = sortedTokens.count - 1
+        var startIndex = sortedTokens.count
+
+        while low <= high {
+            let mid = (low + high) / 2
+            if sortedTokens[mid] >= prefix {
+                startIndex = mid
+                high = mid - 1
+            } else {
+                low = mid + 1
+            }
+        }
+
+        var results: [Int32] = []
+        var seen = Set<Int32>()
+        var idx = startIndex
+        var matchesCount = 0
+
+        while idx < sortedTokens.count && sortedTokens[idx].hasPrefix(prefix) && matchesCount < 50 {
+            if let post = tokenPostings[sortedTokens[idx]] {
+                for id in post where !seen.contains(id) {
+                    seen.insert(id)
+                    results.append(id)
+                }
+            }
+            idx += 1
+            matchesCount += 1
+        }
+        return results
+    }
 
     private func findCandidateIndex(forOffset offset: Int) -> Int {
         var low = 0

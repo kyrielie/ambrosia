@@ -86,8 +86,9 @@ enum FTSOccurrenceExtractor {
             guard let regex = RegexCache.shared.regex(for: pattern, options: [.caseInsensitive]) else {
                 continue
             }
-            let matches = regex.matches(in: string, options: [], range: fullRange)
+            let matches = regex.matches(in: string, options: [.withTransparentBounds], range: fullRange)
             for match in matches {
+                guard match.range.length > 0 else { continue }
                 if let swiftRange = Range(match.range, in: string) {
                     allRanges.append(swiftRange)
                 }

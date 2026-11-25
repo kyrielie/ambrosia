@@ -55,6 +55,15 @@ file. If a bug lives in one of those, look for a pure sub-piece that can be
 pulled out and tested the way `SeriesSpineMap` and `PagingOffsetState`
 already were.
 
+## UserDefaults and Host Environment Test Isolation
+
+Because `AmbrosiaTests` runs hosted inside `Ambrosia.app` (`TEST_HOST`), unmanaged access to `UserDefaults.standard` resolves directly to the developer's live `com.kyrielie.ambrosia` preferences domain (`~/Library/Preferences/com.kyrielie.ambrosia.plist`).
+
+To protect host settings from being modified, reset, or polluted during testing:
+- **`ReaderPreferences`**, **`AO3TagSeedDatabaseConfig`**, **`CustomColumnConfig`**, and **`LibraryRegistry`** accept an injectable `UserDefaults` instance (`userDefaults: UserDefaults? = nil`).
+- When `AppEnvironment.isRunningTests` is true and no instance is supplied, they automatically route to isolated test suites (`com.ambrosia.test-reader-preferences`, `com.ambrosia.test-seed-config`, `com.ambrosia.test-custom-columns`, `com.ambrosia.test-registry`).
+- Modals and error alerts in production code (such as `AnnotationPersistence.presentErrorAlert`) must guard on `!AppEnvironment.isRunningTests` so synthetic test errors never display modal `NSAlert` dialogs during test execution.
+
 ## Coverage map
 
 Verified 2026-10-17 by listing `AmbrosiaTests/` and grepping it for each

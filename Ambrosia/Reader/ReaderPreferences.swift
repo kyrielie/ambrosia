@@ -145,6 +145,8 @@ final class ReaderPreferences: ObservableObject {
 
     static let shared = ReaderPreferences()
 
+    public let userDefaults: UserDefaults
+
     /// Fired once per cosmetic or structural preference change.
     /// `ReaderViewController.subscribeToPreferences()` sinks on
     /// this so cosmetic changes can take the live CSS-variable path
@@ -155,82 +157,88 @@ final class ReaderPreferences: ObservableObject {
 
     var fontFamily: String {
         didSet {
-            UserDefaults.standard.set(fontFamily, forKey: Keys.fontFamily)
+            userDefaults.set(fontFamily, forKey: Keys.fontFamily)
             preferenceChangeKind.send(.cosmetic)
         }
     }
     var fontSize: Int {
         didSet {
-            UserDefaults.standard.set(fontSize, forKey: Keys.fontSize)
+            userDefaults.set(fontSize, forKey: Keys.fontSize)
             preferenceChangeKind.send(.cosmetic)
         }
     }
     var lineHeight: Double {
         didSet {
-            UserDefaults.standard.set(lineHeight, forKey: Keys.lineHeight)
+            userDefaults.set(lineHeight, forKey: Keys.lineHeight)
             preferenceChangeKind.send(.cosmetic)
         }
     }
     var maxWidth: Int {
         didSet {
-            UserDefaults.standard.set(maxWidth, forKey: Keys.maxWidth)
+            userDefaults.set(maxWidth, forKey: Keys.maxWidth)
             preferenceChangeKind.send(.cosmetic)
         }
     }
     var readerBackgroundColor: String {
         didSet {
-            UserDefaults.standard.set(readerBackgroundColor, forKey: Keys.readerBackgroundColor)
+            userDefaults.set(readerBackgroundColor, forKey: Keys.readerBackgroundColor)
             preferenceChangeKind.send(.cosmetic)
         }
     }
     var readerTextColor: String {
         didSet {
-            UserDefaults.standard.set(readerTextColor, forKey: Keys.readerTextColor)
+            userDefaults.set(readerTextColor, forKey: Keys.readerTextColor)
             preferenceChangeKind.send(.cosmetic)
         }
     }
     var paddingH: Int {
         didSet {
-            UserDefaults.standard.set(paddingH, forKey: Keys.paddingH)
+            userDefaults.set(paddingH, forKey: Keys.paddingH)
             preferenceChangeKind.send(.cosmetic)
         }
     }
     var paddingV: Int {
         didSet {
-            UserDefaults.standard.set(paddingV, forKey: Keys.paddingV)
+            userDefaults.set(paddingV, forKey: Keys.paddingV)
             preferenceChangeKind.send(.cosmetic)
         }
     }
     var allowReaderLinkClicks: Bool {
         didSet {
-            UserDefaults.standard.set(allowReaderLinkClicks, forKey: Keys.allowReaderLinkClicks)
+            userDefaults.set(allowReaderLinkClicks, forKey: Keys.allowReaderLinkClicks)
             preferenceChangeKind.send(.cosmetic)
         }
     }
     var appearanceMode: AppearanceMode {
         didSet {
-            UserDefaults.standard.set(appearanceMode.rawValue, forKey: Keys.appearanceMode)
+            userDefaults.set(appearanceMode.rawValue, forKey: Keys.appearanceMode)
             updateEffectiveColors()
         }
     }
     var selectedTheme: ReaderTheme {
         didSet {
-            UserDefaults.standard.set(selectedTheme.rawValue, forKey: Keys.selectedTheme)
+            userDefaults.set(selectedTheme.rawValue, forKey: Keys.selectedTheme)
             updateEffectiveColors()
+        }
+    }
+    var highlightPalette: HighlightPalette {
+        didSet {
+            userDefaults.set(highlightPalette.rawValue, forKey: Keys.highlightPalette)
+            preferenceChangeKind.send(.cosmetic)
         }
     }
     var textAlignment: ThemeTextAlignment {
         didSet {
-            UserDefaults.standard.set(textAlignment.rawValue, forKey: Keys.textAlignment)
+            userDefaults.set(textAlignment.rawValue, forKey: Keys.textAlignment)
             preferenceChangeKind.send(.cosmetic)
         }
     }
     var paragraphIndent: Double? {
         didSet {
             if let paragraphIndent {
-                UserDefaults.standard.set(paragraphIndent, forKey: Keys.paragraphIndent)
+                userDefaults.set(paragraphIndent, forKey: Keys.paragraphIndent)
             } else {
-                UserDefaults.standard.removeObject(forKey: Keys.paragraphIndent)
+                userDefaults.removeObject(forKey: Keys.paragraphIndent)
             }
             preferenceChangeKind.send(.cosmetic)
         }
@@ -279,7 +287,7 @@ final class ReaderPreferences: ObservableObject {
     /// offsets differ between on and off.
     var removeParagraphIndents: Bool {
         didSet {
-            UserDefaults.standard.set(removeParagraphIndents, forKey: Keys.removeParagraphIndents)
+            userDefaults.set(removeParagraphIndents, forKey: Keys.removeParagraphIndents)
             preferenceChangeKind.send(.structural)
         }
     }
@@ -291,19 +299,19 @@ final class ReaderPreferences: ObservableObject {
     /// character offsets are identical with the toggle on or off.
     var collapseSpacerParagraphs: Bool {
         didSet {
-            UserDefaults.standard.set(collapseSpacerParagraphs, forKey: Keys.collapseSpacerParagraphs)
+            userDefaults.set(collapseSpacerParagraphs, forKey: Keys.collapseSpacerParagraphs)
             preferenceChangeKind.send(.structural)
         }
     }
     var colsPerScreen: ColsPerScreen {
         didSet {
-            UserDefaults.standard.set(colsPerScreen.rawValue, forKey: Keys.colsPerScreen)
+            userDefaults.set(colsPerScreen.rawValue, forKey: Keys.colsPerScreen)
             preferenceChangeKind.send(.structural)
         }
     }
     var ao3WorkLayoutOrder: AO3WorkLayoutOrder {
         didSet {
-            UserDefaults.standard.set(ao3WorkLayoutOrder.rawValue, forKey: Keys.ao3WorkLayoutOrder)
+            userDefaults.set(ao3WorkLayoutOrder.rawValue, forKey: Keys.ao3WorkLayoutOrder)
             preferenceChangeKind.send(.structural)
         }
     }
@@ -316,7 +324,7 @@ final class ReaderPreferences: ObservableObject {
     /// up screen space), so it's user-toggleable rather than always-on.
     var autoOpenFindBarForFullTextSearch: Bool {
         didSet {
-            UserDefaults.standard.set(autoOpenFindBarForFullTextSearch, forKey: Keys.autoOpenFindBarForFullTextSearch)
+            userDefaults.set(autoOpenFindBarForFullTextSearch, forKey: Keys.autoOpenFindBarForFullTextSearch)
         }
     }
 
@@ -324,12 +332,12 @@ final class ReaderPreferences: ObservableObject {
 
     var enableFullTextSearch: Bool {
         didSet {
-            UserDefaults.standard.set(enableFullTextSearch, forKey: Keys.enableFullTextSearch)
+            userDefaults.set(enableFullTextSearch, forKey: Keys.enableFullTextSearch)
         }
     }
     var enableSemanticSearch: Bool {
         didSet {
-            UserDefaults.standard.set(enableSemanticSearch, forKey: Keys.enableSemanticSearch)
+            userDefaults.set(enableSemanticSearch, forKey: Keys.enableSemanticSearch)
         }
     }
 
@@ -337,7 +345,7 @@ final class ReaderPreferences: ObservableObject {
 
     var defaultSearchSortToRelevance: Bool {
         didSet {
-            UserDefaults.standard.set(defaultSearchSortToRelevance, forKey: Keys.defaultSearchSortToRelevance)
+            userDefaults.set(defaultSearchSortToRelevance, forKey: Keys.defaultSearchSortToRelevance)
         }
     }
 
@@ -345,7 +353,7 @@ final class ReaderPreferences: ObservableObject {
 
     var enableAdvancedEPUBExport: Bool {
         didSet {
-            UserDefaults.standard.set(enableAdvancedEPUBExport, forKey: Keys.enableAdvancedEPUBExport)
+            userDefaults.set(enableAdvancedEPUBExport, forKey: Keys.enableAdvancedEPUBExport)
         }
     }
 
@@ -353,12 +361,12 @@ final class ReaderPreferences: ObservableObject {
 
     var preferredReader: PreferredReaderOption {
         didSet {
-            UserDefaults.standard.set(preferredReader.rawValue, forKey: Keys.preferredReader)
+            userDefaults.set(preferredReader.rawValue, forKey: Keys.preferredReader)
         }
     }
     var customReaderAppPath: String {
         didSet {
-            UserDefaults.standard.set(customReaderAppPath, forKey: Keys.customReaderAppPath)
+            userDefaults.set(customReaderAppPath, forKey: Keys.customReaderAppPath)
         }
     }
     var customReaderAppName: String {
@@ -371,37 +379,37 @@ final class ReaderPreferences: ObservableObject {
     // MARK: - Library appearance — colour mode
 
     var libraryColorMode: LibraryColorMode {
-        didSet { UserDefaults.standard.set(libraryColorMode.rawValue, forKey: Keys.libraryColorMode) }
+        didSet { userDefaults.set(libraryColorMode.rawValue, forKey: Keys.libraryColorMode) }
     }
 
     var libraryAppearanceMode: LibraryAppearanceMode {
-        didSet { UserDefaults.standard.set(libraryAppearanceMode.rawValue, forKey: Keys.libraryAppearanceMode) }
+        didSet { userDefaults.set(libraryAppearanceMode.rawValue, forKey: Keys.libraryAppearanceMode) }
     }
 
     // Custom light/dark colour pairs (used when libraryColorMode == .custom)
     var libraryLightBackgroundColor: String {
-        didSet { UserDefaults.standard.set(libraryLightBackgroundColor, forKey: Keys.libraryLightBG) }
+        didSet { userDefaults.set(libraryLightBackgroundColor, forKey: Keys.libraryLightBG) }
     }
     var libraryDarkBackgroundColor: String {
-        didSet { UserDefaults.standard.set(libraryDarkBackgroundColor, forKey: Keys.libraryDarkBG) }
+        didSet { userDefaults.set(libraryDarkBackgroundColor, forKey: Keys.libraryDarkBG) }
     }
     var libraryLightTextColor: String {
-        didSet { UserDefaults.standard.set(libraryLightTextColor, forKey: Keys.libraryLightText) }
+        didSet { userDefaults.set(libraryLightTextColor, forKey: Keys.libraryLightText) }
     }
     var libraryDarkTextColor: String {
-        didSet { UserDefaults.standard.set(libraryDarkTextColor, forKey: Keys.libraryDarkText) }
+        didSet { userDefaults.set(libraryDarkTextColor, forKey: Keys.libraryDarkText) }
     }
     var showSkippedCollection: Bool {
-        didSet { UserDefaults.standard.set(showSkippedCollection, forKey: Keys.showSkippedCollection) }
+        didSet { userDefaults.set(showSkippedCollection, forKey: Keys.showSkippedCollection) }
     }
     var hideFanworksTagPill: Bool {
-        didSet { UserDefaults.standard.set(hideFanworksTagPill, forKey: Keys.hideFanworksTagPill) }
+        didSet { userDefaults.set(hideFanworksTagPill, forKey: Keys.hideFanworksTagPill) }
     }
     var correctCalibreAmpEntities: Bool {
-        didSet { UserDefaults.standard.set(correctCalibreAmpEntities, forKey: Keys.correctCalibreAmpEntities) }
+        didSet { userDefaults.set(correctCalibreAmpEntities, forKey: Keys.correctCalibreAmpEntities) }
     }
     var hideNonAO3PublisherBooks: Bool {
-        didSet { UserDefaults.standard.set(hideNonAO3PublisherBooks, forKey: Keys.hideNonAO3PublisherBooks) }
+        didSet { userDefaults.set(hideNonAO3PublisherBooks, forKey: Keys.hideNonAO3PublisherBooks) }
     }
     /// Hides books whose Calibre description was written by the EPUB-merge plugin
     /// (see `CalibreBook.isDescriptionAnthology`) — i.e. merged/anthology files —
@@ -409,7 +417,7 @@ final class ReaderPreferences: ObservableObject {
     /// exclusion (which only keeps them out of grouped series rows, not out of the
     /// library altogether).
     var hideAnthologyBooks: Bool {
-        didSet { UserDefaults.standard.set(hideAnthologyBooks, forKey: Keys.hideAnthologyBooks) }
+        didSet { userDefaults.set(hideAnthologyBooks, forKey: Keys.hideAnthologyBooks) }
     }
     /// Hides the non-winning copy of a Calibre duplicate — two rows for the
     /// same AO3 work (same `ao3_work_id`, different `calibre_id`), which
@@ -420,10 +428,10 @@ final class ReaderPreferences: ObservableObject {
     /// Never silent by default — surfaced as its own toggle next to
     /// `hideNonAO3PublisherBooks` so the user knows books are being hidden.
     var hideDuplicateBooks: Bool {
-        didSet { UserDefaults.standard.set(hideDuplicateBooks, forKey: Keys.hideDuplicateBooks) }
+        didSet { userDefaults.set(hideDuplicateBooks, forKey: Keys.hideDuplicateBooks) }
     }
     var emailPillsShowCollections: Bool {
-        didSet { UserDefaults.standard.set(emailPillsShowCollections, forKey: Keys.emailPillsShowCollections) }
+        didSet { userDefaults.set(emailPillsShowCollections, forKey: Keys.emailPillsShowCollections) }
     }
 
     // MARK: - Feed server
@@ -445,7 +453,7 @@ final class ReaderPreferences: ObservableObject {
     /// Whether the random daily-story feed (/feed/random-daily.xml) is enabled
     /// for the currently active library. Off by default.
     var feedServerEnableDailyStory: Bool {
-        didSet { UserDefaults.standard.set(feedServerEnableDailyStory, forKey: feedKey(Keys.feedServerEnableDailyStory)) }
+        didSet { userDefaults.set(feedServerEnableDailyStory, forKey: feedKey(Keys.feedServerEnableDailyStory)) }
     }
 
     /// Collection IDs excluded from the RSS feed server, for the currently
@@ -453,7 +461,7 @@ final class ReaderPreferences: ObservableObject {
     /// pattern used by other multi-value prefs.
     var feedServerExcludedCollectionIDs: Set<String> {
         didSet {
-            UserDefaults.standard.set(
+            userDefaults.set(
                 feedServerExcludedCollectionIDs.sorted().joined(separator: ","),
                 forKey: feedKey(Keys.feedServerExcludedCollectionIDs)
             )
@@ -466,7 +474,7 @@ final class ReaderPreferences: ObservableObject {
     /// broadcasts on the LAN without the user re-confirming each launch
     /// would be a quiet posture change.
     var feedServerAutoRestart: Bool {
-        didSet { UserDefaults.standard.set(feedServerAutoRestart, forKey: Keys.feedServerAutoRestart) }
+        didSet { userDefaults.set(feedServerAutoRestart, forKey: Keys.feedServerAutoRestart) }
     }
 
     /// Re-point the per-library feed prefs at a new library and reload their
@@ -474,7 +482,7 @@ final class ReaderPreferences: ObservableObject {
     /// when no library is open (falls back to the global/legacy key).
     func reloadFeedPrefs(forLibraryHash hash: String?) {
         activeFeedNamespace = hash ?? ""
-        let ud = UserDefaults.standard
+        let ud = userDefaults
         feedServerEnableDailyStory = ud.object(forKey: feedKey(Keys.feedServerEnableDailyStory)) != nil
             ? ud.bool(forKey: feedKey(Keys.feedServerEnableDailyStory))
             : false
@@ -533,7 +541,7 @@ final class ReaderPreferences: ObservableObject {
 
     var defaultReadingMode: ReadingMode {
         didSet {
-            UserDefaults.standard.set(defaultReadingMode.rawValue, forKey: Keys.defaultReadingMode)
+            userDefaults.set(defaultReadingMode.rawValue, forKey: Keys.defaultReadingMode)
             preferenceChangeKind.send(.structural)
         }
     }
@@ -547,7 +555,7 @@ final class ReaderPreferences: ObservableObject {
     /// sync for free. Do not migrate this to a new key or add a second sync
     /// mechanism.
     var groupBySeries: Bool {
-        didSet { UserDefaults.standard.set(groupBySeries, forKey: Keys.groupBySeries) }
+        didSet { userDefaults.set(groupBySeries, forKey: Keys.groupBySeries) }
     }
 
     /// Context menu configuration — not persisted.
@@ -563,7 +571,7 @@ final class ReaderPreferences: ObservableObject {
     var keyBindings: [RebindableAction: KeyBinding] {
         didSet {
             if let data = try? JSONEncoder().encode(keyBindings) {
-                UserDefaults.standard.set(data, forKey: Keys.keyBindings)
+                userDefaults.set(data, forKey: Keys.keyBindings)
             }
         }
     }
@@ -586,7 +594,7 @@ final class ReaderPreferences: ObservableObject {
     var savedThemes: [SavedTheme] {
         didSet {
             if let data = try? JSONEncoder().encode(savedThemes) {
-                UserDefaults.standard.set(data, forKey: Keys.savedThemes)
+                userDefaults.set(data, forKey: Keys.savedThemes)
             }
         }
     }
@@ -643,6 +651,7 @@ final class ReaderPreferences: ObservableObject {
         static let customReaderAppPath         = ""
         static let appearanceMode              = AppearanceMode.system
         static let selectedTheme               = ReaderTheme.parchment
+        static let highlightPalette            = HighlightPalette.default
         static let textAlignment               = ThemeTextAlignment.book
         static let paragraphIndent: Double?    = nil
 
@@ -702,14 +711,23 @@ final class ReaderPreferences: ObservableObject {
         static let customReaderAppPath         = "rp.customReaderAppPath"
         static let appearanceMode              = "rp.appearanceMode"
         static let selectedTheme               = "rp.selectedTheme"
+        static let highlightPalette            = "rp.highlightPalette"
         static let textAlignment               = "rp.textAlignment"
         static let paragraphIndent             = "rp.paragraphIndent"
         static let keyBindings                 = "rp.keyBindings"
         static let savedThemes                 = "rp.savedThemes"
     }
 
-    private init() {
-        let ud = UserDefaults.standard
+    init(userDefaults: UserDefaults? = nil) {
+        let ud: UserDefaults
+        if let userDefaults {
+            ud = userDefaults
+        } else if AppEnvironment.isRunningTests {
+            ud = UserDefaults(suiteName: "com.ambrosia.test-reader-preferences") ?? .standard
+        } else {
+            ud = .standard
+        }
+        self.userDefaults = ud
         fontFamily   = ud.string(forKey: Keys.fontFamily)  ?? Defaults.fontFamily
         fontSize     = ud.integer(forKey: Keys.fontSize).nonZero  ?? Defaults.fontSize
         lineHeight   = ud.double(forKey: Keys.lineHeight).nonZero  ?? Defaults.lineHeight
@@ -750,6 +768,12 @@ final class ReaderPreferences: ObservableObject {
 
         let rawSelectedTheme = ud.string(forKey: Keys.selectedTheme) ?? Defaults.selectedTheme.rawValue
         selectedTheme = ReaderTheme(rawValue: rawSelectedTheme) ?? Defaults.selectedTheme
+
+        if ud.object(forKey: Keys.highlightPalette) != nil {
+            highlightPalette = HighlightPalette(rawValue: ud.integer(forKey: Keys.highlightPalette)) ?? Defaults.highlightPalette
+        } else {
+            highlightPalette = Defaults.highlightPalette
+        }
 
         let rawTextAlignment = ud.string(forKey: Keys.textAlignment) ?? Defaults.textAlignment.rawValue
         textAlignment = ThemeTextAlignment(rawValue: rawTextAlignment) ?? Defaults.textAlignment
@@ -886,6 +910,9 @@ final class ReaderPreferences: ObservableObject {
     var cssVariableDeclarations: String {
         let theme = activeTheme ?? (ReaderTheme.current(bg: readerBackgroundColor, fg: readerTextColor) ?? .parchment)
         let paragraphIndentVar = paragraphIndent.map { "--ambrosia-paragraph-indent: \($0)em;" } ?? ""
+        let isDark = effectiveIsDark
+        let hlHexSet = highlightPalette.hexSet(isDark: isDark)
+        let hlOpacity = isDark ? "82%" : "72%"
         return """
         --ambrosia-font-family: \(fontFamily);
         --ambrosia-font-size: \(fontSize)px;
@@ -902,6 +929,12 @@ final class ReaderPreferences: ObservableObject {
         --ao3-preface-background-color: \(theme.prefaceBackgroundColor);
         --ao3-preface-text-color: \(readerTextColor);
         --ao3-preface-label-color: \(theme.prefaceLabelColor);
+        --ambrosia-hl-yellow: \(hlHexSet.yellow);
+        --ambrosia-hl-red: \(hlHexSet.red);
+        --ambrosia-hl-green: \(hlHexSet.green);
+        --ambrosia-hl-blue: \(hlHexSet.blue);
+        --ambrosia-hl-purple: \(hlHexSet.purple);
+        --ambrosia-hl-opacity: \(hlOpacity);
         """
     }
 
@@ -958,6 +991,58 @@ final class ReaderPreferences: ObservableObject {
         em, i { font-style: italic; }
         strong, b { font-weight: bold; }
         h1, h2, h3, h4, h5, h6 { font-weight: bold; margin: 1em 0 0.5em; line-height: 1.2; }
+        mark.ambrosia-highlight {
+            background-color: color-mix(in srgb, var(--ambrosia-hl-yellow, #FFCC00) var(--ambrosia-hl-opacity, 72%), transparent);
+            color: inherit;
+            border-radius: 0.15em;
+            padding: min(0.1em, max(0em, (var(--ambrosia-line-height, 1.4) - 1) * 0.5em)) 0.05em;
+            -webkit-box-decoration-break: clone;
+            box-decoration-break: clone;
+            line-height: inherit;
+            cursor: pointer;
+        }
+        mark.ambrosia-highlight[data-annotation-color="yellow"] {
+            background-color: color-mix(in srgb, var(--ambrosia-hl-yellow, #FFCC00) var(--ambrosia-hl-opacity, 72%), transparent);
+        }
+        mark.ambrosia-highlight[data-annotation-color="red"] {
+            background-color: color-mix(in srgb, var(--ambrosia-hl-red, #FF3B30) var(--ambrosia-hl-opacity, 72%), transparent);
+        }
+        mark.ambrosia-highlight[data-annotation-color="green"] {
+            background-color: color-mix(in srgb, var(--ambrosia-hl-green, #34C759) var(--ambrosia-hl-opacity, 72%), transparent);
+        }
+        mark.ambrosia-highlight[data-annotation-color="blue"] {
+            background-color: color-mix(in srgb, var(--ambrosia-hl-blue, #007AFF) var(--ambrosia-hl-opacity, 72%), transparent);
+        }
+        mark.ambrosia-highlight[data-annotation-color="purple"] {
+            background-color: color-mix(in srgb, var(--ambrosia-hl-purple, #AF52DE) var(--ambrosia-hl-opacity, 72%), transparent);
+        }
+        mark.ambrosia-highlight[data-overlap="underline"] {
+            background-color: transparent !important;
+            padding: 0;
+            text-decoration: underline;
+            text-decoration-thickness: 2px;
+            text-underline-offset: 2px;
+            text-decoration-color: var(--ambrosia-hl-yellow, #FFCC00);
+        }
+        mark.ambrosia-highlight[data-overlap="underline"][data-annotation-color="red"] {
+            text-decoration-color: var(--ambrosia-hl-red, #FF3B30);
+        }
+        mark.ambrosia-highlight[data-overlap="underline"][data-annotation-color="green"] {
+            text-decoration-color: var(--ambrosia-hl-green, #34C759);
+        }
+        mark.ambrosia-highlight[data-overlap="underline"][data-annotation-color="blue"] {
+            text-decoration-color: var(--ambrosia-hl-blue, #007AFF);
+        }
+        mark.ambrosia-highlight[data-overlap="underline"][data-annotation-color="purple"] {
+            text-decoration-color: var(--ambrosia-hl-purple, #AF52DE);
+        }
+        @keyframes ambrosia-highlight-flash {
+            0% { box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.6); }
+            100% { box-shadow: 0 0 0 3px transparent; }
+        }
+        mark.ambrosia-highlight.ambrosia-highlight-flash {
+            animation: ambrosia-highlight-flash 1.5s ease-out;
+        }
         h1 { font-size: 1.6em; } h2 { font-size: 1.4em; } h3 { font-size: 1.2em; }
         table { border-collapse: collapse; width: 100%; margin: 1em 0; }
         td, th { border: 1px solid currentColor; padding: 0.4em 0.6em; }

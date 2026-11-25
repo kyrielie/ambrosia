@@ -1,6 +1,8 @@
 excluded:
   - Ambrosia.xcodeproj
   - docs
+  - .build
+  - DerivedData
   # Local, gitignored scratch/reference tree (see .gitignore's "AI tool
   # output / scratch dumps" section) -- not part of Ambrosia, never present
   # in a CI checkout, but present on disk for local `swiftlint lint`/

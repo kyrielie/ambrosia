@@ -79,6 +79,7 @@ final class AnnotationPersistence {
     }
 
     private func presentErrorAlert(message: String) {
+        guard !AppEnvironment.isRunningTests else { return }
         let alert = NSAlert()
         alert.messageText = "Annotation Error"
         alert.informativeText = message

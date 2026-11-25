@@ -11,7 +11,17 @@ import Foundation
 final class CustomColumnConfig: @unchecked Sendable {
 
     static let shared = CustomColumnConfig()
-    private init() {}
+    public let userDefaults: UserDefaults
+
+    init(userDefaults: UserDefaults? = nil) {
+        if let userDefaults {
+            self.userDefaults = userDefaults
+        } else if AppEnvironment.isRunningTests {
+            self.userDefaults = UserDefaults(suiteName: "com.ambrosia.test-custom-columns") ?? .standard
+        } else {
+            self.userDefaults = .standard
+        }
+    }
 
     private let wordCountKey = "customColumn.wordCount"
     private let kudosKey     = "customColumn.kudos"
@@ -19,14 +29,14 @@ final class CustomColumnConfig: @unchecked Sendable {
     /// The Calibre custom column label (e.g. "words", "kudos") for word count.
     /// nil = not configured / not available in this library.
     var wordCountLabel: String? {
-        get { UserDefaults.standard.string(forKey: wordCountKey) }
-        set { UserDefaults.standard.set(newValue, forKey: wordCountKey) }
+        get { userDefaults.string(forKey: wordCountKey) }
+        set { userDefaults.set(newValue, forKey: wordCountKey) }
     }
 
     /// The Calibre custom column label for kudos.
     var kudosLabel: String? {
-        get { UserDefaults.standard.string(forKey: kudosKey) }
-        set { UserDefaults.standard.set(newValue, forKey: kudosKey) }
+        get { userDefaults.string(forKey: kudosKey) }
+        set { userDefaults.set(newValue, forKey: kudosKey) }
     }
 
     // MARK: - Auto-detection

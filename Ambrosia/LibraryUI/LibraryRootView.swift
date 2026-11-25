@@ -175,7 +175,6 @@ struct LibraryRootView: View {
                 if countPending {
                     ProgressView()
                         .controlSize(.mini)
-                        .scaleEffect(0.6)
                     Text("Filtering…")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
@@ -414,9 +413,13 @@ struct LibraryRootView: View {
 
     private var footer: some View {
         HStack(spacing: 16) {
-            Button("← Previous") {
+            Button {
                 displayController.previousPage()
-            }.disabled(!displayController.hasPreviousPage).buttonStyle(.borderless)
+            } label: {
+                Label("Previous", systemImage: "chevron.left")
+            }
+            .disabled(!displayController.hasPreviousPage)
+            .buttonStyle(.borderless)
             Spacer()
             if session.isOpen {
                 if displayController.shouldGroupSeriesRows {
@@ -435,9 +438,16 @@ struct LibraryRootView: View {
                 }
             }
             Spacer()
-            Button("Next →") {
+            Button {
                 displayController.nextPage()
-            }.disabled(!displayController.hasNextPage).buttonStyle(.borderless)
+            } label: {
+                HStack(spacing: 4) {
+                    Text("Next")
+                    Image(systemName: "chevron.right")
+                }
+            }
+            .disabled(!displayController.hasNextPage)
+            .buttonStyle(.borderless)
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
         .background(libraryBGColor)
@@ -625,13 +635,6 @@ struct LibraryRootView: View {
 
     private func attachSheets<V: View>(to view: V) -> some View {
         view
-            .sheet(isPresented: Binding(
-                get: { toolbarState.showDuplicateManager },
-                set: { toolbarState.showDuplicateManager = $0 }
-            )) {
-                DuplicateWorksManagerView(session: session)
-                    .preferredColorScheme(prefs.resolvedLibraryColorScheme)
-            }
             .onChange(of: toolbarState.triggerExport) {
                 if toolbarState.triggerExport {
                     ExportManager.presentExportPanel(

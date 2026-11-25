@@ -20,7 +20,7 @@ extension EPUBParser {
             .appendingPathComponent("\(calibreID)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
 
-        let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "gif", "svg", "webp", "bmp"]
+        let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "gif", "svg", "webp", "bmp", "avif"]
         let archive = try Archive(url: epubURL, accessMode: .read)
 
         for entry in archive {

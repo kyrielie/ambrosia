@@ -15,6 +15,7 @@ struct ErrorLogView: View {
     @State private var entries: [ErrorLogEntry] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
+    @State private var showClearConfirmation = false
 
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -31,7 +32,28 @@ struct ErrorLogView: View {
         }
         .frame(minWidth: 520, minHeight: 420)
         .preventInitialButtonFocus()
+        .onExitCommand { doDismiss() }
+        .confirmationDialog(
+            "Clear Error Log?",
+            isPresented: $showClearConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Clear All Errors", role: .destructive) {
+                Task { await clear() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes all logged error entries from this library.")
+        }
         .task { await load() }
+    }
+
+    private func doDismiss() {
+        if let onDismiss {
+            onDismiss()
+        } else {
+            dismiss()
+        }
     }
 
     private var header: some View {
@@ -39,15 +61,12 @@ struct ErrorLogView: View {
             Text("Error Log")
                 .font(.headline)
             Spacer()
-            Button("Clear") { Task { await clear() } }
+            Button("Clear", role: .destructive) { showClearConfirmation = true }
                 .disabled(entries.isEmpty)
             Button("Done") {
-                if let onDismiss {
-                    onDismiss()
-                } else {
-                    dismiss()
-                }
+                doDismiss()
             }
+            .keyboardShortcut(.cancelAction)
         }
         .padding()
     }

@@ -79,8 +79,8 @@ final class SearchBarViewController: NSViewController {
         root.addSubview(label)
         self.resultLabel = label
 
-        let prev = makeIconButton(symbol: "chevron.up", tip: "Previous result", action: #selector(prevTapped))
-        let next = makeIconButton(symbol: "chevron.down", tip: "Next result", action: #selector(nextTapped))
+        let prev = makeIconButton(symbol: "chevron.up", tip: "Previous result (⇧⌘G)", action: #selector(prevTapped))
+        let next = makeIconButton(symbol: "chevron.down", tip: "Next result (⌘G)", action: #selector(nextTapped))
         let close = makeIconButton(symbol: "xmark", tip: "Close search", action: #selector(closeTapped))
 
         prev.isEnabled = false
@@ -119,7 +119,6 @@ final class SearchBarViewController: NSViewController {
 
             label.leadingAnchor.constraint(equalTo: field.trailingAnchor, constant: 8),
             label.centerYAnchor.constraint(equalTo: field.centerYAnchor),
-            label.widthAnchor.constraint(lessThanOrEqualToConstant: 68),
             label.widthAnchor.constraint(greaterThanOrEqualToConstant: 0),
 
             prev.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 4),

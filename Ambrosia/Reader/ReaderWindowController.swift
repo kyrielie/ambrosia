@@ -5,6 +5,7 @@ import SwiftUI
 extension NSToolbarItem.Identifier {
     static let readerTOC        = NSToolbarItem.Identifier("ambrosia.reader.toc")
     static let readerSearch     = NSToolbarItem.Identifier("ambrosia.reader.search")
+    static let readerAnnotations = NSToolbarItem.Identifier("ambrosia.reader.annotations")
     static let readerNavigation = NSToolbarItem.Identifier("ambrosia.reader.navigation")
     static let readerLike       = NSToolbarItem.Identifier("ambrosia.reader.like")
     static let readerReadLater  = NSToolbarItem.Identifier("ambrosia.reader.readlater")
@@ -48,6 +49,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
     // Cached toolbar control views
     private var tocButton: NSButton?
     private var searchButton: NSButton?
+    private var annotationsButton: NSButton?
     private var pageLabel: NSTextField?
     private var prevButton: NSButton?
     private var nextButton: NSButton?
@@ -295,6 +297,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         var identifiers: [NSToolbarItem.Identifier] = [
             .readerTOC,
             .readerSearch,
+            .readerAnnotations,
             .flexibleSpace,
             .readerNavigation,
             .flexibleSpace,
@@ -304,7 +307,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
             .readerAppearance
         ]
         if case .series = target {
-            let index = identifiers.firstIndex(of: .readerLike) ?? 5
+            let index = identifiers.firstIndex(of: .readerLike) ?? 6
             identifiers.insert(.readerSeriesLike, at: index)
             identifiers.insert(.readerSeriesReadLater, at: index + 1)
         }
@@ -315,6 +318,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         [
             .readerTOC,
             .readerSearch,
+            .readerAnnotations,
             .readerNavigation,
             .readerLike,
             .readerReadLater,
@@ -336,6 +340,9 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
 
         case .readerSearch:
             return makeSearchItem(identifier)
+
+        case .readerAnnotations:
+            return makeAnnotationsItem(identifier)
 
         case .readerNavigation:
             return makeNavigationItem(identifier)
@@ -395,9 +402,9 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
             target: self,
             action: #selector(prevPageClicked)
         )
-        prev.bezelStyle = .accessoryBarAction
-        prev.isBordered = false
-        prev.toolTip = "Previous Page (Left Arrow / Shift-Space)"
+        prev.bezelStyle = .toolbar
+        prev.isBordered = true
+        prev.toolTip = "Previous Page (⌘← / Shift-Space)"
         self.prevButton = prev
 
         let label = NSTextField(labelWithString: "1 / 1")
@@ -413,9 +420,9 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
             target: self,
             action: #selector(nextPageClicked)
         )
-        next.bezelStyle = .accessoryBarAction
-        next.isBordered = false
-        next.toolTip = "Next Page (Right Arrow / Space)"
+        next.bezelStyle = .toolbar
+        next.isBordered = true
+        next.toolTip = "Next Page (⌘→ / Space)"
         self.nextButton = next
 
         stack.addArrangedSubview(prev)
@@ -426,19 +433,24 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         return item
     }
 
+    private func makeToolbarButton(symbol: String, accessibilityDescription: String, action: Selector) -> NSButton {
+        let button = NSButton(
+            image: NSImage(systemSymbolName: symbol, accessibilityDescription: accessibilityDescription)?
+                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
+            target: self,
+            action: action
+        )
+        button.bezelStyle = .toolbar
+        button.isBordered = true
+        return button
+    }
+
     private func makeLikeItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
         let item = NSToolbarItem(itemIdentifier: identifier)
         item.label = "Like"
         item.toolTip = "Like this work"
 
-        let button = NSButton(
-            image: NSImage(systemSymbolName: "heart", accessibilityDescription: "Like")?
-                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
-            target: self,
-            action: #selector(likeClicked)
-        )
-        button.bezelStyle = .accessoryBarAction
-        button.isBordered = false
+        let button = makeToolbarButton(symbol: "heart", accessibilityDescription: "Like", action: #selector(likeClicked))
         self.likeButton = button
 
         item.view = button
@@ -450,14 +462,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         item.label = "Read Later"
         item.toolTip = "Add to Read Later"
 
-        let button = NSButton(
-            image: NSImage(systemSymbolName: "bookmark", accessibilityDescription: "Read Later")?
-                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
-            target: self,
-            action: #selector(readLaterClicked)
-        )
-        button.bezelStyle = .accessoryBarAction
-        button.isBordered = false
+        let button = makeToolbarButton(symbol: "bookmark", accessibilityDescription: "Read Later", action: #selector(readLaterClicked))
         self.readLaterButton = button
 
         item.view = button
@@ -468,14 +473,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         let item = NSToolbarItem(itemIdentifier: identifier)
         item.label = "Like Series"
         item.toolTip = "Like this series"
-        let button = NSButton(
-            image: NSImage(systemSymbolName: "star", accessibilityDescription: "Like Series")?
-                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
-            target: self,
-            action: #selector(seriesLikeClicked)
-        )
-        button.bezelStyle = .accessoryBarAction
-        button.isBordered = false
+        let button = makeToolbarButton(symbol: "star", accessibilityDescription: "Like Series", action: #selector(seriesLikeClicked))
         self.seriesLikeButton = button
         item.view = button
         return item
@@ -485,14 +483,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         let item = NSToolbarItem(itemIdentifier: identifier)
         item.label = "Read Later Series"
         item.toolTip = "Add Series to Read Later"
-        let button = NSButton(
-            image: NSImage(systemSymbolName: "bookmark", accessibilityDescription: "Read Later Series")?
-                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
-            target: self,
-            action: #selector(seriesReadLaterClicked)
-        )
-        button.bezelStyle = .accessoryBarAction
-        button.isBordered = false
+        let button = makeToolbarButton(symbol: "bookmark", accessibilityDescription: "Read Later Series", action: #selector(seriesReadLaterClicked))
         self.seriesReadLaterButton = button
         item.view = button
         return item
@@ -503,15 +494,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         item.label = "Info"
         item.toolTip = "Work Info & Preface (⌘I)"
 
-        let button = NSButton(
-            image: NSImage(systemSymbolName: "info.circle", accessibilityDescription: "Work Info")?
-                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
-            target: self,
-            action: #selector(infoClicked)
-        )
-        button.bezelStyle = .accessoryBarAction
-        button.isBordered = false
-
+        let button = makeToolbarButton(symbol: "info.circle", accessibilityDescription: "Work Info", action: #selector(infoClicked))
         item.view = button
         return item
     }
@@ -521,14 +504,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         item.label = "Appearance"
         item.toolTip = "Appearance (Aa)"
 
-        let button = NSButton(
-            image: NSImage(systemSymbolName: "textformat.size", accessibilityDescription: "Appearance")?
-                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
-            target: self,
-            action: #selector(appearanceClicked(_:))
-        )
-        button.bezelStyle = .accessoryBarAction
-        button.isBordered = false
+        let button = makeToolbarButton(symbol: "textformat.size", accessibilityDescription: "Appearance", action: #selector(appearanceClicked(_:)))
         self.appearanceButton = button
 
         item.view = button
@@ -540,14 +516,7 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         item.label = "Table of Contents"
         item.toolTip = "Table of Contents (⌘T)"
 
-        let button = NSButton(
-            image: NSImage(systemSymbolName: "list.bullet", accessibilityDescription: "Table of Contents")?
-                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
-            target: self,
-            action: #selector(tocClicked(_:))
-        )
-        button.bezelStyle = .accessoryBarAction
-        button.isBordered = false
+        let button = makeToolbarButton(symbol: "list.bullet", accessibilityDescription: "Table of Contents", action: #selector(tocClicked(_:)))
         self.tocButton = button
 
         item.view = button
@@ -559,15 +528,20 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
         item.label = "Search in Book"
         item.toolTip = "Search in Book (⌘F)"
 
-        let button = NSButton(
-            image: NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "Search in Book")?
-                .withSymbolConfiguration(Self.toolbarSymbolConfig) ?? NSImage(),
-            target: self,
-            action: #selector(searchClicked(_:))
-        )
-        button.bezelStyle = .accessoryBarAction
-        button.isBordered = false
+        let button = makeToolbarButton(symbol: "magnifyingglass", accessibilityDescription: "Search in Book", action: #selector(searchClicked(_:)))
         self.searchButton = button
+
+        item.view = button
+        return item
+    }
+
+    private func makeAnnotationsItem(_ identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = "Annotations"
+        item.toolTip = "Annotations (⌘B)"
+
+        let button = makeToolbarButton(symbol: "bookmark.square", accessibilityDescription: "Annotations", action: #selector(annotationsClicked(_:)))
+        self.annotationsButton = button
 
         item.view = button
         return item
@@ -581,6 +555,10 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
 
     @objc private func searchClicked(_ sender: Any?) {
         readerViewController?.toggleSearchBar()
+    }
+
+    @objc private func annotationsClicked(_ sender: Any?) {
+        readerViewController?.toggleAnnotationSidebar()
     }
 
     @objc private func prevPageClicked() {

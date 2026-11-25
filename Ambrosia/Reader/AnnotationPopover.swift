@@ -18,21 +18,16 @@ struct AnnotationPopover: View {
     // MARK: - Input
 
     let selectedText: String
-    let onSave: (String?, String) -> Void   // (note?, colorHex)
+    let onSave: (String?, AnnotationColor, String) -> Void   // (note?, colorKey, colorHex)
     let onCancel: () -> Void
 
     // MARK: - State
 
     @State private var noteText: String = ""
-    @State private var colorHex: String = "#FFD60A"
+    @State private var colorKey: AnnotationColor = .yellow
 
-    private let palette: [(label: String, hex: String)] = [
-        ("Yellow", "#FFD60A"),
-        ("Red", "#FF453A"),
-        ("Green", "#30D158"),
-        ("Blue", "#0A84FF"),
-        ("Purple", "#BF5AF2")
-    ]
+    private var palette: HighlightPalette { ReaderPreferences.shared.highlightPalette }
+    private var isDark: Bool { ReaderPreferences.shared.effectiveIsDark }
 
     // MARK: - Body
 
@@ -86,24 +81,24 @@ struct AnnotationPopover: View {
                     .foregroundStyle(.secondary)
 
                 HStack(spacing: 8) {
-                    ForEach(palette, id: \.hex) { swatch in
+                    ForEach(AnnotationColor.allCases) { swatch in
                         Button {
-                            colorHex = swatch.hex
+                            colorKey = swatch
                         } label: {
                             Circle()
-                                .fill(Color(hex: swatch.hex) ?? .yellow)
+                                .fill(palette.swiftUIColor(for: swatch, isDark: isDark))
                                 .frame(width: 24, height: 24)
                                 .overlay(
                                     Circle()
                                         .strokeBorder(
-                                            colorHex == swatch.hex
+                                            colorKey == swatch
                                                 ? Color.primary : Color.clear,
                                             lineWidth: 2
                                         )
                                 )
                         }
                         .buttonStyle(.plain)
-                        .help(swatch.label)
+                        .help(swatch.displayName)
                     }
                     Spacer()
                 }
@@ -116,7 +111,8 @@ struct AnnotationPopover: View {
                     .keyboardShortcut(.escape, modifiers: [])
                 Button("Save") {
                     let note = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    onSave(note.isEmpty ? nil : note, colorHex)
+                    let resolvedHex = palette.hex(for: colorKey, isDark: isDark)
+                    onSave(note.isEmpty ? nil : note, colorKey, resolvedHex)
                 }
                 .keyboardShortcut(.return, modifiers: [.command])
                 .buttonStyle(.borderedProminent)

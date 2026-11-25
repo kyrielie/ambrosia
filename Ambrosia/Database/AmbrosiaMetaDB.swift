@@ -280,6 +280,7 @@ actor AmbrosiaMetaDB {
             selected_text TEXT    NOT NULL DEFAULT '',
             note          TEXT,
             color_hex     TEXT,
+            color_key     TEXT    NOT NULL DEFAULT 'yellow',
             created_at    TEXT    NOT NULL
         );
 
@@ -289,6 +290,26 @@ actor AmbrosiaMetaDB {
         CREATE INDEX IF NOT EXISTS idx_annotations_position
             ON annotations(calibre_id, spine_index, start_char);
         """)
+
+        if try !columnExists("annotations", "color_key", db: db) {
+            try db.execute("ALTER TABLE annotations ADD COLUMN color_key TEXT NOT NULL DEFAULT 'yellow'")
+            try db.execute("""
+            UPDATE annotations
+            SET color_key = CASE UPPER(COALESCE(color_hex, ''))
+                WHEN '#FFD60A' THEN 'yellow'
+                WHEN '#FFCC00' THEN 'yellow'
+                WHEN '#FF453A' THEN 'red'
+                WHEN '#FF3B30' THEN 'red'
+                WHEN '#30D158' THEN 'green'
+                WHEN '#34C759' THEN 'green'
+                WHEN '#0A84FF' THEN 'blue'
+                WHEN '#007AFF' THEN 'blue'
+                WHEN '#BF5AF2' THEN 'purple'
+                WHEN '#AF52DE' THEN 'purple'
+                ELSE 'yellow'
+            END
+            """)
+        }
     }
 
     private static func createReadingHistory(db: Connection) throws {
@@ -835,13 +856,20 @@ actor AmbrosiaMetaDB {
         try db.transaction(.deferred) { try block(self) }
     }
 
+    private static func decodeAnnotationColorKey(rawKey: String?, legacyHex: String?) -> AnnotationColor {
+        if let rawKey, let key = AnnotationColor(rawValue: rawKey) {
+            return key
+        }
+        return AnnotationColor(legacyHex: legacyHex)
+    }
+
     func annotations(for calibreID: Int, spineIndex: Int? = nil) throws -> [Annotation] {
         let iso = ISO8601DateFormatter()
         let sql: String
         let args: [Binding?]
         if let spineIndex {
             sql = """
-            SELECT id, spine_index, start_char, end_char, selected_text, note, color_hex, created_at
+            SELECT id, spine_index, start_char, end_char, selected_text, note, color_hex, created_at, color_key
             FROM annotations
             WHERE calibre_id = ? AND spine_index = ?
             ORDER BY start_char
@@ -849,7 +877,7 @@ actor AmbrosiaMetaDB {
             args = [calibreID, spineIndex]
         } else {
             sql = """
-            SELECT id, spine_index, start_char, end_char, selected_text, note, color_hex, created_at
+            SELECT id, spine_index, start_char, end_char, selected_text, note, color_hex, created_at, color_key
             FROM annotations
             WHERE calibre_id = ?
             ORDER BY spine_index, start_char
@@ -865,6 +893,8 @@ actor AmbrosiaMetaDB {
                   let end = row.int(at: 3),
                   let selectedText = row[safe: 4] as? String,
                   let created = row[safe: 7] as? String else { return nil }
+            let hex = (row[safe: 6] as? String) ?? "#FFD60A"
+            let key = Self.decodeAnnotationColorKey(rawKey: row[safe: 8] as? String, legacyHex: hex)
             return Annotation(
                 id: id,
                 spineIndex: spine,
@@ -872,7 +902,8 @@ actor AmbrosiaMetaDB {
                 endChar: end,
                 selectedText: selectedText,
                 note: row[safe: 5] as? String,
-                colorHex: (row[safe: 6] as? String) ?? "#FFD60A",
+                colorKey: key,
+                colorHex: hex,
                 createdDate: iso.date(from: created) ?? Date()
             )
         }
@@ -882,8 +913,8 @@ actor AmbrosiaMetaDB {
         try run(
             """
             INSERT OR REPLACE INTO annotations
-            (id, calibre_id, spine_index, start_char, end_char, selected_text, note, color_hex, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, calibre_id, spine_index, start_char, end_char, selected_text, note, color_hex, color_key, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 annotation.id.uuidString,
@@ -894,6 +925,7 @@ actor AmbrosiaMetaDB {
                 annotation.selectedText,
                 annotation.note,
                 annotation.colorHex,
+                annotation.colorKey.rawValue,
                 ISO8601DateFormatter().string(from: annotation.createdDate)
             ]
         )
@@ -1245,7 +1277,7 @@ actor AmbrosiaMetaDB {
         let rows = try prepare(
             """
             SELECT id, calibre_id, spine_index, start_char, end_char,
-                   selected_text, note, color_hex, created_at
+                   selected_text, note, color_hex, created_at, color_key
             FROM annotations
             ORDER BY created_at DESC, rowid DESC
             LIMIT ?
@@ -1264,17 +1296,22 @@ actor AmbrosiaMetaDB {
                   let created   = iso.date(from: dateStr)
             else { return nil }
 
-            var annotation = Annotation(
-                spineIndex: spine,
-                startChar: start,
-                endChar: end,
-                selectedText: text,
-                colorHex: (row[safe: 7] as? String) ?? "#FFD60A"
+            let hex = (row[safe: 7] as? String) ?? "#FFD60A"
+            let key = Self.decodeAnnotationColorKey(rawKey: row[safe: 9] as? String, legacyHex: hex)
+            return (
+                Annotation(
+                    id: id,
+                    spineIndex: spine,
+                    startChar: start,
+                    endChar: end,
+                    selectedText: text,
+                    note: row[safe: 6] as? String,
+                    colorKey: key,
+                    colorHex: hex,
+                    createdDate: created
+                ),
+                calibreID
             )
-            annotation.id          = id
-            annotation.note        = row[safe: 6] as? String
-            annotation.createdDate = created
-            return (annotation, calibreID)
         }
     }
 
@@ -1289,7 +1326,7 @@ actor AmbrosiaMetaDB {
         let rows = try prepare(
             """
             SELECT id, calibre_id, spine_index, start_char, end_char,
-                   selected_text, note, color_hex, created_at
+                   selected_text, note, color_hex, created_at, color_key
             FROM annotations
             ORDER BY created_at DESC, rowid DESC
             """
@@ -1306,17 +1343,22 @@ actor AmbrosiaMetaDB {
                   let created   = iso.date(from: dateStr)
             else { return nil }
 
-            var annotation = Annotation(
-                spineIndex: spine,
-                startChar: start,
-                endChar: end,
-                selectedText: text,
-                colorHex: (row[safe: 7] as? String) ?? "#FFD60A"
+            let hex = (row[safe: 7] as? String) ?? "#FFD60A"
+            let key = Self.decodeAnnotationColorKey(rawKey: row[safe: 9] as? String, legacyHex: hex)
+            return (
+                Annotation(
+                    id: id,
+                    spineIndex: spine,
+                    startChar: start,
+                    endChar: end,
+                    selectedText: text,
+                    note: row[safe: 6] as? String,
+                    colorKey: key,
+                    colorHex: hex,
+                    createdDate: created
+                ),
+                calibreID
             )
-            annotation.id          = id
-            annotation.note        = row[safe: 6] as? String
-            annotation.createdDate = created
-            return (annotation, calibreID)
         }
     }
 

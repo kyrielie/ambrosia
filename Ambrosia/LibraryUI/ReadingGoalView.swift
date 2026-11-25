@@ -58,6 +58,7 @@ struct ReadingGoalView: View {
         }
         .frame(minWidth: 680, minHeight: 520)
         .preventInitialButtonFocus()
+        .onExitCommand { doDismiss() }
         .task {
             await loadData()
         }
@@ -81,6 +82,7 @@ struct ReadingGoalView: View {
             Button("Done") {
                 doDismiss()
             }
+            .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)

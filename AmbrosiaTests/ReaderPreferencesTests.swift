@@ -15,11 +15,11 @@ final class ReaderPreferencesTests: XCTestCase {
 
         prefs.preferredReader = .systemDefault
         XCTAssertEqual(prefs.preferredReader, .systemDefault)
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "rp.preferredReader"), "systemDefault")
+        XCTAssertEqual(prefs.userDefaults.string(forKey: "rp.preferredReader"), "systemDefault")
 
         prefs.preferredReader = .customApp
         XCTAssertEqual(prefs.preferredReader, .customApp)
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "rp.preferredReader"), "customApp")
+        XCTAssertEqual(prefs.userDefaults.string(forKey: "rp.preferredReader"), "customApp")
     }
 
     func testCustomReaderAppNameDerivation() {
@@ -61,11 +61,11 @@ final class ReaderPreferencesTests: XCTestCase {
 
         prefs.ao3WorkLayoutOrder = .titleFirst
         XCTAssertEqual(prefs.ao3WorkLayoutOrder, .titleFirst)
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "rp.ao3WorkLayoutOrder"), "titleFirst")
+        XCTAssertEqual(prefs.userDefaults.string(forKey: "rp.ao3WorkLayoutOrder"), "titleFirst")
 
         prefs.ao3WorkLayoutOrder = .ao3EPUB
         XCTAssertEqual(prefs.ao3WorkLayoutOrder, .ao3EPUB)
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "rp.ao3WorkLayoutOrder"), "ao3EPUB")
+        XCTAssertEqual(prefs.userDefaults.string(forKey: "rp.ao3WorkLayoutOrder"), "ao3EPUB")
 
         prefs.resetReaderToDefaults()
         XCTAssertEqual(prefs.ao3WorkLayoutOrder, .ao3Web)
@@ -77,12 +77,12 @@ final class ReaderPreferencesTests: XCTestCase {
 
         prefs.appearanceMode = .light
         XCTAssertEqual(prefs.appearanceMode, .light)
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "rp.appearanceMode"), "light")
+        XCTAssertEqual(prefs.userDefaults.string(forKey: "rp.appearanceMode"), "light")
         XCTAssertFalse(prefs.effectiveIsDark)
 
         prefs.appearanceMode = .dark
         XCTAssertEqual(prefs.appearanceMode, .dark)
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "rp.appearanceMode"), "dark")
+        XCTAssertEqual(prefs.userDefaults.string(forKey: "rp.appearanceMode"), "dark")
         XCTAssertTrue(prefs.effectiveIsDark)
 
         let theme = ReaderTheme.sepia
@@ -100,11 +100,11 @@ final class ReaderPreferencesTests: XCTestCase {
 
         prefs.textAlignment = .justify
         XCTAssertEqual(prefs.textAlignment, .justify)
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "rp.textAlignment"), "justify")
+        XCTAssertEqual(prefs.userDefaults.string(forKey: "rp.textAlignment"), "justify")
 
         prefs.paragraphIndent = 1.75
         XCTAssertEqual(prefs.paragraphIndent, 1.75)
-        XCTAssertEqual(UserDefaults.standard.double(forKey: "rp.paragraphIndent"), 1.75)
+        XCTAssertEqual(prefs.userDefaults.double(forKey: "rp.paragraphIndent"), 1.75)
 
         let emittedCSS = prefs.css(paginated: false)
         XCTAssertTrue(emittedCSS.contains("--ambrosia-text-align: justify"), "Must emit text-align CSS variable")
@@ -165,7 +165,7 @@ final class ReaderPreferencesTests: XCTestCase {
         XCTAssertFalse(prefs.collapseSpacerParagraphs)
 
         prefs.collapseSpacerParagraphs = true
-        XCTAssertTrue(UserDefaults.standard.bool(forKey: "rp.collapseSpacerParagraphs"))
+        XCTAssertTrue(prefs.userDefaults.bool(forKey: "rp.collapseSpacerParagraphs"))
         XCTAssertTrue(prefs.isReaderCustomized)
 
         // The collapse rule is always present; the class decides what it hits.
@@ -175,7 +175,7 @@ final class ReaderPreferencesTests: XCTestCase {
 
         prefs.resetReaderToDefaults()
         XCTAssertFalse(prefs.collapseSpacerParagraphs)
-        XCTAssertFalse(UserDefaults.standard.bool(forKey: "rp.collapseSpacerParagraphs"))
+        XCTAssertFalse(prefs.userDefaults.bool(forKey: "rp.collapseSpacerParagraphs"))
     }
 
     func testCollapseSpacerParagraphsIsStructural() {
@@ -278,10 +278,22 @@ final class ReaderPreferencesTests: XCTestCase {
 
         prefs.enableAdvancedEPUBExport = false
         XCTAssertFalse(prefs.enableAdvancedEPUBExport)
-        XCTAssertEqual(UserDefaults.standard.bool(forKey: "rp.enableAdvancedEPUBExport"), false)
+        XCTAssertEqual(prefs.userDefaults.bool(forKey: "rp.enableAdvancedEPUBExport"), false)
 
         prefs.enableAdvancedEPUBExport = true
         XCTAssertTrue(prefs.enableAdvancedEPUBExport)
-        XCTAssertEqual(UserDefaults.standard.bool(forKey: "rp.enableAdvancedEPUBExport"), true)
+        XCTAssertEqual(prefs.userDefaults.bool(forKey: "rp.enableAdvancedEPUBExport"), true)
     }
+
+    func testReaderPreferencesUsesIsolatedSuiteDuringTests() {
+        let prefs = ReaderPreferences.shared
+        XCTAssertNotEqual(prefs.userDefaults, UserDefaults.standard, "ReaderPreferences must use isolated suite during tests")
+        let standardFont = UserDefaults.standard.object(forKey: "rp.fontSize")
+        prefs.fontSize = 99
+        XCTAssertEqual(prefs.userDefaults.integer(forKey: "rp.fontSize"), 99)
+        XCTAssertEqual(UserDefaults.standard.object(forKey: "rp.fontSize") as? Int, standardFont as? Int,
+                       "UserDefaults.standard must not be modified by ReaderPreferences in tests")
+        prefs.resetReaderToDefaults()
+    }
+
 }

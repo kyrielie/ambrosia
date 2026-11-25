@@ -190,6 +190,8 @@ class FullOPFParser: NSObject, XMLParserDelegate {
     /// elements; joined with ", " the same way dcCreators' individual
     /// elements are captured whole rather than split.
     var dcSubjects: [String] = []
+    /// True when `<meta property="rendition:layout">pre-paginated</meta>` is set.
+    var isFixedLayout = false
 
     private var inManifest  = false
     private var inSpine     = false
@@ -205,6 +207,8 @@ class FullOPFParser: NSObject, XMLParserDelegate {
     private var publisherBuffer = ""
     private var inSubject      = false
     private var subjectBuffer  = ""
+    private var inRenditionLayout = false
+    private var renditionLayoutBuffer = ""
 
     func parser(_ parser: XMLParser, didStartElement element: String,
                 namespaceURI: String?, qualifiedName _: String?,
@@ -237,6 +241,8 @@ class FullOPFParser: NSObject, XMLParserDelegate {
             if dcPublisher == nil { inPublisher = true; publisherBuffer = "" }
         case "dc:subject", "subject":
             inSubject = true; subjectBuffer = ""
+        case "meta" where attr["property"] == "rendition:layout":
+            inRenditionLayout = true; renditionLayoutBuffer = ""
         default:
             break
         }
@@ -249,6 +255,7 @@ class FullOPFParser: NSObject, XMLParserDelegate {
         if inDate { dateBuffer += string }
         if inPublisher { publisherBuffer += string }
         if inSubject { subjectBuffer += string }
+        if inRenditionLayout { renditionLayoutBuffer += string }
     }
 
     func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
@@ -295,6 +302,13 @@ class FullOPFParser: NSObject, XMLParserDelegate {
                 inSubject = false
                 let trimmed = subjectBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty { dcSubjects.append(trimmed) }
+            }
+        case "meta":
+            if inRenditionLayout {
+                inRenditionLayout = false
+                if renditionLayoutBuffer.trimmingCharacters(in: .whitespacesAndNewlines) == "pre-paginated" {
+                    isFixedLayout = true
+                }
             }
         default: break
         }

@@ -192,4 +192,15 @@ final class AO3TagSeedDatabaseConfigInstanceTests: XCTestCase {
             return XCTFail("expected .invalid after refresh, got \(AO3TagSeedDatabaseConfig.shared.validationStatus)")
         }
     }
+
+    func testAO3TagSeedDatabaseConfigUsesIsolatedSuiteDuringTests() {
+        let config = AO3TagSeedDatabaseConfig.shared
+        XCTAssertNotEqual(config.userDefaults, UserDefaults.standard, "AO3TagSeedDatabaseConfig must use isolated suite during tests")
+        let standardPath = UserDefaults.standard.string(forKey: "ao3TagSeedDatabase.path")
+        config.databasePath = "/tmp/test-fake-path.db"
+        XCTAssertEqual(config.userDefaults.string(forKey: "ao3TagSeedDatabase.path"), "/tmp/test-fake-path.db")
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "ao3TagSeedDatabase.path"), standardPath,
+                       "UserDefaults.standard must not be modified by AO3TagSeedDatabaseConfig in tests")
+        config.databasePath = savedDatabasePath
+    }
 }

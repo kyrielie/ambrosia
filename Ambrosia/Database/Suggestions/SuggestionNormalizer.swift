@@ -2,8 +2,20 @@ import Foundation
 
 /// Pure-logic normalizer for search suggestion queries and candidate indexing.
 /// Provides Unicode NFD diacritic stripping, lowercase folding, non-alphanumeric
-/// tokenization, and trailing qualifier extraction.
+/// tokenization, reader token canonicalization, and qualifier extraction.
 public enum SuggestionNormalizer {
+
+    private static let parentheticalRegex: NSRegularExpression = {
+        // Matches (...)
+        // swiftlint:disable:next force_try
+        try! NSRegularExpression(pattern: "\\s*\\([^)]*\\)", options: [])
+    }()
+
+    private static let ynRegex: NSRegularExpression = {
+        // Matches y/n as whole token or surrounded by whitespace/punctuation
+        // swiftlint:disable:next force_try
+        try! NSRegularExpression(pattern: "(?i)(?<=^|[\\s/&,])y/n(?=[\\s/&,]|$)|(?i)\\by/n\\b", options: [])
+    }()
 
     /// Normalizes a string by decomposing Unicode canonical mappings (NFD),
     /// stripping non-spacing combining marks (e.g. accents), and converting to lowercase.
@@ -16,10 +28,32 @@ public enum SuggestionNormalizer {
         return String(String.UnicodeScalarView(stripped)).lowercased()
     }
 
-    /// Splits a string into normalized alphanumeric tokens, stripping punctuation.
+    /// Canonicalizes reader tokens: replaces `y/n` with `reader`.
+    public static func normalizeReaderTokens(_ string: String) -> String {
+        ynRegex.stringByReplacingMatches(
+            in: string,
+            options: [],
+            range: NSRange(location: 0, length: string.utf16.count),
+            withTemplate: "reader"
+        )
+    }
+
+    /// Strips any parenthetical qualifiers, e.g. `(Smallville)` or `(Marvel)`.
+    public static func stripParentheticals(_ string: String) -> String {
+        parentheticalRegex.stringByReplacingMatches(
+            in: string,
+            options: [],
+            range: NSRange(location: 0, length: string.utf16.count),
+            withTemplate: ""
+        ).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Splits a string into normalized alphanumeric tokens, stripping punctuation and quotes.
+    /// Canonicalizes `y/n` into `reader`.
     /// E.g. `James "Bucky" Barnes/Steve Rogers` -> `["james", "bucky", "barnes", "steve", "rogers"]`.
     public static func tokens(of string: String) -> [String] {
-        let folded = fold(string)
+        let withReader = normalizeReaderTokens(string)
+        let folded = fold(withReader)
         return folded.unicodeScalars
             .split { !CharacterSet.alphanumerics.contains($0) }
             .compactMap { sub in

@@ -9,6 +9,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var libraryWindowController: LibraryWindowController?
     var session: LibrarySession!
     var importProgressController: ImportProgressWindowController?
+    let launchDate = Date()
 
     private var keyBindingsSubscription: AnyCancellable?
 
@@ -41,6 +42,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         LibraryRegistry.shared.pruneStaleTestLibraries()
         AmbrosiaMetaDB.pruneStaleTestDatabases()
 
+        let cutoff = launchDate
+        Task.detached(priority: .utility) {
+            AppDelegate.cleanupOrphanedExtractionDirectories(olderThan: cutoff)
+        }
+
         // Reopen last used library silently on launch
         VolumeMonitor.shared.startMonitoring(session: session)
         Task { await session.reopenIfNeeded() }
@@ -53,6 +59,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ReaderMenuController.shared.startMonitoring()
         syncReaderMenuShortcuts()
         startObservingKeyBindings()
+    }
+
+    /// Removes orphaned `<tmp>/ambrosia/<calibreID>` image extraction directories
+    /// left behind by prior crashes or force-quits (older than `cutoffDate`).
+    nonisolated static func cleanupOrphanedExtractionDirectories(
+        olderThan cutoffDate: Date,
+        in baseDirectory: URL? = nil
+    ) {
+        let fm = FileManager.default
+        let root = baseDirectory
+            ?? fm.temporaryDirectory.appendingPathComponent("ambrosia", isDirectory: true)
+        guard let entries = try? fm.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.contentModificationDateKey, .creationDateKey, .isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+        for url in entries {
+            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey, .isDirectoryKey])
+            guard values?.isDirectory == true else { continue }
+            let timestamp = values?.contentModificationDate ?? values?.creationDate ?? .distantFuture
+            if timestamp < cutoffDate {
+                try? fm.removeItem(at: url)
+            }
+        }
     }
 
     private func startObservingKeyBindings() {
@@ -84,8 +116,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         for action in RebindableAction.allCases {
             actionForTitle[action.displayName] = action
         }
-        // Also map standard Edit ▸ Find item if titled "Find…"
+        // Also map dynamic/alternate titles
         actionForTitle["Find…"] = .toggleFindBar
+        actionForTitle["Unlike This Work"] = .likeCurrentWork
+        actionForTitle["Remove from Read Later"] = .readLaterCurrentWork
 
         applyBindings(actionForTitle: actionForTitle, bindings: bindings, to: mainMenu)
     }
@@ -147,6 +181,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ReaderMenuState.shared.canGoNextPage = focused && (rvc?.canGoNext ?? false)
         ReaderMenuState.shared.canGoPreviousChapter = focused && (rvc?.canGoPreviousChapter ?? false)
         ReaderMenuState.shared.canGoNextChapter = focused && (rvc?.canGoNextChapter ?? false)
+        if let rvc {
+            ReaderMenuState.shared.isCurrentWorkLiked = session?.effectiveLikedIDs.contains(rvc.activeCalibreID) ?? false
+            ReaderMenuState.shared.isCurrentWorkInReadLater = session?.effectiveReadLaterIDs.contains(rvc.activeCalibreID) ?? false
+        } else {
+            ReaderMenuState.shared.isCurrentWorkLiked = false
+            ReaderMenuState.shared.isCurrentWorkInReadLater = false
+        }
+        if let lvc = libraryWindowController?.contentViewController as? LibraryViewController {
+            ReaderMenuState.shared.libraryViewMode = lvc.toolbarState.viewMode
+        }
         if let rvc, case .series(let series) = rvc.target, let session {
             ReaderMenuState.shared.isSeriesReader = focused
             ReaderMenuState.shared.seriesLikeState = session.seriesLikeState(for: series, collectionID: SystemCollectionID.liked)
@@ -207,15 +251,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
            let book = libraryWindow.currentSelectedBook {
             openExternalReader(forCalibreID: book.id)
             return
-        }
-        Task { [weak self] in
-            guard let self, let library = self.session?.library else { return }
-            let allIDs = await library.allBookIDs()
-            if let firstID = allIDs.first {
-                await MainActor.run {
-                    self.openExternalReader(forCalibreID: firstID)
-                }
-            }
         }
     }
 
@@ -693,9 +728,12 @@ final class ReaderMenuState {
     var canGoNextPage: Bool = false
     var canGoPreviousChapter: Bool = false
     var canGoNextChapter: Bool = false
+    var isCurrentWorkLiked: Bool = false
+    var isCurrentWorkInReadLater: Bool = false
     var isSeriesReader: Bool = false
     var seriesLikeState: SeriesLikeState = .none
     var seriesReadLaterState: SeriesLikeState = .none
+    var libraryViewMode: LibraryViewMode = .list
 }
 
 @MainActor

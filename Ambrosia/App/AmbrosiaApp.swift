@@ -18,9 +18,9 @@ struct AmbrosiaApp: App {
         }
         .environment(session)
         .commands {
-            // ── Ambrosia → Preferences… (⌘,) ─────────────────────────────
+            // ── Ambrosia → Settings… (⌘,) ────────────────────────────────
             CommandGroup(replacing: .appSettings) {
-                Button("Preferences…") {
+                Button("Settings…") {
                     PreferencesWindowController.show()
                 }
                 .keyboardShortcut(",", modifiers: [.command])
@@ -46,12 +46,6 @@ struct AmbrosiaApp: App {
 
             CommandGroup(after: .pasteboard) {
                 Divider()
-
-                Button("Search Library Body Text…") {
-                    FTSSearchResultsWindowController.show()
-                }
-                .keyboardShortcut("f", modifiers: [.command, .shift])
-                .disabled(!(AppDelegate.shared?.session.hasFulltextIndex == true && ReaderPreferences.shared.enableFullTextSearch))
 
                 Menu("Find") {
                     Button("Find…") {
@@ -116,16 +110,20 @@ struct AmbrosiaApp: App {
                     AppDelegate.shared?.openCurrentOrSelectedInExternalReader()
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
+                .disabled(session.activePath == nil)
 
                 Button("Reveal in Finder") {
                     AppDelegate.shared?.revealCurrentOrLibraryInFinder()
                 }
                 .keyboardShortcut("r", modifiers: [.command, .option])
+                .disabled(session.activePath == nil)
 
                 Button("Manage Duplicate AO3 Works…") {
-                    AppDelegate.shared?.libraryWindowController?.toolbarStateForCommands?.showDuplicateManager = true
+                    AppDelegate.shared?.showLibraryWindow()
+                    AppDelegate.shared?.libraryWindowController?.showDuplicateManager()
                 }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(session.activePath == nil)
 
                 Divider()
 
@@ -148,18 +146,36 @@ struct AmbrosiaApp: App {
 
             CommandGroup(after: .toolbar) {
                 Menu("View Mode") {
-                    Button("List View") {
+                    Button {
                         AppDelegate.shared?.libraryWindowController?.toolbarStateForCommands?.viewMode = .list
+                    } label: {
+                        if readerMenuState.libraryViewMode == .list {
+                            Label("List View", systemImage: "checkmark")
+                        } else {
+                            Text("List View")
+                        }
                     }
                     .keyboardShortcut("1", modifiers: [.command])
 
-                    Button("Reading / Email View") {
+                    Button {
                         AppDelegate.shared?.libraryWindowController?.toolbarStateForCommands?.viewMode = .email
+                    } label: {
+                        if readerMenuState.libraryViewMode == .email {
+                            Label("Reading / Email View", systemImage: "checkmark")
+                        } else {
+                            Text("Reading / Email View")
+                        }
                     }
                     .keyboardShortcut("2", modifiers: [.command])
 
-                    Button("Ranking View") {
+                    Button {
                         AppDelegate.shared?.libraryWindowController?.toolbarStateForCommands?.viewMode = .ranking
+                    } label: {
+                        if readerMenuState.libraryViewMode == .ranking {
+                            Label("Activity", systemImage: "checkmark")
+                        } else {
+                            Text("Activity")
+                        }
                     }
                     .keyboardShortcut("3", modifiers: [.command])
                 }
@@ -203,6 +219,12 @@ struct AmbrosiaApp: App {
                 }
                 .disabled(session.activePath == nil)
 
+                Button("Error Log…") {
+                    AppDelegate.shared?.showLibraryWindow()
+                    AppDelegate.shared?.libraryWindowController?.showErrorLog()
+                }
+                .disabled(session.activePath == nil)
+
                 Divider()
 
                 Button("Toggle Sidebar") {
@@ -211,11 +233,10 @@ struct AmbrosiaApp: App {
                 .keyboardShortcut("s", modifiers: [.command, .option])
 
                 Button("Toggle AO3 Style Filter") {
-                    guard let libraryWindowController = AppDelegate.shared?.libraryWindowController,
-                          let toolbarState = libraryWindowController.toolbarStateForCommands else { return }
-                    toolbarState.showAO3FilterSidebar.toggle()
+                    AppDelegate.shared?.libraryWindowController?.toggleAO3FilterWindow()
                 }
                 .keyboardShortcut("f", modifiers: [.command, .option])
+                .disabled(session.activePath == nil)
 
                 Button("Toggle Advanced Filter Drawer") {
                     guard let libraryWindowController = AppDelegate.shared?.libraryWindowController,
@@ -237,43 +258,6 @@ struct AmbrosiaApp: App {
                     AppDelegate.shared?.showLibraryWindow()
                 }
                 .keyboardShortcut("0", modifiers: [.command, .option])
-
-                Button("Contents Panel") {
-                    if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
-                       libraryWindowController.window?.isKeyWindow == true {
-                        libraryWindowController.showTOCInEmailSidebar(nil)
-                    } else {
-                        NSApp.sendAction(#selector(ReaderViewController.showTOCSidebar(_:)),
-                                         to: nil, from: nil)
-                    }
-                }
-                .disabled(!readerMenuState.isReaderFocused)
-
-                Button("Annotations Panel") {
-                    if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
-                       libraryWindowController.window?.isKeyWindow == true {
-                        libraryWindowController.showEmailAnnotationSidebar(nil)
-                    } else {
-                        NSApp.sendAction(#selector(ReaderViewController.showAnnotationSidebar(_:)),
-                                         to: nil, from: nil)
-                    }
-                }
-                .disabled(!readerMenuState.isReaderFocused)
-
-                Button("Info Panel") {
-                    if let libraryWindowController = AppDelegate.shared?.libraryWindowController,
-                       libraryWindowController.window?.isKeyWindow == true {
-                        if libraryWindowController.toolbarStateForCommands?.viewMode == .email {
-                            libraryWindowController.showEmailInfoSidebar(nil)
-                        } else {
-                            libraryWindowController.showBookInfoSheet()
-                        }
-                    } else if let readerWindow = NSApp.keyWindow?.windowController as? ReaderWindowController {
-                        readerWindow.showBookInfoSheet()
-                    } else {
-                        AppDelegate.shared?.libraryWindowController?.showBookInfoSheet()
-                    }
-                }
             }
 
             CommandMenu("Reader") {
@@ -388,6 +372,20 @@ struct AmbrosiaApp: App {
                     }
                     .disabled(!readerMenuState.isReaderFocused)
 
+                    Menu("Highlight Palette") {
+                        ForEach(HighlightPalette.allCases) { palette in
+                            Button {
+                                ReaderPreferences.shared.highlightPalette = palette
+                            } label: {
+                                if ReaderPreferences.shared.highlightPalette == palette {
+                                    Label(palette.displayName, systemImage: "checkmark")
+                                } else {
+                                    Text(palette.displayName)
+                                }
+                            }
+                        }
+                    }
+
                     Menu("Text Alignment") {
                         ForEach(ThemeTextAlignment.allCases) { align in
                             Button {
@@ -482,27 +480,15 @@ struct AmbrosiaApp: App {
                 }
                 .disabled(!readerMenuState.isReaderFocused)
 
-                Button("Find Next") {
-                    NSApp.sendAction(#selector(ReaderViewController.findNextAction(_:)),
-                                     to: nil, from: nil)
-                }
-                .disabled(!readerMenuState.isReaderFocused)
-
-                Button("Find Previous") {
-                    NSApp.sendAction(#selector(ReaderViewController.findPreviousAction(_:)),
-                                     to: nil, from: nil)
-                }
-                .disabled(!readerMenuState.isReaderFocused)
-
                 Divider()
 
-                Button("Like This Work") {
+                Button(readerMenuState.isCurrentWorkLiked ? "Unlike This Work" : "Like This Work") {
                     NSApp.sendAction(#selector(ReaderViewController.toggleLikeCurrentWork(_:)),
                                      to: nil, from: nil)
                 }
                 .disabled(!readerMenuState.isReaderFocused)
 
-                Button("Add to Read Later") {
+                Button(readerMenuState.isCurrentWorkInReadLater ? "Remove from Read Later" : "Add to Read Later") {
                     NSApp.sendAction(#selector(ReaderViewController.toggleReadLaterCurrentWork(_:)),
                                      to: nil, from: nil)
                 }

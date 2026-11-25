@@ -35,6 +35,16 @@ public actor PassageDatabase {
         let rc = sqlite3_open_v2(databaseURL.path, &handle, flags, nil)
         guard rc == SQLITE_OK, let handle else {
             if let handle { sqlite3_close_v2(handle) }
+            if SQLiteFileMaintenance.isCorruptionErrorCode(rc) {
+                SQLiteFileMaintenance.removeDatabaseAndSidecars(at: databaseURL)
+            }
+            return nil
+        }
+
+        let probeRC = sqlite3_exec(handle, "SELECT count(*) FROM sqlite_master;", nil, nil, nil)
+        if SQLiteFileMaintenance.isCorruptionErrorCode(probeRC) {
+            sqlite3_close_v2(handle)
+            SQLiteFileMaintenance.removeDatabaseAndSidecars(at: databaseURL)
             return nil
         }
 

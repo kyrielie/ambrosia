@@ -14,11 +14,23 @@ struct AnnotationSidebarView: View {
     let onJump: (Annotation) -> Void
     let onDelete: (UUID) -> Void
 
+    @State private var filterQuery = ""
+
     private var sorted: [Annotation] {
-        annotations.sorted {
+        let base = annotations.sorted {
             if $0.spineIndex != $1.spineIndex { return $0.spineIndex < $1.spineIndex }
             return $0.startChar < $1.startChar
         }
+        let trimmed = filterQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return base }
+        return base.filter {
+            $0.selectedText.lowercased().contains(trimmed)
+                || ($0.note?.lowercased().contains(trimmed) ?? false)
+        }
+    }
+
+    private var bookmarkShortcutHint: String {
+        ReaderPreferences.shared.keyBindings[.addAnnotation]?.displayString ?? "⌘D"
     }
 
     var body: some View {
@@ -31,28 +43,61 @@ struct AnnotationSidebarView: View {
                 Text("Annotations")
                     .font(.headline)
                 Spacer()
-                Text("\(annotations.count)")
+                Text("\(sorted.count)")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
 
+            if !annotations.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.tertiary)
+                        .font(.caption)
+                    TextField("Filter annotations…", text: $filterQuery)
+                        .textFieldStyle(.plain)
+                        .font(.callout)
+                    if !filterQuery.isEmpty {
+                        Button {
+                            filterQuery = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.primary.opacity(0.1), lineWidth: 0.5)
+                )
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+            }
+
             Divider()
 
-            if annotations.isEmpty {
+            if sorted.isEmpty {
                 Spacer()
                 VStack(spacing: 8) {
                     Image(systemName: "bookmark")
                         .font(.system(size: 32))
                         .foregroundStyle(.tertiary)
-                    Text("No annotations yet")
+                    Text(filterQuery.isEmpty ? "No annotations yet" : "No matching annotations")
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                    Text("Press ⌘D to bookmark.\nSelect text and right-click to highlight.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
+                    if filterQuery.isEmpty {
+                        Text("Press \(bookmarkShortcutHint) to bookmark.\nSelect text and right-click to highlight.")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .multilineTextAlignment(.center)
+                    }
                 }
                 .padding(24)
                 Spacer()
@@ -91,7 +136,10 @@ private struct AnnotationRow: View {
     }
 
     private var accentColor: Color {
-        Color(hex: annotation.colorHex) ?? .yellow
+        ReaderPreferences.shared.highlightPalette.swiftUIColor(
+            for: annotation.colorKey,
+            isDark: ReaderPreferences.shared.effectiveIsDark
+        )
     }
 
     private var previewText: String {

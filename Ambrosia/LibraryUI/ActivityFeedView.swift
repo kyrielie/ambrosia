@@ -378,7 +378,10 @@ struct ActivityFeedRow: View {
                 if !annotation.isPointAnnotation, !annotation.selectedText.isEmpty {
                     HStack(alignment: .top, spacing: 8) {
                         Rectangle()
-                            .fill(Color(hex: annotation.colorHex) ?? .yellow)
+                            .fill(ReaderPreferences.shared.highlightPalette.swiftUIColor(
+                                for: annotation.colorKey,
+                                isDark: ReaderPreferences.shared.effectiveIsDark
+                            ))
                             .frame(width: 3)
                             .clipShape(Capsule())
                         Text("\u{201C}\(annotation.selectedText.prefix(200))\u{201D}")
@@ -464,7 +467,10 @@ struct ActivityFeedRow: View {
         switch entry {
         case .session:                       return .purple
         case .annotation(let annotation, _, _):
-            return annotation.isPointAnnotation ? .blue : (Color(hex: annotation.colorHex) ?? .yellow)
+            return annotation.isPointAnnotation ? .blue : ReaderPreferences.shared.highlightPalette.swiftUIColor(
+                for: annotation.colorKey,
+                isDark: ReaderPreferences.shared.effectiveIsDark
+            )
         case .collectionChange:              return .green
         case .search(let searchEntry):        return searchEntry.hasFilterRules ? .orange : .blue
         }

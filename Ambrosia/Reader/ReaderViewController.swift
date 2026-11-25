@@ -653,6 +653,9 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 do {
                     self.currentHTML = try self.buildScrollHTML()
                     self.loadCurrentHTML()
+                    if loaded.parsers.contains(where: \.isFixedLayout) {
+                        self.showHUD("Fixed-layout EPUBs may not paginate as expected")
+                    }
                 } catch {
                     self.showError(error.localizedDescription)
                 }
@@ -2012,7 +2015,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
         let popoverView = AnnotationPopover(
             selectedText: pending.selectedText,
-            onSave: { [weak self] note, colorHex in
+            onSave: { [weak self] note, colorKey, colorHex in
                 guard let self else { return }
                 self.annotationPopover?.close()
                 self.annotationPopover = nil
@@ -2020,6 +2023,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
                 var final = pending
                 final.spineIndex = localSpineIndex
                 final.note     = note
+                final.colorKey = colorKey
                 final.colorHex = colorHex
 
                 let previousAnnotations = self.annotations
@@ -2505,8 +2509,21 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     // MARK: - Annotation sidebar
 
     func toggleAnnotationSidebar() {
-        if let panel = sidebarPanel, panel.isVisible { panel.close(); return }
+        if let panel = sidebarPanel, panel.isVisible {
+            panel.orderOut(nil)
+            removeReaderWindowObservers()
+            sidebarPanel = nil
+            sidebarHostingView = nil
+            return
+        }
         openAnnotationSidebar()
+    }
+
+    private func clampedPanelOriginX(preferredX: CGFloat, width: CGFloat) -> CGFloat {
+        guard let visibleFrame = (view.window?.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame else {
+            return preferredX
+        }
+        return min(max(preferredX, visibleFrame.minX), max(visibleFrame.minX, visibleFrame.maxX - width))
     }
 
     private func openAnnotationSidebar() {
@@ -2531,16 +2548,17 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         //
         // NSPanel(contentRect:) takes the *content* area (below the title bar), so
         // screenRect.height is used directly — the title bar is added on top of it.
+        let panelWidth: CGFloat = 280
         let contentRect = CGRect(
-            x: screenRect.maxX,
+            x: clampedPanelOriginX(preferredX: screenRect.maxX, width: panelWidth),
             y: screenRect.minY,
-            width: 260,
+            width: panelWidth,
             height: screenRect.height
         )
 
         let panel = NSPanel(
             contentRect: contentRect,
-            styleMask: [.titled, .closable],
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -2563,6 +2581,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
         let close = nc.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { [weak self] _ in
             self?.removeReaderWindowObservers()
+            self?.sidebarPanel = nil
+            self?.sidebarHostingView = nil
         }
         sidebarPanelObservers = [move, resize, close]
     }
@@ -2590,7 +2610,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         guard let target, target.isVisible,
               let screenRect = readerScreenRect() else { return }
         let contentRect = CGRect(
-            x: screenRect.maxX,
+            x: clampedPanelOriginX(preferredX: screenRect.maxX, width: target.frame.width),
             y: screenRect.minY,
             width: target.frame.width,
             height: screenRect.height
@@ -2691,7 +2711,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         // Anchored to the left edge, independent of the annotation panel on
         // the right — both can be open simultaneously in standalone mode.
         let contentRect = CGRect(
-            x: screenRect.minX - panelWidth,
+            x: clampedPanelOriginX(preferredX: screenRect.minX - panelWidth, width: panelWidth),
             y: screenRect.minY,
             width: panelWidth,
             height: screenRect.height
@@ -2719,6 +2739,8 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         }
         let close = nc.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { [weak self] _ in
             self?.removeTOCWindowObservers()
+            self?.tocPanel = nil
+            self?.tocHostingView = nil
         }
         tocPanelObservers = [move, resize, close]
     }
@@ -2727,7 +2749,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         let target = panel ?? tocPanel
         guard let target, target.isVisible, let screenRect = readerScreenRect() else { return }
         let contentRect = CGRect(
-            x: screenRect.minX - target.frame.width,
+            x: clampedPanelOriginX(preferredX: screenRect.minX - target.frame.width, width: target.frame.width),
             y: screenRect.minY,
             width: target.frame.width,
             height: screenRect.height
@@ -3120,7 +3142,7 @@ extension ReaderViewController: SearchBarDelegate {
                 var searchRange = NSRange(location: 0, length: nsText.length)
                 while searchRange.length > 0 && results.count < limit {
                     let match = nsText.range(of: query, options: [.caseInsensitive, .diacriticInsensitive], range: searchRange)
-                    guard match.location != NSNotFound else { break }
+                    guard match.location != NSNotFound, match.length > 0 else { break }
                     let nextLocation = NSMaxRange(match)
                     searchRange = NSRange(location: nextLocation, length: nsText.length - nextLocation)
 

@@ -38,13 +38,14 @@ final class AO3TagSeedDatabaseConfig {
 
     private let readLock = NSRecursiveLock()
     private var cachedReadDB: (path: String, conn: Connection)?
+    public let userDefaults: UserDefaults
 
     var isEnabled: Bool = false {
         didSet {
             readLock.lock()
             cachedReadDB = nil
             readLock.unlock()
-            UserDefaults.standard.set(isEnabled, forKey: Keys.enabled)
+            userDefaults.set(isEnabled, forKey: Keys.enabled)
             refreshValidation()
         }
     }
@@ -55,9 +56,9 @@ final class AO3TagSeedDatabaseConfig {
             cachedReadDB = nil
             readLock.unlock()
             if let databasePath, !databasePath.isEmpty {
-                UserDefaults.standard.set(databasePath, forKey: Keys.path)
+                userDefaults.set(databasePath, forKey: Keys.path)
             } else {
-                UserDefaults.standard.removeObject(forKey: Keys.path)
+                userDefaults.removeObject(forKey: Keys.path)
             }
             refreshValidation()
         }
@@ -70,16 +71,22 @@ final class AO3TagSeedDatabaseConfig {
         return URL(fileURLWithPath: databasePath)
     }
 
-    private init() {
+    init(userDefaults: UserDefaults? = nil) {
+        if let userDefaults {
+            self.userDefaults = userDefaults
+        } else if AppEnvironment.isRunningTests {
+            self.userDefaults = UserDefaults(suiteName: "com.ambrosia.test-seed-config") ?? .standard
+        } else {
+            self.userDefaults = .standard
+        }
         loadFromDefaults()
     }
 
     private func loadFromDefaults() {
-        let defaults = UserDefaults.standard
-        let enabledValue: Bool = defaults.object(forKey: Keys.enabled) == nil
+        let enabledValue: Bool = userDefaults.object(forKey: Keys.enabled) == nil
             ? false
-            : defaults.bool(forKey: Keys.enabled)
-        let pathValue = defaults.string(forKey: Keys.path)
+            : userDefaults.bool(forKey: Keys.enabled)
+        let pathValue = userDefaults.string(forKey: Keys.path)
 
         if Thread.isMainThread {
             isEnabled = enabledValue

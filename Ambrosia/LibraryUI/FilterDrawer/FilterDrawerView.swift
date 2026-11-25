@@ -130,9 +130,8 @@ struct FilterDrawerView: View {
                 Button("Cancel") {
                     onDismiss()
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 4)
+                .keyboardShortcut(.cancelAction)
+                .buttonStyle(.bordered)
 
                 Button("Apply") {
                     expression = draftExpression

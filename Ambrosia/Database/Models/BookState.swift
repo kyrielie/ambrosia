@@ -73,15 +73,58 @@ public struct BookState: Identifiable, Sendable, Equatable, Hashable {
 // MARK: - Annotation (unified bookmark + highlight)
 
 struct Annotation: Codable, Identifiable {
-    var id: UUID          = UUID()
+    var id: UUID               = UUID()
     var spineIndex: Int                 // which spine item
     var startChar: Int                  // UTF-16 code units, text nodes only
     var endChar: Int                    // == startChar for point annotations (old bookmarks)
     var selectedText: String            // "" for point annotations
     var note: String?                   // user-written note, optional
-    var colorHex: String                // "#FFD60A" yellow default
+    var colorKey: AnnotationColor       // semantic key ("yellow", "red", etc.)
+    var colorHex: String                // legacy hex retained for backward compatibility
     var isPointAnnotation: Bool { startChar == endChar }
-    var createdDate: Date               = Date()
+    var createdDate: Date      = Date()
+
+    init(
+        id: UUID = UUID(),
+        spineIndex: Int,
+        startChar: Int,
+        endChar: Int,
+        selectedText: String,
+        note: String? = nil,
+        colorKey: AnnotationColor? = nil,
+        colorHex: String = "#FFD60A",
+        createdDate: Date = Date()
+    ) {
+        self.id = id
+        self.spineIndex = spineIndex
+        self.startChar = startChar
+        self.endChar = endChar
+        self.selectedText = selectedText
+        self.note = note
+        let resolvedKey = colorKey ?? AnnotationColor(legacyHex: colorHex)
+        self.colorKey = resolvedKey
+        self.colorHex = colorHex
+        self.createdDate = createdDate
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, spineIndex, startChar, endChar, selectedText, note, colorKey, colorHex, createdDate
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        spineIndex = try container.decode(Int.self, forKey: .spineIndex)
+        startChar = try container.decode(Int.self, forKey: .startChar)
+        endChar = try container.decode(Int.self, forKey: .endChar)
+        selectedText = try container.decode(String.self, forKey: .selectedText)
+        note = try container.decodeIfPresent(String.self, forKey: .note)
+        let decodedHex = try container.decodeIfPresent(String.self, forKey: .colorHex) ?? "#FFD60A"
+        colorHex = decodedHex
+        colorKey = try container.decodeIfPresent(AnnotationColor.self, forKey: .colorKey)
+            ?? AnnotationColor(legacyHex: decodedHex)
+        createdDate = try container.decodeIfPresent(Date.self, forKey: .createdDate) ?? Date()
+    }
 }
 
 // MARK: - ReadingMode (used by ReaderPreferences — kept here for compatibility)

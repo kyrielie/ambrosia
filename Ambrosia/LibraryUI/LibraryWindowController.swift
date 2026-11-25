@@ -9,6 +9,7 @@ extension NSToolbarItem.Identifier {
     static let librarySearch        = NSToolbarItem.Identifier("ambrosia.library.search")
     static let libraryFTSSearch     = NSToolbarItem.Identifier("ambrosia.library.ftsSearch")
     static let libraryFilter        = NSToolbarItem.Identifier("ambrosia.library.filter")
+    static let libraryAO3Filter     = NSToolbarItem.Identifier("ambrosia.library.ao3filter")
     static let librarySort          = NSToolbarItem.Identifier("ambrosia.library.sort")
     static let libraryCollections   = NSToolbarItem.Identifier("ambrosia.library.collections")
     static let libraryReadingGoal   = NSToolbarItem.Identifier("ambrosia.library.readinggoal")
@@ -66,6 +67,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     private var suggestionPanel: NSPanel?
     private var suggestionHostingVC: NSHostingController<SearchSuggestionsView>?
     private var suggestionMouseMonitor: Any?
+    private var searchDismissMouseMonitor: Any?
+    private var filterToolbarItem: NSToolbarItem?
     private let suggestionDebouncer = DebounceTimer(delay: 0.2)
     private var suggestionTask: Task<Void, Never>?
     private var suggestionGeneration: Int = 0
@@ -107,6 +110,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         startObservingAppearance()
         startObservingCounts()
         startObservingFTSAvailability()
+        startObservingFilterIconState()
     }
 
     @available(*, unavailable)
@@ -114,6 +118,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
 
     deinit {
         removeSuggestionMouseMonitor()
+        removeSearchDismissMouseMonitor()
         removeWindowMoveResizeObservers()
     }
 
@@ -148,6 +153,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         window.toolbar = toolbar
         updateFTSSearchToolbarItemVisibility()
         installWindowMoveResizeObservers(for: window)
+        installSearchDismissMouseMonitor()
         scheduleSearchTextObservation()
     }
 
@@ -198,7 +204,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             items.append(.libraryFTSSearch)
         }
         items.append(contentsOf: [
-            .libraryFilter, .librarySort,
+            .libraryFilter, .libraryAO3Filter, .librarySort,
             .flexibleSpace,
             .libraryCollections, .libraryReadingGoal, .libraryExport, .libraryViewMode
         ])
@@ -206,7 +212,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.librarySidebarToggle, .librarySearch, .libraryFTSSearch, .libraryFilter, .librarySort,
+        [.librarySidebarToggle, .librarySearch, .libraryFTSSearch, .libraryFilter, .libraryAO3Filter, .librarySort,
          .libraryCollections, .libraryReadingGoal, .libraryExport,
          .libraryViewMode, .libraryTitle,
          .space, .flexibleSpace]
@@ -243,9 +249,21 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             return makeTitleItem(identifier)
 
         case .libraryFilter:
-            return makeIconItem(identifier, label: "Filter",
-                                image: "line.3.horizontal.decrease.circle",
-                                action: #selector(toggleFilter))
+            let symbol = (toolbarState?.hasActiveFilter ?? false)
+                ? "line.3.horizontal.decrease.circle.fill"
+                : "line.3.horizontal.decrease.circle"
+            let item = makeIconItem(identifier, label: "Filter",
+                                    image: symbol,
+                                    action: #selector(toggleFilter))
+            filterToolbarItem = item
+            return item
+
+        case .libraryAO3Filter:
+            let item = makeIconItem(identifier, label: "AO3 Filter",
+                                    image: "slider.horizontal.3",
+                                    action: #selector(toggleAO3FilterWindow))
+            item.toolTip = "AO3 Style Filter (⌥⌘F)"
+            return item
 
         case .librarySort:
             return makeSortItem(identifier)
@@ -330,18 +348,6 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         let feedItem = NSMenuItem(title: "RSS Feed Server…", action: #selector(showRSSPanel), keyEquivalent: "")
         feedItem.target = self
         menu.addItem(feedItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        let errorLogItem = NSMenuItem(title: "Error Log…", action: #selector(showErrorLog), keyEquivalent: "")
-        errorLogItem.target = self
-        menu.addItem(errorLogItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        let duplicateItem = NSMenuItem(title: "Manage Duplicate Works…", action: #selector(showDuplicateManager), keyEquivalent: "")
-        duplicateItem.target = self
-        menu.addItem(duplicateItem)
 
         return menu
     }
@@ -486,7 +492,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             images: [
                 toolbarSegmentImage(systemSymbolName: "list.bullet", accessibilityDescription: "List"),
                 toolbarSegmentImage(systemSymbolName: "envelope", accessibilityDescription: "Email"),
-                toolbarSegmentImage(systemSymbolName: "list.number", accessibilityDescription: "Ranking")
+                toolbarSegmentImage(systemSymbolName: "clock", accessibilityDescription: "Activity")
             ],
             trackingMode: .selectOne,
             target: self,
@@ -569,6 +575,23 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         let fmt   = NumberFormatter()
         fmt.numberStyle = .decimal
         ficCountLabel?.stringValue = "\(fmt.string(from: NSNumber(value: count)) ?? "\(count)") fics"
+    }
+
+    private func startObservingFilterIconState() {
+        withObservationTracking {
+            _ = toolbarState?.hasActiveFilter
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let active = self.toolbarState?.hasActiveFilter ?? false
+                let symbol = active
+                    ? "line.3.horizontal.decrease.circle.fill"
+                    : "line.3.horizontal.decrease.circle"
+                self.filterToolbarItem?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Filter")?
+                    .withSymbolConfiguration(Self.toolbarSymbolConfig)
+                self.startObservingFilterIconState()
+            }
+        }
     }
 
     private func startObservingCounts() { scheduleCounting() }
@@ -971,6 +994,34 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         }
     }
 
+    private func installSearchDismissMouseMonitor() {
+        guard searchDismissMouseMonitor == nil else { return }
+        searchDismissMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            guard let self,
+                  let window = self.window,
+                  event.window === window,
+                  let searchField = self.searchToolbarItem?.searchField else {
+                return event
+            }
+            let editor = searchField.currentEditor()
+            let isSearchFocused = (window.firstResponder === searchField) || (editor != nil && window.firstResponder === editor)
+            guard isSearchFocused else { return event }
+
+            if self.eventHitsSearchSuggestions(event) {
+                return event
+            }
+            window.makeFirstResponder(nil)
+            return event
+        }
+    }
+
+    private func removeSearchDismissMouseMonitor() {
+        if let monitor = searchDismissMouseMonitor {
+            NSEvent.removeMonitor(monitor)
+            searchDismissMouseMonitor = nil
+        }
+    }
+
     private func eventHitsSearchSuggestions(_ event: NSEvent) -> Bool {
         if event.window === suggestionPanel {
             return true
@@ -1009,17 +1060,39 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             )
         }
     }
+    @objc func toggleAO3FilterWindow() {
+        guard let window,
+              let toolbarState,
+              let session,
+              let metaDB = session.metaDB,
+              let library = session.library else { return }
+
+        if toolbarState.showAO3FilterSidebar {
+            toolbarState.showAO3FilterSidebar = false
+        }
+
+        AO3FilterPopupWindowController.toggle(
+            anchorWindow: window,
+            toolbarState: toolbarState,
+            dependencies: AO3FilterPopupWindowController.LibraryDependencies(
+                metaDB: metaDB,
+                library: library,
+                ftsLibrary: session.ftsLibrary,
+                collectionStore: session.collectionStore
+            ),
+            visibilityVersion: session.visibilityVersion
+        )
+    }
+
     /// In email mode this collapses/expands the split-view sidebar via
-    /// `toggleEmailSidebar`, observed by `EmailLibraryViewController`. In
-    /// list/ranking mode there is no such observer — previously a silent
-    /// no-op (bug #7) — so this now opens the same docked AO3 filter panel
-    /// the toolbar/menu "Open AO3 Style Filter" action opens.
+    /// `toggleEmailSidebar`. In list/activity mode this toggles the floating
+    /// AO3-style filter window without shifting the library view.
     @objc func triggerSidebarToggle() {
         switch toolbarState?.viewMode {
         case .email:
             toolbarState?.toggleEmailSidebar.toggle()
         default:
-            toolbarState?.showAO3FilterSidebar.toggle()
+            toggleAO3FilterWindow()
         }
     }
 
@@ -1245,7 +1318,25 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     @objc func triggerCSVExport() { toolbarState?.triggerExport      = true }
     @objc func triggerEPUBExport() { toolbarState?.triggerEPUBExport  = true }
     @objc func triggerAnnotationExport() { toolbarState?.triggerAnnotationExport = true }
-    @objc func showDuplicateManager() { toolbarState?.showDuplicateManager = true }
+    @objc func showDuplicateManager() { showDuplicateManagerSheet() }
+
+    @MainActor
+    func showDuplicateManagerSheet() {
+        guard let window, window.attachedSheet == nil, let session else { return }
+        let host = NSHostingController(rootView: DuplicateWorksManagerView(
+            session: session,
+            onDismiss: { [weak self] in
+                self?.dismissAttachedSheet()
+            }
+        )
+        .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme))
+        let sheetWindow = NSWindow(contentViewController: host)
+        sheetWindow.styleMask = [.titled, .closable, .resizable]
+        sheetWindow.setContentSize(NSSize(width: 820, height: 600))
+        sheetWindow.minSize = NSSize(width: 700, height: 480)
+        sheetWindow.initialFirstResponder = nil
+        window.beginSheet(sheetWindow, completionHandler: nil)
+    }
     @objc func showRSSPanel() {
         guard let session else { return }
 

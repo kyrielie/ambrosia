@@ -34,6 +34,24 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
         var collectionStore: CollectionStore?
     }
 
+    static var isOpen: Bool {
+        shared?.window?.isVisible == true
+    }
+
+    static func toggle(anchorWindow: NSWindow,
+                       toolbarState: LibraryToolbarState,
+                       dependencies: LibraryDependencies,
+                       visibilityVersion: Int) {
+        if let existing = shared, existing.window?.isVisible == true {
+            existing.close()
+            return
+        }
+        open(anchorWindow: anchorWindow,
+             toolbarState: toolbarState,
+             dependencies: dependencies,
+             visibilityVersion: visibilityVersion)
+    }
+
     static func open(anchorWindow: NSWindow,
                      toolbarState: LibraryToolbarState,
                      dependencies: LibraryDependencies,
@@ -120,36 +138,13 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
     private func installContent(state: AO3FilterPopupState, toolbarState: LibraryToolbarState,
                                 facetController: AO3FilterFacetController, visibilityVersion: Int) {
         hostingController.rootView = AnyView(
-            VStack(spacing: 0) {
-                HStack {
-                    Spacer()
-                    Button { [weak self] in
-                        self?.attachBackToSidebar(toolbarState: toolbarState)
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "arrow.down.left.square")
-                            Text("Dock into Window")
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
-                }
-                AO3FilterPopupView(state: state, toolbarState: toolbarState, facetController: facetController,
-                                   visibilityVersion: visibilityVersion,
-                                   onApply: { [weak self] in self?.applyDidCommit(toolbarState: toolbarState) })
-            }
+            AO3FilterPopupView(state: state, toolbarState: toolbarState, facetController: facetController,
+                               visibilityVersion: visibilityVersion,
+                               onApply: { [weak self] in self?.applyDidCommit(toolbarState: toolbarState) })
         )
         DispatchQueue.main.async { [weak self] in
             self?.window?.makeFirstResponder(nil)
         }
-    }
-
-    private func attachBackToSidebar(toolbarState: LibraryToolbarState) {
-        close()
-        toolbarState.showAO3FilterSidebar = true
     }
 
     // MARK: - Docking

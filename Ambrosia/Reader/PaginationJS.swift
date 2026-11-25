@@ -323,7 +323,7 @@ private let _pjsNavigateAndHighlight: String = #"""
     var span = document.createElement('span');
     span.id = '__ambrosia_highlight__';
     span.style.cssText =
-    'background-color:rgba(255,214,10,0.55);border-radius:2px;transition:opacity 1.5s;opacity:1;';
+    'background-color:rgba(255,214,10,0.55);color:#111111 !important;border-radius:2px;transition:opacity 1.5s;opacity:1;';
     range.surroundContents(span);
     window.ambrosiaNavigateToOffset(offset);
     setTimeout(function () {
@@ -349,7 +349,8 @@ private let _pjsNavigateAndHighlight: String = #"""
     var span = document.createElement('span');
     span.id = '__ambrosia_passage_glow__';
     span.style.cssText =
-    'background-color:rgba(255,200,0,0.40);box-shadow:0 0 8px rgba(255,200,0,0.5);border-radius:4px;transition:opacity 2.0s;opacity:1;';
+    'background-color:rgba(255,200,0,0.40);color:#111111 !important;' +
+    'box-shadow:0 0 8px rgba(255,200,0,0.5);border-radius:4px;transition:opacity 2.0s;opacity:1;';
     range.surroundContents(span);
     setTimeout(function () {
     span.style.opacity = '0';

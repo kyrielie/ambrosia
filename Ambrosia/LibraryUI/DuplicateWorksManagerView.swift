@@ -8,6 +8,7 @@ import SwiftUI
 /// canonical winner before providing safe Calibre CLI cleanup commands.
 struct DuplicateWorksManagerView: View {
     let session: LibrarySession
+    var onDismiss: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
 
     @State private var clusters: [AO3DuplicateCluster] = []
@@ -16,8 +17,17 @@ struct DuplicateWorksManagerView: View {
     @State private var filterText = ""
     @State private var migratedClusterIDs: Set<String> = []
 
-    init(session: LibrarySession) {
+    init(session: LibrarySession, onDismiss: (() -> Void)? = nil) {
         self.session = session
+        self.onDismiss = onDismiss
+    }
+
+    private func doDismiss() {
+        if let onDismiss {
+            onDismiss()
+        } else {
+            dismiss()
+        }
     }
 
     var body: some View {
@@ -54,6 +64,7 @@ struct DuplicateWorksManagerView: View {
         }
         .frame(minWidth: 700, idealWidth: 820, minHeight: 480, idealHeight: 600)
         .preventInitialButtonFocus()
+        .onExitCommand { doDismiss() }
         .task {
             await loadDuplicates()
         }
@@ -79,8 +90,9 @@ struct DuplicateWorksManagerView: View {
                     .frame(width: 200)
             }
             Button("Done") {
-                dismiss()
+                doDismiss()
             }
+            .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)

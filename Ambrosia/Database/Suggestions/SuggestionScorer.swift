@@ -106,23 +106,34 @@ public struct SuggestionCollector {
     }
 
     public var isFull: Bool {
-        matches.count >= limit
+        matches.count >= limit && (matches.last?.matchClass == .exact || matches.last?.matchClass == .prefix)
     }
 
-    /// Inserts a match if not already present and ranks it into the top-k list.
+    /// Checks whether the collector has capacity to be improved by a match of this class.
+    public func hasCapacity(forClass matchClass: SuggestionMatchClass) -> Bool {
+        if matches.count < limit { return true }
+        guard let worst = matches.last else { return true }
+        return matchClass < worst.matchClass
+    }
+
+    /// Inserts a match if not already present and ranks it into the bounded top-k list.
     public mutating func insert(_ match: SuggestionMatch) {
         guard !seenValues.contains(match.value) else { return }
-        seenValues.insert(match.value)
-        matches.append(match)
+
+        if matches.count < limit {
+            seenValues.insert(match.value)
+            matches.append(match)
+            matches.sort(by: SuggestionMatch.isBetter)
+        } else if let worst = matches.last, SuggestionMatch.isBetter(match, than: worst) {
+            seenValues.remove(worst.value)
+            seenValues.insert(match.value)
+            matches[matches.count - 1] = match
+            matches.sort(by: SuggestionMatch.isBetter)
+        }
     }
 
     /// Returns the final sorted top-k results.
     public func finalized() -> [SuggestionMatch] {
-        var sorted = matches
-        sorted.sort(by: SuggestionMatch.isBetter)
-        if sorted.count > limit {
-            return Array(sorted.prefix(limit))
-        }
-        return sorted
+        matches
     }
 }

@@ -65,6 +65,7 @@ struct CollectionsView: View {
             maxHeight: .infinity
         )
         .preventInitialButtonFocus()
+        .onExitCommand { doDismiss() }
         .task { await reload() }
         .onReceive(NotificationCenter.default.publisher(for: .bookStateDidChange)) { note in
             if let calibreID = note.userInfo?["calibreID"] as? Int,
@@ -142,6 +143,7 @@ struct CollectionsView: View {
             Button("Done") {
                 doDismiss()
             }
+            .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
