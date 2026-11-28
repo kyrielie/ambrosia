@@ -97,6 +97,21 @@ enum CalibreImportManager {
                         if let newID { addedIDs.append(newID) }
                         continue
                     }
+                    if matched.annotationCount > 0, let metaDB = session.metaDB {
+                        try? await AnnotationBackupManager.shared.flushNow(
+                            calibreID: matched.calibreID,
+                            libraryURL: rootURL,
+                            metaDB: metaDB
+                        )
+                        if let oldURL = matched.epubURL, FileManager.default.fileExists(atPath: oldURL.path) {
+                            await preflightAnnotationContextSnapshot(
+                                calibreID: matched.calibreID,
+                                epubURL: oldURL,
+                                metaDB: metaDB
+                            )
+                        }
+                        try? await metaDB.markBookAnnotationsNeedsReanchor(calibreID: matched.calibreID)
+                    }
                     try await updateExistingBook(
                         incomingURL: item.incoming.url,
                         targetBook: matched,
@@ -337,6 +352,66 @@ enum CalibreImportManager {
             )
         }
         return Int(insertedID)
+    }
+
+    private static func preflightAnnotationContextSnapshot(
+        calibreID: Int,
+        epubURL: URL,
+        metaDB: AmbrosiaMetaDB
+    ) async {
+        guard let existing = try? await metaDB.annotations(for: calibreID) else { return }
+        let needingContext = existing.filter { $0.quotePrefix.isEmpty && $0.quoteSuffix.isEmpty }
+        guard !needingContext.isEmpty else { return }
+
+        let extracted: [(id: UUID, href: String, prefix: String, suffix: String)] = await Task.detached(
+            priority: .utility
+        ) {
+            var parser = EPUBParser(epubURL: epubURL)
+            guard (try? parser.parse()) != nil else { return [] }
+            var plainTextCache: [Int: String] = [:]
+            var updates: [(UUID, String, String, String)] = []
+
+            for ann in needingContext {
+                guard parser.spine.indices.contains(ann.spineIndex) else { continue }
+                let item = parser.spine[ann.spineIndex]
+                let text: String
+                if let cached = plainTextCache[ann.spineIndex] {
+                    text = cached
+                } else if let parsed = try? parser.plainText(for: item) {
+                    plainTextCache[ann.spineIndex] = parsed
+                    text = parsed
+                } else {
+                    continue
+                }
+
+                let utf16 = text.utf16
+                let total = utf16.count
+                let clampedStart = max(0, min(ann.startChar, total))
+                let clampedEnd = max(clampedStart, min(ann.endChar, total))
+                let prefixStart = max(0, clampedStart - 200)
+                let suffixEnd = min(total, clampedEnd + 200)
+
+                let prefixIdxStart = utf16.index(utf16.startIndex, offsetBy: prefixStart)
+                let prefixIdxEnd = utf16.index(utf16.startIndex, offsetBy: clampedStart)
+                let suffixIdxStart = utf16.index(utf16.startIndex, offsetBy: clampedEnd)
+                let suffixIdxEnd = utf16.index(utf16.startIndex, offsetBy: suffixEnd)
+
+                let prefix = String(utf16[prefixIdxStart..<prefixIdxEnd]) ?? ""
+                let suffix = String(utf16[suffixIdxStart..<suffixIdxEnd]) ?? ""
+                updates.append((ann.id, item.href, prefix, suffix))
+            }
+            return updates
+        }.value
+
+        for item in extracted {
+            try? await metaDB.updateAnnotationAnchorContext(
+                id: item.id,
+                spineHref: item.href,
+                quotePrefix: item.prefix,
+                quoteSuffix: item.suffix,
+                chapterTitle: nil
+            )
+        }
     }
 
     private static func relativePath(of fileURL: URL, from rootURL: URL) -> String {

@@ -69,6 +69,23 @@ final class EPUBImportSheetViewModel {
         items.filter { $0.selectedAction.isMutating }.count
     }
 
+    var annotatedOverwriteCount: Int {
+        items.filter {
+            ($0.selectedAction == .updateExisting || $0.selectedAction == .replaceExisting)
+                && ($0.matchedBook?.annotationCount ?? 0) > 0
+        }.count
+    }
+
+    func switchAnnotatedConflictsToKeepBoth() {
+        for idx in items.indices {
+            let isOverwrite = items[idx].selectedAction == .updateExisting || items[idx].selectedAction == .replaceExisting
+            if isOverwrite && (items[idx].matchedBook?.annotationCount ?? 0) > 0
+                && items[idx].availableActions.contains(.keepBoth) {
+                items[idx].selectedAction = .keepBoth
+            }
+        }
+    }
+
     func items(for category: ImportTriageCategory) -> [EPUBImportTriageItem] {
         items.filter { item in
             guard item.category == category else { return false }
@@ -154,6 +171,23 @@ struct EPUBImportConfirmationSheet: View {
             }
 
             Divider()
+            if viewModel.annotatedOverwriteCount > 0 && viewModel.commitResult == nil && !viewModel.isScanning {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("\(viewModel.annotatedOverwriteCount) book(s) have highlights or bookmarks that will auto-reanchor on next open.")
+                        .font(.caption)
+                    Spacer()
+                    Button("Switch Annotated to Keep Both") {
+                        viewModel.switchAnnotatedConflictsToKeepBoth()
+                    }
+                    .font(.caption)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color.orange.opacity(0.08))
+                Divider()
+            }
             footerView
         }
         .frame(minWidth: 760, minHeight: 520)
@@ -307,8 +341,9 @@ struct EPUBImportConfirmationSheet: View {
                     }
 
                     HStack(spacing: 6) {
-                        if matched.annotationCount > 0 && item.selectedAction == .updateExisting {
-                            Text("\(matched.annotationCount) annotation(s) may shift")
+                        if matched.annotationCount > 0
+                            && (item.selectedAction == .updateExisting || item.selectedAction == .replaceExisting) {
+                            Text("\(matched.annotationCount) annotation(s) will auto-reanchor")
                                 .font(.caption2)
                                 .foregroundStyle(.orange)
                         }

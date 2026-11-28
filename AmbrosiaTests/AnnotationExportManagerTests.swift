@@ -52,7 +52,7 @@ final class AnnotationExportManagerTests: XCTestCase {
         let header = csv.components(separatedBy: "\r\n").first
         XCTAssertEqual(
             header,
-            "Book Title,Authors,Type,Selected Text,Note,Color,Spine Index,Created Date"
+            "Book Title,Authors,Type,Chapter Title,Selected Text,Note,Color,Has Highlight,Original Text,Replacement Text,Spine Index,Created Date"
         )
     }
 
@@ -109,8 +109,8 @@ final class AnnotationExportManagerTests: XCTestCase {
         let csv = AnnotationExportManager.exportToCSV(rows: [row])
         let lines = csv.components(separatedBy: "\r\n").filter { !$0.isEmpty }
         let fields = lines[1].components(separatedBy: ",")
-        // Note column (index 4) is empty when annotation.note is nil.
-        XCTAssertEqual(fields[4], "")
+        // Note column (index 5, after Chapter Title and Selected Text) is empty when annotation.note is nil.
+        XCTAssertEqual(fields[5], "")
     }
 
     func testRowOrderIsPreserved() {

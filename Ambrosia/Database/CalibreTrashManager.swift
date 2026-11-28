@@ -87,6 +87,17 @@ enum CalibreTrashManager {
             throw CalibreTrashError.bookOpenInReader(openLosers)
         }
 
+        // Pre-trash annotation snapshot checkpoint
+        if let metaDB = session.metaDB {
+            for loserID in uniqueLosers where await metaDB.annotationCount(for: loserID) > 0 {
+                try? await AnnotationBackupManager.shared.flushNow(
+                    calibreID: loserID,
+                    libraryURL: rootURL,
+                    metaDB: metaDB
+                )
+            }
+        }
+
         // 2. Reject hardlinks to winners
         if let library = session.library {
             for loserID in uniqueLosers {

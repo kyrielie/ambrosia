@@ -13,7 +13,12 @@ Unified `Annotation` represents point annotations and ranged highlights:
 - `startChar == endChar`: point annotation.
 - `startChar != endChar`: ranged annotation/highlight.
 
-Annotations are persisted in `AmbrosiaMetaDB.annotations`, not SwiftData. JS selection capture computes UTF-16 offsets with a TreeWalker. Highlights are restored through `HighlightBridge`; sidebar UI is SwiftUI in an `NSPanel`.
+Annotations are persisted in `AmbrosiaMetaDB.annotations` (indexed by `annotations_fts` via SQLite `AFTER INSERT`/`UPDATE`/`DELETE` triggers), not SwiftData. JS selection capture (`HighlightBridge` + `AnnotationEngineJS`) computes UTF-16 offsets with a `TreeWalker`, capturing `spine_href`, 200-character `quote_prefix`/`quote_suffix` context, and `chapter_title` for both ranged highlights and point annotations. Highlights are restored in a single batched pass through `HighlightBridge`, resolving self-healing W3C quote+context anchors in full-spine coordinate space before paginated slicing and persisting any repaired offsets or `orphaned_at` states; sidebar UI is SwiftUI in an `NSPanel`, complemented by the cross-library `AnnotationsBrowserWindowController` (`⇧⌘A`, using `SentenceContext` via `NLTokenizer`).
+
+### Non-Destructive Text Edits & Pre-Update Safety
+- `Annotation` supports optional in-place text substitutions (`original_text`, `replacement_text`, `has_highlight`) rendered in-memory without modifying EPUB files on disk, with `TextReplacementOffsetShift` guarding against overlaps and shifting downstream offsets in descending order.
+- Before `CalibreImportManager` overwrites an annotated book (`.updateExisting`/`.replaceExisting`), it flushes an `AnnotationBackupManager` snapshot, backfills missing `quote_prefix`/`quote_suffix` from the old EPUB via `EPUBParser.plainText(for:)`, and flags `needs_reanchor = 1` for automatic repair on next open.
+- `AnnotationBackupManager` writes debounced per-book `annotations-snapshot.json` files outside the Calibre library (`~/Library/Application Support/Ambrosia/Backups/<library-id>/Annotations/`) with **File ▸ Export ▸ Restore Annotations from Backup…** recovery.
 
 ### Optimistic Persistence and Error Recovery
 

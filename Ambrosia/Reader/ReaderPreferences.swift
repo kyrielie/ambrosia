@@ -1040,8 +1040,13 @@ final class ReaderPreferences: ObservableObject {
             0% { box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.6); }
             100% { box-shadow: 0 0 0 3px transparent; }
         }
-        mark.ambrosia-highlight.ambrosia-highlight-flash {
+        mark.ambrosia-highlight.ambrosia-highlight-flash,
+        span.ambrosia-edit-only.ambrosia-highlight-flash {
             animation: ambrosia-highlight-flash 1.5s ease-out;
+        }
+        span.ambrosia-edit-only {
+            cursor: pointer;
+            border-bottom: 1px dotted currentColor;
         }
         h1 { font-size: 1.6em; } h2 { font-size: 1.4em; } h3 { font-size: 1.2em; }
         table { border-collapse: collapse; width: 100%; margin: 1em 0; }

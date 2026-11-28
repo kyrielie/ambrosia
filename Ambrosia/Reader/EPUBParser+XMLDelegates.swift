@@ -192,6 +192,12 @@ class FullOPFParser: NSObject, XMLParserDelegate {
     var dcSubjects: [String] = []
     /// True when `<meta property="rendition:layout">pre-paginated</meta>` is set.
     var isFixedLayout = false
+    /// dc:identifier value (e.g. AO3 URL or UUID)
+    var dcIdentifier: String?
+    /// dc:language value
+    var dcLanguage: String?
+    /// `<meta property="nectar:kudos">` value
+    var nectarKudos: Int?
 
     private var inManifest  = false
     private var inSpine     = false
@@ -209,6 +215,12 @@ class FullOPFParser: NSObject, XMLParserDelegate {
     private var subjectBuffer  = ""
     private var inRenditionLayout = false
     private var renditionLayoutBuffer = ""
+    private var inIdentifier = false
+    private var identifierBuffer = ""
+    private var inLanguage = false
+    private var languageBuffer = ""
+    private var inNectarKudos = false
+    private var nectarKudosBuffer = ""
 
     func parser(_ parser: XMLParser, didStartElement element: String,
                 namespaceURI: String?, qualifiedName _: String?,
@@ -241,8 +253,16 @@ class FullOPFParser: NSObject, XMLParserDelegate {
             if dcPublisher == nil { inPublisher = true; publisherBuffer = "" }
         case "dc:subject", "subject":
             inSubject = true; subjectBuffer = ""
+        case "dc:identifier", "identifier":
+            if dcIdentifier == nil || attr["id"] == "pub-id" {
+                inIdentifier = true; identifierBuffer = ""
+            }
+        case "dc:language", "language":
+            if dcLanguage == nil { inLanguage = true; languageBuffer = "" }
         case "meta" where attr["property"] == "rendition:layout":
             inRenditionLayout = true; renditionLayoutBuffer = ""
+        case "meta" where attr["property"] == "nectar:kudos":
+            inNectarKudos = true; nectarKudosBuffer = ""
         default:
             break
         }
@@ -255,7 +275,10 @@ class FullOPFParser: NSObject, XMLParserDelegate {
         if inDate { dateBuffer += string }
         if inPublisher { publisherBuffer += string }
         if inSubject { subjectBuffer += string }
+        if inIdentifier { identifierBuffer += string }
+        if inLanguage { languageBuffer += string }
         if inRenditionLayout { renditionLayoutBuffer += string }
+        if inNectarKudos { nectarKudosBuffer += string }
     }
 
     func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
@@ -303,12 +326,29 @@ class FullOPFParser: NSObject, XMLParserDelegate {
                 let trimmed = subjectBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty { dcSubjects.append(trimmed) }
             }
+        case "dc:identifier", "identifier":
+            if inIdentifier {
+                inIdentifier = false
+                let trimmed = identifierBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { dcIdentifier = trimmed }
+            }
+        case "dc:language", "language":
+            if inLanguage {
+                inLanguage = false
+                let trimmed = languageBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+                if dcLanguage == nil, !trimmed.isEmpty { dcLanguage = trimmed }
+            }
         case "meta":
             if inRenditionLayout {
                 inRenditionLayout = false
                 if renditionLayoutBuffer.trimmingCharacters(in: .whitespacesAndNewlines) == "pre-paginated" {
                     isFixedLayout = true
                 }
+            }
+            if inNectarKudos {
+                inNectarKudos = false
+                let trimmed = nectarKudosBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let parsed = Int(trimmed) { nectarKudos = parsed }
             }
         default: break
         }

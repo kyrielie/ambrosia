@@ -322,6 +322,60 @@ actor AmbrosiaMetaDB {
             END
             """)
         }
+
+        let newColumns: [(String, String)] = [
+            ("spine_href", "TEXT NOT NULL DEFAULT ''"),
+            ("quote_prefix", "TEXT NOT NULL DEFAULT ''"),
+            ("quote_suffix", "TEXT NOT NULL DEFAULT ''"),
+            ("chapter_title", "TEXT"),
+            ("needs_reanchor", "INTEGER NOT NULL DEFAULT 0"),
+            ("last_reanchored_at", "TEXT"),
+            ("orphaned_at", "TEXT"),
+            ("has_highlight", "INTEGER NOT NULL DEFAULT 1"),
+            ("original_text", "TEXT"),
+            ("replacement_text", "TEXT"),
+            ("updated_at", "TEXT NOT NULL DEFAULT ''")
+        ]
+        for (column, definition) in newColumns where try !columnExists("annotations", column, db: db) {
+            try db.execute("ALTER TABLE annotations ADD COLUMN \(column) \(definition)")
+        }
+        try db.execute("UPDATE annotations SET updated_at = created_at WHERE updated_at = ''")
+
+        let ftsExists = try db.scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'annotations_fts'"
+        ) as? Int64 ?? 0
+        if ftsExists == 0 {
+            try db.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS annotations_fts USING fts5(
+                selected_text,
+                note,
+                original_text,
+                replacement_text,
+                content='annotations',
+                content_rowid='rowid',
+                tokenize='unicode61 remove_diacritics 2'
+            );
+
+            CREATE TRIGGER IF NOT EXISTS annotations_ai AFTER INSERT ON annotations BEGIN
+                INSERT INTO annotations_fts(rowid, selected_text, note, original_text, replacement_text)
+                VALUES (new.rowid, new.selected_text, new.note, new.original_text, new.replacement_text);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS annotations_ad AFTER DELETE ON annotations BEGIN
+                INSERT INTO annotations_fts(annotations_fts, rowid, selected_text, note, original_text, replacement_text)
+                VALUES ('delete', old.rowid, old.selected_text, old.note, old.original_text, old.replacement_text);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS annotations_au AFTER UPDATE ON annotations BEGIN
+                INSERT INTO annotations_fts(annotations_fts, rowid, selected_text, note, original_text, replacement_text)
+                VALUES ('delete', old.rowid, old.selected_text, old.note, old.original_text, old.replacement_text);
+                INSERT INTO annotations_fts(rowid, selected_text, note, original_text, replacement_text)
+                VALUES (new.rowid, new.selected_text, new.note, new.original_text, new.replacement_text);
+            END;
+
+            INSERT INTO annotations_fts(annotations_fts) VALUES('rebuild');
+            """)
+        }
     }
 
     private static func createReadingHistory(db: Connection) throws {
@@ -400,9 +454,13 @@ actor AmbrosiaMetaDB {
             series_json TEXT,
             rating TEXT,
             warnings_json TEXT,
-            extracted_at TEXT NOT NULL
+            extracted_at TEXT NOT NULL,
+            is_restricted INTEGER
         );
         """)
+        if try !columnExists("ao3_metadata", "is_restricted", db: db) {
+            try db.run("ALTER TABLE ao3_metadata ADD COLUMN is_restricted INTEGER")
+        }
         // Additive columns for libraries whose ao3_metadata table predates rating/
         // warnings extraction. CREATE TABLE IF NOT EXISTS above only applies to
         // brand-new tables, so existing tables need these added explicitly.
@@ -875,13 +933,66 @@ actor AmbrosiaMetaDB {
         return AnnotationColor(legacyHex: legacyHex)
     }
 
+    private static let annotationSelectColumns = """
+        id, calibre_id, spine_index, start_char, end_char, selected_text,
+        note, color_hex, created_at, color_key,
+        spine_href, quote_prefix, quote_suffix, chapter_title,
+        needs_reanchor, last_reanchored_at, orphaned_at,
+        has_highlight, original_text, replacement_text, updated_at
+        """
+
+    private static func decodeAnnotationRow(
+        _ row: Statement.Element,
+        iso: ISO8601DateFormatter
+    ) -> (annotation: Annotation, calibreID: Int)? {
+        guard let idString = row[safe: 0] as? String,
+              let id = UUID(uuidString: idString),
+              let calibreID = row.int(at: 1),
+              let spine = row.int(at: 2),
+              let start = row.int(at: 3),
+              let end = row.int(at: 4),
+              let selectedText = row[safe: 5] as? String,
+              let createdStr = row[safe: 8] as? String else { return nil }
+
+        let hex = (row[safe: 7] as? String) ?? "#FFD60A"
+        let key = decodeAnnotationColorKey(rawKey: row[safe: 9] as? String, legacyHex: hex)
+        let createdDate = iso.date(from: createdStr) ?? Date()
+        let updatedDate = (row[safe: 20] as? String).flatMap { iso.date(from: $0) } ?? createdDate
+        let originalText = row[safe: 18] as? String
+        let hasHighlight = (row.int(at: 17) ?? 1) != 0 || originalText == nil
+
+        let annotation = Annotation(
+            id: id,
+            spineIndex: spine,
+            spineHref: (row[safe: 10] as? String) ?? "",
+            startChar: start,
+            endChar: end,
+            selectedText: selectedText,
+            quotePrefix: (row[safe: 11] as? String) ?? "",
+            quoteSuffix: (row[safe: 12] as? String) ?? "",
+            chapterTitle: row[safe: 13] as? String,
+            note: row[safe: 6] as? String,
+            colorKey: key,
+            colorHex: hex,
+            hasHighlight: hasHighlight,
+            originalText: originalText,
+            replacementText: row[safe: 19] as? String,
+            needsReanchor: (row.int(at: 14) ?? 0) != 0,
+            lastReanchoredAt: (row[safe: 15] as? String).flatMap { iso.date(from: $0) },
+            orphanedAt: (row[safe: 16] as? String).flatMap { iso.date(from: $0) },
+            createdDate: createdDate,
+            updatedAt: updatedDate
+        )
+        return (annotation, calibreID)
+    }
+
     func annotations(for calibreID: Int, spineIndex: Int? = nil) throws -> [Annotation] {
         let iso = ISO8601DateFormatter()
         let sql: String
         let args: [Binding?]
         if let spineIndex {
             sql = """
-            SELECT id, spine_index, start_char, end_char, selected_text, note, color_hex, created_at, color_key
+            SELECT \(Self.annotationSelectColumns)
             FROM annotations
             WHERE calibre_id = ? AND spine_index = ?
             ORDER BY start_char
@@ -889,7 +1000,7 @@ actor AmbrosiaMetaDB {
             args = [calibreID, spineIndex]
         } else {
             sql = """
-            SELECT id, spine_index, start_char, end_char, selected_text, note, color_hex, created_at, color_key
+            SELECT \(Self.annotationSelectColumns)
             FROM annotations
             WHERE calibre_id = ?
             ORDER BY spine_index, start_char
@@ -897,36 +1008,21 @@ actor AmbrosiaMetaDB {
             args = [calibreID]
         }
 
-        return try prepare(sql, args).compactMap { row in
-            guard let idString = row[safe: 0] as? String,
-                  let id = UUID(uuidString: idString),
-                  let spine = row.int(at: 1),
-                  let start = row.int(at: 2),
-                  let end = row.int(at: 3),
-                  let selectedText = row[safe: 4] as? String,
-                  let created = row[safe: 7] as? String else { return nil }
-            let hex = (row[safe: 6] as? String) ?? "#FFD60A"
-            let key = Self.decodeAnnotationColorKey(rawKey: row[safe: 8] as? String, legacyHex: hex)
-            return Annotation(
-                id: id,
-                spineIndex: spine,
-                startChar: start,
-                endChar: end,
-                selectedText: selectedText,
-                note: row[safe: 5] as? String,
-                colorKey: key,
-                colorHex: hex,
-                createdDate: iso.date(from: created) ?? Date()
-            )
-        }
+        return try prepare(sql, args).compactMap { Self.decodeAnnotationRow($0, iso: iso)?.annotation }
     }
 
     func insertAnnotation(_ annotation: Annotation, calibreID: Int) throws {
+        let iso = ISO8601DateFormatter()
+        let effectiveHasHighlight = (annotation.hasHighlight || annotation.originalText == nil) ? 1 : 0
         try run(
             """
-            INSERT OR REPLACE INTO annotations
-            (id, calibre_id, spine_index, start_char, end_char, selected_text, note, color_hex, color_key, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO annotations (
+                id, calibre_id, spine_index, start_char, end_char, selected_text,
+                note, color_hex, color_key, created_at,
+                spine_href, quote_prefix, quote_suffix, chapter_title,
+                needs_reanchor, last_reanchored_at, orphaned_at,
+                has_highlight, original_text, replacement_text, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 annotation.id.uuidString,
@@ -938,13 +1034,131 @@ actor AmbrosiaMetaDB {
                 annotation.note,
                 annotation.colorHex,
                 annotation.colorKey.rawValue,
-                ISO8601DateFormatter().string(from: annotation.createdDate)
+                iso.string(from: annotation.createdDate),
+                annotation.spineHref,
+                annotation.quotePrefix,
+                annotation.quoteSuffix,
+                annotation.chapterTitle,
+                annotation.needsReanchor ? 1 : 0,
+                annotation.lastReanchoredAt.map { iso.string(from: $0) },
+                annotation.orphanedAt.map { iso.string(from: $0) },
+                effectiveHasHighlight,
+                annotation.originalText,
+                annotation.replacementText,
+                iso.string(from: annotation.updatedAt)
             ]
         )
         try run(
             "INSERT OR IGNORE INTO collection_members VALUES (?, ?, ?)",
-            [SystemCollectionID.hasAnnotations, calibreID, ISO8601DateFormatter().string(from: Date())]
+            [SystemCollectionID.hasAnnotations, calibreID, iso.string(from: Date())]
         )
+    }
+
+    struct ReanchorUpdate: Sendable {
+        let spineIndex: Int
+        let spineHref: String
+        let startChar: Int
+        let endChar: Int
+        let quotePrefix: String
+        let quoteSuffix: String
+        let chapterTitle: String?
+    }
+
+    func reanchorAnnotation(id: UUID, update: ReanchorUpdate) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        try run(
+            """
+            UPDATE annotations
+            SET spine_index = ?, spine_href = ?, start_char = ?, end_char = ?,
+                quote_prefix = ?, quote_suffix = ?, chapter_title = COALESCE(?, chapter_title),
+                needs_reanchor = 0, last_reanchored_at = ?, orphaned_at = NULL, updated_at = ?
+            WHERE id = ?
+            """,
+            [
+                update.spineIndex, update.spineHref, update.startChar, update.endChar,
+                update.quotePrefix, update.quoteSuffix, update.chapterTitle,
+                now, now, id.uuidString
+            ]
+        )
+    }
+
+    func markAnnotationOrphaned(id: UUID) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        try run(
+            "UPDATE annotations SET orphaned_at = COALESCE(orphaned_at, ?), needs_reanchor = 0 WHERE id = ?",
+            [now, id.uuidString]
+        )
+    }
+
+    func markBookAnnotationsNeedsReanchor(calibreID: Int) throws {
+        try run("UPDATE annotations SET needs_reanchor = 1 WHERE calibre_id = ?", [calibreID])
+    }
+
+    func updateAnnotationAnchorContext(
+        id: UUID,
+        spineHref: String,
+        quotePrefix: String,
+        quoteSuffix: String,
+        chapterTitle: String?
+    ) throws {
+        try run(
+            """
+            UPDATE annotations
+            SET spine_href = ?, quote_prefix = ?, quote_suffix = ?,
+                chapter_title = COALESCE(?, chapter_title)
+            WHERE id = ?
+            """,
+            [spineHref, quotePrefix, quoteSuffix, chapterTitle, id.uuidString]
+        )
+    }
+
+    struct AnnotationDetailsUpdate: Sendable {
+        let note: String?
+        let colorKey: AnnotationColor
+        let colorHex: String
+        let hasHighlight: Bool
+        let originalText: String?
+        let replacementText: String?
+    }
+
+    func updateAnnotationDetails(id: UUID, update: AnnotationDetailsUpdate) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let effectiveHasHighlight = (update.hasHighlight || update.originalText == nil) ? 1 : 0
+        try run(
+            """
+            UPDATE annotations
+            SET note = ?, color_key = ?, color_hex = ?,
+                has_highlight = ?, original_text = ?, replacement_text = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            [
+                update.note, update.colorKey.rawValue, update.colorHex,
+                effectiveHasHighlight, update.originalText, update.replacementText, now, id.uuidString
+            ]
+        )
+    }
+
+    func shiftAnnotationOffsets(
+        _ shifts: [(id: UUID, startChar: Int, endChar: Int, quotePrefix: String?, quoteSuffix: String?)]
+    ) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        for shift in shifts {
+            try run(
+                """
+                UPDATE annotations
+                SET start_char = ?, end_char = ?,
+                    quote_prefix = COALESCE(?, quote_prefix),
+                    quote_suffix = COALESCE(?, quote_suffix),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                [
+                    shift.startChar, shift.endChar,
+                    shift.quotePrefix, shift.quoteSuffix,
+                    now, shift.id.uuidString
+                ]
+            )
+        }
     }
 
     func deleteAnnotation(id: UUID, calibreID: Int) throws {
@@ -1288,43 +1502,14 @@ actor AmbrosiaMetaDB {
         let iso = ISO8601DateFormatter()
         let rows = try prepare(
             """
-            SELECT id, calibre_id, spine_index, start_char, end_char,
-                   selected_text, note, color_hex, created_at, color_key
+            SELECT \(Self.annotationSelectColumns)
             FROM annotations
             ORDER BY created_at DESC, rowid DESC
             LIMIT ?
             """,
             [limit as Binding?]
         )
-        return rows.compactMap { row in
-            guard let idString  = row[safe: 0] as? String,
-                  let id        = UUID(uuidString: idString),
-                  let calibreID = row.int(at: 1),
-                  let spine     = row.int(at: 2),
-                  let start     = row.int(at: 3),
-                  let end       = row.int(at: 4),
-                  let text      = row[safe: 5] as? String,
-                  let dateStr   = row[safe: 8] as? String,
-                  let created   = iso.date(from: dateStr)
-            else { return nil }
-
-            let hex = (row[safe: 7] as? String) ?? "#FFD60A"
-            let key = Self.decodeAnnotationColorKey(rawKey: row[safe: 9] as? String, legacyHex: hex)
-            return (
-                Annotation(
-                    id: id,
-                    spineIndex: spine,
-                    startChar: start,
-                    endChar: end,
-                    selectedText: text,
-                    note: row[safe: 6] as? String,
-                    colorKey: key,
-                    colorHex: hex,
-                    createdDate: created
-                ),
-                calibreID
-            )
-        }
+        return rows.compactMap { Self.decodeAnnotationRow($0, iso: iso) }
     }
 
     /// Returns every annotation in the library, newest first. Unlike
@@ -1337,41 +1522,93 @@ actor AmbrosiaMetaDB {
         let iso = ISO8601DateFormatter()
         let rows = try prepare(
             """
-            SELECT id, calibre_id, spine_index, start_char, end_char,
-                   selected_text, note, color_hex, created_at, color_key
+            SELECT \(Self.annotationSelectColumns)
             FROM annotations
             ORDER BY created_at DESC, rowid DESC
             """
         )
-        return rows.compactMap { row in
-            guard let idString  = row[safe: 0] as? String,
-                  let id        = UUID(uuidString: idString),
-                  let calibreID = row.int(at: 1),
-                  let spine     = row.int(at: 2),
-                  let start     = row.int(at: 3),
-                  let end       = row.int(at: 4),
-                  let text      = row[safe: 5] as? String,
-                  let dateStr   = row[safe: 8] as? String,
-                  let created   = iso.date(from: dateStr)
-            else { return nil }
+        return rows.compactMap { Self.decodeAnnotationRow($0, iso: iso) }
+    }
 
-            let hex = (row[safe: 7] as? String) ?? "#FFD60A"
-            let key = Self.decodeAnnotationColorKey(rawKey: row[safe: 9] as? String, legacyHex: hex)
-            return (
-                Annotation(
-                    id: id,
-                    spineIndex: spine,
-                    startChar: start,
-                    endChar: end,
-                    selectedText: text,
-                    note: row[safe: 6] as? String,
-                    colorKey: key,
-                    colorHex: hex,
-                    createdDate: created
-                ),
-                calibreID
-            )
+    enum AnnotationFilterType: String, CaseIterable, Identifiable, Sendable {
+        case all = "All"
+        case highlights = "Highlights"
+        case withNotes = "With Notes"
+        case textEdits = "Text Edits"
+        case bookmarks = "Bookmarks"
+        case orphaned = "Orphaned"
+
+        var id: String { rawValue }
+    }
+
+    func searchAnnotations(
+        query: String,
+        scopeCalibreID: Int? = nil,
+        scopeSpineIndex: Int? = nil,
+        filterType: AnnotationFilterType = .all,
+        colorKey: AnnotationColor? = nil
+    ) throws -> [(annotation: Annotation, calibreID: Int)] {
+        let iso = ISO8601DateFormatter()
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        var conditions: [String] = []
+        var args: [Binding?] = []
+
+        let fromClause: String
+        if !trimmed.isEmpty {
+            let ftsTokens = trimmed
+                .split(whereSeparator: { $0.isWhitespace })
+                .map { token -> String in
+                    let cleaned = token.replacingOccurrences(of: "\"", with: "")
+                    return "\"\(cleaned)\"*"
+                }
+                .joined(separator: " ")
+            fromClause = "FROM annotations a JOIN annotations_fts ON a.rowid = annotations_fts.rowid"
+            conditions.append("annotations_fts MATCH ?")
+            args.append(ftsTokens)
+        } else {
+            fromClause = "FROM annotations a"
         }
+
+        if let calibreID = scopeCalibreID {
+            conditions.append("a.calibre_id = ?")
+            args.append(calibreID)
+        }
+        if let spineIndex = scopeSpineIndex {
+            conditions.append("a.spine_index = ?")
+            args.append(spineIndex)
+        }
+        switch filterType {
+        case .all:
+            break
+        case .highlights:
+            conditions.append("a.has_highlight = 1 AND a.start_char != a.end_char")
+        case .withNotes:
+            conditions.append("a.note IS NOT NULL AND TRIM(a.note) != ''")
+        case .textEdits:
+            conditions.append("a.original_text IS NOT NULL")
+        case .bookmarks:
+            conditions.append("a.start_char = a.end_char")
+        case .orphaned:
+            conditions.append("a.orphaned_at IS NOT NULL")
+        }
+        if let colorKey {
+            conditions.append("a.color_key = ?")
+            args.append(colorKey.rawValue)
+        }
+
+        let whereClause = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
+        let columns = Self.annotationSelectColumns
+            .split(separator: ",")
+            .map { "a." + $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .joined(separator: ", ")
+
+        let sql = """
+        SELECT \(columns)
+        \(fromClause)
+        \(whereClause)
+        ORDER BY a.updated_at DESC, a.created_at DESC, a.rowid DESC
+        """
+        return try prepare(sql, args).compactMap { Self.decodeAnnotationRow($0, iso: iso) }
     }
 
     /// Returns up to `limit` collection membership events, newest first.
@@ -1710,7 +1947,7 @@ actor AmbrosiaMetaDB {
         SELECT calibre_id, story_url, ao3_work_id, authors_json, kudos_count, word_count,
                chapter_current, chapter_total, is_complete, language, published_date, updated_date,
                fandoms_json, relationships_json, characters_json, additional_tags_json, category_json,
-               ao3_collections_json, series_json, rating, warnings_json, extracted_at
+               ao3_collections_json, series_json, rating, warnings_json, extracted_at, is_restricted
         FROM ao3_metadata
         WHERE calibre_id IN (\(placeholders))
         """
@@ -1753,7 +1990,8 @@ actor AmbrosiaMetaDB {
                 series: decodeSeries(row.binding(at: 18)),
                 rating: row[safe: 19] as? String,
                 warnings: decodeStrings(row.binding(at: 20)),
-                extractedAt: extractedAt
+                extractedAt: extractedAt,
+                isRestricted: row.int(at: 22).map { $0 != 0 }
             )
         }
         return result
@@ -1794,8 +2032,8 @@ actor AmbrosiaMetaDB {
             (calibre_id, story_url, ao3_work_id, authors_json, author_names_json, kudos_count, word_count,
              chapter_current, chapter_total, is_complete, language, published_date, updated_date,
              fandoms_json, relationships_json, characters_json, additional_tags_json, category_json,
-             ao3_collections_json, series_json, rating, warnings_json, extracted_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ao3_collections_json, series_json, rating, warnings_json, extracted_at, is_restricted)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 calibreID,
@@ -1820,7 +2058,8 @@ actor AmbrosiaMetaDB {
                 seriesJSON,
                 metadata.rating,
                 json(metadata.warnings),
-                metadata.extractedAt
+                metadata.extractedAt,
+                metadata.isRestricted.map { $0 ? 1 : 0 }
             ]
         )
 

@@ -43,6 +43,13 @@ final class AnnotationPersistence {
         Task {
             do {
                 try await insertHandler(annotation, calibreID)
+                if let path = AppDelegate.shared?.session.activePath, let metaDB {
+                    await AnnotationBackupManager.shared.scheduleDirtyBackup(
+                        calibreID: calibreID,
+                        libraryURL: URL(fileURLWithPath: path),
+                        metaDB: metaDB
+                    )
+                }
             } catch {
                 _ = try? await metaDB?.logError(
                     subsystem: "Reader",
@@ -65,6 +72,13 @@ final class AnnotationPersistence {
         Task {
             do {
                 try await deleteHandler(id, calibreID)
+                if let path = AppDelegate.shared?.session.activePath, let metaDB {
+                    await AnnotationBackupManager.shared.scheduleDirtyBackup(
+                        calibreID: calibreID,
+                        libraryURL: URL(fileURLWithPath: path),
+                        metaDB: metaDB
+                    )
+                }
             } catch {
                 _ = try? await metaDB?.logError(
                     subsystem: "Reader",

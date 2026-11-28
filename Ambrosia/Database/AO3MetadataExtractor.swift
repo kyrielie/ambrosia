@@ -29,6 +29,7 @@ struct AO3MetadataRecord: Codable, Equatable, Sendable {
     var rating: String?
     var warnings: [String]
     var extractedAt: String
+    var isRestricted: Bool?
 }
 
 /// One author credited on a work. AO3 works can list multiple authors
@@ -107,10 +108,18 @@ enum AO3MetadataExtractor {
         do {
             // 1. Native AO3 preface fast path (dl.tags)
             if let meta = try doc.select("dl.tags").first() {
+                if NectarEPUBParser.canParse(document: doc),
+                   let result = NectarEPUBParser.parse(document: doc),
+                   case .ao3(let record) = result {
+                    return record
+                }
                 return parseNativeAO3(doc: doc, meta: meta)
             }
 
             // 2. External Fanfiction Frontmatter Parsers
+            if let result = NectarEPUBParser.parse(document: doc) {
+                if case .ao3(let record) = result { return record }
+            }
             if let result = FanFicFareParser.parse(document: doc) {
                 if case .ao3(let record) = result { return record }
             }
@@ -317,7 +326,7 @@ enum AO3MetadataExtractor {
         var series: [AO3MetadataRecord.SeriesEntry] = []
         for node in element.getChildNodes() {
             if let textNode = node as? TextNode {
-                pendingIndex = firstMatch(in: textNode.text(), pattern: #"(?:,\s*)?[Pp]art\s+([0-9]+)\s+of"#).flatMap(Int.init)
+                pendingIndex = firstMatch(in: textNode.text(), pattern: #"(?:,\s*)?[Pp]art\s+#?([0-9]+)\s+of"#).flatMap(Int.init)
             } else if let link = node as? Element, link.tagName().lowercased() == "a" {
                 let name = (try? link.text()).flatMap(\.nilIfEmpty)
                 let href = (try? link.attr("href")) ?? ""
@@ -350,6 +359,22 @@ enum AO3MetadataExtractor {
               match.numberOfRanges > 1,
               let range = Range(match.range(at: 1), in: string) else { return nil }
         return String(string[range])
+    }
+
+    static func applyOPFFallbacks(to record: inout AO3MetadataRecord, parser: EPUBParser) {
+        if record.workID == nil, let pubID = parser.opfIdentifier,
+           let id = firstMatch(in: pubID, pattern: #"/works/([0-9]+)"#) {
+            record.workID = id
+            if record.storyURL == nil {
+                record.storyURL = pubID.hasPrefix("http") ? pubID : "https://archiveofourown.org/works/\(id)"
+            }
+        }
+        if record.language == nil, let lang = parser.opfLanguage, !lang.isEmpty {
+            record.language = lang
+        }
+        if record.kudosCount == nil, let kudos = parser.nectarKudos {
+            record.kudosCount = kudos
+        }
     }
 
     private static let workIDRegex = try? NSRegularExpression(pattern: #"/works/([0-9]+)"#)

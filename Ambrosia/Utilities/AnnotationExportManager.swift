@@ -29,7 +29,8 @@ struct AnnotationExportManager {
     /// Text, Note, Color, Spine Index, Created Date.
     static func exportToCSV(rows: [AnnotationExportRow]) -> String {
         let header = [
-            "Book Title", "Authors", "Type", "Selected Text", "Note", "Color",
+            "Book Title", "Authors", "Type", "Chapter Title", "Selected Text",
+            "Note", "Color", "Has Highlight", "Original Text", "Replacement Text",
             "Spine Index", "Created Date"
         ]
 
@@ -40,9 +41,13 @@ struct AnnotationExportManager {
                 row.book.displayTitle,
                 row.book.authors.joined(separator: "; "),
                 row.annotation.isPointAnnotation ? "Bookmark" : "Highlight",
+                row.annotation.chapterTitle ?? "",
                 row.annotation.selectedText,
                 row.annotation.note ?? "",
-                row.annotation.colorHex,
+                row.annotation.colorKey.rawValue,
+                row.annotation.hasHighlight ? "true" : "false",
+                row.annotation.originalText ?? "",
+                row.annotation.replacementText ?? "",
                 String(row.annotation.spineIndex),
                 ExportManager.isoDate(row.annotation.createdDate)
             ])

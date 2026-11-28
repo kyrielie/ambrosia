@@ -141,6 +141,12 @@ struct AmbrosiaApp: App {
                 }
                 .disabled(session.activePath == nil)
 
+                Button("Browse All Annotations…") {
+                    AnnotationsBrowserWindowController.show(session: session)
+                }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
+                .disabled(session.activePath == nil)
+
                 Divider()
 
                 Menu("Export") {
@@ -152,6 +158,21 @@ struct AmbrosiaApp: App {
                     }
                     Button("Export Annotations…") {
                         AppDelegate.shared?.libraryWindowController?.triggerAnnotationExport()
+                    }
+                    Button("Restore Annotations from Backup…") {
+                        Task { @MainActor in
+                            guard let rootPath = session.activePath, let metaDB = session.metaDB else { return }
+                            let count = (try? await AnnotationBackupManager.shared.restoreAllSnapshots(
+                                libraryURL: URL(fileURLWithPath: rootPath),
+                                metaDB: metaDB
+                            )) ?? 0
+                            let alert = NSAlert()
+                            alert.messageText = count > 0 ? "Annotations Restored" : "No Backups Found"
+                            alert.informativeText = count > 0
+                                ? "Restored \(count) annotation(s) from automatic snapshots."
+                                : "No annotation snapshot backups were found for this library."
+                            alert.runModal()
+                        }
                     }
                     Divider()
                     Button("RSS Feed Server…") {

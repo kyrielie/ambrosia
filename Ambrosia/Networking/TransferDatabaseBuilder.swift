@@ -67,6 +67,12 @@ enum TransferDatabaseBuilder {
         let isLiked: Bool
         let isFinished: Bool
         let readingProgress: Double?
+
+        var ao3Language: String?
+        var collectionsJSON: String = "[]"
+        var kudos: Int?
+        var additionalTagsJSON: String = "[]"
+        var isRestricted: Bool?
     }
 
     enum BuildError: Error {
@@ -78,7 +84,12 @@ enum TransferDatabaseBuilder {
     /// stamped. `fileURL` must not already exist. `manifest` describes this
     /// page's position within a paginated walk (see `ManifestRow`) and is
     /// written to a second table, `transfer_manifest`, alongside `items`.
-    static func build(rows: [Row], manifest: ManifestRow, at fileURL: URL) throws {
+    static func build(
+        rows: [Row],
+        manifest: ManifestRow,
+        wireVersion: Int32 = wireFormatVersion,
+        at fileURL: URL
+    ) throws {
         let db: Connection
         do {
             db = try Connection(fileURL.path)
@@ -95,6 +106,18 @@ enum TransferDatabaseBuilder {
             expected_total_row_count  INTEGER NOT NULL
         );
         """)
+
+        let useV2 = wireVersion >= 2
+        let extraColumns = useV2
+            ? """
+            ,
+            ao3_language        TEXT,
+            collections_json    TEXT,
+            kudos               INTEGER,
+            additional_tags_json TEXT,
+            is_restricted       INTEGER
+            """
+            : ""
 
         try db.execute("""
         CREATE TABLE items (
@@ -128,19 +151,33 @@ enum TransferDatabaseBuilder {
             is_read_later       INTEGER NOT NULL DEFAULT 0,
             is_liked            INTEGER NOT NULL DEFAULT 0,
             is_finished         INTEGER NOT NULL DEFAULT 0,
-            reading_progress    REAL
+            reading_progress    REAL\(extraColumns)
         );
         """)
 
-        let insertSQL = """
-        INSERT INTO items (
-            id, ao3_work_id, is_anthology, ao3_series_id, series_name,
-            url, title, content_html, summary, date_published, date_modified, authors_json, tags_json,
-            word_count, chapter_current, chapter_total, is_complete,
-            fandoms_json, relationships_json, characters_json, ratings_json, warnings_json, categories_json, series_json,
-            is_read_later, is_liked, is_finished, reading_progress
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """
+        let insertSQL: String
+        if useV2 {
+            insertSQL = """
+            INSERT INTO items (
+                id, ao3_work_id, is_anthology, ao3_series_id, series_name,
+                url, title, content_html, summary, date_published, date_modified, authors_json, tags_json,
+                word_count, chapter_current, chapter_total, is_complete,
+                fandoms_json, relationships_json, characters_json, ratings_json, warnings_json, categories_json, series_json,
+                is_read_later, is_liked, is_finished, reading_progress,
+                ao3_language, collections_json, kudos, additional_tags_json, is_restricted
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+        } else {
+            insertSQL = """
+            INSERT INTO items (
+                id, ao3_work_id, is_anthology, ao3_series_id, series_name,
+                url, title, content_html, summary, date_published, date_modified, authors_json, tags_json,
+                word_count, chapter_current, chapter_total, is_complete,
+                fandoms_json, relationships_json, characters_json, ratings_json, warnings_json, categories_json, series_json,
+                is_read_later, is_liked, is_finished, reading_progress
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+        }
 
         try db.transaction {
             try db.run(
@@ -149,7 +186,7 @@ enum TransferDatabaseBuilder {
                  manifest.pageRowCount, manifest.expectedTotalRowCount]
             )
             for row in rows {
-                try db.run(insertSQL, [
+                var bindings: [Binding?] = [
                     "ambrosia-book-\(row.calibreID)",
                     row.ao3WorkID,
                     row.isAnthology ? 1 : 0,
@@ -181,7 +218,18 @@ enum TransferDatabaseBuilder {
                     row.isLiked ? 1 : 0,
                     row.isFinished ? 1 : 0,
                     row.readingProgress
-                ])
+                ]
+                if useV2 {
+                    let extraBindings: [Binding?] = [
+                        row.ao3Language,
+                        row.collectionsJSON,
+                        row.kudos,
+                        row.additionalTagsJSON,
+                        row.isRestricted.map { $0 ? 1 : 0 }
+                    ]
+                    bindings.append(contentsOf: extraBindings)
+                }
+                try db.run(insertSQL, bindings)
             }
         }
 
@@ -190,6 +238,6 @@ enum TransferDatabaseBuilder {
         // flow, but cheap to order defensively) sees either the pre-existing
         // default user_version or the fully-populated table, never a
         // half-written table claiming to be the current wire version.
-        try db.execute("PRAGMA user_version = \(wireFormatVersion)")
+        try db.execute("PRAGMA user_version = \(useV2 ? 2 : wireFormatVersion)")
     }
 }

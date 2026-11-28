@@ -9,6 +9,7 @@ enum FanfictionGeneratorFormat: String, Sendable {
     case fanFicFare = "FanFicFare"
     case ficLab = "FicLab"
     case ficHub = "FicHub"
+    case nectar = "Nectar"
 }
 
 enum FanfictionParseResult: Sendable {
@@ -393,6 +394,156 @@ enum FicHubParser {
             rating: nil,
             warnings: [],
             extractedAt: ISO8601DateFormatter().string(from: Date())
+        )
+        return .ao3(record)
+    }
+}
+
+// MARK: - Nectar EPUB Parser
+
+enum NectarEPUBParser {
+    static func canParse(document doc: Document) -> Bool {
+        if (try? doc.select("dl.tags-dl, div.stats-block, section#preface").first()) != nil {
+            return true
+        }
+        return false
+    }
+
+    // swiftlint:disable:next function_body_length cyclomatic_complexity
+    static func parse(document doc: Document) -> FanfictionParseResult? {
+        guard canParse(document: doc) else { return nil }
+
+        var workID: String?
+        var storyURL: String?
+        for link in (try? doc.select("a[href]").array()) ?? [] {
+            guard let href = try? link.attr("href"),
+                  let id = firstMatch(in: href, pattern: #"/works/([0-9]+)"#) else { continue }
+            workID = id
+            storyURL = href.hasPrefix("http") ? href : "https://archiveofourown.org/works/\(id)"
+            break
+        }
+
+        var authors: [AO3AuthorEntry] = []
+        let bylineLinks = (try? doc.select("p.byline a[rel=author], .byline a").array()) ?? []
+        for link in bylineLinks {
+            guard let name = try? link.text().trimmingCharacters(in: .whitespacesAndNewlines),
+                  !name.isEmpty else { continue }
+            let href = try? link.attr("href")
+            authors.append(AO3AuthorEntry(
+                username: name,
+                pseud: nil,
+                profileURL: href.flatMap { $0.hasPrefix("http") ? $0 : "https://archiveofourown.org\($0)" },
+                source: .byline
+            ))
+        }
+
+        var rating: String?
+        var warnings: [String] = []
+        var categories: [String] = []
+        var fandoms: [String] = []
+        var relationships: [String] = []
+        var characters: [String] = []
+        var additionalTags: [String] = []
+        var collections: [String] = []
+        var series: [AO3MetadataRecord.SeriesEntry] = []
+        var language: String?
+
+        let dts = (try? doc.select("dl.tags-dl dt, dl.tags dt").array()) ?? []
+        for dt in dts {
+            guard let label = try? dt.text().trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                  let dd = try? dt.nextElementSibling(), dd.tagName().lowercased() == "dd" else { continue }
+
+            let linkTexts = ((try? dd.select("a").array()) ?? [])
+                .compactMap { try? $0.text().trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            let rawText = (try? dd.text().trimmingCharacters(in: .whitespacesAndNewlines)) ?? ""
+            let values = linkTexts.isEmpty ? parseList(rawText) : linkTexts
+
+            if label.contains("rating") {
+                rating = values.first
+            } else if label.contains("warning") {
+                warnings = values
+            } else if label.contains("categor") {
+                categories = values
+            } else if label.contains("fandom") {
+                fandoms = values
+            } else if label.contains("relationship") {
+                relationships = values
+            } else if label.contains("character") {
+                characters = values
+            } else if label.contains("additional") || label.contains("freeform") {
+                additionalTags = values
+            } else if label.contains("collection") {
+                collections = values
+            } else if label.contains("language") {
+                language = values.first ?? (rawText.isEmpty ? nil : rawText)
+            } else if label.contains("series") {
+                if let idxStr = firstMatch(in: rawText, pattern: #"Part\s+#?([0-9]+)\s+of"#),
+                   let idx = Int(idxStr),
+                   let name = values.first {
+                    let sHref = (try? dd.select("a").first()?.attr("href")) ?? ""
+                    let sID = firstMatch(in: sHref, pattern: #"/series/([0-9]+)"#)
+                    series.append(.init(name: name, index: idx, ao3ID: sID))
+                }
+            }
+        }
+
+        var publishedDate: String?
+        var updatedDate: String?
+        var wordCount: Int?
+        var chapterCurrent: Int?
+        var chapterTotal: Int?
+        var isComplete = false
+        var kudosCount: Int?
+        var isRestricted: Bool?
+
+        if let statsText = try? doc.select("div.stats-block").text() {
+            publishedDate = firstMatch(in: statsText, pattern: #"Published:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})"#)
+            updatedDate = firstMatch(in: statsText, pattern: #"(?:Completed|Updated):\s*([0-9]{4}-[0-9]{2}-[0-9]{2})"#)
+            if let wc = firstMatch(in: statsText, pattern: #"Words:\s*([0-9,]+)"#) {
+                wordCount = Int(wc.replacingOccurrences(of: ",", with: ""))
+            }
+            if let ch = firstMatch(in: statsText, pattern: #"Chapters:\s*([0-9]+/[0-9?]+)"#) {
+                let parts = ch.split(separator: "/").map(String.init)
+                if parts.count == 2 {
+                    chapterCurrent = Int(parts[0])
+                    chapterTotal = Int(parts[1])
+                    if let current = chapterCurrent, let total = chapterTotal, total > 0 && current >= total {
+                        isComplete = true
+                    }
+                }
+            }
+            if let kStr = firstMatch(in: statsText, pattern: #"Kudos:\s*([0-9,]+)"#) {
+                kudosCount = Int(kStr.replacingOccurrences(of: ",", with: ""))
+            }
+            if statsText.contains("Restricted") || statsText.contains("🔒") {
+                isRestricted = true
+            }
+        }
+
+        let record = AO3MetadataRecord(
+            storyURL: storyURL,
+            workID: workID,
+            authors: authors,
+            kudosCount: kudosCount,
+            wordCount: wordCount,
+            chapterCurrent: chapterCurrent,
+            chapterTotal: chapterTotal,
+            isComplete: isComplete,
+            language: language,
+            publishedDate: publishedDate,
+            updatedDate: updatedDate,
+            fandoms: fandoms,
+            relationships: relationships,
+            characters: characters,
+            additionalTags: additionalTags,
+            categories: categories,
+            ao3Collections: collections,
+            series: series,
+            rating: rating,
+            warnings: warnings,
+            extractedAt: ISO8601DateFormatter().string(from: Date()),
+            isRestricted: isRestricted
         )
         return .ao3(record)
     }

@@ -1670,7 +1670,15 @@ actor LocalFeedServer {
             pageRowCount: rows.count,
             expectedTotalRowCount: allPairs.count
         )
-        return try await sqliteResponse(for: rows, manifest: manifest)
+        let wireVersion: Int32 = {
+            guard let comps = URLComponents(string: feedURL),
+                  let raw = comps.queryItems?.first(where: { $0.name == "wire_version" })?.value,
+                  let parsedVersion = Int32(raw), parsedVersion >= 2 else {
+                return TransferDatabaseBuilder.wireFormatVersion
+            }
+            return parsedVersion
+        }()
+        return try await sqliteResponse(for: rows, manifest: manifest, wireVersion: wireVersion)
     }
 
     /// Manifest for the "no library open" / "nothing left after skip
@@ -1759,6 +1767,9 @@ actor LocalFeedServer {
             (try? String(data: JSONFeedBuilder.encoder.encode(value), encoding: .utf8)) ?? "[]"
         }
 
+        let collections = dedupPreservingOrder(ao3?.ao3Collections.compactMap { $0.isEmpty ? nil : $0 } ?? [])
+        let additionalTags = dedupPreservingOrder(ao3?.additionalTags.compactMap { $0.isEmpty ? nil : $0 } ?? [])
+
         return TransferDatabaseBuilder.Row(
             calibreID: book.id,
             ao3WorkID: ao3?.workID.flatMap { $0.isEmpty ? nil : $0 },
@@ -1787,7 +1798,12 @@ actor LocalFeedServer {
             isReadLater: isReadLater,
             isLiked: isLiked,
             isFinished: isFinished,
-            readingProgress: readingProgress
+            readingProgress: readingProgress,
+            ao3Language: ao3?.language.flatMap { $0.isEmpty ? nil : $0 },
+            collectionsJSON: json(collections),
+            kudos: ao3?.kudosCount ?? book.kudos,
+            additionalTagsJSON: json(additionalTags),
+            isRestricted: ao3?.isRestricted
         )
     }
 
@@ -1799,13 +1815,22 @@ actor LocalFeedServer {
     /// error (503) here, not a silent empty-body fallback, since a
     /// truncated/garbled `.sqlite` payload the client can't tell apart from a
     /// valid one is worse than an explicit failure.
-    private func sqliteResponse(for rows: [TransferDatabaseBuilder.Row], manifest: TransferDatabaseBuilder.ManifestRow) async throws -> HTTPResponse {
+    private func sqliteResponse(
+        for rows: [TransferDatabaseBuilder.Row],
+        manifest: TransferDatabaseBuilder.ManifestRow,
+        wireVersion: Int32 = TransferDatabaseBuilder.wireFormatVersion
+    ) async throws -> HTTPResponse {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("ambrosia-feed-transfer-\(UUID().uuidString).sqlite")
         defer { try? FileManager.default.removeItem(at: tempURL) }
 
         do {
-            try TransferDatabaseBuilder.build(rows: rows, manifest: manifest, at: tempURL)
+            try TransferDatabaseBuilder.build(
+                rows: rows,
+                manifest: manifest,
+                wireVersion: wireVersion,
+                at: tempURL
+            )
         } catch {
             #if DEBUG
             print("[LocalFeedServer] sqlite transfer build failed: \(error)")

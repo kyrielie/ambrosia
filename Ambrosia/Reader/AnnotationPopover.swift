@@ -17,17 +17,50 @@ struct AnnotationPopover: View {
 
     // MARK: - Input
 
+    struct SavePayload {
+        let note: String?
+        let colorKey: AnnotationColor
+        let colorHex: String
+        let hasHighlight: Bool
+        let replacementText: String?
+    }
+
     let selectedText: String
-    let onSave: (String?, AnnotationColor, String) -> Void   // (note?, colorKey, colorHex)
+    let allowTextEdit: Bool
+    let onSave: (SavePayload) -> Void
     let onCancel: () -> Void
 
     // MARK: - State
 
-    @State private var noteText: String = ""
-    @State private var colorKey: AnnotationColor = .yellow
+    @State private var noteText: String
+    @State private var colorKey: AnnotationColor
+    @State private var hasHighlight: Bool
+    @State private var replacementText: String
+    @State private var showTextEditor: Bool
 
     private var palette: HighlightPalette { ReaderPreferences.shared.highlightPalette }
     private var isDark: Bool { ReaderPreferences.shared.effectiveIsDark }
+
+    init(
+        selectedText: String,
+        initialNote: String? = nil,
+        initialColorKey: AnnotationColor = .yellow,
+        initialHasHighlight: Bool = true,
+        initialReplacementText: String? = nil,
+        allowTextEdit: Bool = true,
+        onSave: @escaping (SavePayload) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.selectedText = selectedText
+        self.allowTextEdit = allowTextEdit
+        self.onSave = onSave
+        self.onCancel = onCancel
+        _noteText = State(initialValue: initialNote ?? "")
+        _colorKey = State(initialValue: initialColorKey)
+        _hasHighlight = State(initialValue: initialHasHighlight)
+        _replacementText = State(initialValue: initialReplacementText ?? selectedText)
+        _showTextEditor = State(initialValue: initialReplacementText != nil)
+    }
 
     // MARK: - Body
 
@@ -104,6 +137,22 @@ struct AnnotationPopover: View {
                 }
             }
 
+            // Non-destructive text edit (optional)
+            if allowTextEdit && !selectedText.isEmpty {
+                DisclosureGroup("Edit Text (Non-Destructive)", isExpanded: $showTextEditor) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        TextField("Replacement text", text: $replacementText, axis: .vertical)
+                            .textFieldStyle(.roundedBorder)
+                            .lineLimit(2...4)
+                        Toggle("Keep highlight", isOn: $hasHighlight)
+                            .font(.caption)
+                    }
+                    .padding(.top, 4)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
             // Cancel / Save
             HStack {
                 Spacer()
@@ -112,7 +161,15 @@ struct AnnotationPopover: View {
                 Button("Save") {
                     let note = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
                     let resolvedHex = palette.hex(for: colorKey, isDark: isDark)
-                    onSave(note.isEmpty ? nil : note, colorKey, resolvedHex)
+                    let trimmedRepl = replacementText.trimmingCharacters(in: .newlines)
+                    let editedText: String? = (showTextEditor && trimmedRepl != selectedText) ? trimmedRepl : nil
+                    onSave(SavePayload(
+                        note: note.isEmpty ? nil : note,
+                        colorKey: colorKey,
+                        colorHex: resolvedHex,
+                        hasHighlight: editedText == nil ? true : hasHighlight,
+                        replacementText: editedText
+                    ))
                 }
                 .keyboardShortcut(.return, modifiers: [.command])
                 .buttonStyle(.borderedProminent)

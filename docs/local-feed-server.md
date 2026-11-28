@@ -12,8 +12,8 @@ them.
 - Serves:
   - `GET /`: HTML index of available feeds.
   - `GET /feed/collection/<id>.xml`, `GET /feed/search.xml`, `GET /feed/random-daily.xml`: RSS 2.0 XML feeds with CDATA content embedding and AO3 custom metadata extensions.
-  - `GET /feed/collection/<id>.json`, `GET /feed/search.json`, `GET /feed/random-daily.json`: JSON Feed v1.1 serialization.
-  - `GET /feed/collection/<id>.sqlite`, `GET /feed/search.sqlite`, `GET /feed/random-daily.sqlite`: Gzipped SQLite transfer databases built on-the-fly for large library sync via `TransferDatabaseBuilder`.
+  - `GET /feed/collection/<id>.json`, `GET /feed/search.json`, `GET /feed/random-daily.json`: JSON Feed v1.1 serialization (`_ambrosia` includes `ao3_language`, `collections`, `kudos`, `additional_tags`, and `is_restricted`).
+  - `GET /feed/collection/<id>.sqlite`, `GET /feed/search.sqlite`, `GET /feed/random-daily.sqlite`: Gzipped/LZFSE SQLite transfer databases built on-the-fly for large library sync via `TransferDatabaseBuilder` (defaults to `wire_version=1` / `PRAGMA user_version = 1`; pass `?wire_version=2` for `PRAGMA user_version = 2` with `ao3_language`, `collections_json`, `kudos`, `additional_tags_json`, `is_restricted`).
   - `GET /feeds.opml`: OPML 2.0 export of collection and special feeds.
 - Deconstructed architecture (Phase 6):
   - `LocalFeedServer.swift`: Lean HTTP socket server lifecycle, routing dispatch, and port binding.

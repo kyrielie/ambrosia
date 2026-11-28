@@ -36,6 +36,11 @@ struct JSONFeedAmbrosiaExtension: Codable, Equatable {
     var isAnthology: Bool?
     var ao3SeriesID: String?
     var seriesName: String?
+    var ao3Language: String?
+    var collections: [String]?
+    var kudos: Int?
+    var additionalTags: [String]?
+    var isRestricted: Bool?
 
     enum CodingKeys: String, CodingKey {
         case wordCount = "word_count"
@@ -48,6 +53,10 @@ struct JSONFeedAmbrosiaExtension: Codable, Equatable {
         case isAnthology = "is_anthology"
         case ao3SeriesID = "ao3_series_id"
         case seriesName = "series_name"
+        case ao3Language = "ao3_language"
+        case collections, kudos
+        case additionalTags = "additional_tags"
+        case isRestricted = "is_restricted"
     }
 }
 
@@ -138,6 +147,9 @@ enum JSONFeedBuilder {
         let dateModified = ao3?.updatedDate.flatMap { $0.isEmpty ? nil : FeedDateFormatter.iso8601DateString(from: $0) }
         let anthologyEntry = anthologySeriesEntry(for: book, seriesEntries: seriesEntries)
 
+        let additionalTags = dedupPreservingOrder(ao3?.additionalTags.compactMap { $0.isEmpty ? nil : $0 } ?? [])
+        let collections = dedupPreservingOrder(ao3?.ao3Collections.compactMap { $0.isEmpty ? nil : $0 } ?? [])
+
         let ambrosiaExtensionValue = JSONFeedAmbrosiaExtension(
             wordCount: ao3?.wordCount ?? book.wordCount,
             chapterCurrent: ao3?.chapterCurrent,
@@ -154,7 +166,12 @@ enum JSONFeedBuilder {
             ao3WorkID: ao3?.workID.flatMap { $0.isEmpty ? nil : $0 },
             isAnthology: anthologyEntry != nil ? true : nil,
             ao3SeriesID: anthologyEntry?.ao3SeriesID,
-            seriesName: anthologyEntry != nil && (anthologyEntry?.ao3SeriesID?.isEmpty ?? true) ? anthologyEntry?.seriesName : nil
+            seriesName: anthologyEntry != nil && (anthologyEntry?.ao3SeriesID?.isEmpty ?? true) ? anthologyEntry?.seriesName : nil,
+            ao3Language: ao3?.language.flatMap { $0.isEmpty ? nil : $0 },
+            collections: collections.isEmpty ? nil : collections,
+            kudos: ao3?.kudosCount ?? book.kudos,
+            additionalTags: additionalTags.isEmpty ? nil : additionalTags,
+            isRestricted: ao3?.isRestricted
         )
 
         return JSONFeedItem(
@@ -228,7 +245,12 @@ enum JSONFeedBuilder {
             ao3WorkID: nil,
             isAnthology: nil,
             ao3SeriesID: group.seriesKey.hasPrefix("ao3:") ? String(group.seriesKey.dropFirst(4)) : nil,
-            seriesName: group.seriesKey.hasPrefix("ao3:") ? nil : group.seriesName
+            seriesName: group.seriesKey.hasPrefix("ao3:") ? nil : group.seriesName,
+            ao3Language: leaderAO3?.language.flatMap { $0.isEmpty ? nil : $0 },
+            collections: nil,
+            kudos: leaderAO3?.kudosCount,
+            additionalTags: group.allAdditionalTags.isEmpty ? nil : group.allAdditionalTags,
+            isRestricted: leaderAO3?.isRestricted
         )
 
         return JSONFeedItem(

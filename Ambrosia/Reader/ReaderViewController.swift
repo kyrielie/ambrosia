@@ -355,9 +355,18 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             guard let self else { return }
             self.totalColumns = total
             // Re-inject highlights for the newly loaded spine item.
-            let ranged = self.annotations
-                .filter { !$0.isPointAnnotation && self.annotationBelongsToCurrentSpineItem($0) }
-            HighlightBridge.restoreHighlights(ranged, into: self.webView)
+        let ranged = self.annotations
+            .filter { !$0.isPointAnnotation && self.annotationBelongsToCurrentSpineItem($0) }
+        let currentRef = self.spineMap.ref(atGlobalIndex: self.currentSpineIndex)
+        let currentHref: String = {
+            guard let currentRef, self.workParsers.indices.contains(currentRef.workIndex) else { return "" }
+            let spine = self.workParsers[currentRef.workIndex].spine
+            return spine.indices.contains(currentRef.localIndex) ? spine[currentRef.localIndex].href : ""
+        }()
+        let localIdx = currentRef?.localIndex ?? self.currentSpineIndex
+        HighlightBridge.restoreHighlights(ranged, into: self.webView) { [weak self] report in
+            self?.handleBatchRenderReport(report, spineIndex: localIdx, spineHref: currentHref)
+        }
             self.performPendingAnnotationJumpIfNeeded()
             if let fragment = self.pendingLinkFragment {
                 self.pendingLinkFragment = nil
@@ -1346,7 +1355,73 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         guard let ref = spineMap.ref(atGlobalIndex: currentSpineIndex),
               workParsers.indices.contains(ref.workIndex) else { return false }
         let calibreID = spineMap.workIDs[ref.workIndex]
-        return annotationCalibreID[annotation.id] == calibreID && annotation.spineIndex == ref.localIndex
+        guard annotationCalibreID[annotation.id] == calibreID else { return false }
+
+        let spine = workParsers[ref.workIndex].spine
+        if !annotation.spineHref.isEmpty, spine.indices.contains(ref.localIndex) {
+            let currentHref = spine[ref.localIndex].href
+            if currentHref == annotation.spineHref {
+                return true
+            }
+            let currentBase = (currentHref as NSString).lastPathComponent
+            let annBase = (annotation.spineHref as NSString).lastPathComponent
+            if !currentBase.isEmpty && currentBase == annBase {
+                return true
+            }
+        }
+        return annotation.spineIndex == ref.localIndex
+    }
+
+    private func handleBatchRenderReport(
+        _ report: HighlightBridge.BatchRenderReport?,
+        spineIndex: Int,
+        spineHref: String
+    ) {
+        guard let report, !report.reanchored.isEmpty || !report.orphanedIDs.isEmpty else { return }
+        let now = Date()
+        for item in report.reanchored {
+            if let idx = annotations.firstIndex(where: { $0.id == item.id }) {
+                annotations[idx].spineIndex = spineIndex
+                if !spineHref.isEmpty { annotations[idx].spineHref = spineHref }
+                annotations[idx].startChar = item.startChar
+                annotations[idx].endChar = item.endChar
+                annotations[idx].quotePrefix = item.quotePrefix
+                annotations[idx].quoteSuffix = item.quoteSuffix
+                annotations[idx].needsReanchor = false
+                annotations[idx].lastReanchoredAt = now
+                annotations[idx].orphanedAt = nil
+            }
+        }
+        for orphanID in report.orphanedIDs {
+            if let idx = annotations.firstIndex(where: { $0.id == orphanID }) {
+                annotations[idx].needsReanchor = false
+                if annotations[idx].orphanedAt == nil {
+                    annotations[idx].orphanedAt = now
+                }
+            }
+        }
+        onAnnotationsChanged?(annotations)
+        refreshSidebarIfVisible()
+        Task {
+            guard let metaDB = AppDelegate.shared?.session.metaDB else { return }
+            for item in report.reanchored {
+                try? await metaDB.reanchorAnnotation(
+                    id: item.id,
+                    update: .init(
+                        spineIndex: spineIndex,
+                        spineHref: spineHref,
+                        startChar: item.startChar,
+                        endChar: item.endChar,
+                        quotePrefix: item.quotePrefix,
+                        quoteSuffix: item.quoteSuffix,
+                        chapterTitle: nil
+                    )
+                )
+            }
+            for orphanID in report.orphanedIDs {
+                try? await metaDB.markAnnotationOrphaned(id: orphanID)
+            }
+        }
     }
 
     func scrollPageVertically(multiplier: CGFloat) {
@@ -1777,11 +1852,10 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             guard let tap = HighlightBridge.decodeTap(from: message) else { return }
             let idWithDashes = tap.id.inserting(dashes: true)
             guard let uuid = UUID(uuidString: idWithDashes),
-                  let annotation = annotations.first(where: { $0.id == uuid }),
-                  let note = annotation.note, !note.isEmpty
+                  let annotation = annotations.first(where: { $0.id == uuid })
             else { return }
             DispatchQueue.main.async { [weak self] in
-                self?.presentNotePopover(note: note, clientX: tap.locationX, clientY: tap.locationY)
+                self?.presentEditAnnotationPopover(for: annotation, clientX: tap.locationX, clientY: tap.locationY)
             }
 
         default:
@@ -1956,43 +2030,56 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         webView.evaluateJavaScript(sentenceJS) { [weak self] result, _ in
             guard let self else { return }
             let previewText = (result as? String) ?? ""
+            let currentRef = self.spineMap.ref(atGlobalIndex: self.currentSpineIndex)
+            let spineHref: String = {
+                guard let currentRef, self.workParsers.indices.contains(currentRef.workIndex) else { return "" }
+                let spine = self.workParsers[currentRef.workIndex].spine
+                return spine.indices.contains(spineIndex) ? spine[spineIndex].href : ""
+            }()
 
-            let annotation = Annotation(
-                spineIndex: spineIndex,
-                startChar: offset,
-                endChar: offset,
-                selectedText: previewText,
-                colorHex: "#FFD60A"
-            )
+            HighlightBridge.capturePointContext(offset: offset, in: self.webView) { [weak self] quotePrefix, quoteSuffix, chapterTitle in
+                guard let self else { return }
+                let annotation = Annotation(
+                    spineIndex: spineIndex,
+                    spineHref: spineHref,
+                    startChar: offset,
+                    endChar: offset,
+                    selectedText: previewText,
+                    quotePrefix: quotePrefix,
+                    quoteSuffix: quoteSuffix,
+                    chapterTitle: chapterTitle,
+                    colorHex: "#FFD60A"
+                )
 
-            var existing = self.annotations
-            if !existing.contains(where: {
-                $0.startChar == offset && $0.spineIndex == spineIndex && $0.isPointAnnotation
-                    && self.annotationCalibreID[$0.id] == calibreID
-            }) {
-                let previousAnnotations = self.annotations
-                let previousCalibreIDs = self.annotationCalibreID
-                existing.append(annotation)
-                self.annotations = existing
-                self.annotationCalibreID[annotation.id] = calibreID
-                self.onAnnotationsChanged?(existing)
-                self.annotationPersistence.saveAnnotation(annotation, calibreID: calibreID) { [weak self] in
-                    guard let self else { return }
-                    self.annotations = previousAnnotations
-                    self.annotationCalibreID = previousCalibreIDs
-                    self.onAnnotationsChanged?(previousAnnotations)
-                    HighlightBridge.removeHighlight(id: annotation.id, from: self.webView)
-                    self.refreshSidebarIfVisible()
+                var existing = self.annotations
+                if !existing.contains(where: {
+                    $0.startChar == offset && $0.spineIndex == spineIndex && $0.isPointAnnotation
+                        && self.annotationCalibreID[$0.id] == calibreID
+                }) {
+                    let previousAnnotations = self.annotations
+                    let previousCalibreIDs = self.annotationCalibreID
+                    existing.append(annotation)
+                    self.annotations = existing
+                    self.annotationCalibreID[annotation.id] = calibreID
+                    self.onAnnotationsChanged?(existing)
+                    self.annotationPersistence.saveAnnotation(annotation, calibreID: calibreID) { [weak self] in
+                        guard let self else { return }
+                        self.annotations = previousAnnotations
+                        self.annotationCalibreID = previousCalibreIDs
+                        self.onAnnotationsChanged?(previousAnnotations)
+                        HighlightBridge.removeHighlight(id: annotation.id, from: self.webView)
+                        self.refreshSidebarIfVisible()
+                    }
                 }
-            }
 
-            self.webView.evaluateJavaScript(
-                "window.ambrosiaHighlight(\(offset));",
-                completionHandler: nil
-            )
-            self.flushPosition()
-            self.refreshSidebarIfVisible()
-            self.showHUD("Bookmark saved")
+                self.webView.evaluateJavaScript(
+                    "window.ambrosiaHighlight(\(offset));",
+                    completionHandler: nil
+                )
+                self.flushPosition()
+                self.refreshSidebarIfVisible()
+                self.showHUD("Bookmark saved")
+            }
         }
     }
 
@@ -2023,16 +2110,27 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
         let popoverView = AnnotationPopover(
             selectedText: pending.selectedText,
-            onSave: { [weak self] note, colorKey, colorHex in
+            onSave: { [weak self] payload in
                 guard let self else { return }
                 self.annotationPopover?.close()
                 self.annotationPopover = nil
 
                 var final = pending
                 final.spineIndex = localSpineIndex
-                final.note     = note
-                final.colorKey = colorKey
-                final.colorHex = colorHex
+                if let ref = resolvedRef, self.workParsers.indices.contains(ref.workIndex) {
+                    let spine = self.workParsers[ref.workIndex].spine
+                    if spine.indices.contains(localSpineIndex) {
+                        final.spineHref = spine[localSpineIndex].href
+                    }
+                }
+                final.note     = payload.note
+                final.colorKey = payload.colorKey
+                final.colorHex = payload.colorHex
+                final.hasHighlight = payload.hasHighlight
+                if let repl = payload.replacementText {
+                    final.originalText = final.selectedText
+                    final.replacementText = repl
+                }
 
                 let previousAnnotations = self.annotations
                 let previousCalibreIDs = self.annotationCalibreID
@@ -2076,6 +2174,106 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         let anchor = pendingMenuAnchorPoint.map(webViewAnchorRect(point:))
             ?? webViewAnchorRect(clientX: pendingCursorX, clientY: pendingCursorY)
         pendingMenuAnchorPoint = nil
+        popover.show(relativeTo: anchor, of: webView, preferredEdge: .minY)
+    }
+
+    private func presentEditAnnotationPopover(
+        for annotation: Annotation,
+        clientX: CGFloat,
+        clientY: CGFloat
+    ) {
+        annotationPopover?.close()
+        let popoverView = AnnotationPopover(
+            selectedText: annotation.selectedText,
+            initialNote: annotation.note,
+            initialColorKey: annotation.colorKey,
+            initialHasHighlight: annotation.hasHighlight,
+            initialReplacementText: annotation.replacementText,
+            allowTextEdit: !annotation.isPointAnnotation,
+            onSave: { [weak self] payload in
+                guard let self else { return }
+                self.annotationPopover?.close()
+                self.annotationPopover = nil
+
+                guard let idx = self.annotations.firstIndex(where: { $0.id == annotation.id }) else { return }
+                let oldText = annotation.replacementText ?? annotation.selectedText
+                let newText = payload.replacementText ?? annotation.selectedText
+                let delta = newText.utf16.count - oldText.utf16.count
+
+                if delta != 0, TextReplacementOffsetShift.hasOverlap(
+                    startChar: annotation.startChar,
+                    endChar: annotation.endChar,
+                    spineIndex: annotation.spineIndex,
+                    annotations: self.annotations,
+                    excludingID: annotation.id
+                ) {
+                    self.showHUD("Remove overlapping annotation before resizing text")
+                    return
+                }
+
+                let shifts = TextReplacementOffsetShift.downstreamShifts(
+                    editEnd: annotation.endChar,
+                    delta: delta,
+                    spineIndex: annotation.spineIndex,
+                    annotations: self.annotations,
+                    excludingID: annotation.id
+                )
+
+                self.annotations[idx].note = payload.note
+                self.annotations[idx].colorKey = payload.colorKey
+                self.annotations[idx].colorHex = payload.colorHex
+                self.annotations[idx].hasHighlight = payload.hasHighlight
+                self.annotations[idx].originalText = payload.replacementText != nil ? annotation.selectedText : nil
+                self.annotations[idx].replacementText = payload.replacementText
+                self.annotations[idx].updatedAt = Date()
+
+                for shift in shifts {
+                    if let sIdx = self.annotations.firstIndex(where: { $0.id == shift.id }) {
+                        self.annotations[sIdx].startChar = shift.startChar
+                        self.annotations[sIdx].endChar = shift.endChar
+                    }
+                }
+
+                self.onAnnotationsChanged?(self.annotations)
+                self.refreshSidebarIfVisible()
+                HighlightBridge.clearHighlights(from: self.webView) { [weak self] in
+                    guard let self else { return }
+                    let ranged = self.annotations.filter { !$0.isPointAnnotation }
+                    HighlightBridge.restoreHighlights(ranged, into: self.webView)
+                }
+
+                Task {
+                    guard let metaDB = AppDelegate.shared?.session.metaDB else { return }
+                    try? await metaDB.updateAnnotationDetails(
+                        id: annotation.id,
+                        update: .init(
+                            note: payload.note,
+                            colorKey: payload.colorKey,
+                            colorHex: payload.colorHex,
+                            hasHighlight: payload.hasHighlight,
+                            originalText: payload.replacementText != nil ? annotation.selectedText : nil,
+                            replacementText: payload.replacementText
+                        )
+                    )
+                    if !shifts.isEmpty {
+                        try? await metaDB.shiftAnnotationOffsets(
+                            shifts.map { ($0.id, $0.startChar, $0.endChar, nil, nil) }
+                        )
+                    }
+                }
+                self.showHUD("Annotation updated")
+            },
+            onCancel: { [weak self] in
+                self?.annotationPopover?.close()
+                self?.annotationPopover = nil
+            }
+        )
+        let popover = NSPopover()
+        popover.contentViewController = NSHostingController(rootView: popoverView)
+        popover.behavior = .semitransient
+        popover.contentSize = NSSize(width: 320, height: 300)
+        annotationPopover = popover
+        let anchor = webViewAnchorRect(clientX: clientX, clientY: clientY)
         popover.show(relativeTo: anchor, of: webView, preferredEdge: .minY)
     }
 

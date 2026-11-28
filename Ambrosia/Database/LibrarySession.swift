@@ -1357,6 +1357,7 @@ final class LibrarySession {
                                 }
 
                                 if var metadata = AO3MetadataExtractor.extract(from: doc) {
+                                    AO3MetadataExtractor.applyOPFFallbacks(to: &metadata, parser: parser)
                                     spineItemsChecked = checked
                                     let prefaceIndex = checked - 1
 
