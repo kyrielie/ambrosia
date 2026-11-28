@@ -59,6 +59,7 @@ struct LibraryHealthView: View {
 
     @State private var showRemoveExactSheet = false
     @State private var includeContentMatchesInRemoval = false
+    @State private var entryPendingTrash: (entry: AO3DuplicateEntry, cluster: AO3DuplicateCluster)?
 
     private static let dateFormatter: DateFormatter = {
         let fmt = DateFormatter()
@@ -106,8 +107,16 @@ struct LibraryHealthView: View {
         .task(id: session.activePath) {
             await viewModel.loadIfNeeded(session: session)
         }
-        .alert("Safely Remove Exact Duplicates", isPresented: $showRemoveExactSheet) {
-            Button("Migrate State & Copy Remove Command") {
+        .alert("Trash Identical Duplicates (Reversible)", isPresented: $showRemoveExactSheet) {
+            Button("Move to \(viewModel.predictedTrashDestination(session: session).displayName)") {
+                Task {
+                    await viewModel.trashExactDuplicates(
+                        includeContentMatches: includeContentMatchesInRemoval,
+                        session: session
+                    )
+                }
+            }
+            Button("Copy CLI Command Instead") {
                 Task {
                     let count = await viewModel.migrateExactDuplicates(
                         includeContentMatches: includeContentMatchesInRemoval,
@@ -126,12 +135,57 @@ struct LibraryHealthView: View {
             let exactCount = viewModel.exactMatchLoserCount
             let contentCount = viewModel.contentMatchLoserCount
             let mb = String(format: "%.2f", Double(viewModel.reclaimableExactBytes) / (1024 * 1024))
+            let dest = viewModel.predictedTrashDestination(session: session).displayName
             Text(
                 "Found \(exactCount) byte-identical (SHA-256) redundant file(s) (\(mb) MB) " +
                 "and \(contentCount) content-identical (ZIP CRC-32) file(s). " +
                 "Ambrosia will migrate reading progress, annotations, and collections to each winner " +
-                "and copy the safe `calibredb remove` command."
+                "and reversibly move the redundant copies to \(dest)."
             )
+        }
+        .alert(
+            "Trash Superseded Edition (Reversible)?",
+            isPresented: Binding(
+                get: { entryPendingTrash != nil },
+                set: { if !$0 { entryPendingTrash = nil } }
+            )
+        ) {
+            if let pending = entryPendingTrash {
+                Button("Move #\(pending.entry.calibreID) to Trash", role: .destructive) {
+                    let target = pending
+                    entryPendingTrash = nil
+                    Task {
+                        await viewModel.trashSupersededEntry(
+                            entry: target.entry,
+                            cluster: target.cluster,
+                            session: session
+                        )
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                entryPendingTrash = nil
+            }
+        } message: {
+            if let pending = entryPendingTrash {
+                let winner = pending.cluster.entries.first(where: { $0.isWinner })
+                let winnerWords = winner?.wordCount.map { "\($0.formatted()) words" } ?? "unknown words"
+                let loserWords = pending.entry.wordCount.map { "\($0.formatted()) words" } ?? "unknown words"
+                let winnerCh = winner?.chapterCurrent.map { "Ch. \($0)" } ?? "unknown ch."
+                let loserCh = pending.entry.chapterCurrent.map { "Ch. \($0)" } ?? "unknown ch."
+                let dest = viewModel.predictedTrashDestination(session: session).displayName
+                let annWarn = pending.entry.annotationCount > 0
+                    ? "\n\nWarning: This copy has \(pending.entry.annotationCount) annotation(s). "
+                        + "They will transfer to #\(pending.cluster.winnerID), "
+                        + "but UTF-16 highlight offsets may not align if chapter text differs."
+                    : ""
+                Text(
+                    "\"\(pending.cluster.title)\"\n" +
+                    "Superseded #\(pending.entry.calibreID) (\(loserCh), \(loserWords)) vs. " +
+                    "Winner #\(pending.cluster.winnerID) (\(winnerCh), \(winnerWords)).\n\n" +
+                    "State will migrate to the winner and #\(pending.entry.calibreID) will move to \(dest).\(annWarn)"
+                )
+            }
         }
     }
 
@@ -327,6 +381,13 @@ struct LibraryHealthView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.mini)
+
+                Button("Trash…") {
+                    entryPendingTrash = (entry: entry, cluster: cluster)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .disabled(viewModel.isTrashing)
             }
 
             Button { openInReader(calibreID: entry.calibreID) } label: { Image(systemName: "book") }

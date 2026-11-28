@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SQLite
+import SwiftUI
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -697,10 +698,54 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Open from Finder / Dock
+    // MARK: - Open from Finder / Dock & EPUB Import
+
+    @MainActor
+    func importBooksFromPanel() {
+        guard session.activePath != nil else { return }
+        let panel = NSOpenPanel()
+        panel.title = "Import EPUB Books"
+        panel.message = "Select EPUB files or folders containing EPUBs to pre-triage and import."
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.epub]
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        presentImportTriage(urls: panel.urls)
+    }
+
+    @MainActor
+    func presentImportTriage(urls: [URL]) {
+        guard session.activePath != nil else { return }
+        showLibraryWindow()
+        guard let hostWindow = libraryWindowController?.window else { return }
+        if hostWindow.attachedSheet != nil { return }
+
+        let sheetWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 780, height: 540),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        sheetWindow.minSize = NSSize(width: 760, height: 520)
+
+        let rootView = EPUBImportConfirmationSheet(urls: urls, session: session) {
+            hostWindow.endSheet(sheetWindow)
+        }
+        .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme)
+
+        sheetWindow.contentView = NSHostingView(rootView: rootView)
+        hostWindow.beginSheet(sheetWindow)
+    }
 
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {
         let url = URL(fileURLWithPath: filename)
+        if url.pathExtension.lowercased() == "epub", session.activePath != nil {
+            Task { @MainActor [weak self] in
+                self?.presentImportTriage(urls: [url])
+            }
+            return true
+        }
         var isDir: ObjCBool = false
         if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
             openLibraryAtURL(url)
@@ -710,8 +755,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        let urls = filenames.map { URL(fileURLWithPath: $0) }
+        let epubURLs = urls.filter { $0.pathExtension.lowercased() == "epub" }
+        if !epubURLs.isEmpty, session.activePath != nil {
+            Task { @MainActor [weak self] in
+                self?.presentImportTriage(urls: epubURLs)
+            }
+            sender.reply(toOpenOrPrint: .success)
+            return
+        }
         if let first = filenames.first {
-            _ = application(sender, openFile: first)
+            let handled = application(sender, openFile: first)
+            sender.reply(toOpenOrPrint: handled ? .success : .failure)
+        } else {
+            sender.reply(toOpenOrPrint: .failure)
         }
     }
 }

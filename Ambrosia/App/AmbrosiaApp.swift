@@ -101,6 +101,12 @@ struct AmbrosiaApp: App {
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(session.activePath == nil)
 
+                Button("Import Books…") {
+                    AppDelegate.shared?.importBooksFromPanel()
+                }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
+                .disabled(session.activePath == nil)
+
                 Menu("Recent Libraries") {
                     RecentLibrariesMenuContent(session: session)
                 }

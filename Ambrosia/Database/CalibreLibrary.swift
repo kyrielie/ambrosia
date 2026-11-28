@@ -1774,6 +1774,35 @@ actor CalibreLibrary {
 // MARK: - EPUB path lookup
 
 extension CalibreLibrary {
+    /// Finds book IDs whose title (case-insensitive trimmed) and at least one author match.
+    func findBookIDs(matchingNormalizedTitle title: String, authors: [String]) -> [Int] {
+        let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedTitle.isEmpty else { return [] }
+        let sql = "SELECT id FROM books WHERE LOWER(TRIM(title)) = ? LIMIT 25"
+        guard let rows = try? db.prepare(sql, [normalizedTitle as Binding?]) else { return [] }
+        let candidateIDs = rows.compactMap { row -> Int? in
+            if let val = row[0] as? Int64 { return Int(val) }
+            return row[0] as? Int
+        }
+        guard !candidateIDs.isEmpty else { return [] }
+        let normalizedAuthors = Set(
+            authors
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                .filter { !$0.isEmpty }
+        )
+        guard !normalizedAuthors.isEmpty else { return candidateIDs }
+
+        let books = booksForIDs(candidateIDs)
+        return books.filter { book in
+            let bookAuthors = Set(
+                book.displayAuthors
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            )
+            return !bookAuthors.isDisjoint(with: normalizedAuthors)
+        }.map(\.id)
+    }
+
     /// Returns the absolute URL of the EPUB file for the given Calibre book ID,
     /// or nil if the book is not found or has no .epub file.
     /// Handles both direct relative file paths and standard Calibre directories via data table / folder scans.

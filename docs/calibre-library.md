@@ -89,3 +89,13 @@ When opening a directory that does not contain a pre-existing Calibre library (`
 6. **Detecting new books**:
    - **Calibre-managed libraries**: Additions/edits made through Calibre (GUI or `calibredb`) are detected automatically on app activation via `LibrarySession.checkForLibraryChanges()` (see `session-model.md`). Loose `.epub` files copied manually into a library folder are not watched automatically.
    - **Manual rescan**: **File ▸ Scan Library for New Books…** (`⌘⇧R`) runs `AppDelegate.scanLibraryForNewBooks()`, which diffs `EPUBFolderScanner` relative file paths against `SELECT path FROM books` and ingests unmatched EPUBs via `CalibreLibraryWriter`. On a Calibre-managed library, `books.path` stores the *directory* (`Author/Title (123)`) rather than the `.epub` file path, and direct SQLite writes bypass Calibre's in-memory cache if Calibre is running; therefore, Calibre-managed libraries should continue adding books via Calibre / `calibredb`.
+
+---
+
+## Safe Import, Pre-Triage & Reversible Trashing
+
+- **Three-Tier Mutation Engine (`CalibreCLIBridge`, `CalibreImportManager`, `CalibreTrashManager`)**:
+  - **Tier 1 (`calibredb` CLI, optional)**: Auto-detected at `/Applications/calibre.app/Contents/MacOS/calibredb` or `$PATH` (with optional `calibredbCustomPath` override) for Calibre-managed libraries when Calibre desktop GUI (`net.kovidgoyal.calibre`) is closed. Uses `calibredb add`, `calibredb add_format --replace`, and `calibredb remove` (moves to Calibre's `.caltrash`).
+  - **Tier 2 (Standalone Mode)**: Detected via `.covers/` or direct `.epub` `books.path` entries. Uses `CalibreLibraryWriter` + incremental `CalibreFTSWriter` for additions, atomic file replacement + `metadata.db` updates for updates, and trash-first SQLite cleanup for deletions.
+  - **Tier 3 (Guarded SQLite Fallback)**: Used on Calibre-managed libraries when `calibredb` is absent and Calibre is closed. Enforces `PRAGMA foreign_keys = ON;`, `CalibreFunctions.register(on:)`, Trash-first (`FileManager.default.trashItem`) rollback, and `AmbrosiaMetaDB.transferBookState` / `cleanupDeletedBooks` / `invalidateAO3Metadata`.
+- **In-Memory Pre-Triage (`EPUBImportTriageEngine`)**: Classifies dropped or selected `.epub` files (and folders) into `.newBook`, `.exactDuplicate`, `.newerRevision`, `.olderRevision`, `.conflict`, or `.anthology` using AO3 ID / normalized title+author matching, preface-first stats, and `DuplicateVerificationService` hashes before mutating the library.

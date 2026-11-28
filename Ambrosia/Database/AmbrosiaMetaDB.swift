@@ -3626,6 +3626,47 @@ actor AmbrosiaMetaDB {
         }
         return keys
     }
+
+    // MARK: - Deletion & Re-Extraction Cleanup
+
+    func annotationCount(for calibreID: Int) -> Int {
+        let count = try? readDB.scalar(
+            "SELECT COUNT(*) FROM annotations WHERE calibre_id = ?",
+            calibreID
+        ) as? Int64
+        return Int(count ?? 0)
+    }
+
+    /// Removes cached AO3 extraction rows for a work whose EPUB was updated in place
+    /// so the next background extraction scan re-parses chapter/word counts.
+    func invalidateAO3Metadata(for calibreID: Int) throws {
+        try db.transaction {
+            try db.run("DELETE FROM ao3_metadata WHERE calibre_id = ?", calibreID)
+            try db.run("DELETE FROM book_anthology_cache WHERE calibre_id = ?", calibreID)
+        }
+    }
+
+    /// Purges orphaned derived and user-state rows after book IDs are removed from `metadata.db`.
+    func cleanupDeletedBooks(calibreIDs: [Int]) throws {
+        let uniqueIDs = Array(Set(calibreIDs))
+        guard !uniqueIDs.isEmpty else { return }
+        try db.transaction {
+            for calibreID in uniqueIDs {
+                try db.run("DELETE FROM ao3_metadata WHERE calibre_id = ?", calibreID)
+                try db.run("DELETE FROM book_series_cache WHERE calibre_id = ?", calibreID)
+                try db.run("DELETE FROM book_anthology_cache WHERE calibre_id = ?", calibreID)
+                try db.run("DELETE FROM book_state WHERE calibre_id = ?", calibreID)
+                try db.run("DELETE FROM annotations WHERE calibre_id = ?", calibreID)
+                try db.run("DELETE FROM reading_history WHERE calibre_id = ?", calibreID)
+                try db.run("DELETE FROM book_opens WHERE calibre_id = ?", calibreID)
+                try db.run("DELETE FROM collection_members WHERE calibre_id = ?", calibreID)
+                try db.run("DELETE FROM maintenance_dismissals WHERE target_key = ?", String(calibreID))
+            }
+        }
+        for calibreID in uniqueIDs {
+            bookStateCache.removeValue(forKey: calibreID)
+        }
+    }
 }
 
 private extension Array {

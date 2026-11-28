@@ -125,6 +125,7 @@ final class LibraryHealthViewModel {
     var selectedTab: LibraryHealthTab = .duplicates
     var isLoading = false
     var isVerifyingExactDuplicates = false
+    var isTrashing = false
     var statusMessage: String?
 
     // Duplicates
@@ -647,6 +648,65 @@ final class LibraryHealthViewModel {
             migratedClusterIDs.insert(cluster.workID)
         }
         return migratedCount
+    }
+
+    func predictedTrashDestination(session: LibrarySession) -> TrashDestination {
+        guard let activePath = session.activePath else { return .macOSTrash }
+        return CalibreTrashManager.predictedDestination(for: URL(fileURLWithPath: activePath))
+    }
+
+    func trashExactDuplicates(includeContentMatches: Bool, session: LibrarySession) async {
+        guard !isTrashing else { return }
+        let targetTiers: Set<DuplicateMatchTier> = includeContentMatches
+            ? [.exactFileMatch, .contentMatch]
+            : [.exactFileMatch]
+        var winnerByLoserID: [Int: Int] = [:]
+        var loserIDs: [Int] = []
+        for cluster in clusters {
+            for entry in cluster.loserEntries {
+                if let tier = entry.matchTier, targetTiers.contains(tier) {
+                    winnerByLoserID[entry.calibreID] = cluster.winnerID
+                    loserIDs.append(entry.calibreID)
+                }
+            }
+        }
+        guard !loserIDs.isEmpty else { return }
+
+        isTrashing = true
+        defer { isTrashing = false }
+        do {
+            let result = try await CalibreTrashManager.trashBooks(
+                winnerByLoserID: winnerByLoserID,
+                loserIDs: loserIDs,
+                session: session
+            )
+            let mb = String(format: "%.2f", Double(result.reclaimedBytes) / (1024 * 1024))
+            statusMessage = "Moved \(result.trashedIDs.count) duplicate(s) (\(mb) MB) to \(result.destination.displayName)."
+            await reload(session: session)
+        } catch {
+            statusMessage = "Trash failed: \(error.localizedDescription)"
+        }
+    }
+
+    func trashSupersededEntry(
+        entry: AO3DuplicateEntry,
+        cluster: AO3DuplicateCluster,
+        session: LibrarySession
+    ) async {
+        guard !isTrashing, !entry.isWinner else { return }
+        isTrashing = true
+        defer { isTrashing = false }
+        do {
+            let result = try await CalibreTrashManager.trashBooks(
+                winnerByLoserID: [entry.calibreID: cluster.winnerID],
+                loserIDs: [entry.calibreID],
+                session: session
+            )
+            statusMessage = "Moved #\(entry.calibreID) to \(result.destination.displayName) and migrated state to #\(cluster.winnerID)."
+            await reload(session: session)
+        } catch {
+            statusMessage = "Trash failed: \(error.localizedDescription)"
+        }
     }
 
     func toggleDismissWIP(_ item: StaleWIPItem, session: LibrarySession) {

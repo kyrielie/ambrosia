@@ -55,8 +55,69 @@ class LibraryViewController: NSViewController {
         applyLibraryAppearance()
         installFilterSheetHost()
         applyViewMode(toolbarState.viewMode)
+        installDropTargetOverlay()
         startObservingViewMode()
         startObservingAppearance()
+    }
+
+    private var dropOverlayHost: NSHostingView<AnyView>?
+
+    private func installDropTargetOverlay() {
+        let dropView = EPUBDropTargetView { [weak self] urls in
+            self?.setDropOverlayVisible(false)
+            guard self?.session.activePath != nil else { return }
+            AppDelegate.shared?.presentImportTriage(urls: urls)
+        } onDragStateChange: { [weak self] isDragging in
+            self?.setDropOverlayVisible(isDragging)
+        }
+        dropView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(dropView, positioned: .above, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            dropView.topAnchor.constraint(equalTo: view.topAnchor),
+            dropView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            dropView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            dropView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+
+        let overlay = AnyView(
+            VStack(spacing: 10) {
+                Image(systemName: "arrow.down.doc.fill")
+                    .font(.system(size: 36))
+                    .foregroundStyle(Color.accentColor)
+                Text("Drop EPUBs to Import & Pre-Triage")
+                    .font(.headline)
+                Text("Ambrosia will check for duplicates and chapter updates before changing your library.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(28)
+            .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black.opacity(0.18))
+        )
+        let host = NSHostingView(rootView: overlay)
+        host.sizingOptions = []
+        host.isHidden = true
+        host.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(host, positioned: .above, relativeTo: dropView)
+        NSLayoutConstraint.activate([
+            host.topAnchor.constraint(equalTo: view.topAnchor),
+            host.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            host.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            host.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+        dropOverlayHost = host
+    }
+
+    private func setDropOverlayVisible(_ visible: Bool) {
+        dropOverlayHost?.isHidden = !visible
+        if visible, let host = dropOverlayHost {
+            view.addSubview(host, positioned: .above, relativeTo: nil)
+        }
     }
 
     // MARK: - Appearance
@@ -247,3 +308,59 @@ private struct LibraryFilterSheetHost: View {
 
 // ReadingHistoryView, ReadingHistoryDisplayRow, ReadingHistoryRow, and HistoryPill
 // were removed in Phase 22. The .ranking view mode now hosts ActivityFeedView.
+
+private final class EPUBDropTargetView: NSView {
+    private let onDropURLs: ([URL]) -> Void
+    private let onDragStateChange: (Bool) -> Void
+
+    init(onDropURLs: @escaping ([URL]) -> Void, onDragStateChange: @escaping (Bool) -> Void) {
+        self.onDropURLs = onDropURLs
+        self.onDragStateChange = onDragStateChange
+        super.init(frame: .zero)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let urls = extractSupportedURLs(from: sender)
+        guard !urls.isEmpty else { return [] }
+        onDragStateChange(true)
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        onDragStateChange(false)
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        onDragStateChange(false)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        onDragStateChange(false)
+        let urls = extractSupportedURLs(from: sender)
+        guard !urls.isEmpty else { return false }
+        onDropURLs(urls)
+        return true
+    }
+
+    private func extractSupportedURLs(from info: NSDraggingInfo) -> [URL] {
+        guard let items = info.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] else {
+            return []
+        }
+        return items.filter { url in
+            if url.pathExtension.lowercased() == "epub" { return true }
+            var isDir: ObjCBool = false
+            return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+        }
+    }
+}

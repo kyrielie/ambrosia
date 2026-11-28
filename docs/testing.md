@@ -275,3 +275,7 @@ by default. Opt in once per clone:
 ```
 git config core.hooksPath scripts/git-hooks
 ```
+
+### Recently Added Test Suites
+
+- `AmbrosiaTests/EPUBImportAndTrashTests.swift`: Covers `CalibreCLIBridge.detectMutationMode`, `EPUBImportTriageEngine.collectEPUBURLs` / `inspectAndTriage` classifications (`.newBook`, `.exactDuplicate`, `.newerRevision`, `.olderRevision`), and `CalibreTrashManager.trashBooks` state migration + cleanup.

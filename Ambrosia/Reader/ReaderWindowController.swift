@@ -33,6 +33,11 @@ final class ReaderWindowController: NSWindowController, NSWindowDelegate, NSTool
     static var hasOpenWindows: Bool {
         !openWindows.isEmpty
     }
+
+    @MainActor
+    static func openBookIDs() -> Set<Int> {
+        Set(openWindows.values.compactMap { $0.readerViewController?.activeCalibreID })
+    }
     /// The size the user last resized a reader window to, shared across all
     /// books for the lifetime of the app process. Deliberately in-memory only
     /// (not UserDefaults-backed): a fresh launch always starts from the
