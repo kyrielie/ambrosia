@@ -90,7 +90,9 @@ Mark Read, Reset Progress and Remove from Collection are implemented once in `Co
 
 ## Modal Sheets Architecture
 
-All modal library dialogs (`CollectionsView`, `ReadingGoalView`, `ErrorLogView`, `DuplicateWorksManagerView`, `RSSPublishWarningView`, `ManageFeedsView`) are managed and presented centrally as AppKit modal sheets on `LibraryWindowController` (`window.beginSheet`), rather than via multiple SwiftUI `.sheet(isPresented:)` modifiers. This guarantees clean, single-animation presentation across all library modes without bouncing or re-opening.
+All modal library dialogs (`CollectionsView`, `ReadingGoalView`, `ErrorLogView`, `RSSPublishWarningView`, `ManageFeedsView`) are managed and presented centrally as AppKit modal sheets on `LibraryWindowController` (`window.beginSheet`), rather than via multiple SwiftUI `.sheet(isPresented:)` modifiers. This guarantees clean, single-animation presentation across all library modes without bouncing or re-opening.
+
+`LibraryHealthWindowController` (`LibraryHealthView` / `LibraryHealthViewModel`) provides a dedicated non-modal 4-tab maintenance window (**Duplicates**, **Stale WIPs**, **Series Gaps**, **Series Sequels**) with `DuplicateVerificationService` (`SHA-256` + `ZIP CRC-32` + anthology exclusion), Calibre `books.timestamp` (`Date Added`) filtering, and `maintenance_dismissals` persistence.
 
 ## Filter Drawer Dismissal
 

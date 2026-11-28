@@ -65,7 +65,13 @@ struct AmbrosiaApp: App {
                         FTSSearchResultsWindowController.show()
                     }
                     .keyboardShortcut("f", modifiers: [.command, .shift])
-                    .disabled(!(AppDelegate.shared?.session.hasFulltextIndex == true && ReaderPreferences.shared.enableFullTextSearch))
+                    .disabled(
+                        !(
+                            (AppDelegate.shared?.session.hasFulltextIndex == true
+                             && ReaderPreferences.shared.enableFullTextSearch)
+                            || AppDelegate.shared?.session.hasPassageIndex == true
+                        )
+                    )
 
                     Button("Find Next") {
                         NSApp.sendAction(#selector(ReaderViewController.findNextAction(_:)),
@@ -119,10 +125,14 @@ struct AmbrosiaApp: App {
                 .disabled(session.activePath == nil)
 
                 Button("Manage Duplicate AO3 Works…") {
-                    AppDelegate.shared?.showLibraryWindow()
-                    AppDelegate.shared?.libraryWindowController?.showDuplicateManager()
+                    LibraryHealthWindowController.show(tab: .duplicates)
                 }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(session.activePath == nil)
+
+                Button("Library Health & File Management…") {
+                    LibraryHealthWindowController.show()
+                }
                 .disabled(session.activePath == nil)
 
                 Divider()

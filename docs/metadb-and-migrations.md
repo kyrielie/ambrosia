@@ -21,6 +21,7 @@ see `swiftdata-store.md`.
   `effective_collection_members`, and `series_placeholders`.
 - `canonical_tags`, `tag_synonyms`, `tag_parent_links`, `tag_subtag_sections`.
 - `reading_history`, `book_opens` (write path wired up: `startReadingSession`, `updateReadingSession`, `closeZombieReadingSessions` are called from the reader session lifecycle).
+- `maintenance_dismissals` — `(kind, target_key, dismissed_at)` storing user-acknowledged/muted items for `LibraryHealthView` (e.g. `stale_wip`, `series_sequel`).
 - `error_log` — a general-purpose, prunable failure trail (`logError`/`recentErrors`/`pruneErrorLog`/`clearErrorLog`), viewable via `ErrorLogView` (Export menu → "Error Log…"). Complements, not replaces, `ao3_extraction_diagnostics`'s scoped-per-subsystem diagnostics.
 
 ### Lock Contention & Busy Timeout

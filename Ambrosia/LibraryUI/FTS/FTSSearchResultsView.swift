@@ -55,6 +55,80 @@ final class FTSSearchViewModel {
 
     private var searchTask: Task<Void, Never>?
     private var snippetStreamTask: Task<Void, Never>?
+    private var lastActivePath: String?
+
+    var isLexicalAvailable: Bool {
+        ReaderPreferences.shared.enableFullTextSearch && (AppDelegate.shared?.session.hasFulltextIndex ?? false)
+    }
+
+    var isSemanticAvailable: Bool {
+        AppDelegate.shared?.session.hasPassageIndex ?? false
+    }
+
+    func isModeAvailable(_ searchMode: FTSSearchMode) -> Bool {
+        switch searchMode {
+        case .lexical: return isLexicalAvailable
+        case .semantic: return isSemanticAvailable
+        }
+    }
+
+    var currentModeUnavailableReason: String? {
+        switch mode {
+        case .lexical:
+            if !ReaderPreferences.shared.enableFullTextSearch {
+                return "Full-text search is disabled in Preferences ▸ Data."
+            }
+            if AppDelegate.shared?.session.hasFulltextIndex != true {
+                return "Full-text search database (full-text-search.db) not found for this library. You can build it in Preferences ▸ Data."
+            }
+            return nil
+        case .semantic:
+            if AppDelegate.shared?.session.hasPassageIndex != true {
+                return "Semantic passage database (ambrosia_semantic_passages.db) not found for this library. "
+                    + "Generate it using scripts/ambrosia_embed_cli.py or copy it into the library folder."
+            }
+            return nil
+        }
+    }
+
+    func syncWithSession(activePath: String?) {
+        if activePath != lastActivePath {
+            lastActivePath = activePath
+            resetSearchState()
+        }
+        if !isModeAvailable(mode) {
+            if mode == .lexical && isSemanticAvailable {
+                mode = .semantic
+            } else if mode == .semantic && isLexicalAvailable {
+                mode = .lexical
+            }
+        }
+    }
+
+    private func cancelActiveTasks() {
+        searchTask?.cancel()
+        searchTask = nil
+        snippetStreamTask?.cancel()
+        snippetStreamTask = nil
+        isSearching = false
+        isStreamingSnippets = false
+    }
+
+    private func resetSearchState() {
+        cancelActiveTasks()
+        results = []
+        passageResults = []
+        totalOccurrences = 0
+        hasSearched = false
+        errorMessage = nil
+    }
+
+    func handleModeChange() {
+        errorMessage = nil
+        if hasSearched {
+            performSearch()
+        }
+    }
 
     func performSearch() {
         if mode == .semantic {
@@ -67,6 +141,8 @@ final class FTSSearchViewModel {
     // MARK: - Lexical FTS5 Search
 
     private func performLexicalSearch() {
+        cancelActiveTasks()
+
         let trimmed = queryText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             results = []
@@ -80,9 +156,6 @@ final class FTSSearchViewModel {
             errorMessage = "Invalid search syntax. Please check for unbalanced quotes or invalid operators."
             return
         }
-
-        searchTask?.cancel()
-        snippetStreamTask?.cancel()
 
         guard let session = AppDelegate.shared?.session else {
             errorMessage = "No active library session."
@@ -159,14 +232,14 @@ final class FTSSearchViewModel {
     }
 
     private func streamSnippets(query: FTSQuery, token: SearchToken, ftsLibrary: CalibreFTSLibrary) {
+        let bookIDs = results.map(\.book.id)
         snippetStreamTask = Task { [weak self] in
             guard let self else { return }
             self.isStreamingSnippets = true
             var runningTotal = 0
 
-            for index in 0..<self.results.count {
+            for bookID in bookIDs {
                 guard !Task.isCancelled else { break }
-                let bookID = self.results[index].book.id
 
                 let multiSnippets = try? await ftsLibrary.multiSnippets(
                     bookID: bookID,
@@ -177,6 +250,7 @@ final class FTSSearchViewModel {
                 )
 
                 guard !Task.isCancelled else { break }
+                guard let index = self.results.firstIndex(where: { $0.id == bookID }) else { continue }
 
                 if let firstSnippet = multiSnippets?.first {
                     self.results[index].snippetsResult = firstSnippet
@@ -192,6 +266,8 @@ final class FTSSearchViewModel {
     // MARK: - Semantic Passage Search
 
     private func performSemanticSearch() {
+        cancelActiveTasks()
+
         let trimmed = queryText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             passageResults = []
@@ -199,9 +275,6 @@ final class FTSSearchViewModel {
             errorMessage = nil
             return
         }
-
-        searchTask?.cancel()
-        snippetStreamTask?.cancel()
 
         guard let session = AppDelegate.shared?.session else {
             errorMessage = "No active library session."
@@ -286,25 +359,29 @@ final class FTSSearchViewModel {
     private func streamPassageExcerpts() {
         guard let pathStr = LibraryRegistry.shared.activePath else { return }
         let libraryRoot = URL(fileURLWithPath: pathStr)
+        let pending = passageResults.compactMap { item -> (id: Int, epubURL: URL, spineIndex: Int, startOffset: Int, endOffset: Int)? in
+            guard let epubURL = item.book.epubURL(libraryRoot: libraryRoot) else { return nil }
+            return (item.id, epubURL, item.passage.spineIndex, item.passage.startOffset, item.passage.endOffset)
+        }
 
         snippetStreamTask = Task { [weak self] in
             guard let self else { return }
             self.isStreamingSnippets = true
 
-            for index in 0..<self.passageResults.count {
+            for entry in pending {
                 guard !Task.isCancelled else { break }
-                let item = self.passageResults[index]
-                if let epubURL = item.book.epubURL(libraryRoot: libraryRoot) {
-                    let excerpt = PassageSnippetExtractor.extractPassage(
-                        epubURL: epubURL,
-                        spineIndex: item.passage.spineIndex,
-                        startOffset: item.passage.startOffset,
-                        endOffset: item.passage.endOffset
+                let excerpt = await Task.detached(priority: .userInitiated) {
+                    PassageSnippetExtractor.extractPassage(
+                        epubURL: entry.epubURL,
+                        spineIndex: entry.spineIndex,
+                        startOffset: entry.startOffset,
+                        endOffset: entry.endOffset
                     )
-                    guard !Task.isCancelled else { break }
-                    if let excerpt, !excerpt.isEmpty {
-                        self.passageResults[index].passage.extractedText = excerpt
-                    }
+                }.value
+                guard !Task.isCancelled else { break }
+                if let excerpt, !excerpt.isEmpty,
+                   let index = self.passageResults.firstIndex(where: { $0.id == entry.id }) {
+                    self.passageResults[index].passage.extractedText = excerpt
                 }
             }
             self.isStreamingSnippets = false
@@ -359,9 +436,26 @@ struct FTSSearchResultsView: View {
         }
         .frame(minWidth: 550, minHeight: 450)
         .onAppear {
-            if let session = AppDelegate.shared?.session {
-                readLaterIDs = session.effectiveReadLaterIDs
-            }
+            syncSessionState()
+        }
+        .onChange(of: AppDelegate.shared?.session.activePath) { _, _ in
+            syncSessionState()
+        }
+        .onChange(of: AppDelegate.shared?.session.hasFulltextIndex) { _, _ in
+            viewModel.syncWithSession(activePath: AppDelegate.shared?.session.activePath)
+        }
+        .onChange(of: AppDelegate.shared?.session.hasPassageIndex) { _, _ in
+            viewModel.syncWithSession(activePath: AppDelegate.shared?.session.activePath)
+        }
+        .onChange(of: ReaderPreferences.shared.enableFullTextSearch) { _, _ in
+            viewModel.syncWithSession(activePath: AppDelegate.shared?.session.activePath)
+        }
+    }
+
+    private func syncSessionState() {
+        if let session = AppDelegate.shared?.session {
+            readLaterIDs = session.effectiveReadLaterIDs
+            viewModel.syncWithSession(activePath: session.activePath)
         }
     }
 
@@ -378,9 +472,7 @@ struct FTSSearchResultsView: View {
             .labelsHidden()
             .fixedSize()
             .onChange(of: viewModel.mode) { _, _ in
-                if viewModel.hasSearched {
-                    viewModel.performSearch()
-                }
+                viewModel.handleModeChange()
             }
 
             HStack(spacing: 6) {
@@ -433,6 +525,7 @@ struct FTSSearchResultsView: View {
                 viewModel.performSearch()
             }
             .keyboardShortcut(.return, modifiers: [])
+            .disabled(viewModel.currentModeUnavailableReason != nil)
         }
         .padding(12)
     }
@@ -501,24 +594,32 @@ struct FTSSearchResultsView: View {
     @ViewBuilder
     private var contentArea: some View {
         if let error = viewModel.errorMessage {
-            VStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 28))
-                    .foregroundColor(.orange)
-                Text(error)
-                    .font(.callout)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding()
+            unavailableOrErrorView(message: error, isError: true)
         } else if !viewModel.hasSearched {
-            emptyPromptView
+            if let unavailableReason = viewModel.currentModeUnavailableReason {
+                unavailableOrErrorView(message: unavailableReason, isError: false)
+            } else {
+                emptyPromptView
+            }
         } else if viewModel.mode == .semantic {
             semanticContentArea
         } else {
             lexicalContentArea
         }
+    }
+
+    private func unavailableOrErrorView(message: String, isError: Bool) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: isError ? "exclamationmark.triangle" : "info.circle")
+                .font(.system(size: 28))
+                .foregroundColor(isError ? .orange : .secondary)
+            Text(message)
+                .font(.callout)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
     }
 
     // MARK: - Semantic Results List

@@ -510,17 +510,25 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
             // (e.g. the Email card list) is actually focused.
             guard let responder = self.view.window?.firstResponder as? NSView,
                   responder.isDescendant(of: self.view) else { return event }
+            if responder is NSText { return event }
+            if let findView = self.findBarHostingView, responder.isDescendant(of: findView) {
+                return event
+            }
 
+            let disallowedModifiers: NSEvent.ModifierFlags = [.command, .option, .control]
             switch event.keyCode {
             case 123, 126:       // ← ↑
+                guard event.modifierFlags.isDisjoint(with: disallowedModifiers.union(.shift)) else { return event }
                 guard !event.isARepeat else { return nil }
                 self.goToPreviousPage()
                 return nil
             case 124, 125:       // → ↓
+                guard event.modifierFlags.isDisjoint(with: disallowedModifiers.union(.shift)) else { return event }
                 guard !event.isARepeat else { return nil }
                 self.goToNextPage()
                 return nil
             case 49:              // Space
+                guard event.modifierFlags.isDisjoint(with: disallowedModifiers) else { return event }
                 guard !event.isARepeat else { return nil }
                 if event.modifierFlags.contains(.shift) {
                     self.goToPreviousPage()
@@ -2510,6 +2518,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     func toggleAnnotationSidebar() {
         if let panel = sidebarPanel, panel.isVisible {
+            panel.parent?.removeChildWindow(panel)
             panel.orderOut(nil)
             removeReaderWindowObservers()
             sidebarPanel = nil
@@ -2519,11 +2528,22 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         openAnnotationSidebar()
     }
 
-    private func clampedPanelOriginX(preferredX: CGFloat, width: CGFloat) -> CGFloat {
+    private func clampedPanelFrame(
+        preferredX: CGFloat,
+        preferredY: CGFloat,
+        width: CGFloat,
+        contentHeight: CGFloat,
+        styleMask: NSWindow.StyleMask
+    ) -> NSRect {
+        let initialContent = CGRect(x: preferredX, y: preferredY, width: width, height: contentHeight)
+        var frame = NSPanel.frameRect(forContentRect: initialContent, styleMask: styleMask)
         guard let visibleFrame = (view.window?.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame else {
-            return preferredX
+            return frame
         }
-        return min(max(preferredX, visibleFrame.minX), max(visibleFrame.minX, visibleFrame.maxX - width))
+        frame.size.height = min(frame.height, visibleFrame.height)
+        frame.origin.x = min(max(frame.origin.x, visibleFrame.minX), max(visibleFrame.minX, visibleFrame.maxX - frame.width))
+        frame.origin.y = min(max(frame.origin.y, visibleFrame.minY), max(visibleFrame.minY, visibleFrame.maxY - frame.height))
+        return frame
     }
 
     private func openAnnotationSidebar() {
@@ -2539,33 +2559,27 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         hosting.sizingOptions = []
         sidebarHostingView = hosting
 
-        // Anchor to the right edge of the *reader view's screen rect*, not the
-        // enclosing window frame. In a standalone reader window both are the same,
-        // but in the email split view the window frame's maxX is the library
-        // window's right edge — which sits somewhere to the right of the reader
-        // pane. Using the view's converted screen rect keeps the panel correctly
-        // flush to the reader pane's right edge in both configurations.
-        //
-        // NSPanel(contentRect:) takes the *content* area (below the title bar), so
-        // screenRect.height is used directly — the title bar is added on top of it.
         let panelWidth: CGFloat = 280
-        let contentRect = CGRect(
-            x: clampedPanelOriginX(preferredX: screenRect.maxX, width: panelWidth),
-            y: screenRect.minY,
+        let styleMask: NSWindow.StyleMask = [.titled, .closable, .resizable]
+        let frame = clampedPanelFrame(
+            preferredX: screenRect.maxX,
+            preferredY: screenRect.minY,
             width: panelWidth,
-            height: screenRect.height
+            contentHeight: screenRect.height,
+            styleMask: styleMask
         )
+        let contentRect = NSPanel.contentRect(forFrameRect: frame, styleMask: styleMask)
 
         let panel = NSPanel(
             contentRect: contentRect,
-            styleMask: [.titled, .closable, .resizable],
+            styleMask: styleMask,
             backing: .buffered,
             defer: false
         )
         panel.title = "Annotations"
         panel.isFloatingPanel = true
-        panel.level = .floating
         panel.contentView = hosting  // frame is managed by window layout; sizingOptions=[] keeps hosting stable
+        readerWindow.addChildWindow(panel, ordered: .above)
         panel.orderFront(nil)
         sidebarPanel = panel
 
@@ -2609,13 +2623,13 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         let target = panel ?? sidebarPanel
         guard let target, target.isVisible,
               let screenRect = readerScreenRect() else { return }
-        let contentRect = CGRect(
-            x: clampedPanelOriginX(preferredX: screenRect.maxX, width: target.frame.width),
-            y: screenRect.minY,
+        let newFrame = clampedPanelFrame(
+            preferredX: screenRect.maxX,
+            preferredY: screenRect.minY,
             width: target.frame.width,
-            height: screenRect.height
+            contentHeight: screenRect.height,
+            styleMask: target.styleMask
         )
-        let newFrame = NSPanel.frameRect(forContentRect: contentRect, styleMask: target.styleMask)
         target.setFrame(newFrame, display: true)
     }
 
@@ -2679,6 +2693,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     func closeTOCPopup() {
         if let panel = tocPanel, panel.isVisible {
+            panel.parent?.removeChildWindow(panel)
             panel.orderOut(nil)
             removeTOCWindowObservers()
             tocPanel = nil
@@ -2690,6 +2705,7 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
 
     func toggleTOCSidebar() {
         if let panel = tocPanel, panel.isVisible {
+            panel.parent?.removeChildWindow(panel)
             panel.orderOut(nil)
             removeTOCWindowObservers()
             tocPanel = nil
@@ -2708,28 +2724,30 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
         tocHostingView = hosting
 
         let panelWidth: CGFloat = 280
-        // Anchored to the left edge, independent of the annotation panel on
-        // the right — both can be open simultaneously in standalone mode.
-        let contentRect = CGRect(
-            x: clampedPanelOriginX(preferredX: screenRect.minX - panelWidth, width: panelWidth),
-            y: screenRect.minY,
+        let styleMask: NSWindow.StyleMask = [.titled, .closable, .resizable]
+        let frame = clampedPanelFrame(
+            preferredX: screenRect.minX - panelWidth,
+            preferredY: screenRect.minY,
             width: panelWidth,
-            height: screenRect.height
+            contentHeight: screenRect.height,
+            styleMask: styleMask
         )
+        let contentRect = NSPanel.contentRect(forFrameRect: frame, styleMask: styleMask)
 
         let panel = NSPanel(
             contentRect: contentRect,
-            styleMask: [.titled, .closable, .resizable],
+            styleMask: styleMask,
             backing: .buffered,
             defer: false
         )
         panel.title = "Contents"
         panel.isFloatingPanel = true
-        panel.level = .floating
         panel.contentView = hosting
+        readerWindow.addChildWindow(panel, ordered: .above)
         panel.orderFront(nil)
         tocPanel = panel
 
+        removeTOCWindowObservers()
         let nc = NotificationCenter.default
         let move = nc.addObserver(forName: NSWindow.didMoveNotification, object: readerWindow, queue: .main) { [weak self, weak panel] _ in
             self?.syncTOCPanel(panel)
@@ -2748,13 +2766,13 @@ class ReaderViewController: NSViewController, WKNavigationDelegate, WKScriptMess
     func syncTOCPanel(_ panel: NSPanel? = nil) {
         let target = panel ?? tocPanel
         guard let target, target.isVisible, let screenRect = readerScreenRect() else { return }
-        let contentRect = CGRect(
-            x: clampedPanelOriginX(preferredX: screenRect.minX - target.frame.width, width: target.frame.width),
-            y: screenRect.minY,
+        let newFrame = clampedPanelFrame(
+            preferredX: screenRect.minX - target.frame.width,
+            preferredY: screenRect.minY,
             width: target.frame.width,
-            height: screenRect.height
+            contentHeight: screenRect.height,
+            styleMask: target.styleMask
         )
-        let newFrame = NSPanel.frameRect(forContentRect: contentRect, styleMask: target.styleMask)
         target.setFrame(newFrame, display: true)
     }
 

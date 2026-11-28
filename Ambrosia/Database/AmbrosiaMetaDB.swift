@@ -203,6 +203,7 @@ actor AmbrosiaMetaDB {
         try createReadingGoals(db: db)
         try createSchemaMigrations(db: db)
         try createLibraryState(db: db)
+        try createMaintenanceDismissals(db: db)
         try bootstrapSystemCollections(db: db)
         pruneStaleDiagnostics(db: db)
     }
@@ -230,6 +231,17 @@ actor AmbrosiaMetaDB {
         CREATE TABLE IF NOT EXISTS library_state (
             key    TEXT PRIMARY KEY,
             value  TEXT NOT NULL
+        );
+        """)
+    }
+
+    private static func createMaintenanceDismissals(db: Connection) throws {
+        try db.execute("""
+        CREATE TABLE IF NOT EXISTS maintenance_dismissals (
+            kind         TEXT NOT NULL,
+            target_key   TEXT NOT NULL,
+            dismissed_at TEXT NOT NULL,
+            PRIMARY KEY (kind, target_key)
         );
         """)
     }
@@ -3484,6 +3496,135 @@ actor AmbrosiaMetaDB {
 
     public func completedBooksCount(from start: Date, to end: Date) -> Int {
         (try? completedBooksCount(start: start, end: end)) ?? 0
+    }
+
+    // MARK: - Library Health & Maintenance Queries
+
+    struct AO3HealthSnapshot: Sendable {
+        let calibreID: Int
+        let workID: String?
+        let wordCount: Int?
+        let chapterCurrent: Int?
+        let chapterTotal: Int?
+        let isComplete: Bool?
+        let publishedDate: String?
+        let updatedDate: String?
+        let series: [AO3MetadataRecord.SeriesEntry]
+        let extractedAt: String
+    }
+
+    func allAO3HealthSnapshots() -> [AO3HealthSnapshot] {
+        let sql = """
+            SELECT calibre_id, ao3_work_id, word_count, chapter_current, chapter_total,
+                   is_complete, published_date, updated_date, series_json, extracted_at
+            FROM ao3_metadata
+        """
+        guard let rows = try? readDB.prepare(sql) else { return [] }
+        let decoder = JSONDecoder()
+        var snapshots: [AO3HealthSnapshot] = []
+        for row in rows {
+            guard let cid = row.int(at: 0) else { continue }
+            let seriesJSON = row[8] as? String
+            let series: [AO3MetadataRecord.SeriesEntry]
+            if let rawJSON = seriesJSON, !rawJSON.isEmpty, rawJSON != "[]", let data = rawJSON.data(using: .utf8) {
+                series = (try? decoder.decode([AO3MetadataRecord.SeriesEntry].self, from: data)) ?? []
+            } else {
+                series = []
+            }
+            let isComp: Bool? = row.int(at: 5).map { $0 != 0 }
+            snapshots.append(AO3HealthSnapshot(
+                calibreID: cid,
+                workID: row[1] as? String,
+                wordCount: row.int(at: 2),
+                chapterCurrent: row.int(at: 3),
+                chapterTotal: row.int(at: 4),
+                isComplete: isComp,
+                publishedDate: row[6] as? String,
+                updatedDate: row[7] as? String,
+                series: series,
+                extractedAt: (row[9] as? String) ?? ""
+            ))
+        }
+        return snapshots
+    }
+
+    func allAnthologyCacheIDs() -> Set<Int> {
+        let sql = "SELECT DISTINCT calibre_id FROM series_cache WHERE is_anthology = 1"
+        guard let rows = try? readDB.prepare(sql) else { return [] }
+        var ids = Set<Int>()
+        for row in rows {
+            if let cid = row.int(at: 0) {
+                ids.insert(cid)
+            }
+        }
+        return ids
+    }
+
+    func allSeriesCacheEntries() -> [SeriesCacheEntry] {
+        let sql = """
+        SELECT m.calibre_id, s.name, m.series_index, s.ao3_series_id,
+               m.is_anthology, s.calibre_series_id, s.series_id, s.series_key
+        FROM series_cache m JOIN series s ON s.series_id = m.series_id
+        ORDER BY s.name, m.series_index
+        """
+        guard let rows = try? prepare(sql, []) else { return [] }
+        return rows.compactMap { row -> SeriesCacheEntry? in
+            guard let calibreID = row.int(at: 0),
+                  let seriesName = row[safe: 1] as? String,
+                  let seriesIndex = row.int(at: 2) else { return nil }
+            return SeriesCacheEntry(
+                seriesID: row.int(at: 6),
+                calibreID: calibreID,
+                seriesName: seriesName,
+                seriesIndex: seriesIndex,
+                ao3SeriesID: row[safe: 3] as? String,
+                isAnthology: (row.int(at: 4) ?? 0) != 0,
+                calibreSeriesID: row.int(at: 5),
+                seriesKey: row[safe: 7] as? String
+            )
+        }
+    }
+
+    func effectiveCollectionBookIDs(collectionID: String) -> Set<Int> {
+        let sql = "SELECT calibre_id FROM effective_collection_members WHERE collection_id = ?"
+        guard let rows = try? readDB.prepare(sql, collectionID) else { return [] }
+        var ids = Set<Int>()
+        for row in rows {
+            if let cid = row.int(at: 0) {
+                ids.insert(cid)
+            }
+        }
+        return ids
+    }
+
+    func dismissMaintenanceItem(kind: String, targetKey: String) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        try db.run(
+            """
+            INSERT OR REPLACE INTO maintenance_dismissals (kind, target_key, dismissed_at)
+            VALUES (?, ?, ?)
+            """,
+            kind, targetKey, now
+        )
+    }
+
+    func undismissMaintenanceItem(kind: String, targetKey: String) throws {
+        try db.run(
+            "DELETE FROM maintenance_dismissals WHERE kind = ? AND target_key = ?",
+            kind, targetKey
+        )
+    }
+
+    func dismissedMaintenanceKeys(kind: String) -> Set<String> {
+        let sql = "SELECT target_key FROM maintenance_dismissals WHERE kind = ?"
+        guard let rows = try? readDB.prepare(sql, kind) else { return [] }
+        var keys = Set<String>()
+        for row in rows {
+            if let key = row[0] as? String {
+                keys.insert(key)
+            }
+        }
+        return keys
     }
 }
 

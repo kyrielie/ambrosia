@@ -117,6 +117,7 @@ Testing), against 112 source files (updated November 2026).
 | `ReadingGoal` math and progress calculation | `ReadingGoalMathTests` |
 | `TypographyValueFormat` formatters and steppers | `TypographyValueFormatTests` |
 | `LibraryQueryHelpers`, `LibraryVisibilityPolicy`, `DuplicateBookDetector` | `LibraryQueryHelpersTests`, `LibraryVisibilityPolicyTests`, `DuplicateBookDetectorTests` |
+| `DuplicateVerificationService`, `maintenance_dismissals` | `DuplicateVerificationServiceTests` |
 | `KeyBinding.validate` | `KeyBindingValidationTests` |
 | `CollectionStore`, `ErrorLogEntry` storage | `CollectionStoreTests`, `ErrorLogTests` |
 | `MembershipDelta`, `CollectionStore.applyMemberDelta` | `MembershipDeltaTests`, `CollectionStoreDeltaTests` |
@@ -186,6 +187,11 @@ Testing), against 112 source files (updated November 2026).
 | `AmbrosiaMetaDB.searchTags` autocomplete and prefix matching | `TagAutocompleteTests` |
 | `TypoDistance` OSA/Damerau-Levenshtein edit distance | `TypoDistanceTests` |
 | `VolumeMonitor` disk mount/unmount and volume tracking | `VolumeMonitorTests` |
+| `AO3FilterPopupDigest` toolbar state digest | `AO3FilterPopupDigestTests` |
+| `SearchActivityLog` ring buffer and deduplication | `SearchActivityLogTests` |
+| `ActivityFeedFilter`, `SearchActivityEntry`, `ActivityFeedEntry` | `ActivityFeedModelTests` |
+| `ReaderMenuState` defaults and updates | `ReaderMenuStateTests` |
+| `ExportManager.csvEscape` and `ExportManager.csvRow` | `ExportCSVTests` |
 
 Note on `LRUCache`: eviction is insertion-order, not access-order. Reading a
 key via the `subscript` getter does not move it to the back of `order`; only

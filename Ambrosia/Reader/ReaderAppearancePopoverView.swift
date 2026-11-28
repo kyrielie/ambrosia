@@ -5,6 +5,13 @@ struct ReaderAppearancePopoverView: View {
     @Bindable private var prefs = ReaderPreferences.shared
     weak var readerVC: ReaderViewController?
     var onClose: (() -> Void)?
+    @State private var selectedMode: ReadingMode
+
+    init(readerVC: ReaderViewController?, onClose: (() -> Void)? = nil) {
+        self.readerVC = readerVC
+        self.onClose = onClose
+        self._selectedMode = State(initialValue: readerVC?.currentMode ?? ReaderPreferences.shared.defaultReadingMode)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -14,8 +21,9 @@ struct ReaderAppearancePopoverView: View {
                     .font(.headline)
                 Spacer()
                 Picker("Mode", selection: Binding(
-                    get: { readerVC?.currentMode ?? prefs.defaultReadingMode },
+                    get: { selectedMode },
                     set: { newMode in
+                        selectedMode = newMode
                         readerVC?.setReadingMode(newMode)
                     }
                 )) {
@@ -82,6 +90,8 @@ struct ReaderAppearancePopoverView: View {
                         }
                         .buttonStyle(.plain)
                         .help(theme.label)
+                        .accessibilityLabel(theme.label)
+                        .accessibilityAddTraits(isSelected ? .isSelected : [])
                     }
                 }
             }
@@ -181,7 +191,7 @@ struct ReaderAppearancePopoverView: View {
                     }
                 }
 
-                if (readerVC?.currentMode ?? prefs.defaultReadingMode) == .paginated {
+                if selectedMode == .paginated {
                     HStack {
                         Text("Columns")
                             .font(.caption)

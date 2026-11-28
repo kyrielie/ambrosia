@@ -198,9 +198,9 @@ final class AO3FilterPopupWindowController: NSWindowController, NSWindowDelegate
             x = min(max(rightX, screenFrame.minX), max(screenFrame.minX, screenFrame.maxX - width))
         }
 
-        let contentRect = CGRect(x: x, y: anchorFrame.minY, width: width, height: anchorFrame.height)
-        let newFrame = NSPanel.frameRect(forContentRect: contentRect, styleMask: panel.styleMask)
-        panel.setFrame(newFrame, display: true)
+        let height = min(anchorFrame.height, screenFrame.height)
+        let y = min(max(anchorFrame.minY, screenFrame.minY), max(screenFrame.minY, screenFrame.maxY - height))
+        panel.setFrame(CGRect(x: x, y: y, width: width, height: height), display: true)
     }
 
     /// Discards checkbox state if the underlying search/filter changed since

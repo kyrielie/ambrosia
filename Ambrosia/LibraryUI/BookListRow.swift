@@ -181,8 +181,8 @@ struct BookListRow: View, Equatable {
                 AppDelegate.shared?.revealInFinder(book: book)
             }
             Divider()
-            Button(isLiked ? "Unlike" : "Like") { onLikeToggle() }
-            Button("Read Later") { onReadLater() }
+            Button(effectiveLiked ? "Unlike" : "Like") { onLikeToggle() }
+            Button(effectiveReadLater ? "Remove from Read Later" : "Add to Read Later") { onReadLaterToggle() }
             Button("Mark as Read") { onMarkRead() }
             Button("Reset Reading Progress") { onResetProgress() }
             Button("Skip") { onSkip() }
@@ -236,6 +236,7 @@ struct BookListRow: View, Equatable {
             })
             .buttonStyle(.borderless)
             .help(effectiveReadLater ? "Remove from Read Later" : "Add to Read Later")
+            .accessibilityLabel(effectiveReadLater ? "Remove from Read Later" : "Add to Read Later")
             Button(action: {
                 let next = !effectiveLiked
                 optimisticLiked = next
@@ -249,6 +250,7 @@ struct BookListRow: View, Equatable {
             })
             .buttonStyle(.borderless)
             .help(effectiveLiked ? "Unlike" : "Like")
+            .accessibilityLabel(effectiveLiked ? "Unlike" : "Like")
         }
     }
 

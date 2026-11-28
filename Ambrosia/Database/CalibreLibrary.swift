@@ -1716,7 +1716,45 @@ actor CalibreLibrary {
     internal func parseDate(_ string: String) -> Date? {
         if let parsedDate = Self.isoWithFractional.date(from: string) { return parsedDate }
         if let parsedDate = Self.isoWithoutFractional.date(from: string) { return parsedDate }
+        // Calibre SQLite timestamps often use a space separator ("YYYY-MM-DD HH:MM:SS[.ffffff]+00:00")
+        let normalized = string.replacingOccurrences(of: " ", with: "T")
+        if normalized != string {
+            if let parsedDate = Self.isoWithFractional.date(from: normalized) { return parsedDate }
+            if let parsedDate = Self.isoWithoutFractional.date(from: normalized) { return parsedDate }
+        }
         return Self.ymdFormatter.date(from: string)
+    }
+
+    /// Fetches Calibre's `books.timestamp` (Date Added) for the given book IDs.
+    func fetchDateAdded(for ids: [Int]) -> [Int: Date] {
+        guard !ids.isEmpty else { return [:] }
+        var result: [Int: Date] = [:]
+        for start in stride(from: 0, to: ids.count, by: 900) {
+            let chunk = Array(ids[start..<min(start + 900, ids.count)])
+            let placeholders = chunk.map { _ in "?" }.joined(separator: ",")
+            let sql = "SELECT id, timestamp FROM books WHERE id IN (\(placeholders))"
+            let bindings: [Binding?] = chunk.map { $0 as Binding? }
+            guard let rows = try? db.prepare(sql, bindings) else { continue }
+            for row in rows {
+                guard let rawID = row[0] as? Int64,
+                      let tsStr = row[1] as? String,
+                      let date = parseDate(tsStr) else { continue }
+                result[Int(rawID)] = date
+            }
+        }
+        return result
+    }
+
+    /// Returns all Calibre book IDs that have an entry in `books_series_link`.
+    func fetchCalibreSeriesBookIDs() -> Set<Int> {
+        guard let rows = try? db.prepare("SELECT book FROM books_series_link", []) else { return [] }
+        var result = Set<Int>()
+        for row in rows {
+            if let rawID = row[0] as? Int64 {
+                result.insert(Int(rawID))
+            }
+        }
+        return result
     }
 
     // MARK: - Custom column cache (lazy — must live in primary class declaration, not extension)

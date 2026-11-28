@@ -16,6 +16,9 @@ struct AO3DuplicateEntry: Identifiable, Sendable, Equatable {
     let readingTimeSeconds: TimeInterval
     let annotationCount: Int
     let epubPath: String?
+    let dateAdded: Date?
+    var fileSizeBytes: Int64?
+    var matchTier: DuplicateMatchTier?
 }
 
 /// A cluster of two or more Calibre rows sharing the same canonical `ao3_work_id`.
@@ -53,7 +56,10 @@ struct AO3DuplicateCluster: Identifiable, Sendable, Equatable {
                 readPercent: entry.readPercent,
                 readingTimeSeconds: entry.readingTimeSeconds,
                 annotationCount: entry.annotationCount,
-                epubPath: entry.epubPath
+                epubPath: entry.epubPath,
+                dateAdded: entry.dateAdded,
+                fileSizeBytes: entry.fileSizeBytes,
+                matchTier: entry.matchTier
             )
         }.sorted { e1, e2 in
             if e1.calibreID == newWinnerID { return true }
@@ -77,23 +83,46 @@ struct AO3DuplicateCluster: Identifiable, Sendable, Equatable {
 enum CalibreDuplicateManager {
 
     /// Constructs clusters of duplicate AO3 works from pre-fetched caches.
+    /// Excludes merged anthologies (`anthologyIDs`) from competing as single-work duplicates.
     static func buildClusters(
         workIDs: [Int: String],
         dates: [Int: (published: String?, updated: String?)],
         booksByID: [Int: CalibreBook],
         metadataByID: [Int: AO3MetadataRecord] = [:],
         bookStatesByID: [Int: BookState] = [:],
-        annotationCountsByID: [Int: Int] = [:]
+        annotationCountsByID: [Int: Int] = [:],
+        anthologyIDs: Set<Int> = [],
+        datesAdded: [Int: Date] = [:]
     ) -> [AO3DuplicateCluster] {
         guard !workIDs.isEmpty else { return [] }
 
         let groups = Dictionary(grouping: workIDs.keys, by: { workIDs[$0] ?? "" })
             .filter { !$0.key.isEmpty && $0.value.count > 1 }
 
+        var wordCounts: [Int: Int] = [:]
+        var chapterCurrents: [Int: Int] = [:]
+        for (id, meta) in metadataByID {
+            if let wc = meta.wordCount { wordCounts[id] = wc }
+            if let cc = meta.chapterCurrent { chapterCurrents[id] = cc }
+        }
+        for (id, book) in booksByID where wordCounts[id] == nil {
+            if let wc = book.wordCount { wordCounts[id] = wc }
+        }
+
         var clusters: [AO3DuplicateCluster] = []
 
-        for (workID, calibreIDs) in groups.sorted(by: { $0.key < $1.key }) {
-            guard let winnerID = DuplicateBookDetector.preferredWinner(in: calibreIDs, dates: dates) else {
+        for (workID, rawCalibreIDs) in groups.sorted(by: { $0.key < $1.key }) {
+            let calibreIDs = anthologyIDs.isEmpty
+                ? rawCalibreIDs
+                : rawCalibreIDs.filter { !anthologyIDs.contains($0) }
+            guard calibreIDs.count > 1,
+                  let winnerID = DuplicateBookDetector.preferredWinner(
+                    in: calibreIDs,
+                    dates: dates,
+                    wordCounts: wordCounts,
+                    chapterCurrents: chapterCurrents,
+                    datesAdded: datesAdded
+                  ) else {
                 continue
             }
 
@@ -128,7 +157,10 @@ enum CalibreDuplicateManager {
                     readPercent: state?.totalReadPercent ?? 0.0,
                     readingTimeSeconds: state?.totalReadingTimeSeconds ?? 0.0,
                     annotationCount: annCount,
-                    epubPath: book?.relativePath
+                    epubPath: book?.relativePath,
+                    dateAdded: datesAdded[id],
+                    fileSizeBytes: nil,
+                    matchTier: nil
                 )
             }
 

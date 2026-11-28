@@ -160,7 +160,9 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     // MARK: - NSToolbarDelegate
 
     private var shouldShowFTSToolbarItem: Bool {
-        ReaderPreferences.shared.enableFullTextSearch && (session?.hasFulltextIndex ?? false)
+        let hasFTS = ReaderPreferences.shared.enableFullTextSearch && (session?.hasFulltextIndex ?? false)
+        let hasPassages = session?.hasPassageIndex ?? false
+        return hasFTS || hasPassages
     }
 
     private func startObservingFTSAvailability() {
@@ -170,6 +172,7 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
             _ = session?.activePath
             _ = session?.hasFulltextIndex
             _ = session?.hasSemanticIndex
+            _ = session?.passageDB
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.updateFTSSearchToolbarItemVisibility()
@@ -1306,7 +1309,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         .environment(session)
         .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme))
         let sheetWindow = NSWindow(contentViewController: host)
-        sheetWindow.styleMask = [.titled]
+        sheetWindow.styleMask = [.titled, .closable]
+        sheetWindow.initialFirstResponder = nil
         window.beginSheet(sheetWindow, completionHandler: nil)
     }
 
@@ -1318,24 +1322,12 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
     @objc func triggerCSVExport() { toolbarState?.triggerExport      = true }
     @objc func triggerEPUBExport() { toolbarState?.triggerEPUBExport  = true }
     @objc func triggerAnnotationExport() { toolbarState?.triggerAnnotationExport = true }
-    @objc func showDuplicateManager() { showDuplicateManagerSheet() }
+    @objc func showDuplicateManager() {
+        LibraryHealthWindowController.show(tab: .duplicates)
+    }
 
-    @MainActor
-    func showDuplicateManagerSheet() {
-        guard let window, window.attachedSheet == nil, let session else { return }
-        let host = NSHostingController(rootView: DuplicateWorksManagerView(
-            session: session,
-            onDismiss: { [weak self] in
-                self?.dismissAttachedSheet()
-            }
-        )
-        .preferredColorScheme(ReaderPreferences.shared.resolvedLibraryColorScheme))
-        let sheetWindow = NSWindow(contentViewController: host)
-        sheetWindow.styleMask = [.titled, .closable, .resizable]
-        sheetWindow.setContentSize(NSSize(width: 820, height: 600))
-        sheetWindow.minSize = NSSize(width: 700, height: 480)
-        sheetWindow.initialFirstResponder = nil
-        window.beginSheet(sheetWindow, completionHandler: nil)
+    @objc func showLibraryHealth() {
+        LibraryHealthWindowController.show()
     }
     @objc func showRSSPanel() {
         guard let session else { return }
@@ -1368,7 +1360,8 @@ class LibraryWindowController: NSWindowController, NSToolbarDelegate, NSSearchFi
         ))
         guard let window else { return }
         let sheetWindow = NSWindow(contentViewController: host)
-        sheetWindow.styleMask = [.titled]
+        sheetWindow.styleMask = [.titled, .closable]
+        sheetWindow.initialFirstResponder = nil
         window.beginSheet(sheetWindow, completionHandler: nil)
     }
 

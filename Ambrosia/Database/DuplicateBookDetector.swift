@@ -20,28 +20,38 @@ enum DuplicateBookDetector {
     /// Returns the calibre IDs that should be hidden as stale duplicates —
     /// every ID in a shared-`ao3_work_id` group except the winner.
     ///
+    /// Merged anthologies (`anthologyIDs`) are excluded from competing as
+    /// single-work duplicates so they are never hidden behind or conflated with
+    /// an individual work sharing Work #1's `ao3_work_id`.
+    ///
     /// Winner selection: prefer the newer `updated` date; if either/both are
-    /// missing, fall back to the newer `published` date; if dates are equal
-    /// or entirely absent on both sides, fall back to the lower `calibre_id`
-    /// so the choice is arbitrary but stable across reloads (the same pair
-    /// always resolves the same way, so the "winner" doesn't flip-flop
-    /// between library refreshes).
+    /// missing, fall back to the newer `published` date; on ties, prefer higher
+    /// `chapterCurrent`, higher `wordCount`, newer `dateAdded`, and finally the
+    /// lower `calibre_id` so the choice is stable across reloads.
     static func loserIDs(
         workIDs: [Int: String],
-        dates: [Int: (published: String?, updated: String?)]
+        dates: [Int: (published: String?, updated: String?)],
+        anthologyIDs: Set<Int> = [],
+        wordCounts: [Int: Int] = [:],
+        chapterCurrents: [Int: Int] = [:],
+        datesAdded: [Int: Date] = [:]
     ) -> Set<Int> {
         guard !workIDs.isEmpty else { return [] }
 
-        // Every key in this grouping closure comes from workIDs.keys itself,
-        // so the lookup can never actually miss -- the fallback value here
-        // exists only so this doesn't need a force-unwrap, per this repo's
-        // no-force-unwrap rule; it can never be observed in practice.
         let groups = Dictionary(grouping: workIDs.keys, by: { workIDs[$0] ?? "" })
         var losers = Set<Int>()
 
         for (_, calibreIDs) in groups where calibreIDs.count > 1 {
-            if let winner = preferredWinner(in: calibreIDs, dates: dates) {
-                losers.formUnion(calibreIDs.filter { $0 != winner })
+            let standaloneIDs = anthologyIDs.isEmpty ? calibreIDs : calibreIDs.filter { !anthologyIDs.contains($0) }
+            guard standaloneIDs.count > 1 else { continue }
+            if let winner = preferredWinner(
+                in: standaloneIDs,
+                dates: dates,
+                wordCounts: wordCounts,
+                chapterCurrents: chapterCurrents,
+                datesAdded: datesAdded
+            ) {
+                losers.formUnion(standaloneIDs.filter { $0 != winner })
             }
         }
 
@@ -51,11 +61,21 @@ enum DuplicateBookDetector {
     /// Selects the single preferred winner among a list of duplicate calibre IDs.
     static func preferredWinner(
         in calibreIDs: [Int],
-        dates: [Int: (published: String?, updated: String?)]
+        dates: [Int: (published: String?, updated: String?)],
+        wordCounts: [Int: Int] = [:],
+        chapterCurrents: [Int: Int] = [:],
+        datesAdded: [Int: Date] = [:]
     ) -> Int? {
         guard let first = calibreIDs.first else { return nil }
         return calibreIDs.dropFirst().reduce(first) { current, candidate in
-            isPreferred(candidate, over: current, dates: dates) ? candidate : current
+            isPreferred(
+                candidate,
+                over: current,
+                dates: dates,
+                wordCounts: wordCounts,
+                chapterCurrents: chapterCurrents,
+                datesAdded: datesAdded
+            ) ? candidate : current
         }
     }
 
@@ -64,7 +84,10 @@ enum DuplicateBookDetector {
     static func isPreferred(
         _ candidate: Int,
         over current: Int,
-        dates: [Int: (published: String?, updated: String?)]
+        dates: [Int: (published: String?, updated: String?)],
+        wordCounts: [Int: Int] = [:],
+        chapterCurrents: [Int: Int] = [:],
+        datesAdded: [Int: Date] = [:]
     ) -> Bool {
         let candidateUpdated = parseISODate(dates[candidate]?.updated)
         let currentUpdated = parseISODate(dates[current]?.updated)
@@ -82,7 +105,23 @@ enum DuplicateBookDetector {
         if candidatePublished != nil, currentPublished == nil { return true }
         if currentPublished != nil, candidatePublished == nil { return false }
 
-        // No usable dates on either side, or an exact tie: stable arbitrary
+        let candidateChapters = chapterCurrents[candidate] ?? 0
+        let currentChapters = chapterCurrents[current] ?? 0
+        if candidateChapters != currentChapters {
+            return candidateChapters > currentChapters
+        }
+
+        let candidateWords = wordCounts[candidate] ?? 0
+        let currentWords = wordCounts[current] ?? 0
+        if candidateWords != currentWords {
+            return candidateWords > currentWords
+        }
+
+        if let candidateAdded = datesAdded[candidate], let currentAdded = datesAdded[current], candidateAdded != currentAdded {
+            return candidateAdded > currentAdded
+        }
+
+        // No usable dates/counts on either side, or an exact tie: stable arbitrary
         // tiebreak so the winner never flip-flops across refreshes.
         return candidate < current
     }

@@ -56,6 +56,7 @@ struct SeriesListRow: View, Equatable {
                 }
                 .buttonStyle(.borderless)
                 .help(series.missingIndices.isEmpty ? "Show series index" : "Missing works")
+                .accessibilityLabel(series.missingIndices.isEmpty ? "Show series index" : "Missing works")
                 .popover(isPresented: $showIndex) { indexPopover }
                 Button(action: onReadLaterToggle) {
                     Image(systemName: readLaterState == .none ? "bookmark" : "bookmark.fill")
@@ -64,6 +65,7 @@ struct SeriesListRow: View, Equatable {
                 .buttonStyle(.borderless)
                 .disabled(!series.isFlaggable)
                 .help(readLaterState == .full ? "Remove Series from Read Later" : "Add Series to Read Later")
+                .accessibilityLabel(readLaterState == .full ? "Remove Series from Read Later" : "Add Series to Read Later")
                 Button(action: onLikeToggle) {
                     Image(systemName: likeState == .full ? "star.fill" : (likeState == .partial ? "star.leadinghalf.filled" : "star"))
                         .foregroundStyle(likeState == .full ? Color.yellow : (likeState == .partial ? Color.orange : Color.secondary))
@@ -71,6 +73,7 @@ struct SeriesListRow: View, Equatable {
                 .buttonStyle(.borderless)
                 .disabled(!series.isFlaggable)
                 .help(likeState == .full ? "Unlike Series" : "Like Series")
+                .accessibilityLabel(likeState == .full ? "Unlike Series" : "Like Series")
             }
             Text(series.displayAuthors)
                 .font(.subheadline)
@@ -101,8 +104,10 @@ struct SeriesListRow: View, Equatable {
             }
             Divider()
             Button(likeState == .full ? "Unlike Series" : "Like Series", action: onLikeToggle)
+                .disabled(!series.isFlaggable)
             Button(readLaterState == .full ? "Remove Series from Read Later" : "Add Series to Read Later",
                    action: onReadLaterToggle)
+                .disabled(!series.isFlaggable)
             Button("Mark Series as Read", action: onMarkRead)
             Button("Reset Series Reading Progress", action: onResetProgress)
             Button("Skip Series", action: onSkip)
@@ -228,31 +233,35 @@ struct SeriesListRow: View, Equatable {
     }
 
     private func exportSeriesManifest() {
-        let report = SeriesGapAnalyzer.analyze(series: series)
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.plainText, .html]
-        let invalid = CharacterSet(charactersIn: "\\/:*?\"<>|")
-        let safeName = series.seriesName.components(separatedBy: invalid).joined(separator: "_")
-        panel.nameFieldStringValue = "\(safeName)_manifest.txt"
-        panel.message = "Choose a location to save the missing works download manifest."
-        panel.prompt = "Export"
+        Task { @MainActor in
+            let workIDs = series.works.map(\.id)
+            let metaByID = (try? await AppDelegate.shared?.session.metaDB?.ao3Metadata(for: workIDs)) ?? [:]
+            let report = SeriesGapAnalyzer.analyze(series: series, metadataByID: metaByID)
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.plainText, .html]
+            let invalid = CharacterSet(charactersIn: "\\/:*?\"<>|")
+            let safeName = series.seriesName.components(separatedBy: invalid).joined(separator: "_")
+            panel.nameFieldStringValue = "\(safeName)_manifest.txt"
+            panel.message = "Choose a location to save the missing works download manifest."
+            panel.prompt = "Export"
 
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            let content: String
-            if url.pathExtension.lowercased() == "html" {
-                content = SeriesGapManifestBuilder.generateHTMLManifest(report: report)
-            } else {
-                content = SeriesGapManifestBuilder.generateTextManifest(report: report)
-            }
-            do {
-                try content.write(to: url, atomically: true, encoding: .utf8)
-            } catch {
-                let alert = NSAlert()
-                alert.messageText = "Failed to Save Manifest"
-                alert.informativeText = error.localizedDescription
-                alert.alertStyle = .warning
-                alert.runModal()
+            panel.begin { response in
+                guard response == .OK, let url = panel.url else { return }
+                let content: String
+                if url.pathExtension.lowercased() == "html" {
+                    content = SeriesGapManifestBuilder.generateHTMLManifest(report: report)
+                } else {
+                    content = SeriesGapManifestBuilder.generateTextManifest(report: report)
+                }
+                do {
+                    try content.write(to: url, atomically: true, encoding: .utf8)
+                } catch {
+                    let alert = NSAlert()
+                    alert.messageText = "Failed to Save Manifest"
+                    alert.informativeText = error.localizedDescription
+                    alert.alertStyle = .warning
+                    alert.runModal()
+                }
             }
         }
     }
